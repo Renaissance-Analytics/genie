@@ -133,7 +133,7 @@ import { ensureFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
-import { gitClone, gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
+import { gitAddSubmodule, gitClone, gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
@@ -1481,10 +1481,13 @@ async function boot(): Promise<void> {
             // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
             // Signed in to GitHub, a repository of an account the app is installed on (with Contents) clones with that sign-in
             // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
-            gitClone: (url, into) => gitClone(url, into, githubAccount?.cloneAuth(url) ?? undefined),
+            gitClone: (url, into, branch) => gitClone(url, into, githubAccount?.cloneAuth(url) ?? undefined, branch),
+            // A Tynn project's repositories as submodules of the envelope Genie makes for it, with the same credential.
+            gitAddSubmodule: (envelope, url, at, branch) => gitAddSubmodule(envelope, url, at, branch, githubAccount?.cloneAuth(url) ?? undefined),
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
+            list: () => registry?.listWorkspaces() ?? [],
             addWorkspace: (w) => registry!.addWorkspace(w),
             agentsOf: (id) => registry?.agentsOf(id) ?? [],
             setAsleep: (id, asleep) => registry!.setAsleep(id, asleep),

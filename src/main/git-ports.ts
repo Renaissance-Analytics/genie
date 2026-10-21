@@ -36,10 +36,45 @@ function gitConfigValue(cwd: string, key: string): Promise<string | null> {
  */
 export async function gitFirstCommit(path: string, message: string): Promise<void> {
     await git(path, ['init', '--quiet', '--initial-branch=main']);
+    await gitCommit(path, message);
+}
+
+/**
+ * Everything in the folder staged, one commit — with Genie's bot identity for THIS command only when the machine has
+ * none, as the first commit does. For an envelope Genie is still making (the Tynn import's submodules).
+ */
+export async function gitCommit(path: string, message: string): Promise<void> {
     const identity = commitIdentityConfig({ name: await gitConfigValue(path, 'user.name'), email: await gitConfigValue(path, 'user.email') });
     await git(path, ['add', '--all', '--', '.']);
     await git(path, [...identity.flatMap(([k, v]) => ['-c', `${k}=${v}`]), 'commit', '--quiet', '-m', message]);
 }
+
+/** A git command with per-command config in its environment (see gitClone); rejects with git's words, secrets scrubbed. */
+function gitWithAuth(cwd: string | undefined, args: readonly string[], auth?: GitAuth): Promise<string> {
+    const env: NodeJS.ProcessEnv | undefined = auth && auth.config.length > 0 ? { ...process.env, ...gitConfigEnv(auth.config) } : undefined;
+    const scrub = (text: string) => redactSecrets(text, auth?.secrets ?? []);
+    return new Promise<string>((resolve, reject) => {
+        execFile('git', [...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }, (error, stdout, stderr) =>
+            (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve(String(stdout))));
+    });
+}
+
+/**
+ * A REPOSITORY AS A SUBMODULE of an envelope Genie is making (Add workspace parity item 3; Genie 1's build, create-agi.ts):
+ * `git submodule add [-b <branch>] -- <url> <at>`, with the clone credential as gitClone carries it. With a branch, git
+ * records it in .gitmodules itself; without one, the branch the remote checked out is recorded — what Genie 1 did, minus
+ * its guessed `main` for a detached HEAD (then nothing is recorded). Resolves to the branch tracked, or `null`.
+ */
+export async function gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null, auth?: GitAuth): Promise<string | null> {
+    await gitWithAuth(envelope, ['submodule', 'add', '--quiet', ...(branch ? ['-b', branch] : []), '--', url, at], auth);
+    if (branch) return branch;
+    const head = await git(join(envelope, ...at.split('/')), ['symbolic-ref', '--quiet', '--short', 'HEAD']).then((v) => v.trim() || null, () => null);
+    // The submodule's name is its path (git's default for `submodule add`).
+    if (head) await git(envelope, ['config', '-f', '.gitmodules', `submodule.${at}.branch`, head]);
+    return head;
+}
+
+export interface GitAuth { config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }
 
 /**
  * `git clone`, optionally with config for THIS command only — the GitHub sign-in's credential (core/github.ts
@@ -51,13 +86,11 @@ export async function gitFirstCommit(path: string, message: string): Promise<voi
  * repos/, and a clone without them is an envelope of empty folders. git keeps GIT_CONFIG_COUNT/KEY/VALUE in the
  * environment of the submodule clones it spawns, so the credential reaches a private envelope's private submodules too
  * (measured by test/git-ports.test.ts with real git).
+ *
+ * `branch`: the one to check out (Tynn's `default_branch` for the envelope it names); none = the remote's HEAD.
  */
-export function gitClone(url: string, into: string, auth?: { config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }): Promise<void> {
-    const env: NodeJS.ProcessEnv | undefined = auth && auth.config.length > 0 ? { ...process.env, ...gitConfigEnv(auth.config) } : undefined;
-    const scrub = (text: string) => redactSecrets(text, auth?.secrets ?? []);
-    return new Promise<void>((resolve, reject) => {
-        execFile('git', ['clone', '--recurse-submodules', '--', url, into], { windowsHide: true, ...(env ? { env } : {}) }, (error, _stdout, stderr) => (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve()));
-    });
+export function gitClone(url: string, into: string, auth?: GitAuth, branch?: string | null): Promise<void> {
+    return gitWithAuth(undefined, ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), '--', url, into], auth).then(() => {});
 }
 
 /** Config entries as git's environment: GIT_CONFIG_COUNT and GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, appended after any already there. */

@@ -4,7 +4,7 @@ import type { AgentPermissions } from '../core/identity.js';
 import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
-import type { TynnProject } from '../core/tynn.js';
+import type { TynnContent, TynnProject } from '../core/tynn.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
@@ -231,10 +231,10 @@ export interface GenieBridge {
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
-        /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"). */
-        tynnProjects(): Promise<{ ok: true; host: string; projects: TynnProject[] } | { ok: false; reason: string }>;
+        /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"); `added` = already a workspace here, by its id. */
+        tynnProjects(): Promise<{ ok: true; host: string; projects: TynnProject[]; added?: Record<string, string> } | { ok: false; reason: string }>;
         /** The CHOSEN project: the parent picked on the host, then the plan before anything is written. */
-        previewAddFromTynn(projectId: string, parent: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
+        previewAddFromTynn(projectId: string, parent: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; content?: TynnContent; steps: PlanStep[] } | { ok: false; reason: string; workspaceId?: string }>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         hibernate(workspaceId: string): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | { ok: false; reason: string }>;
         wake(workspaceId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
