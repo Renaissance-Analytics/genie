@@ -94,9 +94,17 @@ jobs:
     needs: publish
     permissions:
       contents: write
+      # close on ship: tell each issue this release fixes, and close it (scripts/close-shipped.ts)
+      issues: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # every tag and commit: the issues shipped are those named since the previous release
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       # electron-builder created the release on this repository (electron-builder.yml publish block);
       # the body comes from docs/releases/v<version>.md, with the same token. The
       # release keeps the type the publish step gave it (prerelease or full release, by the tag);
@@ -105,3 +113,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --notes-file "docs/releases/${{ github.ref_name }}.md"
+      # CLOSE ON SHIP (the owner's choice, 2026-10-21): a merge is not a release, so an issue a merged fix names is
+      # only shipped now. Every issue a commit since the previous release says it fixes or closes is told
+      # "Shipped in <tag>" and closed if still open (src/core/shipped-issues.ts). Never fails the release.
+      - name: close what this release ships
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --yes tsx@4.23.15 scripts/close-shipped.ts "${{ github.ref_name }}"
