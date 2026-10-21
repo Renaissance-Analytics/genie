@@ -30,6 +30,19 @@ function harness() {
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe('the add confirmer', () => {
+    it('after an add opens, it says which workspace was added — so "It came with agents" can look (parity item 6); a refusal adds nothing', async () => {
+        const added: string[] = [];
+        const opened: string[] = [];
+        const confirm = addConfirmer(() => ({ setBusy: () => {}, setPreview: () => {}, open: (r) => opened.push(r), added: (id) => added.push(id) }));
+        confirm(() => Promise.resolve({ ok: true, id: 'acme' }));
+        await settle();
+        expect(opened).toEqual(['genie://workspace/acme']);
+        expect(added).toEqual(['acme']);
+        confirm(() => Promise.resolve({ ok: false, reason: 'no' }));
+        await settle();
+        expect(added).toEqual(['acme']);
+    });
+
     it('a second confirm while the first runs starts NOTHING; the busy state covers the whole run; the added workspace opens', async () => {
         const h = harness();
         const d = deferred<AddOutcome>();

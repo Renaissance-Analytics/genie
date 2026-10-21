@@ -180,6 +180,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             tynnProjects: () => answer('workspaces.tynnProjects'),
             tynnOwnerOptions: () => answer('workspaces.tynnOwnerOptions'),
             createTynnProject: (input) => answer('workspaces.createTynnProject', input),
+            importedAgents: (workspaceId) => answer('workspaces.importedAgents', workspaceId),
+            adoptAgent: (workspaceId, name) => answer('workspaces.adoptAgent', workspaceId, name),
             previewAddFromTynn: (projectId, parent) => answer('workspaces.previewAddFromTynn', projectId, parent),
             confirmAddFromTynn: (parent, projectId) => answer('workspaces.confirmAddFromTynn', parent, projectId),
             hibernate: (workspaceId) => answer('workspaces.hibernate', workspaceId),

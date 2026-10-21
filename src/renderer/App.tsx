@@ -36,6 +36,8 @@ import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspa
 import type { GithubAsk } from './components/AgiRemoteChoice.js';
 import { GITHUB_ROUTE } from '../core/github.js';
 import type { TynnLinkApi } from './components/TynnProjectLink.js';
+import { ImportedAgentsModal } from './components/ImportedAgents.js';
+import { importedAgentsOffer, type ImportedAgent } from '../core/agent-adoption.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
 import { PanelHostContext } from './components/PluginPane.js';
@@ -586,7 +588,19 @@ function DesktopApp({ bridge }: AppProps) {
     const [addBusy, setAddBusy] = useState(false);
     const navigateRef = useRef(navigate);
     navigateRef.current = navigate;
-    const confirmAddOnce = useMemo(() => addConfirmer(() => ({ setBusy: setAddBusy, setPreview: setAddPreview, open: (route) => navigateRef.current(route) })), []);
+    /*
+     * "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's WorkspaceBroughtAgents): after ANY add, the `.agents/*`
+     * the workspace brought and has not registered, offered for adoption over the workspace it opened. Nothing to offer =
+     * no screen; a list the host cannot read = no screen (the workspace is added; this must not hold it hostage).
+     */
+    const [cameWith, setCameWith] = useState<{ workspaceId: string; agents: readonly ImportedAgent[] } | null>(null);
+    const offerAgentsRef = useRef<(id: string) => void>(() => {});
+    offerAgentsRef.current = (id) => {
+        const read = resolvedBridge?.workspaces.importedAgents;
+        if (!read) return;
+        void read(id).then((r) => { if (r.ok && importedAgentsOffer(r.agents).offer) setCameWith({ workspaceId: id, agents: r.agents }); }, () => {});
+    };
+    const confirmAddOnce = useMemo(() => addConfirmer(() => ({ setBusy: setAddBusy, setPreview: setAddPreview, open: (route) => navigateRef.current(route), added: (id) => offerAgentsRef.current(id) })), []);
     // Add from a git URL (§6.1): the form, then the host picks the parent and the plan replaces the form.
     const [addFromGit, setAddFromGit] = useState(false);
     // From Tynn (§6.1): the person's projects while picking one; `undefined` when not picking.
@@ -1311,7 +1325,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             github={features.integrations?.github ?? null}
             onGithub={githubAsk}
-            onCreated={(id) => navigate(`genie://workspace/${id}`)}
+            onCreated={(id) => { navigate(`genie://workspace/${id}`); offerAgentsRef.current(id); }}
             onOpenExisting={openExisting}
             onGit={startAddFromGit}
             onTynn={startAddFromTynn}
@@ -1341,10 +1355,18 @@ function DesktopApp({ bridge }: AppProps) {
                 return r.ok ? { ok: true, id: r.id } : r;
             }}
             discard={(path) => { void resolvedBridge?.workspaces.discardStaged?.(path); }}
-            onAdded={(id) => { setWizardRead(null); navigate(`genie://workspace/${id}`); }}
+            onAdded={(id) => { setWizardRead(null); navigate(`genie://workspace/${id}`); offerAgentsRef.current(id); }}
             onClose={() => setWizardRead(null)}
             tynn={tynnLinkApi}
         />
+        {/* "IT CAME WITH AGENTS" (Add workspace parity item 6): over the workspace an add just opened. */}
+        {resolvedBridge?.workspaces.adoptAgent ? (
+            <ImportedAgentsModal
+                shown={cameWith ? { workspaceId: cameWith.workspaceId, name: workspaceLabel(snapshot.workspaces, cameWith.workspaceId), path: snapshot.workspaces?.find((w) => w.id === cameWith.workspaceId)?.path ?? null, agents: cameWith.agents } : null}
+                api={{ adopt: (workspaceId, name) => resolvedBridge.workspaces.adoptAgent!(workspaceId, name) }}
+                onClose={() => setCameWith(null)}
+            />
+        ) : null}
         {pickerAsk && resolvedBridge?.host ? (
             <HostPathPicker
                 mode={pickerAsk.opts.mode}

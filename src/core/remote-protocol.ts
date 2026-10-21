@@ -49,6 +49,8 @@ export const REMOTE_METHODS = [
     'workspaces.tynnProjects',
     'workspaces.tynnOwnerOptions',
     'workspaces.createTynnProject',
+    'workspaces.importedAgents',
+    'workspaces.adoptAgent',
     'workspaces.previewAddFromTynn',
     'workspaces.confirmAddFromTynn',
     'workspaces.hibernate',
@@ -148,6 +150,9 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // The optional link's "New project" (Add workspace parity item 5): who may own it is a read; creating it writes on Tynn.
     'workspaces.tynnOwnerOptions': 'read',
     'workspaces.createTynnProject': 'write',
+    // "It came with agents" (Add workspace parity item 6): the unregistered `.agents/*` is a read; adopting one registers it.
+    'workspaces.importedAgents': 'read',
+    'workspaces.adoptAgent': 'write',
     'workspaces.previewAddFromTynn': 'read',
     'workspaces.confirmAddFromTynn': 'write',
     'workspaces.hibernate': 'write',

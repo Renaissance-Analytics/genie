@@ -62,7 +62,9 @@ import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit } from './envelope-wizard-host.js';
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
-import { mkdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { sacredNameOf } from '../core/agent-adoption.js';
+import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
@@ -1629,6 +1631,24 @@ async function boot(): Promise<void> {
     // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
     // host, and the plan for THAT project before anything is written.
     ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
+    // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
+    // brought and has not registered, and adopting one — read from its AGENT.md, never rewritten. The sacred grant is the
+    // linked Tynn project's `sacred_agent_name`; signed out or unlinked grants nothing.
+    const adoptionPorts: AgentAdoptionPorts = {
+        workspace: (id) => registry?.workspace(id) ?? null,
+        agentsOf: (id) => registry?.agentsOf(id) ?? [],
+        listDirs: async (dir) => (await readdir(dir, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name),
+        readText: async (path) => { try { return await readFileText(path, 'utf8'); } catch { return null; } },
+        register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
+        sacredName: async (workspaceId) => {
+            const projectId = tynnProjectFor(workspaceId);
+            if (projectId === null || !tynnAccount) return null;
+            return sacredNameOf(await tynnAccount.projects(), projectId);
+        },
+    };
+    ipcMain.handle('genie:workspace-imported-agents', (_event, raw: unknown) => (typeof raw === 'string' ? readImportedAgents(adoptionPorts, raw) : { ok: false, reason: 'name a workspace' }));
+    ipcMain.handle('genie:workspace-adopt-agent', (_event, rawId: unknown, rawName: unknown) =>
+        (typeof rawId === 'string' && typeof rawName === 'string' && rawName !== '' ? adoptAgent(adoptionPorts, rawId, rawName) : { ok: false, reason: 'name a workspace and an agent' }));
     ipcMain.handle('genie:workspace-preview-add-tynn', (_event, rawId: unknown, rawParent: unknown) =>
         (typeof rawId === 'string' && rawId.length > 0 && typeof rawParent === 'string' && rawParent !== '' ? previewAddFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'choose a Tynn project and a parent folder' }));
     ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown, rawId: unknown) =>
@@ -1828,6 +1848,8 @@ async function boot(): Promise<void> {
                 tynnProjects: () => listTynnProjects(workspaceOps),
                 tynnOwnerOptions: () => listTynnOwners(workspaceOps),
                 createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
+                importedAgents: (id) => readImportedAgents(adoptionPorts, id),
+                adoptAgent: (id, name) => adoptAgent(adoptionPorts, id, name),
                 previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
                 locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),

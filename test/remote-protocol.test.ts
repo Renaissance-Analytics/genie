@@ -70,9 +70,13 @@ describe('the capability table', () => {
         // (a read) and `stageFromGit`, `registerExisting`, `buildEnvelope`, `discardStaged` (writes) — all owner-only on a host.
         // 73 since the optional Tynn link's "New project" (Add workspace parity item 5): `workspaces.tynnOwnerOptions` (a read)
         // and `workspaces.createTynnProject` (a write) — owner-only on a host.
-        expect(REMOTE_METHODS.length).toBe(73);
+        // 75 since "It came with agents" (Add workspace parity item 6): `workspaces.importedAgents` (a read) and
+        // `workspaces.adoptAgent` (a write) — owner-only on a host.
+        expect(REMOTE_METHODS.length).toBe(75);
         expect(capabilityOf('workspaces.tynnOwnerOptions')).toBe('read');
         expect(capabilityOf('workspaces.createTynnProject')).toBe('write');
+        expect(capabilityOf('workspaces.importedAgents')).toBe('read');
+        expect(capabilityOf('workspaces.adoptAgent')).toBe('write');
         expect(capabilityOf('workspaces.readSource')).toBe('read');
         for (const m of ['workspaces.stageFromGit', 'workspaces.registerExisting', 'workspaces.buildEnvelope', 'workspaces.discardStaged'] as const) expect(capabilityOf(m)).toBe('write');
         expect(capabilityOf('agents.setDrivePages')).toBe('write');
