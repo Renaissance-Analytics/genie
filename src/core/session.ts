@@ -9,6 +9,7 @@ import type { PromptBlock } from './prompt-content.js';
 import { subtreeOf, systemProcessTree, type ProcessTree } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { RATE_LIMIT_META } from './headroom.js';
+import { accountPauseOf, type AccountPause } from './account-pause.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -262,6 +263,8 @@ export class AgentSession {
     #lastTurnEnd: 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null = null;
     /** The provider said this login is not signed in (prism-acp `failure.kind: 'auth'`): a login fixes it, not a restart. */
     #signedOut = false;
+    /** The provider refused the ACCOUNT (billing, on hold, subscription access off — core/account-pause.ts): nothing here fixes it. */
+    #accountPaused: AccountPause | null = null;
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
      * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
@@ -375,6 +378,8 @@ export class AgentSession {
     get held(): boolean { return this.#held; }
     /** Signed out of its provider: the person logs in (the header's `Log in`), and Genie brings it back. */
     get signedOut(): boolean { return this.#signedOut; }
+    /** Its account is paused by the provider: the person puts the account right, then `Try again`. `null` = not paused. */
+    get accountPaused(): AccountPause | null { return this.#accountPaused; }
 
     /** Hold an agent whose LOGIN is at its limit (another agent hit it): its next prompts wait too. */
     hold(): void {
@@ -679,7 +684,10 @@ export class AgentSession {
                     const readingSaidSo = this.#limitThisTurn;
                     const byLimit = crashed && (readingSaidSo || outcome.failure?.kind === 'rate_limit');
                     // Ended by the LOGIN (the owner, 2026-10-18): the provider says this account is not signed in.
-                    const bySignOut = crashed && !byLimit && outcome.failure?.kind === 'auth';
+                    // Ended by the ACCOUNT (the owner, 2026-10-21: a payment failure paused it): checked before the login,
+                    // because prism-acp files `oauth_org_not_allowed` under `auth` and logging in does not fix it.
+                    const paused = crashed && !byLimit ? accountPauseOf(outcome.failure) : null;
+                    const bySignOut = crashed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
                     this.#lastTurnEnd = byLimit ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
                     this.#limitThisTurn = false;
                     if (byLimit) {
@@ -692,6 +700,14 @@ export class AgentSession {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
                         // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
                         if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
+                    } else if (paused !== null) {
+                        // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
+                        // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                        this.#failedAt = null;
+                        this.#accountPaused = paused;
+                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `Account paused: ${paused.words} (${paused.reason}). Check the subscription and its billing with the provider, then use "Try again".` });
                     } else if (bySignOut) {
                         // SIGNED OUT, not Broken: nothing about the agent is wrong; its provider's login is. The header and
                         // the chat offer `Log in`, and a successful login brings it back (main/login-host.ts).
@@ -709,8 +725,9 @@ export class AgentSession {
                         this.#turnState = 'idle';
                         this.#failure = null;
                         this.#failedAt = null;
-                        // A turn that went through: whatever login it ran on is signed in.
+                        // A turn that went through: whatever login it ran on is signed in, and its account is in order.
                         this.#signedOut = false;
+                        this.#accountPaused = null;
                     }
                     // A STOPPED TURN SAYS SO, in the ledger and the chat: `Stopped by you`. ACP reports a cancelled turn
                     // and nothing more, so without this row a stopped turn read exactly like one that finished — the

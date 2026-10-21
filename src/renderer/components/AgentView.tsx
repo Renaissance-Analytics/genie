@@ -210,6 +210,8 @@ export interface AgentViewProps {
     onResumeLimit?: ((agentId: string) => void) | undefined;
     /** `Log in to <provider>` for a signed-out agent (the owner, 2026-10-18). */
     onProviderLogin?: ((agentId: string) => void) | undefined;
+    /** `Try again` for an agent whose ACCOUNT the provider paused (the owner, 2026-10-21): every agent on that login comes back. */
+    onAccountRetry?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
 }
@@ -248,7 +250,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -552,6 +554,18 @@ export function AgentView({
                             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
                         >
                             Log in to {providerLogin(agent.provider)?.name ?? agent.provider}
+                        </button>
+                    ) : null}
+                    {/* ACCOUNT PAUSED (the owner, 2026-10-21: a payment failure): put the account right with the provider, then this. */}
+                    {actions.retryAccount && onAccountRetry ? (
+                        <button
+                            type="button"
+                            data-action="account-retry"
+                            title={`Once the ${providerLogin(agent.provider)?.name ?? agent.provider} account is put right: every agent it stopped comes back`}
+                            onClick={() => onAccountRetry(agent.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--danger)]/20"
+                        >
+                            Try again
                         </button>
                     ) : null}
                     {actions.resumeLimit && onResumeLimit ? (

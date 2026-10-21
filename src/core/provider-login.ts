@@ -31,3 +31,7 @@ export function providerLogin(provider: string): ProviderLogin | null {
 /** What the agent is told once its provider is signed in again and it has been brought back. */
 export const SIGNED_IN_AGAIN =
     'You were signed out of your provider, and the login is back. Carry on with what you were doing: the last message to you may not have reached you, so read the conversation above before you act.';
+
+/** What each agent is told when the person says its paused ACCOUNT is put right (`Try again`, core/account-pause.ts). */
+export const ACCOUNT_BACK =
+    'Your provider had paused this account, and the person says it is put right. Carry on with what you were doing: the last message to you may not have reached you, so read the conversation above before you act.';

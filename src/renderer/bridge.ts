@@ -158,6 +158,8 @@ export interface GenieBridge {
     resumeLimit(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /** `Log in to <provider>` for a signed-out agent: the provider's own login, in a window of its own on this machine. */
     providerLogin(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Try again for an agent whose ACCOUNT the provider paused: every agent on that login comes back. Absent on an older host. */
+    accountRetry?(agentId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * `ok: false` = not sent; the renderer KEEPS the text (and its files) as an undelivered draft (§4.4). `reason` says
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.

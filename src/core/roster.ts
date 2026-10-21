@@ -1,3 +1,4 @@
+import type { AccountPause } from './account-pause.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
 import type { Approval } from './approval.js';
@@ -41,6 +42,8 @@ export interface LiveSession {
     limit?: GateView | undefined;
     /** Signed out of its provider (the login refused): `Log in` fixes it. Absent = not signed out, or not reported. */
     signedOut?: boolean | undefined;
+    /** Its account is paused by the provider (core/account-pause.ts): the account is put right, then `Try again`. */
+    accountPaused?: AccountPause | null | undefined;
     running: boolean;
     turnState: TurnState;
     /** Epoch ms. `null` when the session never recorded a start. */
@@ -178,5 +181,6 @@ export function agentRowFor(
         contextSize: session?.contextSize ?? null,
         limit: session?.limit ?? null,
         signedOut: session?.signedOut === true,
+        accountPaused: session?.accountPaused ?? null,
     };
 }

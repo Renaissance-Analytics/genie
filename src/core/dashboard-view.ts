@@ -1,3 +1,4 @@
+import type { AccountPause } from './account-pause.js';
 import { limitWords } from './limit-words.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
@@ -53,6 +54,8 @@ export interface AgentRow {
     limit?: GateView | null | undefined;
     /** Signed out of its provider (the login refused, #967): `Log in` fixes it. Absent = not reported. */
     signedOut?: boolean | undefined;
+    /** Its account is paused by the provider: said, with why. Absent/`null` = not paused. */
+    accountPaused?: AccountPause | null | undefined;
     id: string;
     name: string;
     provider: string;
@@ -137,6 +140,8 @@ export function statusOf(row: AgentRow): StatusCell {
     const held = row.state === 'waiting' ? null : limitWords(row.limit);
     if (held) return { word: 'Paused', detail: held, tone: 'warn' };
     // SIGNED OUT of its provider (the owner, 2026-10-18): what to do; the Agent view, the chat and the tray offer `Log in`.
+    // ACCOUNT PAUSED by the provider (the owner, 2026-10-21): the account, not the agent; a waiting question still first.
+    if (row.accountPaused && row.state !== 'waiting') return { word: 'Account paused', detail: row.accountPaused.words, tone: 'bad' };
     if (row.signedOut && row.state !== 'waiting') return { word: 'Signed out', detail: 'log in to continue', tone: 'warn' };
     switch (row.state) {
         case 'waiting':
