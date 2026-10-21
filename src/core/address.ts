@@ -218,7 +218,9 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
         case 'settings': return third ? `genie://settings/${third}` : 'genie://settings';
         case 'browser': return `genie://browser${q(keep(['url']))}`;
         case 'takeover': return third ? `genie://takeover/${third}${q(keep(['login']))}` : null;
-        case 'knowledge': case 'flows': case 'toolchain': return `genie://${second}`;
+        case 'knowledge': case 'flows': return `genie://${second}`;
+        // The old Toolchain page is a Settings section now (beta.33 item 20): its address lands there.
+        case 'toolchain': return 'genie://settings/toolchain';
         // The AgentInbox was a page; its address opens the flyout over the Dashboard.
         case 'inbox': return `genie://dashboard?group=workspace&inbox=${encodeURIComponent(params.get('inbox') ?? '')}`;
         case 'genie': {

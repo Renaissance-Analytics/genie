@@ -176,10 +176,10 @@ export const FEATURE_ICONS: readonly FeatureIcon[] = [
 ];
 
 /** Every surface a route can name. */
-export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'knowledge' | 'flows' | 'hosting' | 'toolchain' | 'settings' | 'browser';
+export type Surface = 'dashboard' | 'deck' | 'agent' | 'workspace' | 'takeover' | 'files' | 'knowledge' | 'flows' | 'hosting' | 'settings' | 'browser';
 
 /** The rail's fixed rows. */
-export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'browser' | 'toolchain' | 'workspace' | 'settings';
+export type RailSurface = 'deck' | 'dashboard' | 'genie' | 'hosting' | 'browser' | 'workspace' | 'settings';
 
 /**
  * Which rail rows a build can offer, DERIVED from which surfaces it can serve.
@@ -201,7 +201,7 @@ export function railSurfacesFor(servable: readonly Surface[]): readonly RailSurf
     if (servable.includes('hosting')) rows.push('hosting');
     // The Genie Browser (the owner: "we are missing the Genie Browser for testing and access to sites").
     if (servable.includes('browser')) rows.push('browser');
-    if (servable.includes('toolchain')) rows.push('toolchain');
+    // No Toolchain row (beta.33 item 20): it is Settings → Toolchain, reached through the Settings row.
     if (servable.includes('workspace')) rows.push('workspace');
     // Settings is a labelled route in the rail, not a palette-only surface (owner, 2026-10-12: "I have no menu to access my settings").
     if (servable.includes('settings')) rows.push('settings');

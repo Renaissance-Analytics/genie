@@ -414,7 +414,7 @@ export const NO_FEATURES: GenieBridge['features'] = {
     soundData: async () => null,
 };
 
-export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'knowledge', 'flows', 'hosting', 'toolchain', 'settings', 'browser'];
+export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'workspace', 'takeover', 'files', 'knowledge', 'flows', 'hosting', 'settings', 'browser'];
 
 /**
  * The terminal bridge when there is NO bridge — a render test, or `App` before `window.genie`

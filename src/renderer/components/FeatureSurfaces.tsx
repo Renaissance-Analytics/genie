@@ -1028,11 +1028,8 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             ) : null}
                             {active === 'remote' ? <RemoteAccess remote={data.remote} workspaces={workspaces} onAction={onAction} connect={remoteConnect} /> : null}
                             {active === 'terminals' ? <SetSection title="Terminals" desc="Shells and builds in your workspaces.">{rows('terminals')}</SetSection> : null}
-                            {active === 'toolchain' ? (
-                                <SetSection title="Toolchain" desc="The languages, tools and agent CLIs installed on this machine.">
-                                    <div><Button type="button" size="sm" data-action="open-toolchain" onClick={() => onNavigate('genie://toolchain')}>Open Toolchain</Button></div>
-                                </SetSection>
-                            ) : null}
+                            {/* TOOLCHAIN LIVES HERE (beta.33 item 20; the owner: "Tool chain is a Settings thing, it should not be its own page in the menu"): the whole of it, in this section. */}
+                            {active === 'toolchain' ? <div data-settings-toolchain="" className="min-h-0"><ToolchainSurface data={data} onAction={onAction} onNavigate={onNavigate} /></div> : null}
                         </div>
                     )}
                 </div>
@@ -1065,7 +1062,7 @@ function ProvidersBlock({ providers, onNavigate }: { providers: readonly Provide
                         {out ? <span data-provider-signed-out={p.provider} className="text-[var(--danger)]">signed out ({out.agentName})</span> : null}
                         <span className="ml-auto flex items-center gap-2">
                             {out && login ? <Button type="button" size="sm" data-action={`provider-login-${p.provider}`} onClick={() => login(out.agentId)}>Log in</Button> : null}
-                            {p.installed === false ? <Button type="button" size="sm" variant="ghost" onClick={() => onNavigate('genie://toolchain')}>Install in Toolchain</Button> : null}
+                            {p.installed === false ? <Button type="button" size="sm" variant="ghost" onClick={() => onNavigate('genie://settings/toolchain')}>Install in Toolchain</Button> : null}
                         </span>
                     </li>
                 );

@@ -33,10 +33,13 @@ describe('every servable feature surface is reachable by a labelled control', ()
         expect(unreachable).toEqual([]);
     });
 
-    it('Hosting and Toolchain are rows, named as their surfaces name themselves', () => {
+    // REWRITTEN for beta.33 item 20 (the owner: "Tool chain is a Settings thing, it should not be its own page in the
+    // menu"): Toolchain is Settings → Toolchain now, reached through the Settings row — no row of its own.
+    it('Hosting is a row, named as its surface names itself; Toolchain is not (it is in Settings)', () => {
         const html = rail();
         expect(html).toMatch(/data-nav="genie:\/\/hosting"[\s\S]*?>Hosting</);
-        expect(html).toMatch(/data-nav="genie:\/\/toolchain"[\s\S]*?>Toolchain</);
+        expect(html).not.toContain('data-nav="genie://toolchain"');
+        expect(html).toContain('data-nav="genie://settings"');
     });
 
     // The owner (beta.33 item 19): "the agentinbox should not be a page and it should be accessible from the header system
