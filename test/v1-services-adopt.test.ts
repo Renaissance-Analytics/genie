@@ -312,7 +312,8 @@ describe('at boot, through composition', () => {
         docker = fakeDocker(fixtureContainers().map((c) => (c.Name === '/genie-svc-postgres-17' ? { ...c, NetworkSettings: { Ports: { '5432/tcp': bind(4101) } } } : c)));
         services = await compose();
         expect(services.engines.envFor(BETA).DB_PORT).toBe('4101');
-        const added = await services.engines.add({ engine: 'redis', major: '8', scope: { kind: 'shared' }, consent: true });
+        // A dedicated Redis: a shared one is never added now (hosting fixes 3.2, the owner's D2).
+        const added = await services.engines.add({ engine: 'redis', major: '8', scope: { kind: 'dedicated', workspaceId: BETA }, consent: true });
         expect(added).toMatchObject({ kind: 'added', instance: { publishedPort: 4102 } });
     });
 });

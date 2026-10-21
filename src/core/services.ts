@@ -100,8 +100,13 @@ export interface EngineDef {
     readonly image: string;
     readonly internalPort: number;
     readonly majors: readonly string[];
-    /** `dedicated-only`: the custom image — an arbitrary image has no multi-tenant story to share (Genie 1's `alwaysDedicated`). */
+    /**
+     * `dedicated-only`: the custom image — an arbitrary image has no multi-tenant story to share (Genie 1's
+     * `alwaysDedicated`) — and Redis (the owner's D2), whose workspace users would live only in its memory.
+     */
     readonly sharing: 'shared-or-dedicated' | 'shared-only' | 'dedicated-only';
+    /** Why a `dedicated-only` engine is never shared, said when a shared one is asked for. */
+    readonly dedicatedBecause?: string;
     /**
      * The image tag for a major, when it is not the major itself — Mailpit publishes `v1.30`, and
      * there is no bare `1.30` (Genie 1 measured that 404 on its first live run).
@@ -287,9 +292,13 @@ export const SERVICE_CATALOG: readonly EngineDef[] = [
         hostEnv: sqlEnv('mysql', 'genie'),
     },
     {
-        engine: 'redis', image: 'redis', internalPort: 6379, majors: ['7', '8'], sharing: 'shared-or-dedicated',
+        // ALWAYS ITS OWN (hosting fixes 3.2; the owner's D2, Genie 1's measured rule): a shared Redis's workspace users are
+        // ACL users held in memory, gone when Docker restarts it. Append-only, so a crash keeps the data (measured on
+        // omarchy-test: killed after a write, it came back empty without, kept with; `--requirepass` held either way).
+        engine: 'redis', image: 'redis', internalPort: 6379, majors: ['7', '8'], sharing: 'dedicated-only',
+        dedicatedBecause: 'its workspace users would be held only in its memory, and the first restart would lock every workspace out',
         containerEnv: () => ({}),
-        command: (password) => ['redis-server', '--requirepass', password],
+        command: (password) => ['redis-server', '--requirepass', password, '--appendonly', 'yes'],
         // A Redis created before passwords were set (no `password`) keeps the URL it was created with.
         hostEnv: (host, port, c) => (c.password
             ? { REDIS_URL: `redis://:${c.password}@${host}:${port}`, REDIS_HOST: host, REDIS_PORT: String(port), REDIS_PASSWORD: c.password }
@@ -677,7 +686,9 @@ export function containerPlan(input: {
     if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
     if (def.adoptOnly) throw new Error(`${input.engine} can only be taken over from Genie 1, not created: its images are no longer published`);
     if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
-    if (def.sharing === 'dedicated-only' && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
+    // The arbitrary image only. A Redis shared before the owner's D2 (hosting fixes 3.2) is still planned as it is: new
+    // shared ones are refused where they are ADDED (service-registry.ts), not ones already on a machine.
+    if (def.custom && input.scope.kind !== 'dedicated') throw new Error(`${input.engine} is always dedicated to one workspace — an arbitrary image has no multi-tenant story to share`);
     if (input.variant !== undefined && !def.variants?.[input.variant]) throw new Error(`${input.engine} has no variant ${JSON.stringify(input.variant)}`);
     const key = `${input.scope.kind === 'shared' ? 'shared' : input.scope.workspaceId}-${input.engine}${input.variant ? `-${input.variant}` : ''}-${input.major}`;
     if (def.custom) {

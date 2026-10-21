@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ServiceDriver, type DockerRunner } from '../src/main/service-driver.js';
 import { ServiceRegistry } from '../src/main/service-registry.js';
+import { runtimeDir } from '../src/main/paths.js';
 
 /**
  * PER-WORKSPACE ISOLATION ON A SHARED ENGINE (hosting ship line H3) — Genie 1's behaviour. A shared Postgres used to
@@ -170,45 +171,66 @@ describe('a shared MySQL / MariaDB: root only in the container; a schema and use
     });
 });
 
-describe('a shared Redis: --requirepass, an ACL user + key prefix per workspace', () => {
-    it('starts with --requirepass (the superuser’s password), and a workspace gets REDIS_USERNAME / PASSWORD / PREFIX of its own', async () => {
-        await registry.add({ engine: 'redis', major: '7', scope: SHARED, consent: true, workspaceId: A });
-        const i = registry.list()[0]!;
-        const create = docker.calls.find((c) => c[0] === 'create')!;
-        expect(create.slice(-4)).toEqual(['redis:7', 'redis-server', '--requirepass', i.admin!.password]);
-        const slice = i.slices![A]!;
+/*
+ * A SHARED REDIS MADE BEFORE THE OWNER'S D2 (hosting fixes 3.2: Redis is always its own now). One already on a machine
+ * keeps serving its workspaces as it was made — each its own ACL user and key prefix, put back whenever the engine
+ * restarts — but none is added any more, and no other workspace joins one. Seeded here as services.json holds it.
+ */
+describe('a shared Redis made before D2: its ACL users, kept — and no new one', () => {
+    const shared = {
+        id: 'svc_redis_shared', engine: 'redis', version: '7', scope: SHARED, publishedPort: 4101, credentials: {}, active: true,
+        admin: { user: 'default', password: 'genpw-admin' },
+        slices: {
+            [A]: { identifier: 'ws_example_a', password: 'genpw-slice-a', prefix: 'ws_example_a:' },
+            [B]: { identifier: 'ws_example_b', password: 'genpw-slice-b', prefix: 'ws_example_b:' },
+        },
+    };
+    const seeded = async () => {
+        await mkdir(runtimeDir(dir), { recursive: true });
+        await writeFile(join(runtimeDir(dir), 'services.json'), JSON.stringify({ instances: [shared] }), 'utf8');
+        const d = fakeDocker();
+        d.containers.set('genie-shared-redis-7', 'running');
+        await open(d);
+    };
+
+    it('none is added any more, for a workspace or alone — in words', async () => {
+        for (const workspaceId of [A, undefined]) {
+            const r = await registry.add({ engine: 'redis', major: '7', scope: SHARED, consent: true, ...(workspaceId ? { workspaceId } : {}) }).then(() => null, (e: Error) => e.message);
+            expect(r).toMatch(/redis is always dedicated to one workspace/);
+        }
+        expect(docker.calls.filter((c) => c[0] === 'create')).toHaveLength(0);
+    });
+
+    it('one already on the machine still gives each of its workspaces REDIS_USERNAME / PASSWORD / PREFIX of its own', async () => {
+        await seeded();
         expect(registry.envFor(A)).toEqual({
-            REDIS_URL: `redis://ws_example_a:${slice.password}@127.0.0.1:4101`,
+            REDIS_URL: 'redis://ws_example_a:genpw-slice-a@127.0.0.1:4101',
             REDIS_HOST: '127.0.0.1',
             REDIS_PORT: '4101',
             REDIS_USERNAME: 'ws_example_a',
-            REDIS_PASSWORD: slice.password,
+            REDIS_PASSWORD: 'genpw-slice-a',
             REDIS_PREFIX: 'ws_example_a:',
         });
-        const setuser = docker.execs().filter((a) => a.includes('SETUSER'));
-        expect(setuser).toHaveLength(1);
-        expect(setuser[0]).toEqual(expect.arrayContaining(['ws_example_a', 'reset', `>${slice.password}`, '~ws_example_a:*']));
     });
 
     it('its ACL users live in memory: a restart of the engine puts EVERY workspace’s back — counted, once each', async () => {
-        await registry.add({ engine: 'redis', major: '7', scope: SHARED, consent: true, workspaceId: A });
-        await registry.add({ engine: 'redis', major: '7', scope: SHARED, consent: true, workspaceId: B });
-        const id = registry.list()[0]!.id;
-        const before = docker.execs().filter((a) => a.includes('SETUSER')).length;
-        expect(before).toBe(2);
-        await registry.stop(id);
-        await registry.start(id);
-        const after = docker.execs().filter((a) => a.includes('SETUSER')).slice(before).map((a) => a[a.indexOf('SETUSER') + 1]);
-        expect(after).toEqual(['ws_example_a', 'ws_example_b']);
+        await seeded();
+        await registry.stop(shared.id);
+        await registry.start(shared.id);
+        const put = docker.execs().filter((a) => a.includes('SETUSER'));
+        expect(put.map((a) => a[a.indexOf('SETUSER') + 1])).toEqual(['ws_example_a', 'ws_example_b']);
+        expect(put[0]).toEqual(expect.arrayContaining(['ws_example_a', 'reset', '>genpw-slice-a', '~ws_example_a:*']));
         // Restoring re-keys nothing: the passwords recorded are the ones put back.
-        expect(registry.envFor(A).REDIS_PASSWORD).toBe(registry.list()[0]!.slices![A]!.password);
+        expect(registry.envFor(A).REDIS_PASSWORD).toBe('genpw-slice-a');
     });
+});
 
-    it('a DEDICATED Redis gets a password too (requirepass) and hands it in REDIS_URL / REDIS_PASSWORD; no ACL user', async () => {
+describe('a dedicated Redis (the only kind added now)', () => {
+    it('a DEDICATED Redis gets a password too (requirepass), append-only, and hands it in REDIS_URL / REDIS_PASSWORD; no ACL user', async () => {
         await registry.add({ engine: 'redis', major: '7', scope: { kind: 'dedicated', workspaceId: A }, consent: true });
         const i = registry.list()[0]!;
         expect(i.credentials.password).toMatch(/^genpw-/);
-        expect(docker.calls.find((c) => c[0] === 'create')!.slice(-2)).toEqual(['--requirepass', i.credentials.password]);
+        expect(docker.calls.find((c) => c[0] === 'create')!.slice(-6)).toEqual(['redis:7', 'redis-server', '--requirepass', i.credentials.password, '--appendonly', 'yes']);
         expect(registry.envFor(A)).toMatchObject({ REDIS_URL: `redis://:${i.credentials.password}@127.0.0.1:4101`, REDIS_PASSWORD: i.credentials.password });
         expect(docker.execs()).toEqual([]);
     });

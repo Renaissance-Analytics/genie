@@ -82,27 +82,28 @@ describe('adding an engine', () => {
     });
 
     it('a shared engine is ONE per workstation: adding it twice answers the existing instance; websockets cannot be dedicated', async () => {
-        const a = await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true });
-        const b = await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true });
+        // Mongo, not Redis: Redis is never shared now (hosting fixes 3.2, the owner's D2).
+        const a = await registry.add({ engine: 'mongo', major: '7', scope: { kind: 'shared' }, consent: true });
+        const b = await registry.add({ engine: 'mongo', major: '7', scope: { kind: 'shared' }, consent: true });
         expect(b).toMatchObject({ kind: 'exists', instance: { id: (a as { instance: { id: string } }).instance.id } });
         await expect(registry.add({ engine: 'websockets', major: '4.7.0', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true })).rejects.toThrow(/shared/);
     });
 });
 
 describe('env and status', () => {
-    it('a workspace’s env covers its own engines AND the shared ones it USES, in host form — its own Redis user on the shared engine', async () => {
-        // H3: a shared Redis is multi-tenant. The workspace that adds it gets its own ACL user; one that has not
-        // used it gets nothing from it (it used to get the one unauthenticated URL every workspace shared).
-        await registry.add({ engine: 'postgres', major: '17', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true });
-        await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true, workspaceId: 'tynn' });
+    it('a workspace’s env covers its own engines AND the shared ones it USES, in host form — its own role on the shared engine', async () => {
+        // H3: a shared engine is multi-tenant. The workspace that adds it gets its own role; one that has not used it
+        // gets nothing from it. A shared POSTGRES here: Redis is never shared now (hosting fixes 3.2, the owner's D2).
+        await registry.add({ engine: 'redis', major: '7', scope: { kind: 'dedicated', workspaceId: 'tynn' }, consent: true });
+        await registry.add({ engine: 'postgres', major: '17', scope: { kind: 'shared' }, consent: true, workspaceId: 'tynn' });
         const env = registry.envFor('tynn');
-        expect(env.DB_PORT).toBe('54301');
-        expect(env.REDIS_URL).toBe('redis://ws_tynn:pw1-generated@127.0.0.1:54302');
-        expect(env.REDIS_USERNAME).toBe('ws_tynn');
+        expect(env.REDIS_URL).toBe('redis://:pw1-generated@127.0.0.1:54301');
+        expect(env.DB_PORT).toBe('54302');
+        expect(env.DB_USERNAME).toBe('ws_tynn');
         expect(registry.envFor('fancy').REDIS_URL).toBeUndefined();
         expect(registry.envFor('fancy').DB_PORT).toBeUndefined();
-        await registry.add({ engine: 'redis', major: '7', scope: { kind: 'shared' }, consent: true, workspaceId: 'fancy' });
-        expect(registry.envFor('fancy').REDIS_URL).toBe('redis://ws_fancy:pw1-generated@127.0.0.1:54302');
+        await registry.add({ engine: 'postgres', major: '17', scope: { kind: 'shared' }, consent: true, workspaceId: 'fancy' });
+        expect(registry.envFor('fancy')).toMatchObject({ DB_PORT: '54302', DB_USERNAME: 'ws_fancy' });
     });
 
     it('status is read from Docker on every ask; stop and start go through the driver; remove keeps data unless asked', async () => {
