@@ -807,7 +807,8 @@ if (!approvalEnabled) {
     // 48–49. THE OWNER'S THIRD LOOK (beta.8): "when I select a workspace, I should not see the workspace settings";
     // and 2026-10-19: the first tab is the WORKSPACE DASHBOARD, not an agent list (q_09d1f4a0). The route opens on it —
     // the seeded agent in the header's strip, the dashboard's "Working in" section — and NO settings section. The terminals are a PANEL in a tab you design (Tynn #282, 2026-10-17): the small +
-    // makes a tab, the tab offers every panel kind, and a Terminals panel is the terminal manager.
+    // makes a tab, the tab offers every panel kind, and a Terminals panel is ONE terminal (beta.33 item 9: the owner, "a
+    // terminal panel is 1 panel for that terminal") — placing it starts the terminal; no manager, no + terminal inside.
     const home = await cdp.evaluate(`(() => ({
         dashboard: Boolean(document.querySelector('[data-workspace-dashboard]')),
         pills: document.querySelectorAll('[data-agent-pill]').length,
@@ -820,16 +821,15 @@ if (!approvalEnabled) {
     const designer = await waitFor(cdp, `Boolean(document.querySelector('[data-designed-tab] [data-add-panel="terminal"]')) && !document.querySelector('[data-workspace-dashboard]')`, 'the new tab to open on its designer');
     check(designer, '49a. + makes a tab that opens on its panel designer (and puts the dashboard away)');
     await cdp.evaluate(`document.querySelector('[data-designed-tab] [data-add-panel="terminal"]').click(); true`);
-    const terminalsView = await waitFor(cdp, `Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-add]'))`, 'the Terminals panel');
-    check(terminalsView, '49. a Terminals panel in that tab is the terminal manager, its strip and its + terminal');
+    const terminalsView = await waitFor(cdp, `Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-panel]')) && !document.querySelector('[data-panel="terminal"] [data-terminal-add]') && !document.querySelector('[data-panel="terminal"] [data-terminal-tabs]')`, 'the Terminals panel’s own terminal');
+    check(terminalsView, '49. a Terminals panel in that tab is ONE terminal, started by placing it — no manager, no + terminal');
 
-    await cdp.evaluate(`document.querySelector('[data-panel="terminal"] [data-terminal-add]').click(); true`);
     const paneUp = await waitFor(
         cdp,
-        `Boolean(document.querySelector('[data-terminal-pane] .xterm-rows'))`,
-        'an xterm to mount for the new terminal',
+        `Boolean(document.querySelector('[data-panel="terminal"] [data-terminal-pane] .xterm-rows'))`,
+        'an xterm to mount for the panel’s terminal',
     );
-    check(paneUp, '36. "+ terminal" opens a real terminal pane with xterm mounted');
+    check(paneUp, '36. the panel’s terminal is a real terminal pane with xterm mounted');
 
     // Let the shell print its prompt, then focus xterm's textarea and type.
     await new Promise((r) => setTimeout(r, 1200));
