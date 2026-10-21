@@ -1007,6 +1007,20 @@ export class SessionHost {
     }
 
     /**
+     * WHAT A QUIT WAITS FOR after `stopAll()`: every stopped session's provider exit (each bounded by `exitWithinMs`),
+     * then every row queued — `settled()`.
+     *
+     * `settled()` alone is not enough there. A stopped agent's reply is queued by its provider's EXIT, which arrives
+     * after the stop returns; a wait that begins right after the stop has already looked, and the reply is lost with
+     * the process. Measured in Electron on omarchy-test (2026-10-21): a thread write not awaited before the quit
+     * proceeded reached the file 0 times in 20, and left the thread's lock file behind every time.
+     */
+    async drained(exitWithinMs: number): Promise<void> {
+        await Promise.all([...this.#stopped].filter((s) => s.exit === null).map((s) => s.exitedWithin(exitWithinMs)));
+        await this.settled();
+    }
+
+    /**
      * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
      * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
      * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,

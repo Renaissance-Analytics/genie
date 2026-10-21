@@ -2506,6 +2506,10 @@ app.on('before-quit', (event) => {
     }
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.
     if (step === 'pass') return;
+    // HELD until the sessions' last rows are written (bounded): Electron exits WITHOUT running what is still queued, so
+    // a reply the stop closes, or a turn's last row still landing, was lost with its thread's lock file left behind
+    // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes from drainWritesThenQuit, as a 'pass'.
+    event.preventDefault();
     host?.stopAll();
     // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
     keepaliveNow?.stop();
@@ -2517,7 +2521,21 @@ app.on('before-quit', (event) => {
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();
     clearGenieRunning(genieHome());
+    void drainWritesThenQuit();
 });
+
+/** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
+const QUIT_EXIT_WAIT_MS = 2_000;
+/** The whole wait's bound: a quit is never held past it, written or not. */
+const QUIT_WRITES_MS = 5_000;
+
+/** The shutdown pass's wait (SessionHost.drained), bounded, and then the quit again — which before-quit lets through. */
+function drainWritesThenQuit(): Promise<void> {
+    let bound: ReturnType<typeof setTimeout> | undefined;
+    const drained = (host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve()).catch(() => { /* an unwritten row never blocks a quit */ });
+    return Promise.race([drained, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
+        .finally(() => { clearTimeout(bound); app.quit(); });
+}
 
 // THE LINUX PASSWORD STORE (Tynn #846; Genie 1's genie#379/#588): Chromium picks its secret store from the desktop's
 // name and does not know Hyprland (Omarchy) — so safeStorage could encrypt nothing there. Chosen from what owns the

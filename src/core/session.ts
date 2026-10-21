@@ -1023,6 +1023,14 @@ export class AgentSession {
         return this.#verdict;
     }
 
+    /**
+     * Resolves when the provider exits, or after `ms` — whichever is first. What a quit waits on (`SessionHost.drained`):
+     * a killed provider's EXIT is what queues the reply it closes, and it arrives after `stop()` has returned.
+     */
+    exitedWithin(ms: number): Promise<void> {
+        return this.#exitWithin(ms);
+    }
+
     /** Resolves when the provider exits, or after `ms` — whichever is first. */
     #exitWithin(ms: number): Promise<void> {
         if (this.#exited) return Promise.resolve();
