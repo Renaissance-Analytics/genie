@@ -76,6 +76,6 @@ describe('where it lives', () => {
         expect(EMPTY_FEATURES.issueWatch).toBeNull();
         const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
         expect(main).toMatch(/issueWatch: \(\) => issueWatchPanels\(\)/);
-        expect(main).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\); pushFeatures\(\); \}/);
+        expect(main).toMatch(/onEntry: \(entry\) => \{\s*issueWatchLatest\.set\(entry\.projectId, entry\);\s*issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\);[\s\S]*?pushFeatures\(\);\s*\}/);
     });
 });

@@ -73,6 +73,8 @@ export interface FeaturePorts {
     readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
     /** Have Tynn read a workspace's repos now — the GitHub panel's Refresh. Absent = none (doctor mode). */
     readonly issueWatchRefresh?: (workspaceId: string) => Promise<unknown>;
+    /** Set one repo's IssueWatch switch in Tynn (tynn.ai#307). Absent = none (doctor mode). */
+    readonly issueWatchSetRepo?: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => Promise<unknown>;
     readonly toolchain?: {
         probe(): Promise<ToolStatus[]>;
         update(tool: string): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
@@ -853,6 +855,13 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.inbox.receive({ participant: HUMAN, limit: before + 1 });
             break;
         }
+        case 'issueWatch.setRepo':
+            // A Watched repos checkbox: Tynn's switch, one field; Tynn pushes the changed feed, main re-reads the switches.
+            await ports.issueWatchSetRepo?.(action.workspaceId, action.owner, action.repo, {
+                ...(typeof action.enabled === 'boolean' ? { enabled: action.enabled } : {}),
+                ...(typeof action.includeUpstream === 'boolean' ? { includeUpstream: action.includeUpstream } : {}),
+            });
+            break;
         case 'issueWatch.refresh':
             // The GitHub panel's Refresh: Tynn reads the workspace's repos now and pushes what it finds.
             await ports.issueWatchRefresh?.(action.workspaceId);

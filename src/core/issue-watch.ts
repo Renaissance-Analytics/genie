@@ -346,6 +346,57 @@ export function parseIssueWatchActivity(raw: unknown): { projectId: string; even
     return { projectId, events };
 }
 
+/**
+ * WHICH REPOS FEED THE STREAM (the owner, 2026-10-21: "Genie 1 had the ability for me to choose what repos are included
+ * in the IssueWatch stream"). Tynn's switch per repo (tynn.ai#307): watch it at all; for a fork, include its upstream's
+ * issues and PRs. Read from Tynn's answer, which is untrusted: a row that is not a repo is dropped.
+ */
+export interface WatchedRepo {
+    readonly slug: string;
+    readonly owner: string;
+    readonly repo: string;
+    readonly enabled: boolean;
+    readonly includeUpstream: boolean;
+    readonly isFork: boolean;
+    readonly upstreamSlug: string | null;
+}
+
+export interface WatchedRepos {
+    readonly entitled: boolean;
+    readonly repos: readonly WatchedRepo[];
+}
+
+/** What the panel shows for the choice: Tynn's switches, or why there are none (a Tynn without it; a refusal). */
+export type WatchedReposView = ({ readonly state: 'ok' } & WatchedRepos) | { readonly state: 'unavailable'; readonly reason: string };
+
+const REPO_NAME = /^[A-Za-z0-9_.-]{1,100}$/;
+
+export function parseWatchedRepos(raw: unknown): WatchedRepos | null {
+    if (raw === null || typeof raw !== 'object' || !Array.isArray((raw as { repositories?: unknown }).repositories)) return null;
+    const r = raw as { entitled?: unknown; repositories: unknown[] };
+    const repos: WatchedRepo[] = [];
+    for (const row of r.repositories) {
+        if (row === null || typeof row !== 'object') continue;
+        const x = row as Record<string, unknown>;
+        if (typeof x.owner !== 'string' || typeof x.repo !== 'string' || !REPO_NAME.test(x.owner) || !REPO_NAME.test(x.repo)) continue;
+        repos.push({
+            slug: `${x.owner}/${x.repo}`,
+            owner: x.owner,
+            repo: x.repo,
+            enabled: x.enabled !== false,
+            includeUpstream: x.include_upstream !== false,
+            isFork: x.is_fork === true,
+            upstreamSlug: typeof x.upstream_slug === 'string' && x.upstream_slug.length > 0 ? x.upstream_slug : null,
+        });
+    }
+    return { entitled: r.entitled === true, repos };
+}
+
+/** A GitHub owner or repo name as Tynn's route takes it — anything else is refused before it is sent. */
+export function isRepoName(v: string): boolean {
+    return REPO_NAME.test(v) && v !== '.' && v !== '..';
+}
+
 /** One open item as the panel shows it: `#N`, the title, who opened it and how long ago — never its repo again. */
 export interface IssueWatchRow {
     readonly kind: 'security' | 'pr' | 'issue' | 'feedback';
@@ -379,6 +430,8 @@ export interface IssueWatchPanelView {
     readonly empty: string | null;
     /** What happened lately, newest first, in an agent's notice's words. */
     readonly recent: ReadonlyArray<{ text: string; url: string | null }>;
+    /** Which repos feed the stream (Tynn's switches), or why there are none; `null` = not read yet. */
+    readonly watched: WatchedReposView | null;
 }
 
 /** A list Tynn sent longer ago than this is not called live: Tynn re-reads every repo within 20 minutes when healthy. */
@@ -405,7 +458,7 @@ export const PANEL_RECENT = 20;
  * counts, the open items by family — SECURITY FIRST, the owner's standing rule that security is fixed at once — and what
  * happened lately (`recent` arrives newest first), capped.
  */
-export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly IwEvent[], now: number = Date.now()): IssueWatchPanelView {
+export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly IwEvent[], now: number = Date.now(), watched: WatchedReposView | null = null): IssueWatchPanelView {
     const why = issueWatchWhyNot(summary);
     const delivered = summary.deliveredAt;
     // HONEST ABOUT ITS AGE (the owner, 2026-10-21: merged PRs still listed hours later): "Live" only while the list is
@@ -445,6 +498,7 @@ export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly
         feedback,
         empty: entry && repos.length === 0 && feedback.length === 0 ? 'Nothing open on the watched repos.' : null,
         recent: recent.slice(0, PANEL_RECENT).map((e) => ({ text: eventText(e), url: e.item?.url || null })),
+        watched,
     };
 }
 

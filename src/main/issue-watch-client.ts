@@ -1,4 +1,4 @@
-import { IssueWatchFeed, parseIssueWatchActivity, parseIssueWatchEntry, type IwEntry, type IwEvent } from '../core/issue-watch.js';
+import { IssueWatchFeed, parseIssueWatchActivity, parseIssueWatchEntry, type IwEntry, type IwEvent, isRepoName, parseWatchedRepos, type WatchedRepos } from '../core/issue-watch.js';
 import { encodePong, encodeSubscribe, parsePusherFrame, pusherWsUrl, socketIdOf } from '../core/pusher.js';
 
 /**
@@ -121,6 +121,36 @@ export class IssueWatchClient {
             nextIn: typeof body.cooldown?.label === 'string' ? body.cooldown.label : null,
             ...(error === null ? {} : { error }),
         };
+    }
+
+    /** Which repos feed this project's stream — Tynn's switches (tynn.ai#307) — or why Tynn would not say. */
+    async watchedRepos(projectId: string): Promise<{ ok: true; repos: WatchedRepos } | { ok: false; reason: string }> {
+        const tynn = this.#ports.tynn();
+        if (tynn === null) return { ok: false, reason: 'not signed in to Tynn' };
+        try {
+            const res = await tynn.request(`/api/v1/user/issue-watch/${encodeURIComponent(projectId)}/repositories`, { method: 'GET' });
+            // Every refusal of Tynn's is a 404, and so is a Tynn without this: said as what it is, not guessed at.
+            if (!res.ok) return { ok: false, reason: `Tynn did not answer the repo list (HTTP ${res.status}) — this Tynn may not offer choosing repos yet, or this workspace is not yours to change` };
+            const repos = parseWatchedRepos(await res.json());
+            return repos ? { ok: true, repos } : { ok: false, reason: 'Tynn answered the repo list with something that is not one' };
+        } catch (error) {
+            return { ok: false, reason: `Tynn could not be reached: ${(error as Error).message}` };
+        }
+    }
+
+    /** Set one repo's switch in Tynn; Tynn pushes the changed feed itself. Each switch travels alone. */
+    async setWatchedRepo(projectId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }): Promise<{ ok: true } | { ok: false; reason: string }> {
+        if (!isRepoName(owner) || !isRepoName(repo)) return { ok: false, reason: `${owner}/${repo} is not a GitHub repo name` };
+        const body = { ...(change.enabled !== undefined ? { enabled: change.enabled } : {}), ...(change.includeUpstream !== undefined ? { include_upstream: change.includeUpstream } : {}) };
+        if (Object.keys(body).length === 0) return { ok: false, reason: 'nothing to change' };
+        const tynn = this.#ports.tynn();
+        if (tynn === null) return { ok: false, reason: 'not signed in to Tynn' };
+        try {
+            const res = await tynn.request(`/api/v1/user/issue-watch/${encodeURIComponent(projectId)}/repositories/${owner}/${repo}`, { method: 'POST', body });
+            return res.ok ? { ok: true } : { ok: false, reason: `Tynn did not change ${owner}/${repo} (HTTP ${res.status})` };
+        } catch (error) {
+            return { ok: false, reason: `Tynn could not be reached: ${(error as Error).message}` };
+        }
     }
 
     #set(state: IssueWatchState): void {

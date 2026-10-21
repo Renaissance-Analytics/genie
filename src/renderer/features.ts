@@ -272,6 +272,8 @@ export const EMPTY_FEATURES: FeatureData = {
 export type FeatureAction =
     /** The GitHub panel's Refresh: Tynn reads this workspace's repos now. */
     | { kind: 'issueWatch.refresh'; workspaceId: string }
+    /** One repo's IssueWatch switch in Tynn (watch it; include a fork's upstream) — one field at a time. */
+    | { kind: 'issueWatch.setRepo'; workspaceId: string; owner: string; repo: string; enabled?: boolean; includeUpstream?: boolean }
     | { kind: 'whatsNew.show' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }
