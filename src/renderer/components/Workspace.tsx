@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type ComponentType, type Poin
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
+import { TerminalCell } from './TerminalCell.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
@@ -186,6 +187,15 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     const designed = parseTabs(typeof tabsRaw === 'string' ? tabsRaw : '{"tabs":[]}');
     const canDesign = Boolean(ops?.settings && ops.settings.values !== null);
     const saveTabs = (next: TabsState): void => { ops?.settings?.onSet('workspace_tabs', serializeTabs(next)); };
+    // A terminal panel's new terminal, placed in its cell. Two panels starting at once each build on the other's placement
+    // (the setting's round trip has not come back yet), never on the same stale tabs.
+    const tabsBase = useRef<{ raw: unknown; state: TabsState }>({ raw: tabsRaw, state: designed });
+    if (tabsBase.current.raw !== tabsRaw) tabsBase.current = { raw: tabsRaw, state: designed };
+    const placeTerminal = (tabId: string, cell: number, terminalId: string): void => {
+        const next = placePanel(tabsBase.current.state, tabId, cell, { kind: 'terminal', ref: terminalId });
+        tabsBase.current = { raw: tabsBase.current.raw, state: next };
+        saveTabs(next);
+    };
     const [designNotice, setDesignNotice] = useState<string | null>(null);
     // THE WORKSPACE DASHBOARD (q_09d1f4a0): what waits on you, the work in flight, the last finished — no file changes.
     const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, now: Date.now() });
@@ -238,10 +248,10 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
         return () => { live = false; };
     }, [terminals, workspace.id]);
 
-    const openTerminal = useCallback(() => {
+    const openTerminal = useCallback((): Promise<string> => {
         const previous = seededPrevious.current ? Promise.resolve<string | null>(null) : terminals.previousSession(workspace.id);
         seededPrevious.current = true;
-        void Promise.all([terminals.open(workspace.id, { ...lastSize.current }), previous]).then(([opened, restored]) => {
+        return Promise.all([terminals.open(workspace.id, { ...lastSize.current }), previous]).then(([opened, restored]) => {
             setState((s) =>
                 terminalOpened(
                     s,
@@ -251,6 +261,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     restored ? { restored: true } : {},
                 ),
             );
+            return opened.id;
         });
     }, [terminals, workspace.id]);
 
@@ -412,7 +423,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 <button
                     type="button"
                     data-terminal-add=""
-                    onClick={openTerminal}
+                    onClick={() => { void openTerminal(); }}
                     className="flex items-center gap-1.5 px-3 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]"
                 >
                     <Icon name="plus" className="h-3.5 w-3.5" />
@@ -511,7 +522,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         <button
                             type="button"
                             data-terminal-add-empty=""
-                            onClick={openTerminal}
+                            onClick={() => { void openTerminal(); }}
                             className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]"
                         >
                             Open a terminal
@@ -800,7 +811,24 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         onRename={(name) => saveTabs(renameTab(designed, tab.id, name))}
                         onRemove={() => { saveTabs(removeTab(designed, tab.id)); onViewChange?.('home'); }}
                         renderPanel={(p) => {
-                            if (p.kind === 'terminal') return terminalsBody;
+                            // A TERMINAL PANEL IS ONE TERMINAL (beta.33 item 9): the one its cell names, filling the cell.
+                            if (p.kind === 'terminal') {
+                                const at = tab.cells.indexOf(p);
+                                const held = p.ref === null ? null : [...state.terminals, ...(state.hidden ?? [])].find((t) => t.id === p.ref) ?? null;
+                                return (
+                                    <TerminalCell
+                                        terminalId={p.ref}
+                                        terminal={held}
+                                        output={p.ref === null ? '' : state.output[p.ref] ?? ''}
+                                        Pane={Pane}
+                                        root={workspace.path}
+                                        onData={(id, data) => terminals.write(id, data)}
+                                        onResize={(id, { cols, rows }) => { lastSize.current = { cols, rows }; terminals.resize(id, cols, rows); }}
+                                        onOpenFile={(file) => { const target = workspaceFileOf(workspace.path, file); if (target) onOpenFile?.(target.path, target.line); }}
+                                        onStart={() => { if (at >= 0) void openTerminal().then((id) => placeTerminal(tab.id, at, id)); }}
+                                    />
+                                );
+                            }
                             if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
                             if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />;
                             if (p.kind === 'artboard') {
