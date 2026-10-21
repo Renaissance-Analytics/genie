@@ -18,6 +18,7 @@ function deps(pluginTools: AllToolsDeps['plugins']['plugins']['tools'] = () => [
         attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
+        flows: { resolveCaller: () => null, flows: null },
         plugins: { plugins: { tools: pluginTools, guard: () => null }, run: never as never, approve: async () => 'denied', resolveCaller: () => null },
     };
 }
@@ -28,16 +29,17 @@ describe('allGenieTools', () => {
     // NO SIDECAR (the owner, 2026-10-19: "get rid of the whole sidecar concept"; "do not list tools and instructions an
     // agent cannot use"): `runAgent` was only the sidecar; it is gone, and no skill tells an agent about one.
     // `plan` added 2026-10-20 (the owner: the Active Plan column had no way for an agent to fill it).
-    it('is the thirteen Genie tools, unique, in a stable order — no submitFeedback, no runAgent sidecar', () => {
+    // `flows` added 2026-10-21: an agent makes the flows it needs (a watcher); the person arms them.
+    it('is the fourteen Genie tools, unique, in a stable order — no submitFeedback, no runAgent sidecar', () => {
         const names = allGenieTools(deps()).map((r) => r.definition.name);
-        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes']);
+        expect(names).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows']);
         expect(new Set(names).size).toBe(names.length);
     });
 
     it('with the agents part (normal Genie, not doctor): createAgent after processes — the ONLY tool that is not for every caller', () => {
         const withAgents: AllToolsDeps = { ...deps(), agents: { resolveCaller: () => null, defaultAgentOf: () => null, roster: () => [], approve: async () => 'denied', register: (() => { throw new Error('x'); }) as never, addressOf: () => '' } };
         const regs = allGenieTools(withAgents);
-        expect(regs.map((r) => r.definition.name)).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'createAgent']);
+        expect(regs.map((r) => r.definition.name)).toEqual(['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'plan', 'services', 'sites', 'processes', 'flows', 'createAgent']);
         expect(regs.filter((r) => r.visible !== undefined).map((r) => r.definition.name)).toEqual(['createAgent']);
     });
 
@@ -53,8 +55,8 @@ describe('allGenieTools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
         const names = allGenieTools(deps(() => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }])).map((r) => r.definition.name);
-        expect(names).toHaveLength(14);
-        expect(names[13]).toBe('acme.lint.lint');
+        expect(names).toHaveLength(15);
+        expect(names[14]).toBe('acme.lint.lint');
     });
 });
 

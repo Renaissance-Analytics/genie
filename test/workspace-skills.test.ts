@@ -26,7 +26,7 @@ const run = (fs: SkillFs) => writeAgentSkills({ workspacePath: W, fs, stamp: '20
 
 // The twelve tools Genie 2's MCP registers (pinned by test/mcp-registrations.test.ts); checkIssues is Genie 2's too now (Tynn #806).
 // No runAgent: the sidecar is gone (the owner, 2026-10-19).
-const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'services', 'sites', 'processes'];
+const SERVED = ['imDone', 'ForceTheQuestion', 'agentinbox', 'lists', 'thumbsUp', 'checkIssues', 'knowledge', 'manageTerminals', 'openFileForUser', 'services', 'sites', 'processes', 'flows'];
 const V1_ONLY = ['connectToGenie', 'genieGuide', 'manageProcess', 'manageWorkspaces', 'manageGappDev', 'registerSession', 'provisionWorkspaces'];
 
 describe('Genie 2\'s skills', () => {
@@ -34,7 +34,7 @@ describe('Genie 2\'s skills', () => {
         const { fs, store } = memFs({});
         await run(fs);
         for (const s of GENIE_SKILLS) {
-            const named = [...s.body.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).filter((n) => /^(?:[a-z]+[A-Z]|ForceTheQuestion|agentinbox|lists|knowledge|services|sites|processes)/.test(n));
+            const named = [...s.body.matchAll(/`([A-Za-z]+)`/g)].map((m) => m[1]!).filter((n) => /^(?:[a-z]+[A-Z]|ForceTheQuestion|agentinbox|lists|knowledge|services|sites|processes|flows)/.test(n));
             for (const n of named) expect(SERVED, `${s.name} names ${n}`).toContain(n);
             for (const v1 of V1_ONLY) expect(s.body, `${s.name}`).not.toContain(v1);
             for (const dir of ['.claude/skills', '.agents/skills']) {

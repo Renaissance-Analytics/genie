@@ -9,6 +9,7 @@ import type { AttentionStore } from './attention-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
 import type { HostingApproval, ServiceExec } from './mcp-tools-hosting.js';
 import type { ProcessApproval, ProcessesPort } from './mcp-tools-processes.js';
+import type { FlowsPort } from './mcp-tools-flows.js';
 import type { InboxStore } from './inbox-store.js';
 import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
 import type { KnowledgeStore } from './knowledge-store.js';
@@ -57,6 +58,8 @@ export interface GenieToolParts {
     readonly openInBrowser?: OpenInBrowser;
     /** The background processes the agents' `processes` tool acts on — the Processes tab's book and the supervisor's logs. Absent = none (doctor mode), and the tool says so. */
     readonly processes?: ProcessesPort;
+    /** The flows the agents' `flows` tool acts on — the Flows tab's store and the scheduler's Run now. Absent = none (doctor mode), and the tool says so. */
+    readonly flows?: FlowsPort;
     /** Runs `services exec` commands (main/service-exec.ts). Absent = none (doctor mode), and the tool says so. */
     readonly serviceExec?: ServiceExec;
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
@@ -103,6 +106,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             approve: (caller, action, detail) => p.approve(caller, action, detail),
             processes: p.processes ?? null,
         },
+        flows: { resolveCaller: p.resolveCaller, flows: p.flows ?? null },
         attention: { resolveCaller: p.resolveCaller, openFile: p.openFile, ...(p.reportPlan ? { reportPlan: p.reportPlan } : {}) },
         plugins: {
             plugins: { tools: () => p.plugins.tools(), guard: (id) => p.plugins.guard(id) },

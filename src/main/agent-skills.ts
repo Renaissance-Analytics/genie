@@ -40,6 +40,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`plan\` to show your plan in your Active Plan column: the whole list each time, each step pending, in_progress or completed. Call it when you start work with more than one step, and again as each step starts or finishes.
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
 - \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
+- \`flows\` for scheduled or repeating work — a watcher that runs a check every 30 minutes and prompts an agent on what it finds, a nightly job. You make the flow; it is created disarmed and runs only once the person arms it in Genie's Flows tab.
 - \`manageTerminals\` for shells and builds. You are never run in one yourself.
 - Keep your steps short. Run long commands — test suites, builds, servers — in the background (your shell's background option, or \`processes\`) and check on them, rather than in one long step: messages from the person reach you only between your steps, so while one command runs they wait.
 - \`knowledge\` for the workstation's knowledge graph.

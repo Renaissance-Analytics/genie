@@ -23,6 +23,7 @@ function deps(): AllToolsDeps {
         attention: { resolveCaller: () => null, openFile: async () => ({ ok: false, reason: 'x' }) },
         hosting: { resolveCaller: () => null, approve: async () => 'denied', services: null },
         processes: { resolveCaller: () => null, approve: async () => 'denied', processes: null },
+        flows: { resolveCaller: () => null, flows: null },
         plugins: { plugins: { tools: () => [{ pluginId: 'acme.lint', dir: '/p', manifest: { ...manifest, mcpTools: [tool] }, tool }], guard: () => null }, run: never as never, approve: async () => 'denied', resolveCaller: () => null },
     };
 }
@@ -41,7 +42,7 @@ describe('Genie’s published tool schemas', () => {
     });
 
     it('the mirror resolves terminalId on every tool that takes it — counted, with the tool set as the control', () => {
-        expect(withTerminalId.length).toBe(14); // the thirteen Genie tools (no submitFeedback, removed 2026-10-18; no runAgent sidecar, removed 2026-10-19; plan added 2026-10-20) and the plugin tool
+        expect(withTerminalId.length).toBe(15); // the fourteen Genie tools (no submitFeedback, removed 2026-10-18; no runAgent sidecar, removed 2026-10-19; plan added 2026-10-20; flows added 2026-10-21) and the plugin tool
         const mirrored = withTerminalId.filter((d) => {
             const p = MirroredParameters.fromSchema(d.name, d.inputSchema as never).parameters as Record<string, { path: string[] }>;
             return p.terminalId?.path.join('.') === 'terminalId';
