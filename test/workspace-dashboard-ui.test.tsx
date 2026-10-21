@@ -130,10 +130,10 @@ describe('the workspace route opens on its dashboard', () => {
         expect(busy).not.toContain('Nothing is running in Tynn.ai.');
     });
 
-    it('keeps the one file panel beside the dashboard when ?panel=files, and the bring-back bar when it is popped out', () => {
+    it('?panel=files is the Files TAB — the files take the body, the dashboard is not drawn beside them (beta.35 #41) — and the bring-back bar when popped out', () => {
         const inline = render({ view: 'home', files: NO_FILES, panel: 'files' });
         expect(inline).toContain('data-files-panel="tynn"');
-        expect(inline).toContain('data-workspace-dashboard="tynn"');
+        expect(inline).not.toContain('data-workspace-dashboard="tynn"');
         const popped = render({ view: 'home', files: NO_FILES, panel: 'files', filesPopped: true, onBringBackFiles: () => {} });
         expect(popped).toContain('data-files-popped="tynn"');
         expect(popped).not.toContain('data-files-panel="tynn"');

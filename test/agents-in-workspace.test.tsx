@@ -20,9 +20,9 @@ describe('the strip', () => {
     it('Dashboard (the workspace dashboard, q_09d1f4a0), the workspace’s agents, your tabs, +, Settings', () => {
         const designed = addTab(empty, 'Ops').state;
         const strip = tabStrip(designed, [{ id: 'a1', name: 'atlas' }, { id: 'a2', name: 'wren' }]);
-        expect(strip.map((t) => (t.kind === 'agent' ? `@${t.name}` : t.kind === 'designed' ? t.name : t.kind))).toEqual(['dashboard', '@atlas', '@wren', 'Ops', 'add', 'settings']);
+        expect(strip.map((t) => (t.kind === 'agent' ? `@${t.name}` : t.kind === 'designed' ? t.name : t.kind))).toEqual(['dashboard', 'files', '@atlas', '@wren', 'Ops', 'add', 'settings']);
         // CONTROL: a workspace with no agents — the strip without agent tabs.
-        expect(tabStrip(designed).map((t) => t.kind)).toEqual(['dashboard', 'designed', 'add', 'settings']);
+        expect(tabStrip(designed).map((t) => t.kind)).toEqual(['dashboard', 'files', 'designed', 'add', 'settings']);
     });
 });
 

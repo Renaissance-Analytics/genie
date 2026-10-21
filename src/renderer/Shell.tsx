@@ -615,7 +615,8 @@ export function Shell({
                             onOpenAgent={onOpenAgent}
                             agentTabs={agentTabsOf(snapshot.agents, parsed.workspaceId)}
                             onAddAgent={() => onAddAgent(parsed.workspaceId)}
-                            onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view }))}
+                            // Another tab leaves the Files tab (beta.35 #41) — unless the files are popped out into their own window.
+                            onViewChange={(view) => onNavigate(formatRoute({ ...parsed, view, ...(parsed.detached ? {} : { panel: null, file: null, line: null, filter: null }) }))}
                             onTogglePanel={() => onNavigate(formatRoute({ ...parsed, panel: parsed.panel === 'files' ? null : 'files' }))}
                             filesFile={parsed.file}
                             filesLine={parsed.line}
