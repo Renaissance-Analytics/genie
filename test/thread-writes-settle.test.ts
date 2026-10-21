@@ -122,10 +122,14 @@ describe('a row on screen is not yet a row on disk', () => {
         await rm(store, { recursive: true, force: true });
         expect(existsSync(store)).toBe(false);
         gate.open();
+        // Both rows' writes landed — waited for, not polled for. Polling for the FILE was a race of its own: the turn's
+        // write creates it and the message's write follows, so under load (omarchy-test, 2026-10-21) the read in between
+        // saw ['turn']. The folder had come back; the test had looked one write too early.
+        await session.settled();
         // The write re-creates the folder the teardown had just removed, with the thread in it. Interleaved with the
         // remove's own walk instead of after it, that new entry is the ENOTEMPTY. Looked at with readdir, NOT through a
         // store: opening a FileSessionStore creates its folder, which would make this pass on its own.
-        await vi.waitFor(() => expect(readdirSync(store).filter((f) => f.endsWith('.json'))).toHaveLength(1));
+        expect(readdirSync(store).filter((f) => f.endsWith('.json'))).toHaveLength(1);
         expect(await kindsOnDisk(store, session.agentId)).toEqual(['turn', 'message']);
     });
 });
