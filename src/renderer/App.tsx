@@ -1148,6 +1148,8 @@ function DesktopApp({ bridge }: AppProps) {
             onConfirmAddTynn={(parent, projectId) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
+            // Live site panels — this machine's only (a remote bridge has none).
+            sitePanels={resolvedBridge?.sitePanels}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}

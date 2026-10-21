@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState, type ComponentType, type Poin
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
-import { addTab, clearCell, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type TabsState } from '../../core/workspace-tabs.js';
+import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type TabsState } from '../../core/workspace-tabs.js';
 import {
     activate,
     emptyWorkspace,
@@ -125,6 +125,8 @@ export interface WorkspaceProps {
     ops?: WorkspaceOpsProps | undefined;
     /** The file panel (§4.3), mounted for `?panel=files`; absent = no files host in this window. */
     files?: GenieBridge['files'] | undefined;
+    /** Live site panels (beta.35 item 36, step 5): main places each site panel's page over its box. Absent = not live here. */
+    sitePanels?: GenieBridge['sitePanels'] | undefined;
     /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
     pluginPanels?: readonly PluginPanelView[] | undefined;
     /** IssueWatch's view of this workspace (Tynn #806); absent = none to show, and no GitHub tab. */
@@ -177,7 +179,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -805,7 +807,15 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
                                 return board ? <PluginPane panel={board} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;
                             }
-                            return <SitePanel host={p.ref} onPick={(host) => { const at = tab.cells.indexOf(p); if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
+                            const at = tab.cells.indexOf(p);
+                            const live = sitePanels && at >= 0 ? {
+                                panelKey: panelKey(workspace.id, tab.id, at),
+                                onBounds: (key: string, host: string, bounds: { x: number; y: number; width: number; height: number }) => { void sitePanels.show(key, host, bounds); },
+                                onHide: (key: string) => { void sitePanels.hide(key); },
+                                onReload: (key: string) => { void sitePanels.reload(key); },
+                                onOpenInWindow: (host: string) => { void sitePanels.openWindow(host); },
+                            } : undefined;
+                            return <SitePanel host={p.ref} live={live} onPick={(host) => { if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
                         }}
                     />
                 );

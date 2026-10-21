@@ -146,6 +146,8 @@ export interface ShellProps {
     terminals?: GenieBridge['terminals'];
     /** The file panel's half of the bridge (§4.3); the Workspace surface mounts it for `?panel=files`. */
     files?: GenieBridge['files'] | undefined;
+    /** Live site panels (beta.35 item 36, step 5); absent = not live in this window. */
+    sitePanels?: GenieBridge['sitePanels'] | undefined;
     /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
@@ -260,6 +262,7 @@ export function Shell({
     onOpenBrowser,
     terminals = NO_TERMINALS,
     files = NO_FILES,
+    sitePanels,
     filesPopped = [],
     readCommits,
     onPopOutFiles,
@@ -609,6 +612,7 @@ export function Shell({
                             workspace={workspaceFor(parsed.workspaceId)!}
                             terminals={terminals}
                             files={files}
+                            sitePanels={sitePanels}
                             panel={parsed.panel}
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}

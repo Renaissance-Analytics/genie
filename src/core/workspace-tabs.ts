@@ -153,6 +153,18 @@ export function clearCell(state: TabsState, id: string, cell: number): TabsState
     return update(state, id, (t) => (cell < 0 || cell >= t.cells.length ? t : { ...t, cells: t.cells.map((c, i) => (i === cell ? null : c)) }));
 }
 
+/** The key of a tab's panel in the window (`<workspace>:<tab>:<cell>`) — what a live site panel is kept by. */
+export function panelKey(workspaceId: string, tabId: string, cell: number): string {
+    return `${workspaceId}:${tabId}:${cell}`;
+}
+
+/** Every live site panel the tabs have — a `site` cell with a site chosen (beta.35 item 36, step 5). */
+export function sitePanelKeys(workspaceId: string, state: TabsState): Set<string> {
+    const keys = new Set<string>();
+    for (const tab of state.tabs) tab.cells.forEach((c, i) => { if (c?.kind === 'site' && c.ref) keys.add(panelKey(workspaceId, tab.id, i)); });
+    return keys;
+}
+
 export function serializeTabs(state: TabsState): string {
     return JSON.stringify({ tabs: state.tabs });
 }

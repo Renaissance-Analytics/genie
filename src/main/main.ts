@@ -98,6 +98,8 @@ import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
 import { genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { sitePanels } from './site-panels-electron.js';
+import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
@@ -2288,6 +2290,12 @@ async function boot(): Promise<void> {
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
     browserPane = new BrowserPane(electronBrowserView(window, { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem }), () => composed.routes());
     // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
+    // LIVE SITE PANELS (beta.35 item 36, step 5): each workspace tab's site panel is a page in the browser's session, placed
+    // over its box in this window; a panel removed from its tabs closes its page.
+    const livePanels = sitePanels({ window, frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url) => { genieBrowserWindow?.open(url); } });
+    composed.settings.onChange((key, value, workspaceId) => {
+        if (key === 'workspace_tabs' && workspaceId && typeof value === 'string') livePanels.retainIn(workspaceId, sitePanelKeys(workspaceId, parseTabs(value)));
+    });
     genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host) });
     // What the page did (a link, a redirect, back/forward) is the address bar and the history buttons — pushed, not polled.
     // A hidden pane reports no url; the surface keeps the last page it showed.
