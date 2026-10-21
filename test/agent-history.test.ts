@@ -8,7 +8,7 @@ import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js'
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { sessionsDir } from '../src/main/paths.js';
-import { openDurableStore, readHistory } from '../src/core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory } from '../src/core/thread-store.js';
 
 /**
  * WHAT THE AGENT REMEMBERS, THE UI SHOWS. The owner, beta.21: "Why does the claude agent still have a memory of context
@@ -30,13 +30,13 @@ beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-history-'));
 afterEach(async () => { await Promise.all(hosts.map((h) => h.settled())); await rm(dir, { recursive: true, force: true }); });
 const tree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
 
-function host() {
+function host(clock?: () => number) {
     let events: DriverEvents = {};
     const driverFor: DriverFor = () => ((options: { events: DriverEvents }) => {
         events = options.events;
         return { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return 'cli-1'; } };
     }) as unknown as SessionDriverFactory;
-    const made = new SessionHost({ userData: dir, driverFor, processTree: tree });
+    const made = new SessionHost({ userData: dir, driverFor, processTree: tree, ...(clock ? { clock } : {}) });
     hosts.push(made);
     return { host: made, end: () => events.onTurnEnd?.({ stopReason: 'end_turn' } as never) };
 }
@@ -69,4 +69,38 @@ describe('an agent’s history', () => {
         // THIS run alone (the doctor channel, file attribution) is still this run alone.
         expect(said(second.host.rowsFor(record.id))).toEqual(['second question']);
     });
+});
+
+/*
+ * THE PREVIOUS RUN'S ROWS ARE ITS OWN, HOWEVER LATE THEY WERE WRITTEN (main's CI, 2026-10-21, run 39608121777: turn 1's
+ * `finished` row vanished across a restart). History and this run were told apart by WRITE time against this run's
+ * start: a row the previous run emitted but wrote in the same millisecond the next run started — or after it, a write
+ * still landing on a quick restart — counted as this run's, and this run never had it: gone from both. Here the next
+ * run's start is pinned to those writes, so the case the CI hit by chance is the case every run.
+ */
+describe('a restart right on the heels of the last write', () => {
+    for (const [when, startAt] of [
+        ['in the same millisecond as the last write', (writes: number[]) => Math.max(...writes)],
+        ['before the previous run’s writes had landed', (writes: number[]) => Math.min(...writes) - 1],
+    ] as const) {
+        it(`a run that starts ${when} still shows the previous run whole — and nothing twice`, async () => {
+            const record = agentRecord({ id: mintAgentId(), workspaceId: 'moic', provider: 'claude', name: 'moic' });
+            const first = host();
+            first.host.start(record, dir);
+            first.host.prompt(record.id, 'first question', 'you');
+            first.end();
+            await first.host.settled();
+            const writes = (await openAgentThread(openDurableStore(sessionsDir(dir)), record.id).messages()).map((m) => Date.parse(m.recordedAt));
+            // The gauge: the record holds the whole first run (the row the CI lost included) before the restart.
+            expect(writes.length).toBe(3);
+
+            const at = startAt(writes);
+            const second = host(() => at);
+            second.host.start({ ...record, threadId: 'cli-1' } as typeof record, dir);
+            second.host.prompt(record.id, 'second question', 'you');
+            await vi.waitFor(() => expect(said(second.host.ledgerFor(record.id))).toEqual(['first question', 'second question']), { timeout: 3000 });
+            expect(kinds(second.host.ledgerFor(record.id))).toEqual(['turn 1', 'message', 'finished', 'run resumed', 'turn 2', 'message']);
+            expect(said(second.host.rowsFor(record.id))).toEqual(['second question']);
+        });
+    }
 });

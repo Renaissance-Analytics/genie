@@ -46,6 +46,9 @@ export function openDurableStore(directory: string): SessionStore {
  * throws nothing, its Conversation tab was empty for four releases while every surface
  * downstream got blamed first.
  */
+/** The field a recorded row names the run that wrote it in (stripped when the row is read back). */
+export const RUN_FIELD = 'writtenByRun';
+
 export function openAgentThread(store: SessionStore, agentId: AgentId): Thread {
     return new Thread(store, threadKeyFor(agentId));
 }
@@ -56,18 +59,24 @@ export function openAgentThread(store: SessionStore, agentId: AgentId): Thread {
  * way the Agent view and the chat can show what came before this run; without it an agent remembered hundreds of
  * thousands of tokens of context while the UI showed one turn (the owner, beta.21).
  *
- * `before` (epoch ms) keeps a running agent's CURRENT run out: its rows are already live. `limit` keeps the most recent
- * rows; `earlier` says how many older ones were left out. A row written unserialisable is skipped, never guessed at.
+ * A running agent's CURRENT run is kept out — its rows are already live — by `run`: every row a run writes carries
+ * that run's id ({@link RUN_FIELD}), so a row is this run's exactly when it says so. NOT by when it was written: a row
+ * the previous run emitted but wrote in the same millisecond the next run started, or after it (a write still landing
+ * on a quick restart), read as this run's and was shown by neither (main's CI, 2026-10-21: turn 1's `finished` row
+ * gone). `before` (epoch ms) is that old rule, kept only for rows recorded before runs were named. `limit` keeps the
+ * most recent rows; `earlier` says how many older ones were left out. A row written unserialisable is skipped.
  */
-export async function readHistory(store: SessionStore, agentId: AgentId, options: { before?: number; limit?: number } = {}): Promise<{ rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number; earlierTurns: number }> {
+export async function readHistory(store: SessionStore, agentId: AgentId, options: { before?: number; run?: string; limit?: number } = {}): Promise<{ rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number; earlierTurns: number }> {
     const messages = await openAgentThread(store, agentId).messages();
     const rows: { event: StreamEvent; at: number | null; position: number }[] = [];
     for (const m of messages) {
         const at = Date.parse(m.recordedAt);
-        if (options.before !== undefined && Number.isFinite(at) && at >= options.before) continue;
-        const e = m.message as { kind?: unknown; unserialisable?: unknown };
-        if (typeof e.kind !== 'string' || e.unserialisable === true) continue;
-        rows.push({ event: m.message as unknown as StreamEvent, at: Number.isFinite(at) ? at : null, position: m.position });
+        const { [RUN_FIELD]: writtenBy, ...message } = m.message as Record<string, unknown>;
+        if (typeof writtenBy === 'string') {
+            if (options.run !== undefined && writtenBy === options.run) continue;
+        } else if (options.before !== undefined && Number.isFinite(at) && at >= options.before) continue;
+        if (typeof message.kind !== 'string' || message.unserialisable === true) continue;
+        rows.push({ event: message as unknown as StreamEvent, at: Number.isFinite(at) ? at : null, position: m.position });
     }
     const limit = options.limit ?? rows.length;
     const earlier = Math.max(0, rows.length - limit);
