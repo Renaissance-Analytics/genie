@@ -105,7 +105,7 @@ try {
     Set-Content -Path $cfg -Value "provider: generic`nurl: http://127.0.0.1:8099/`nupdaterCacheDirName: genie2-updater`n" -Encoding ascii
 
     Step "launch the installed $current; NOBODY asks it to check"
-    $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.cmd"
+    $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.mjs"
     Run 'node scripts\smoke-seed.mjs'
     Remove-Item -Force -ErrorAction SilentlyContinue installed-out.log, installed-err.log
     $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `

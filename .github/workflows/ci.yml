@@ -278,11 +278,10 @@ jobs:
           # library's binary and args faithfully while dropping its options object produces a
           # repro that looks complete and is not.
           #
-          # The stub is reached through a .cmd WRAPPER rather than directly, because
-          # `shell: true` means cmd.exe runs the binary and cmd.exe cannot execute a .mjs.
-          # That wrapper is also the shape a user actually has: a real npm-installed codex
-          # IS a .cmd.
-          $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.cmd"
+          # prism-acp 0.21 spawns a provider directly, never through a shell, and refuses a .cmd that is not an npm
+          # shim (a real npm-installed codex IS one, and is accepted). The stub is the .mjs itself: Genie runs a
+          # configured script as its own runtime + the script (session-host `providerLaunchOptions`).
+          $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.mjs"
 
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
