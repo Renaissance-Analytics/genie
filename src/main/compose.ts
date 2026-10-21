@@ -999,11 +999,15 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
-                await envFiles.close();
                 stopLiveness();
                 // Nothing more is started (a port probe still in flight) or synced (a pending hosts write) from here.
                 frontDoorCtl.close();
+                // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`
+                // pass below, a slow or stuck git kept every dev server, worker and the front door running — and a quit
+                // that does not wait that long left them running for good.
                 for (const p of supervisor.list()) supervisor.stop(p.id);
+                // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
+                await envFiles.close();
                 await new Promise<void>((r) => frontDoor.close(r));
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.
