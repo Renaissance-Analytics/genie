@@ -110,8 +110,26 @@ export function deviceCodeFrom(json: unknown): DeviceCode | null {
     return { deviceCode, userCode, verificationUri, expiresIn: num(o.expires_in) ?? 900, interval: Math.max(5, num(o.interval) ?? 5) };
 }
 
+/**
+ * A token grant as GitHub hands it over — at sign-in and on renewal. The refresh token and the lifetimes (seconds) are
+ * there only when the App expires user tokens; without them the access token never expires and nothing is renewed.
+ */
+export interface TokenGrant {
+    readonly token: string;
+    readonly refreshToken?: string;
+    readonly expiresIn?: number;
+    readonly refreshExpiresIn?: number;
+}
+
+function grantFrom(o: Record<string, unknown>, token: string): TokenGrant {
+    const refreshToken = str(o.refresh_token);
+    const expiresIn = num(o.expires_in);
+    const refreshExpiresIn = num(o.refresh_token_expires_in);
+    return { token, ...(refreshToken ? { refreshToken } : {}), ...(expiresIn !== null ? { expiresIn } : {}), ...(refreshExpiresIn !== null ? { refreshExpiresIn } : {}) };
+}
+
 export type PollOutcome =
-    | { readonly kind: 'token'; readonly token: string }
+    | ({ readonly kind: 'token' } & TokenGrant)
     | { readonly kind: 'pending' }
     /** GitHub asks for slower polling: its new interval in seconds, or `null` (then +5 s, RFC 8628 §3.5). */
     | { readonly kind: 'slow-down'; readonly interval: number | null }
@@ -121,7 +139,7 @@ export type PollOutcome =
 export function pollOutcomeFrom(json: unknown): PollOutcome {
     const o = obj(json) ?? {};
     const token = str(o.access_token);
-    if (token) return { kind: 'token', token };
+    if (token) return { kind: 'token', ...grantFrom(o, token) };
     const code = str(o.error) ?? 'unknown';
     if (code === 'authorization_pending') return { kind: 'pending' };
     if (code === 'slow_down') return { kind: 'slow-down', interval: num(o.interval) };
@@ -166,7 +184,8 @@ export function grants(i: Pick<GithubInstallation, 'permissions'>, permission: s
  * - IssueWatch is NOT this App's: Tynn reads GitHub with its own GitHub App and pushes what it finds (Tynn #806). Listed
  *   so nobody looks here for why IssueWatch is quiet.
  *
- * Genie 1's repository create and fork are not in Genie 2 (yet); nothing here pretends they are.
+ * Creating a repository exists in main (GithubAccount.createRepo) with no screen using it yet, and fork is not in Genie 2
+ * yet; neither is listed until a person can use it.
  */
 export function githubCapabilities(input: { signedIn: boolean; installations: readonly GithubInstallation[] | null }): GithubCapability[] {
     const issueWatch: GithubCapability = { id: 'issue-watch', label: 'IssueWatch (issues, pull requests, security alerts)', enabled: true, note: 'Comes through Tynn: Tynn reads GitHub with its own app. Link the workspace to a Tynn project.' };
@@ -190,10 +209,21 @@ export function githubSignal(input: { status: GithubStatus; installations: reado
  * Genie 1's stored login (its `settings` table, `v1:main/github/storage.ts`): `github_token_enc` — base64 of what
  * Electron's `safeStorage.encryptString` returned — and `github_user`. `null` when there is none.
  */
-export function v1GithubLogin(settings: Readonly<Record<string, string>> | null): { tokenEnc: string; login: string | null } | null {
+export function v1GithubLogin(settings: Readonly<Record<string, string>> | null): { tokenEnc: string; login: string | null; refreshEnc?: string; accessExpiresAt?: number; refreshExpiresAt?: number } | null {
     const tokenEnc = settings?.github_token_enc?.trim();
     if (!tokenEnc) return null;
-    return { tokenEnc, login: settings!.github_user?.trim() || null };
+    // Genie 1 kept the refresh token (`github_refresh_enc`, encrypted the same way) and both expiries as epoch ms
+    // (`v1:main/github/storage.ts`); empty when its App issued non-expiring tokens.
+    const refreshEnc = settings!.github_refresh_enc?.trim();
+    const accessExpiresAt = num(settings!.github_token_exp_ms);
+    const refreshExpiresAt = num(settings!.github_refresh_exp_ms);
+    return {
+        tokenEnc,
+        login: settings!.github_user?.trim() || null,
+        ...(refreshEnc ? { refreshEnc } : {}),
+        ...(accessExpiresAt !== null ? { accessExpiresAt } : {}),
+        ...(refreshExpiresAt !== null ? { refreshExpiresAt } : {}),
+    };
 }
 
 /** `https://github.com/<owner>/<repo>` → owner, lower-cased; anything else (ssh, another host) → `null`. */
@@ -222,4 +252,118 @@ export function redactSecrets(text: string, secrets: readonly string[]): string 
     let out = text;
     for (const s of secrets) if (s) out = out.split(s).join('***');
     return out;
+}
+
+/*
+ * WRITING TO GITHUB (add-workspace parity item 9) — the pure half of Genie 1's write client (`v1:main/github/api.ts`):
+ * GitHub's error shapes in words, its rate limits, a renewal's answer, the install chooser for one account, and a created
+ * repository. The network half is main/github-account.ts. Nothing here ever holds a token.
+ */
+
+/** The install chooser, pre-targeted at one account (person or org) when its numeric id is known (Genie 1's `genieInstallUrl`). */
+export function githubInstallUrl(targetId?: number | null): string {
+    return targetId ? `${GITHUB_INSTALL_URL}?suggested_target_id=${targetId}` : GITHUB_INSTALL_URL;
+}
+
+/** GitHub answered a request with an error. `status` 0 = GitHub was not reached. The message is GitHub's own. */
+export class GithubApiError extends Error {
+    constructor(readonly status: number, message: string) {
+        super(message);
+        this.name = 'GithubApiError';
+    }
+}
+
+/** GitHub's rate limit stopped a request, and the reset is too far off to wait for here. */
+export class GithubRateLimitError extends GithubApiError {
+    constructor(status: number, message: string, readonly waitMs: number) {
+        super(status, message);
+        this.name = 'GithubRateLimitError';
+    }
+}
+
+/** No usable sign-in: signed out, or GitHub no longer accepts it and it could not be renewed. The message says which. */
+export class GithubAuthError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'GithubAuthError';
+    }
+}
+
+/**
+ * A write refused on an account the Genie AOS app is not installed on (GitHub answers a user token 403, sometimes 404,
+ * there). Carries the install chooser for THAT account, so the person is one click from the fix, not at a dead end. A
+ * genuine permission denial reads the same to GitHub's API, so GitHub's own words are kept in the message (Genie 1).
+ */
+export class GithubNotInstalledError extends GithubApiError {
+    readonly code = 'not_installed';
+    constructor(readonly account: string, readonly installUrl: string, status: number, githubMessage: string) {
+        super(status, `The Genie AOS app is not installed on ${account}, so Genie cannot write there. Install it: ${installUrl} (${githubMessage})`);
+        this.name = 'GithubNotInstalledError';
+    }
+}
+
+/**
+ * An error answer in words: the status and GitHub's own `message`, with `errors[]` folded in — GitHub's top-level
+ * message is often generic ("Repository creation failed.", "Validation Failed") and the real cause is there.
+ */
+export function githubErrorMessage(status: number, json: unknown, text: string): string {
+    const o = obj(json);
+    const message = str(o?.message) ?? (text.trim() || null);
+    const details = (Array.isArray(o?.errors) ? (o!.errors as unknown[]) : [])
+        .map((raw) => {
+            const e = obj(raw);
+            if (!e) return typeof raw === 'string' ? raw : '';
+            return str(e.message) ?? [e.resource, e.field, e.code].filter((x) => typeof x === 'string' && x).join(' ');
+        })
+        .filter(Boolean);
+    if (!message) return `GitHub answered ${status}`;
+    return `GitHub answered ${status}: ${message}${details.length ? ` — ${details.join('; ')}` : ''}`;
+}
+
+/**
+ * How long GitHub asks to wait before sending again, or `null` when the answer is not a rate limit. GitHub's own rules:
+ * `retry-after` (seconds) when it sends one; a primary limit is 403/429 with `x-ratelimit-remaining: 0`, waited out until
+ * `x-ratelimit-reset` (epoch seconds); a secondary limit without either header means at least a minute.
+ */
+export function rateLimitWaitMs(status: number, headers: { get(name: string): string | null } | undefined, now: number): number | null {
+    if (status !== 403 && status !== 429) return null;
+    const retryAfter = num(headers?.get('retry-after') ?? null);
+    if (retryAfter !== null) return Math.max(0, retryAfter * 1000);
+    if (headers?.get('x-ratelimit-remaining') === '0') {
+        const reset = num(headers.get('x-ratelimit-reset'));
+        return reset !== null ? Math.max(0, reset * 1000 - now) : 60_000;
+    }
+    return status === 429 ? 60_000 : null;
+}
+
+export type RefreshOutcome =
+    | ({ readonly kind: 'token' } & TokenGrant)
+    /** GitHub answered 200 with an `error`: this refresh token (or the App's credentials) is refused, not a passing fault. */
+    | { readonly kind: 'rejected'; readonly code: string; readonly description: string | null };
+
+/** `POST https://github.com/login/oauth/access_token` with `grant_type=refresh_token`, as GitHub answered it. */
+export function refreshOutcomeFrom(json: unknown): RefreshOutcome {
+    const o = obj(json) ?? {};
+    const token = str(o.access_token);
+    if (token) return { kind: 'token', ...grantFrom(o, token) };
+    return { kind: 'rejected', code: str(o.error) ?? 'refresh_failed', description: str(o.error_description) };
+}
+
+/** A repository GitHub created (or one already there, `created: false`). Its URLs are GitHub's, unchanged. */
+export interface CreatedRepo {
+    readonly fullName: string;
+    readonly cloneUrl: string;
+    readonly htmlUrl: string;
+    readonly defaultBranch: string;
+    readonly private: boolean;
+    readonly created: boolean;
+}
+
+export function createdRepoFrom(json: unknown, created: boolean): CreatedRepo | null {
+    const o = obj(json);
+    const fullName = str(o?.full_name);
+    const cloneUrl = str(o?.clone_url);
+    const htmlUrl = str(o?.html_url);
+    if (!o || !fullName || !cloneUrl || !htmlUrl) return null;
+    return { fullName, cloneUrl, htmlUrl, defaultBranch: str(o.default_branch) ?? 'main', private: o.private === true, created };
 }
