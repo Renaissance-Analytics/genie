@@ -204,6 +204,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setIssueWatch: (agentId, setting) => answer('agents.setIssueWatch', agentId, setting),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
             setModel: (agentId, model) => answer('agents.setModel', agentId, model),
+            models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.

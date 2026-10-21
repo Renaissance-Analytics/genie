@@ -100,6 +100,8 @@ export interface HostApiDeps {
         setIssueWatch(agentId: string, setting: unknown): Promise<unknown>;
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
+        /** The provider's models for the agent's picker; `refresh` asks the provider again. */
+        models(agentId: string, refresh: boolean): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
     };
     /** Every agent's activity feed (the Dashboard's lanes, beta.33 item 10): one workspace's, and each as it changes. */
@@ -197,6 +199,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.setModel':
                 // `null` (or nothing, or empty) = back to the provider's default.
                 return deps.agentOps.setModel(str(args[0]), args[1] === null || args[1] === undefined || args[1] === '' ? null : str(args[1]));
+            case 'agents.models':
+                // Only an explicit `true` asks the provider again: a refresh starts its CLI.
+                return deps.agentOps.models(str(args[0]), args[1] === true);
             case 'agents.diagnose':
                 return deps.agentOps.diagnose(str(args[0]));
             case 'workspaces.previewAdd':

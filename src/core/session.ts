@@ -1,3 +1,4 @@
+import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { lastTurnOf, openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
@@ -78,6 +79,18 @@ export interface SessionDriver {
      * does with a prompt sent before it is ready.
      */
     readonly ready?: Promise<void>;
+    /**
+     * THE PROVIDER'S MODELS, AND THIS SESSION'S — prism-acp 0.22's `modelState()` (Claude: from the `initialize` it sends
+     * at start; Codex: `model/list` on its running app server). No extra process, no turn. Optional: a fake driver, or an
+     * older prism, has none, and the picker asks the provider's CLI instead (core/provider-models.ts).
+     */
+    modelState?(): Promise<SessionModelState>;
+    /**
+     * SWITCH THE RUNNING SESSION'S MODEL — prism-acp 0.22's `setModel(id)`. Claude's CLI switches at once (control
+     * `set_model`); Codex sends it with the next turn. Rejects when the provider refuses. Optional for the same reason:
+     * without it the choice applies by a restart on the same conversation, as before.
+     */
+    setModel?(modelId: string): Promise<void>;
 }
 
 /** A turn's outcome, as `prism-acp` reports it. */
@@ -1133,6 +1146,20 @@ export class AgentSession {
     notice(message: string): void {
         void this.#emitRow({ kind: 'notice', level: 'warning', message });
         this.#changed();
+    }
+
+    /** The driver's model state, or `null` when nothing is running or the driver cannot say (`SessionDriver.modelState`). */
+    modelState(): Promise<SessionModelState> | null {
+        const driver = this.#driver;
+        if (!driver || this.#exited || !this.#alive || typeof driver.modelState !== 'function') return null;
+        return driver.modelState();
+    }
+
+    /** Switch the running session's model, or `null` when nothing is running or the driver cannot (`SessionDriver.setModel`). */
+    switchModel(modelId: string): Promise<void> | null {
+        const driver = this.#driver;
+        if (!driver || this.#exited || !this.#alive || typeof driver.setModel !== 'function') return null;
+        return driver.setModel(modelId);
     }
 
     cancel(by: string | null = 'you'): CancelOutcome {

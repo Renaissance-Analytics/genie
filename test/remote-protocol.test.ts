@@ -65,7 +65,8 @@ describe('the capability table', () => {
         // 63 since `agents.setManageTabs` (May manage workspace tabs, beta.35 item 36): a write, agent-scoped.
         // 64 since `activity` (beta.33 item 10: the Dashboard's lanes read every agent's activity feed): a read, workspace-scoped.
         // 65 since `agents.setDrivePages` (May drive pages, browser rebuild step 7): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(65);
+        // 66 since `agents.models` (the provider's own model list for an agent's picker, 2026-10-21): a read, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(66);
         expect(capabilityOf('agents.setDrivePages')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.setDrivePages');
         expect(capabilityOf('activity')).toBe('read');

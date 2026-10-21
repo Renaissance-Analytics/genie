@@ -6,6 +6,7 @@ import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
 import type { StopVerdict } from '../core/session.js';
+import { switchTiming, type ModelChoices, type SessionModelState } from '../core/provider-models.js';
 import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
 
 /**
@@ -42,7 +43,13 @@ export interface AgentOpsPorts {
         /** How the last stop ended, once it has (`SessionHost.ended`): a restart starts only after it. */
         ended?(id: AgentRecord['id']): Promise<StopVerdict | null>;
         probe(id: AgentRecord['id']): LiveSession | null;
+        /** The running agent's own models (`SessionHost.modelState`): `null` = not running, or its driver cannot say. */
+        modelState?(id: AgentRecord['id']): Promise<SessionModelState> | null;
+        /** Switch the running agent's model, no restart (`SessionHost.switchModel`): `null` = not running, or it cannot. */
+        switchModel?(id: AgentRecord['id'], model: string): Promise<void> | null;
     };
+    /** Each provider's model list, asked of its CLI once and kept (core/provider-models.ts `ProviderModelCache`). */
+    models?: { get(provider: string, options?: { refresh?: boolean }): Promise<ModelChoices> };
     cwdFor(record: AgentRecord): string;
     workspacePathFor(record: AgentRecord): string | null;
     /** The persona file's text, or `null` when there is none. */
@@ -164,7 +171,13 @@ export async function setPermissions(ports: AgentOpsPorts, agentId: string, perm
 /**
  * The model an agent's provider starts with — any provider; `null` clears it (back to the provider's default). Which
  * names a provider accepts is the provider's call: Genie refuses only what cannot be a model name — empty, or a
- * leading `-` that would read as a flag on the command line. Applies when the session next starts.
+ * leading `-` that would read as a flag on the command line.
+ *
+ * A RUNNING agent is switched where it runs (prism-acp 0.22 `setModel`): no restart, same conversation — Claude's CLI
+ * at once, Codex from its next turn. Back to the default switches it to the entry the provider marks default. A
+ * provider that refuses the model is said in its words and the choice is NOT kept: the next start would only be refused
+ * again. Where nothing can switch live (not running, a driver without setModel) the choice is kept and applies the old
+ * way (`applyOnStart`: a restart on the same conversation when that costs nothing, else the next start).
  */
 export async function setModel(ports: AgentOpsPorts, agentId: string, model: string | null): Promise<{ ok: true; record: AgentRecord; apply: ApplyWhen } | Refusal> {
     const record = ports.registry.find(agentId);
@@ -172,8 +185,52 @@ export async function setModel(ports: AgentOpsPorts, agentId: string, model: str
     const name = model === null ? null : model.trim();
     if (name !== null && name.length === 0) return { ok: false, reason: 'a model needs a name — choose the default to clear it' };
     if (name !== null && name.startsWith('-')) return { ok: false, reason: `"${name}" is not a model name — it would read as a command-line flag` };
+    const target = name ?? (await defaultModelOf(ports, record));
+    const switching = target === null ? null : ports.host.switchModel?.(record.id, target) ?? null;
+    if (switching) {
+        try {
+            await switching;
+        } catch (error) {
+            return { ok: false, reason: `${record.name}'s provider would not switch to "${target}": ${error instanceof Error ? error.message : String(error)}` };
+        }
+        const switched = await ports.registry.setModel(record.id, name);
+        return switched ? { ok: true, record: switched, apply: { when: 'switched', timing: switchTiming(record.provider) } } : UNKNOWN;
+    }
     const updated = await ports.registry.setModel(record.id, name);
     return updated ? { ok: true, record: updated, apply: ports.applyOnStart?.(record.id) ?? { when: 'next-start' } } : UNKNOWN;
+}
+
+/** The running session's DEFAULT entry, for "back to the default" on a live switch; `null` when it cannot say. */
+async function defaultModelOf(ports: AgentOpsPorts, record: AgentRecord): Promise<string | null> {
+    const live = ports.host.modelState?.(record.id) ?? null;
+    if (!live) return null;
+    try {
+        return (await live).availableModels.find((m) => m.isDefault === true)?.modelId ?? null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * THE MODELS AN AGENT CAN BE GIVEN — the provider's own list (the owner, 2026-10-21: "make sure that the model selection
+ * for agents is using actual available options from the providers"). A running agent's session answers for itself
+ * (`modelState`: no extra process, and `current` is the model it runs on); otherwise, or when it cannot say, the
+ * provider's CLI is asked once and kept (`refresh` asks again).
+ */
+export async function listModels(ports: AgentOpsPorts, agentId: string, refresh = false): Promise<ModelChoices | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const live = ports.host.modelState?.(record.id) ?? null;
+    if (live) {
+        try {
+            const state = await live;
+            if (state.availableModels.length > 0) return { ok: true, provider: record.provider, source: 'session', models: state.availableModels, current: state.currentModelId };
+        } catch {
+            // The session could not say (an older CLI, a refused model/list): the provider's CLI is asked below instead.
+        }
+    }
+    if (!ports.models) return { ok: false, provider: record.provider, reason: 'this Genie cannot ask a provider for its models' };
+    return ports.models.get(record.provider, { refresh });
 }
 
 /**

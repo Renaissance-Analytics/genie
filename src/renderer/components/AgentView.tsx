@@ -26,6 +26,7 @@ import type { Fidelity } from '../../core/dashboard-view.js';
 import { inspectorFor } from '../../core/inspector.js';
 import type { LiveSession } from '../../core/roster.js';
 import type { AgentPermissions } from '../../core/identity.js';
+import { chosenModel, modelLabel, type ModelChoices } from '../../core/provider-models.js';
 import type { AgentTab } from '../../core/route.js';
 import type { StreamFilter, TimedEvent } from '../../core/stream-view.js';
 import { Inspector } from './Inspector.js';
@@ -121,6 +122,13 @@ export interface AgentOpsProps {
     /** The model CHOSEN for the agent (`null` = the provider's default); the one IN USE is `session.model`. Absent `onSetModel` = no control. */
     readonly model?: string | null;
     readonly onSetModel?: (model: string | null) => void;
+    /**
+     * The PROVIDER's models for the picker (prism-acp 0.22; the owner, 2026-10-21: "using actual available options from the
+     * providers"). `'loading'` while it is asked; absent = a host that cannot list them, which keeps the free-text field.
+     */
+    readonly models?: ModelChoices | 'loading';
+    /** Ask the provider again (its CLI starts once more). */
+    readonly onRefreshModels?: () => void;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
     readonly onDiagnose: () => void;
@@ -978,44 +986,103 @@ export function AgentView({
                                                 <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
                                             </label>
                                         ) : null}
-                                        {/* The model: what the provider REPORTED it runs, and what the agent starts with. Never one Genie made up. */}
-                                        {agent.fidelity === 'declared' && ops.onSetModel ? (
-                                            <div data-rail-model={session?.model ?? ''} className="mt-2 text-[11px] text-[var(--fg-3)]">
-                                                <p data-model-reported={session?.model ? 'yes' : 'no'}>
-                                                    Model{' '}
-                                                    {session?.model ? (
-                                                        <span className="font-mono text-[var(--fg-2)]">{session.model}</span>
-                                                    ) : ops.model ? (
-                                                        <span className="text-[var(--fg-4)]">not reported yet</span>
+                                        {/* The model: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
+                                        {agent.fidelity === 'declared' && ops.onSetModel ? (() => {
+                                            const choices = ops.models;
+                                            const listed = choices !== undefined && choices !== 'loading' && choices.ok ? choices : null;
+                                            // IN USE: the running session's own answer (modelState) — a provider list asked before any session
+                                            // knows only the provider's default, which is not a reading of this agent.
+                                            const inUseId = listed?.source === 'session' ? listed.current : null;
+                                            const inUse = inUseId === null ? null : listed?.models.find((m) => m.modelId === inUseId) ?? null;
+                                            const reading = inUse ? modelLabel(inUse) : inUseId ?? session?.model ?? null;
+                                            const defaultEntry = listed?.models.find((m) => m.isDefault === true) ?? null;
+                                            const selected = ops.model ?? defaultEntry?.modelId ?? '';
+                                            const selectedEntry = listed?.models.find((m) => m.modelId === selected) ?? null;
+                                            const unlisted = listed && ops.model && !listed.models.some((m) => m.modelId === ops.model) ? ops.model : null;
+                                            const refresh = ops.onRefreshModels ? (
+                                                <button type="button" data-action="models-refresh" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
+                                                    Refresh list
+                                                </button>
+                                            ) : null;
+                                            return (
+                                                <div data-rail-model={session?.model ?? ''} className="mt-2 text-[11px] text-[var(--fg-3)]">
+                                                    <p data-model-reported={reading ? 'yes' : 'no'}>
+                                                        Model{' '}
+                                                        {reading ? (
+                                                            <span className="font-mono text-[var(--fg-2)]">{reading}</span>
+                                                        ) : ops.model ? (
+                                                            <span className="text-[var(--fg-4)]">not reported yet</span>
+                                                        ) : (
+                                                            <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
+                                                        )}
+                                                    </p>
+                                                    {/* The owner, 2026-10-21: "make sure that the model selection for agents is using actual available
+                                                        options from the providers. For example, I do not even see fable as an option". The list is
+                                                        the provider's own answer; free text only when it could not be had. */}
+                                                    {choices === 'loading' ? (
+                                                        <p data-model-list="loading" className="mt-1 text-[var(--fg-4)]">Asking {agent.provider} for its models…</p>
+                                                    ) : listed ? (
+                                                        <label data-model-list={listed.source} className="mt-1 block">
+                                                            Start {agent.name} with
+                                                            <select
+                                                                data-model-select={selected}
+                                                                value={selected}
+                                                                onChange={(e) => { const next = chosenModel(e.target.value, listed); if (next !== (ops.model ?? null)) ops.onSetModel?.(next); }}
+                                                                className="ml-2 max-w-full rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5"
+                                                            >
+                                                                {defaultEntry ? null : <option value="">{"the provider's default"}</option>}
+                                                                {unlisted ? <option value={unlisted}>{`${unlisted} — not in ${agent.provider}’s list`}</option> : null}
+                                                                {listed.models.map((m) => (
+                                                                    <option key={m.modelId} value={m.modelId} title={m.description}>
+                                                                        {`${modelLabel(m)}${m.isDefault ? ' · default' : ''}${m.modelId === inUseId ? ' · in use' : ''}`}
+                                                                    </option>
+                                                                ))}
+                                                            </select>
+                                                            {refresh}
+                                                            {selectedEntry?.description ? (
+                                                                <span data-model-description={selectedEntry.modelId} className="mt-0.5 block text-[var(--fg-4)]">{selectedEntry.description}</span>
+                                                            ) : null}
+                                                        </label>
                                                     ) : (
-                                                        <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
+                                                        <>
+                                                            {choices !== undefined && !choices.ok ? (
+                                                                <p data-model-list="failed" className="mt-1 text-[var(--fg-4)]">
+                                                                    Couldn’t get {agent.provider}’s list of models: {choices.reason}
+                                                                    {refresh}
+                                                                </p>
+                                                            ) : null}
+                                                            <label className="mt-1 block">
+                                                                Start {agent.name} with
+                                                                {/* The other path, only when the provider's list could not be had: any name the provider
+                                                                    accepts, suggesting only the model the provider reported. */}
+                                                                <input
+                                                                    key={ops.model ?? ''}
+                                                                    data-model-input={ops.model ?? ''}
+                                                                    type="text"
+                                                                    list={session?.model ? `models-${agent.id}` : undefined}
+                                                                    defaultValue={ops.model ?? ''}
+                                                                    placeholder="provider default"
+                                                                    spellCheck={false}
+                                                                    onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
+                                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                                    className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
+                                                                />
+                                                                {session?.model ? (
+                                                                    <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
+                                                                ) : null}
+                                                            </label>
+                                                        </>
                                                     )}
-                                                </p>
-                                                <label className="mt-1 block">
-                                                    Start {agent.name} with
-                                                    {/* Any name the provider accepts, suggesting only models the PROVIDER reported (the owner,
-                                                        2026-10-21: "using actual available options from the providers … I do not even see
-                                                        fable"). A list kept here went stale the day a model shipped; the provider's own list
-                                                        comes from prism-acp (asked 2026-10-21). */}
-                                                    <input
-                                                        key={ops.model ?? ''}
-                                                        data-model-input={ops.model ?? ''}
-                                                        type="text"
-                                                        list={session?.model ? `models-${agent.id}` : undefined}
-                                                        defaultValue={ops.model ?? ''}
-                                                        placeholder="provider default"
-                                                        spellCheck={false}
-                                                        onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
-                                                        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                        className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
-                                                    />
-                                                    {session?.model ? (
-                                                        <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
-                                                    ) : null}
-                                                </label>
-                                                <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
-                                            </div>
-                                        ) : null}
+                                                    {/* A running agent switches without a restart (prism-acp 0.22 setModel): Claude's CLI at once, Codex
+                                                        with its next turn. A driver that cannot switch falls back to the restart on the same conversation. */}
+                                                    <span className="mt-0.5 block text-[var(--fg-4)]">
+                                                        {agent.provider === 'codex'
+                                                            ? `A change applies from ${agent.name}’s next turn — a turn already running finishes on the model it began with.`
+                                                            : `A change applies at once — ${agent.name}’s running session switches models on the same conversation.`}
+                                                    </span>
+                                                </div>
+                                            );
+                                        })() : null}
                                         <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
                                             Who may message {agent.name}
                                             <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
