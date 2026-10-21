@@ -71,7 +71,8 @@ describe('main.ts wiring', () => {
         const src = block(main(), "app.on('before-quit'");
         expect(src).toMatch(/const step = quit\.beforeQuit\(/);
         expect(src).toMatch(/if \(step === 'cancel'\) \{ event\.preventDefault\(\); return; \}/);
-        expect(src).toMatch(/if \(step === 'pass'\) return;\s*\n\s*host\?\.stopAll\(\);/);
+        // The shutdown pass holds the quit until the sessions' writes land (quit-drains-writes.test.ts), then stops them.
+        expect(src).toMatch(/if \(step === 'pass'\) return;\s*\n\s*event\.preventDefault\(\);\s*\n\s*host\?\.stopAll\(\);/);
         expect(src).not.toMatch(/quitConfirmed|runningRecorded/);
     });
 
