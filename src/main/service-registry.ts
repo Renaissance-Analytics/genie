@@ -226,6 +226,22 @@ export class ServiceRegistry {
      * same major, with its own container and volume.
      */
     async add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec; variant?: string }): Promise<AddResult> {
+        // ONE ADD PER ENGINE AT A TIME (hosting fixes 3.1): two at once both passed the "already there" check below and made
+        // one container with two records. The second now runs after the first, and finds it.
+        const key = JSON.stringify([input.engine, input.major, input.variant ?? null, input.scope.kind, input.scope.kind === 'dedicated' ? input.scope.workspaceId : null]);
+        const ahead = this.#adding.get(key) ?? Promise.resolve();
+        const mine = ahead.catch(() => {}).then(() => this.#add(input));
+        this.#adding.set(key, mine);
+        try {
+            return await mine;
+        } finally {
+            if (this.#adding.get(key) === mine) this.#adding.delete(key);
+        }
+    }
+
+    readonly #adding = new Map<string, Promise<AddResult>>();
+
+    async #add(input: { engine: string; major: string; scope: ServiceScope; consent: boolean; workspaceId?: string; custom?: CustomEngineSpec; variant?: string }): Promise<AddResult> {
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine);
         if (!def) throw new Error(`${input.engine} is not an engine Genie manages`);
         if (def.sharing === 'shared-only' && input.scope.kind !== 'shared') throw new Error(`${input.engine} is a shared service — one per workstation, never per workspace`);
