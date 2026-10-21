@@ -148,7 +148,13 @@ export class ServiceDriver {
     async create(input: { engine: string; major: string; scope: ServiceScope; publishedPort: number; credentials?: Credentials; admin?: EngineAdmin; surfacePorts?: Readonly<Record<string, number>>; custom?: CustomEngineSpec; configFile?: string; variant?: string }): Promise<{ ok: true; name: string; existed?: true } | { ok: false; reason: string }> {
         const plan = containerPlan(input);
         const existing = await this.#run(['container', 'inspect', plan.name]);
-        if (existing.exitCode === 0) return { ok: true, name: plan.name, existed: true };
+        if (existing.exitCode === 0) {
+            // ALREADY THERE (hosting fixes 3.1): adopted only as it was made. Recording other credentials or another port
+            // over it re-keyed it — a workspace that could no longer connect ("password authentication failed").
+            const differs = madeDifferently(existing.stdout, plan);
+            if (differs === null) return { ok: true, name: plan.name, existed: true };
+            return { ok: false, reason: `a container named ${plan.name} is already on this machine, made with ${differs}; Genie left it as it is and recorded nothing. Remove that container in Docker (its data volume stays), then add the engine again` };
+        }
         const def = SERVICE_CATALOG.find((e) => e.engine === input.engine)!;
         // `--mount` is comma-separated: a source with a comma would be read as another field, so it is refused, not guessed.
         const bad = (plan.mounts ?? []).find((m) => m.source.includes(','));
@@ -221,7 +227,43 @@ export class ServiceDriver {
      * (core/service-tenancy.ts) — the driver only does what it is told.
      */
     async remove(name: string, options: { deleteData: boolean; volume?: string | null }): Promise<void> {
-        await this.#run(['rm', '-f', name]);
-        if (options.deleteData && options.volume !== null) await this.#run(['volume', 'rm', options.volume ?? `${name}-data`]);
+        // Docker's answer is read (hosting fixes 3.1): a removal it did not do throws in its words, and the caller keeps its
+        // record. What is already gone is removed — a refusal is believed only while the thing is still there.
+        const removed = await this.#run(['rm', '-f', name]);
+        if (removed.exitCode !== 0 && (await this.#run(['container', 'inspect', name])).exitCode === 0) {
+            throw new Error(removed.stdout.trim() || `docker rm ${name} failed (exit ${removed.exitCode})`);
+        }
+        if (options.deleteData && options.volume !== null) {
+            const volume = options.volume ?? `${name}-data`;
+            const gone = await this.#run(['volume', 'rm', volume]);
+            if (gone.exitCode !== 0 && (await this.#run(['volume', 'inspect', volume])).exitCode === 0) {
+                throw new Error(gone.stdout.trim() || `docker volume rm ${volume} failed (exit ${gone.exitCode})`);
+            }
+        }
     }
+}
+
+/**
+ * How a container Docker already holds differs from what Genie would make it with (`docker container inspect` output
+ * against the plan), in words that name ports and variable NAMES only — never a value, which may be a password. `null`
+ * when it was made exactly so: every planned env entry is in its `Config.Env`, every planned port is bound as planned.
+ */
+export function madeDifferently(inspectJson: string, plan: { readonly env: Record<string, string>; readonly publish: readonly string[] }): string | null {
+    let found: { Config?: { Env?: unknown }; HostConfig?: { PortBindings?: unknown } } | undefined;
+    try {
+        found = (JSON.parse(inspectJson) as unknown[])[0] as typeof found;
+    } catch {
+        return 'settings Docker would not show';
+    }
+    const env = new Set(Array.isArray(found?.Config?.Env) ? (found!.Config!.Env as unknown[]).filter((e): e is string => typeof e === 'string') : []);
+    const bindings = (found?.HostConfig?.PortBindings ?? {}) as Record<string, { HostPort?: string }[] | null>;
+    const said: string[] = [];
+    for (const spec of plan.publish) {
+        const [, host, inner] = spec.split(':');
+        const bound = (bindings[`${inner}/tcp`] ?? []).map((b) => b.HostPort);
+        if (!bound.includes(host)) said.push(bound.length > 0 ? `port ${bound.join(', ')} where Genie would use ${host}` : `no port where Genie would use ${host}`);
+    }
+    const otherVars = Object.entries(plan.env).filter(([k, v]) => !env.has(`${k}=${v}`)).map(([k]) => k);
+    if (otherVars.length > 0) said.push(`a different ${otherVars.join(', ')}`);
+    return said.length === 0 ? null : said.join(' and ');
 }

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { containerPlan } from '../src/core/services.js';
 import { DOCKER_CHANGE_TIMEOUT_MS, DOCKER_PULL_TIMEOUT_MS, DOCKER_QUERY_TIMEOUT_MS, ServiceDriver, dockerRunnerOver, type DockerRunner } from '../src/main/service-driver.js';
 
 /**
@@ -60,11 +61,18 @@ describe('create, start, stop, status', () => {
         expect(create).toEqual(['create', '--name', 'genie-tynn-postgres-17', '-p', '127.0.0.1:54321:5432', '-v', 'genie-tynn-postgres-17-data:/var/lib/postgresql/data', '--restart', 'unless-stopped', '-e', 'POSTGRES_USER=genie', '-e', 'POSTGRES_PASSWORD=pw', '-e', 'POSTGRES_DB=tynn', 'postgres:17']);
     });
 
-    it('a container that already exists is not created twice', async () => {
-        const docker = fakeDocker({ 'container inspect': { stdout: '[{"State":{"Status":"exited"}}]', exitCode: 0 } });
-        const d = new ServiceDriver(docker.run);
-        expect(await d.create(pg)).toEqual({ ok: true, name: 'genie-tynn-postgres-17', existed: true });
-        expect(docker.calls.filter((c) => c[0] === 'create')).toHaveLength(0);
+    it('a container that already exists is not created twice — adopted when it was made as planned, refused when not (hosting 3.1)', async () => {
+        // Made exactly as Genie would make it: its env and its loopback port, read back from inspect.
+        const plan = containerPlan(pg);
+        const asMade = [{ State: { Status: 'exited' }, Config: { Env: Object.entries(plan.env).map(([k, v]) => `${k}=${v}`) }, HostConfig: { PortBindings: { '5432/tcp': [{ HostIp: '127.0.0.1', HostPort: '54321' }] } } }];
+        const same = fakeDocker({ 'container inspect': { stdout: JSON.stringify(asMade), exitCode: 0 } });
+        expect(await new ServiceDriver(same.run).create(pg)).toEqual({ ok: true, name: 'genie-tynn-postgres-17', existed: true });
+        expect(same.calls.filter((c) => c[0] === 'create')).toHaveLength(0);
+        // Settings it will not show are not assumed to be Genie's: refused, and still not created twice.
+        const unknown = fakeDocker({ 'container inspect': { stdout: '[{"State":{"Status":"exited"}}]', exitCode: 0 } });
+        const refused = await new ServiceDriver(unknown.run).create(pg);
+        expect(refused.ok).toBe(false);
+        expect(unknown.calls.filter((c) => c[0] === 'create')).toHaveLength(0);
     });
 
     it('start / stop call docker by name; status is READ from inspect — running, exited, or absent', async () => {
