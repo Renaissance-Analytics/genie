@@ -34,7 +34,7 @@ import type { Attachment } from './prompt-content.js';
  * `stopped`: a turn that was stopped — one line where its reply ends, `Stopped by you`, so a reply cut short reads as
  * stopped and not as the agent's last word.
  */
-export type ChatWho = 'you' | 'agent' | 'peer' | 'system' | 'mail' | 'delivery' | 'stopped';
+export type ChatWho = 'you' | 'agent' | 'peer' | 'system' | 'mail' | 'delivery' | 'stopped' | 'thinking';
 
 /** One message a delivery told about: its inbox id (to open it), who wrote it, and one line of what it says. */
 export interface ChatMailRef {
@@ -129,6 +129,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
 export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = []): ChatMessage[] {
     const out: ChatMessage[] = [];
     const waiting = waitingMessages(detail.rows);
+    // Whether the row before was a thought: a reply (or any other row) between two thoughts splits them.
+    let lastWasThink = false;
     for (const row of detail.rows) {
         const e = row.event;
         if (e.kind === 'stopped') {
@@ -142,6 +144,18 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
             out.push({ id: row.id, who: 'system', from: '', text: `Compacted the context${sizes}`, delivered: true, at: row.at });
             continue;
         }
+        // THE AGENT'S THINKING, IN THE CHAT (the owner, 2026-10-20: "the thinking content should be posting in the chat
+        // stream, not the work stream"): in its order with the replies; thoughts in a row are one; a wordless one is none.
+        if (e.kind === 'think') {
+            const text = e.text.trim();
+            if (text === '') continue;
+            const last = out[out.length - 1];
+            if (last?.who === 'thinking' && lastWasThink) last.text = `${last.text}\n\n${text}`;
+            else out.push({ id: row.id, who: 'thinking', from: detail.agent.name, text, delivered: true, at: row.at });
+            lastWasThink = true;
+            continue;
+        }
+        lastWasThink = false;
         if (e.kind !== 'message') continue;
         // GENIE'S NOTICE, WITH ITS CONTEXT (beta.33 item 18): not its instruction to the agent ("collect it with
         // agentinbox receive") but the messages it told about — who wrote each and what it says. A notice recorded
