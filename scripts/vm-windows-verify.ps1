@@ -67,7 +67,18 @@ function Drive($file, $argList, $label) {
         $left = @(Get-Process -ErrorAction SilentlyContinue | Where-Object {
             $_.Path -and ($_.Path -like "$root\node_modules\electron\*" -or $_.Path -like "$env:LOCALAPPDATA\Programs\Genie\*")
         })
-        if ($left.Count) { $left | ForEach-Object { Kill-Tree $_.Id }; throw "$($left.Count) process(es) survived the teardown of $label" }
+        if ($left.Count) {
+            # NAME the survivors before ending them (beta.33's first run said only "1 process survived", which left the
+            # cause to guesswork): the process, its path, its command line and its parent.
+            foreach ($p in $left) {
+                $w = Get-CimInstance Win32_Process -Filter "ProcessId=$($p.Id)" -ErrorAction SilentlyContinue
+                $parent = if ($w) { Get-CimInstance Win32_Process -Filter "ProcessId=$($w.ParentProcessId)" -ErrorAction SilentlyContinue } else { $null }
+                Write-Output ("  survivor: {0} (pid {1}) {2}" -f $p.ProcessName, $p.Id, $p.Path)
+                if ($w) { Write-Output ("    command: " + $w.CommandLine) }
+                Write-Output ("    parent: " + $(if ($parent) { "$($parent.Name) (pid $($parent.ProcessId))" } elseif ($w) { "gone (pid $($w.ParentProcessId))" } else { '?' }))
+            }
+            $left | ForEach-Object { Kill-Tree $_.Id }; throw "$($left.Count) process(es) survived the teardown of $label"
+        }
         Write-Output "$label torn down: 0 processes survived"
         Get-ChildItem smoke-*.png -ErrorAction SilentlyContinue | ForEach-Object {
             Move-Item -Force $_.FullName ($_.Name -replace '^smoke-', "$label-")
