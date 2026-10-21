@@ -32,6 +32,7 @@ import { ipcRelayTransport, watchTynnSignIn, type TynnWorkstationList, type Tynn
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
+import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspaceWizard.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
 import { PanelHostContext } from './components/PluginPane.js';
@@ -659,9 +660,31 @@ function DesktopApp({ bridge }: AppProps) {
     const addStart = pickerStart({ primaryWorkspace, home: hostHome });
     const hostSep = /\\/.test(primaryWorkspace || hostHome || '') ? '\\' : '/';
     const previewAdd = () => { setAddPreview(null); setAddFromGit(false); setTynnPick(undefined); setAddOpen(true); };
+    /*
+     * OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7): Genie 1's wizard — the folder (or an import's
+     * staging clone) is READ, then a NEW <slug>.agi is built beside it; the source is never written. A host without the
+     * wizard (an older Genie this window drives) keeps the plan-then-confirm it had.
+     */
+    const [wizardRead, setWizardRead] = useState<SourceReadView | null>(null);
     const openExisting = () => {
         setAddOpen(false);
-        void pickFolder('Open an existing folder', addStart).then((path) => { if (path) void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview); });
+        void pickFolder('Open an existing folder', addStart).then((path) => {
+            if (!path) return;
+            const read = resolvedBridge?.workspaces.readSource;
+            if (!read) { void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview); return; }
+            void read(path).then((r) => (r.ok ? setWizardRead(r) : setAddPreview(r)), (e: unknown) => setAddPreview({ ok: false, reason: e instanceof Error ? e.message : String(e) }));
+        });
+    };
+    const importFromGit = (url: string) => {
+        const stage = resolvedBridge?.workspaces.stageFromGit;
+        if (!stage) {
+            void pickFolder('Where should the clone land? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromGit(url, parent).then((p) => { setAddFromGit(false); setAddPreview(p); }); });
+            return;
+        }
+        setAddBusy(true);
+        void stage(url)
+            .then((r) => { setAddFromGit(false); if (r.ok) setWizardRead(r.existing ? r : { ...r, url }); else setAddPreview(r); }, (e: unknown) => { setAddFromGit(false); setAddPreview({ ok: false, reason: e instanceof Error ? e.message : String(e) }); })
+            .finally(() => setAddBusy(false));
     };
     const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnPick(undefined); setAddFromGit(true); };
     const startAddFromTynn = () => {
@@ -1186,7 +1209,7 @@ function DesktopApp({ bridge }: AppProps) {
             addFromGit={addFromGit}
             onAddWorkspaceFromGit={startAddFromGit}
             onCancelAddGit={() => setAddFromGit(false)}
-            onPreviewFromGit={(url) => { void pickFolder('Where should the clone land? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromGit(url, parent).then((p) => { setAddFromGit(false); setAddPreview(p); }); }); }}
+            onPreviewFromGit={importFromGit}
             onConfirmAddGit={(url, parent) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAddFromGit(url, parent))}
             // From Tynn (§6.1, Genie 1's): the person's projects first; the one picked goes to the host's folder picker and its plan.
             tynnPick={tynnPick}
@@ -1271,6 +1294,31 @@ function DesktopApp({ bridge }: AppProps) {
             onGit={startAddFromGit}
             onTynn={startAddFromTynn}
             onClose={() => setAddOpen(false)}
+        />
+        {/* OPEN EXISTING / IMPORT FROM GIT — Genie 1's four steps; a NEW workspace beside the source. Before the picker, so Browse opens on top. */}
+        <AddWorkspaceWizard
+            read={wizardRead}
+            primaryWorkspace={primaryWorkspace}
+            sep={hostSep}
+            browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
+            build={async (plan) => {
+                const build = resolvedBridge?.workspaces.buildEnvelope;
+                if (!build) return { ok: false, reason: 'This Genie cannot build a workspace.' };
+                const r = await build(plan);
+                return r.ok ? { ok: true, id: r.id } : r;
+            }}
+            registerExisting={async (path) => {
+                const register = resolvedBridge?.workspaces.registerExisting;
+                return register ? register(path) : { ok: false, reason: 'This Genie cannot add an existing workspace.' };
+            }}
+            cloneExisting={async (url, parent) => {
+                const r = await resolvedBridge?.workspaces.confirmAddFromGit(url, parent);
+                if (!r) return { ok: false, reason: 'This Genie cannot clone a workspace.' };
+                return r.ok ? { ok: true, id: r.id } : r;
+            }}
+            discard={(path) => { void resolvedBridge?.workspaces.discardStaged?.(path); }}
+            onAdded={(id) => { setWizardRead(null); navigate(`genie://workspace/${id}`); }}
+            onClose={() => setWizardRead(null)}
         />
         {pickerAsk && resolvedBridge?.host ? (
             <HostPathPicker

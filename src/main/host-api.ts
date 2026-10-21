@@ -69,6 +69,12 @@ export interface HostApiDeps {
         confirmAdd(path: string): Promise<unknown>;
         create(name: string, parent: string): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
+        /** The Open existing / Import from Git wizard (Add workspace parity item 7); optional, refused where absent. */
+        readSource?(path: string): Promise<unknown>;
+        stageFromGit?(url: string): Promise<unknown>;
+        registerExisting?(path: string): Promise<unknown>;
+        buildEnvelope?(plan: unknown): Promise<unknown>;
+        discardStaged?(path: string): Promise<unknown>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
         hibernate(workspaceId: string): Promise<unknown>;
         wake(workspaceId: string): Promise<unknown>;
@@ -212,6 +218,21 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.previewAddFromGit(str(args[0]), str(args[1]));
             case 'workspaces.confirmAddFromGit':
                 return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
+            case 'workspaces.readSource':
+                if (!deps.workspaceOps.readSource) throw new Error('this host cannot read a folder to set it up');
+                return deps.workspaceOps.readSource(str(args[0]));
+            case 'workspaces.stageFromGit':
+                if (!deps.workspaceOps.stageFromGit) throw new Error('this host cannot import from git');
+                return deps.workspaceOps.stageFromGit(str(args[0]));
+            case 'workspaces.registerExisting':
+                if (!deps.workspaceOps.registerExisting) throw new Error('this host cannot add an existing workspace');
+                return deps.workspaceOps.registerExisting(str(args[0]));
+            case 'workspaces.buildEnvelope':
+                if (!deps.workspaceOps.buildEnvelope) throw new Error('this host cannot build a workspace');
+                return deps.workspaceOps.buildEnvelope(args[0]);
+            case 'workspaces.discardStaged':
+                if (!deps.workspaceOps.discardStaged) throw new Error('this host cannot discard an import');
+                return deps.workspaceOps.discardStaged(str(args[0]));
             case 'workspaces.locateRepo':
                 if (!deps.workspaceOps.locateRepo) throw new Error('this host cannot locate a repo');
                 return deps.workspaceOps.locateRepo(str(args[0]), str(args[1]), str(args[2]));

@@ -32,16 +32,20 @@ function tynnContentWords(content: TynnContent | undefined): string {
     return 'Tynn lists no repositories for it: Genie makes a new envelope with its first commit, linked back to the project.';
 }
 
-/** ADD FROM GIT (§6.1): the URL, then one button that picks the parent folder on the host and shows the plan. */
-export function AddFromGitForm({ onPreview, onCancel }: { onPreview: (url: string) => void; onCancel: () => void }) {
+/**
+ * IMPORT FROM GIT (§6.1; Add workspace parity item 7): the URL, then Genie clones it to a STAGING folder and reads it, and
+ * the same wizard as Open existing folder builds a new workspace from it (Genie 1 cloned, then analysed). The person's
+ * folders are not written until they confirm the wizard's last step; the staging clone is removed afterwards.
+ */
+export function AddFromGitForm({ onPreview, onCancel, busy = false }: { onPreview: (url: string) => void; onCancel: () => void; busy?: boolean | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     return (
-        <form data-form="add-from-git" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm" onSubmit={(e) => { e.preventDefault(); const url = String(new FormData(e.currentTarget).get('url') ?? '').trim(); if (url) onPreview(url); }}>
+        <form data-form="add-from-git" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-sm" onSubmit={(e) => { e.preventDefault(); const url = String(new FormData(e.currentTarget).get('url') ?? '').trim(); if (url && !busy) onPreview(url); }}>
             <p className="font-semibold">Add a workspace from a git URL</p>
             <input name="url" type="url" placeholder="https://github.com/owner/name.git or git@host:owner/name.git" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 font-mono text-xs" />
-            <p className="text-xs text-[var(--fg-3)]">Next you pick the parent folder the clone lands in, and Genie shows the plan. Nothing is cloned until you confirm the plan.</p>
+            <p className="text-xs text-[var(--fg-3)]">Genie clones it to a staging folder and reads it; then you choose what goes into the new workspace and where it lives. Nothing of yours is written until you confirm.</p>
             <div className="flex gap-2">
-                <button type="submit" data-action="pick-parent-and-preview" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Pick the parent folder and preview</button>
+                <button type="submit" data-action="clone-and-read" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60">{busy ? 'Cloning…' : 'Clone and read it'}</button>
                 <button type="button" className={button} onClick={onCancel}>Cancel</button>
             </div>
         </form>

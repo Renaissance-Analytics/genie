@@ -41,6 +41,11 @@ export const REMOTE_METHODS = [
     'workspaces.create',
     'workspaces.previewAddFromGit',
     'workspaces.confirmAddFromGit',
+    'workspaces.readSource',
+    'workspaces.stageFromGit',
+    'workspaces.registerExisting',
+    'workspaces.buildEnvelope',
+    'workspaces.discardStaged',
     'workspaces.tynnProjects',
     'workspaces.previewAddFromTynn',
     'workspaces.confirmAddFromTynn',
@@ -129,6 +134,13 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.create': 'write',
     'workspaces.previewAddFromGit': 'read',
     'workspaces.confirmAddFromGit': 'write',
+    // The Open existing / Import from Git wizard (Add workspace parity item 7): reading a folder is a read; the staging
+    // clone, the build, the registration and dropping a staging clone all write on the host.
+    'workspaces.readSource': 'read',
+    'workspaces.stageFromGit': 'write',
+    'workspaces.registerExisting': 'write',
+    'workspaces.buildEnvelope': 'write',
+    'workspaces.discardStaged': 'write',
     // The signed-in person's projects lead to the host's folder picker: the whole From Tynn is done on the host.
     'workspaces.tynnProjects': 'read',
     'workspaces.previewAddFromTynn': 'read',

@@ -2,6 +2,7 @@ import { registerIcons } from '@particle-academy/react-fancy';
 import * as lucide from '@particle-academy/react-fancy/icons';
 import { FEATURE_ICONS } from '../core/rail-view.js';
 import { NAV_GROUPS } from '../core/settings-nav.js';
+import { KIND_COPY } from './components/AddWorkspaceWizard.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -103,6 +104,10 @@ export const ICON_NAMES: readonly string[] = [
     'loader',
     // The file panel's word-wrap toggle (beta.33 item 15; Genie 1's IconWrap).
     'wrap-text',
+    // The Open existing / Import from Git wizard (Add workspace parity item 7): its header and its Next.
+    'layers', 'arrow-right',
+    // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
+    ...Object.values(KIND_COPY).map((k) => k.icon),
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */
