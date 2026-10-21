@@ -657,6 +657,11 @@ export class AgentSession {
                     // whole conversation would accumulate into one unbounded row.
                     this.#closeMessage();
 
+                    // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
+                    // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
+                    // turn, and it opens nothing, as before.
+                    if (!this.#inTurn && this.#queued.length > 0) void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
+
                     this.#turns += 1;
                     this.#endedThisRun += 1;
                     this.#inTurn = false;
@@ -714,12 +719,17 @@ export class AgentSession {
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
-                    // The next queued prompt's turn starts now: its marker, and `working` again. After a crashed turn
-                    // nothing is assumed to run: the queue is dropped and the failure stands.
+                    // A QUEUED PROMPT IS NOT ASSUMED TO BECOME A TURN (the owner, 2026-10-20: idle agents not woken by
+                    // mail). Claude Code FOLDS a prompt sent mid-turn into the running turn; opening its turn here left a
+                    // phantom one that never ended — moic `working` for 36 minutes while idle, so no inbox notice and the
+                    // owner's next message queued behind it. The agent is idle now; a turn opens when the PROVIDER starts
+                    // one (its first activity, credited to the oldest queued sender) or ends one silently (above). After a
+                    // crashed turn nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];
-                    else if (this.#queued.length > 0) {
-                        const by = this.#queued.shift() ?? null;
-                        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
+                    // EXCEPT after a stop: there is no running turn to fold into, and Claude runs the queued prompt as its
+                    // own turn after the interrupt (measured, test/stop-cancels-turn.test.ts), so that turn opens now.
+                    else if (outcome.stopReason === 'cancelled' && this.#queued.length > 0) {
+                        void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
                         this.#inTurn = true;
                         this.#turnState = 'working';
                     }
@@ -833,6 +843,8 @@ export class AgentSession {
         // turn is running, when this prompt waits for its own (see `#queued`).
         if (this.#inTurn) this.#queued.push(by);
         else {
+            // Whatever the queue still holds was folded into an earlier turn (no turn of its own came): not ahead of this.
+            this.#queued = [];
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by });
             this.#inTurn = true;
             this.#limitThisTurn = false;
@@ -1123,7 +1135,8 @@ export class AgentSession {
         // "Idle", and a quit, which cancels only the turns it believes are running, killed it mid-flight. What trails a
         // turn's end (usage, debug notices) is not activity and opens nothing.
         if (this.#turnState === 'idle' && (event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent'))) {
-            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: null });
+            // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
+            void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
             this.#inTurn = true;
             this.#turnState = 'working';
             this.#changed();
