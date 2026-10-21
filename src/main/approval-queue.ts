@@ -47,6 +47,8 @@ const VERBS: Record<string, string> = {
     // An agent's `processes` tool (mcp-tools-processes.ts): the detail names the command, the folder and the policy.
     'processes.add': 'keep a background process running',
     'processes.remove': 'remove a background process',
+    // An agent's `workspaceTabs` tool (mcp-tools-workspace-tabs.ts): the detail says which tab and what changes.
+    'workspace.tabs': 'change this workspace’s tabs',
 };
 
 /** Actions an agent's autonomy never approves for it: each waits for the person. */

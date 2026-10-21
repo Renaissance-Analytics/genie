@@ -62,7 +62,10 @@ describe('the capability table', () => {
         // 60 since `workspaces.setDefaultAgent` (Genie 1's default agent, 2026-10-19): a write, workspace-scoped like setGoverns.
         // 61 since `host.listDir` (Tynn #835: every file and folder picker reads the HOST's disk): a read; a guest only inside its workspace(s).
         // 62 since `workspaces.create` (Genie 1's New workspace, 2026-10-21): a write — Genie makes the folder on the host.
-        expect(REMOTE_METHODS.length).toBe(62);
+        // 63 since `agents.setManageTabs` (May manage workspace tabs, beta.35 item 36): a write, agent-scoped.
+        expect(REMOTE_METHODS.length).toBe(63);
+        expect(capabilityOf('agents.setManageTabs')).toBe('write');
+        expect(AGENT_SCOPED_METHODS).toContain('agents.setManageTabs');
         expect(capabilityOf('workspaces.setDefaultAgent')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.setDefaultAgent');
         // Tynn #835: the parent folder is picked IN THE WINDOW over the host's disk, so these are reads now (owner-only:

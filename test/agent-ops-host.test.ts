@@ -28,6 +28,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             setMode: async (id, mode) => { if (!current || current.id !== id) return null; current = { ...current, mode }; return current; },
             setAccessScope: async (id, accessScope) => { if (!current || current.id !== id) return null; current = { ...current, accessScope }; return current; },
             setAutoApprove: async (id, autoApprove) => { if (!current || current.id !== id) return null; current = { ...current, autoApprove }; return current; },
+            setManageTabs: async (id, manageTabs) => { if (!current || current.id !== id) return null; current = { ...current, manageTabs }; return current; },
             setIssueWatch: async (id, issueWatch) => { if (!current || current.id !== id) return null; current = { ...current, issueWatch }; return current; },
             setPermissions: async (id, permissions) => { if (!current || current.id !== id) return null; current = { ...current, permissions }; return current; },
             setModel: async (id, model) => { if (!current || current.id !== id) return null; const { model: _previous, ...rest } = current; current = model === null ? rest : { ...rest, model }; return current; },

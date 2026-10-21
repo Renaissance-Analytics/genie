@@ -117,6 +117,11 @@ export interface AgentRecord {
      */
     readonly autoApprove?: boolean;
     /**
+     * MAY MANAGE WORKSPACE TABS (beta.35 item 36): this agent has the `workspaceTabs` tool. The workspace's default agent
+     * has it regardless. Absent = no.
+     */
+    readonly manageTabs?: boolean;
+    /**
      * What this agent hears from IssueWatch (Tynn #806): how and which kinds. Absent = never set, and the default applies
      * (`issueWatchPrefsFor`: the workspace's first agent hears new issues, PRs, security and feedback; the rest nothing).
      */

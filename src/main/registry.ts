@@ -498,6 +498,11 @@ export class Registry {
         return this.#update(agentId, (a) => ({ ...a, autoApprove }));
     }
 
+    /** May manage the workspace's tabs (beta.35 item 36): the `workspaceTabs` tool appears in its next tools/list. */
+    async setManageTabs(agentId: AgentId, manageTabs: boolean): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, manageTabs }));
+    }
+
     /** What it hears from IssueWatch (Tynn #806); kept on the record like every other setting of the agent. */
     async setIssueWatch(agentId: AgentId, issueWatch: IssueWatchSetting): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, issueWatch }));

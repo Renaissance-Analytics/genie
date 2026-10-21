@@ -2,6 +2,7 @@ import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { Liveness } from '../core/liveness.js';
 import { addressOf, inboxSettingFrom } from '../core/inbox.js';
 import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
+import { WORKSPACE_TABS_ACTION } from './mcp-tools-workspace-tabs.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { AttentionStore } from './attention-store.js';
 import type { HostingServices, OpenInBrowser } from './hosting-actions.js';
@@ -29,7 +30,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION, detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
@@ -60,6 +61,8 @@ export interface GenieToolParts {
     readonly plugins: PluginToolsDeps['plugins'] & { readonly run: PluginToolsDeps['run'] };
     /** A workspace's default agent and registering a new agent (`createAgent`, the default agent's only). Absent = no such tool (doctor mode). */
     readonly agents?: { defaultAgentOf(workspaceId: string): string | null; register: AgentToolsDeps['register'] };
+    /** `workspaceTabs` (beta.35 item 36): writing a workspace's tabs, and the sites a site panel may show. Absent = no such tool (doctor mode). */
+    readonly workspaceTabs?: { write(workspaceId: string, raw: string): void; sites(workspaceId: string): readonly string[] };
 }
 
 export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
@@ -112,6 +115,17 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string) => p.approve(caller, action, detail),
                 register: p.agents.register,
                 addressOf: (record: AgentRecord) => addressOf(record, 'full'),
+            },
+        } : {}),
+        ...(p.agents && p.workspaceTabs ? {
+            workspaceTabs: {
+                resolveCaller: p.resolveCaller,
+                defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
+                roster: p.roster,
+                readTabs: (ws: string) => { const raw = p.settings.snapshotFor(ws)['workspace_tabs']; return typeof raw === 'string' ? raw : '{"tabs":[]}'; },
+                writeTabs: (ws: string, raw: string) => p.workspaceTabs!.write(ws, raw),
+                sites: (ws: string) => p.workspaceTabs!.sites(ws),
+                approve: (caller: Caller, action: typeof WORKSPACE_TABS_ACTION, detail: string) => p.approve(caller, action, detail),
             },
         } : {}),
     };

@@ -618,6 +618,12 @@ function DesktopApp({ bridge }: AppProps) {
         setWsSettings(null);
         if (resolvedBridge && workspaceId) { reloadRepos(resolvedBridge, workspaceId); reloadWsSettings(resolvedBridge, workspaceId); }
     }, [resolvedBridge, workspaceId]);
+    // A workspace setting changed in main — the tabs an agent made (beta.35 item 36): the workspace on screen reloads its
+    // settings at once. Pushed, never polled; a window driving another machine has no push and reloads as before.
+    useEffect(() => {
+        if (!resolvedBridge || !workspaceId) return;
+        return resolvedBridge.workspaces.onSettingsChanged?.((changed) => { if (changed === workspaceId) reloadWsSettings(resolvedBridge, workspaceId); });
+    }, [resolvedBridge, workspaceId]);
     useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
     // ADD A WORKSPACE (Tynn #835): the folder is picked over the HOST's disk — the remote machine's, when this window
     // drives one — then the plan is shown before anything is written.
@@ -715,6 +721,7 @@ function DesktopApp({ bridge }: AppProps) {
               mode: detail?.agent.mode ?? 'manual',
               accessScope: detail?.agent.accessScope ?? 'self',
               autoApprove: detail?.agent.autoApprove === true,
+              manageTabs: detail?.agent.manageTabs === true,
               ...(detail?.agent.issueWatch ? { issueWatch: detail.agent.issueWatch } : {}),
               permissions: detail?.agent.permissions ?? 'all',
               model: detail?.agent.model ?? null,
@@ -723,6 +730,7 @@ function DesktopApp({ bridge }: AppProps) {
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAccessScope: (scope) => { void resolvedBridge.agents.setAccessScope(agentId, scope).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAutoApprove: (on) => { void resolvedBridge.agents.setAutoApprove(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
+              onSetManageTabs: (on) => { void resolvedBridge.agents.setManageTabs(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetIssueWatch: (setting) => { void resolvedBridge.agents.setIssueWatch(agentId, setting).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },
               onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.noop ? `already running on ${r.to}` : `switched ${r.from} → ${r.to}; carried ${r.carries.join(', ')}. Start it when ready.`) : r.reason }))); },

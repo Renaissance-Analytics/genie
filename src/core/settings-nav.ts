@@ -88,7 +88,7 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     theme: 'appearance', sidebar_width: 'appearance',
 
     default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',
-    inbox_access: 'workspace-defaults', agents_design_tabs: 'workspace-defaults',
+    inbox_access: 'workspace-defaults',
     saved_prompts: 'prompts',
     mcp_sync_claude: 'agent-mcp', mcp_sync_cursor: 'agent-mcp', mcp_sync_codex: 'agent-mcp', mcp_sync_hooks: 'agent-mcp',
     developer_mode: 'plugins',
