@@ -31,6 +31,7 @@ import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
+import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
@@ -162,6 +163,11 @@ export interface ComposeInput {
     readonly remoteApi?: HostApi;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
+    /**
+     * The signed-in Tynn session (main/tynn-account.ts), late-bound: it opens after composition. Config sync mints a linked
+     * workspace's Tynn agent token over it (main/tynn-agent-token.ts). Absent or null = no token is minted.
+     */
+    readonly tynn?: () => TynnSessionPort | null;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -803,6 +809,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
+    const tynnTokens = tynnAgentTokens();
     // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
     // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
     // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could
@@ -951,19 +958,22 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             }
             const values = settings.snapshot();
             const flag = (k: string) => values[k] !== false;
-            const targets = configSyncTargets({
-                workspacePath,
-                fs: {
-                    read: async (p) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                    write: async (p, text) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
-                    remove: async (p) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
-                    list: async (d) => { try { return await readdirP(d); } catch { return []; } },
-                },
-                flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') },
-            });
-            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
-            agentFiles.config(workspacePath, results, Date.now(), source);
-            return results;
+            const fs = {
+                read: async (p: string) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
+                write: async (p: string, text: string) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
+                remove: async (p: string) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
+                list: async (d: string) => { try { return await readdirP(d); } catch { return []; } },
+            };
+            const flags = { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') };
+            // A workspace linked to Tynn: its agents' Tynn token, minted once and written by the same targets as Genie's own.
+            const tynn = await tynnTokens.ensure({ workspacePath, fs, flags, tynn: input.tynn?.() ?? null, ignore: () => writeAgentGitignore({ workspacePath, fs }) });
+            const targets = configSyncTargets({ workspacePath, fs, flags });
+            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token, ...(tynn.status === 'already' || tynn.status === 'minted' ? { TYNN_MCP_URL: tynn.mcp.url, TYNN_MCP_TOKEN: tynn.mcp.token } : {}) });
+            const all: SyncResult[] = tynn.status === 'unlinked'
+                ? results
+                : [...results, tynn.status === 'failed' ? { id: 'tynn', label: 'Tynn (agent token)', ok: false, error: tynn.reason } : { id: 'tynn', label: 'Tynn (agent token)', ok: true }];
+            agentFiles.config(workspacePath, all, Date.now(), source);
+            return all;
         },
         syncAgentDocs: async (workspacePath, source = 'start') => {
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');

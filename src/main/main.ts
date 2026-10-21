@@ -1693,6 +1693,8 @@ async function boot(): Promise<void> {
         // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
         remoteTransport: remoteHub,
         mcpEndpoint: () => mcp?.endpoint() ?? null,
+        // A linked workspace's Tynn agent token is minted over this session (main/tynn-agent-token.ts); opened after compose.
+        tynn: () => tynnAccount,
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
@@ -2088,6 +2090,18 @@ async function boot(): Promise<void> {
             };
             syncNew();
             registry?.subscribe(() => syncNew());
+            // SIGNING IN TO TYNN LATER (Genie 1 provisioned on the next activation): every workspace linked to a Tynn
+            // project is synced again, so one with no token yet gets it now. One already carrying a token is not minted again.
+            tynnAccount?.onChange(() => {
+                if (!tynnAccount?.status().signedIn) return;
+                for (const w of registry?.listWorkspaces() ?? []) {
+                    if (tynnProjectFor(w.id) === null) continue;
+                    void composed.syncConfig(w.path).then(
+                        (results) => { for (const r of results) if (!r.ok) console.error(`[workspace-files] ${w.id} ${r.label}: ${r.error ?? 'failed'}`); },
+                        (error: unknown) => { console.error(`[workspace-files] ${w.id}: ${(error as Error).message}`); },
+                    );
+                }
+            });
         } catch (error) {
             mcpVerified = { ok: false, reason: error instanceof Error ? error.message : String(error) };
             console.error('[mcp] the loopback server did not start:', mcpVerified.reason);
