@@ -131,10 +131,22 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
 }
 
 describe('the rows', () => {
-    it('a MAIL row: who to whom, the whole text rendered, and a press opens that message in the AgentInbox', () => {
+    // Changed 2026-10-21 (the owner, of a chat full of mail: "reduce the size of these. I don't need to see so much content,
+    // that is what the link to open it is for"): a mail row is its head and a SHORT preview, not the whole message.
+    it('a MAIL row: who to whom, a short plain preview (not the whole message), and a press opens it in the AgentInbox', () => {
         const thread = chatThreadFrom(detail([mail('m2', 'human', 'a1', FTQ_ANSWER, T + 70_000)]), 'a1', rows, () => 0);
         const html = renderToStaticMarkup(<ChatFlyout thread={thread} onSend={() => {}} onClose={() => {}} onOpenMail={() => {}} />);
-        expect(html).toMatch(/data-chat-message="m2" data-who="mail"[\s\S]*you → atlas[\s\S]*Deploy[\s\S]*Ship it tonight\?[\s\S]*Yes[\s\S]*after the backup/);
+        expect(html).toMatch(/data-chat-message="m2" data-who="mail"[\s\S]*you → atlas[\s\S]*Deploy — Ship it tonight\? → Yes · Note: after the backup/);
+        const mailHtml = html.slice(html.indexOf('data-chat-message="m2"'));
+        const preview = /data-mail-preview="[^"]*"[^>]*class="([^"]*)"/.exec(mailHtml) ?? /class="([^"]*)"[^>]*data-mail-preview=/.exec(mailHtml);
+        expect(preview?.[1]).toMatch(/\bline-clamp-2\b/);
+        // Not the message rendered: no list, no bold — the AgentInbox is where it is read in full.
+        expect(mailHtml.slice(0, mailHtml.indexOf('</div></div>'))).not.toMatch(/<(ul|li|strong|h\d)\b/);
+        // A long message is cut short, with an ellipsis.
+        const long = chatThreadFrom(detail([mail('m9', 'a2', 'a1', `- **first**\n${'word '.repeat(200)}`, T + 80_000)]), 'a1', rows, () => 0);
+        const longRow = renderToStaticMarkup(ChatMailRow({ m: long.messages.find((m) => m.id === 'm9')! }));
+        expect(longRow).toMatch(/…/);
+        expect(longRow.length).toBeLessThan(2_000);
         const opened: string[] = [];
         const row = ChatMailRow({ m: thread.messages.find((m) => m.id === 'm2')!, onOpenMail: (id) => opened.push(id) });
         const buttons = findAll(row, (p) => p['data-open-mail'] !== undefined);
