@@ -15,9 +15,9 @@
  * unreachable for three releases because one condition decided it should not render. Every test
  * of that feature passed. The only check that would have caught it is a click.
  */
-import { mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 /**
  * Electron's `userData`, per platform.
@@ -100,6 +100,21 @@ writeFileSync(
     JSON.stringify([{ id: 'tynn', path: workspacePath }], null, 2),
 );
 
+/*
+ * MANY REPOS (beta.33 item 23). The owner: "why the fuck is any content at all behind the fucking chat panel?" — a
+ * workspace header with one chip per repo overflowed its column, and the layout sweep never saw it because this seed's
+ * workspace had ONE repo. A real envelope has many (the owner's has five; twelve is a hostile number, on purpose). The
+ * workspace's own manifest, as an `.agi` envelope carries it: its name is the folder's, so every surface names the
+ * workspace exactly as before. Never written over a project.json that is already there.
+ */
+const manifestPath = join(workspacePath, 'project.json');
+if (existsSync(manifestPath)) throw new Error(`seed refuses to overwrite ${manifestPath}`);
+const repoNames = ['genie', 'tynn-claude-tooling', 'tynn-mcp-testing', 'shared-schemas', 'api', 'web', 'docs', 'cli', 'infra', 'design', 'marketing'];
+writeFileSync(manifestPath, JSON.stringify({
+    name: basename(workspacePath),
+    repos: [{ name: basename(workspacePath), slug: 'host', path: '.' }, ...repoNames.map((n) => ({ name: n, slug: n, path: `repos/${n}` }))],
+}, null, 2));
+
 writeFileSync(
     join(runtime, 'agents.json'),
     JSON.stringify(
@@ -135,5 +150,5 @@ writeFileSync(
 );
 
 console.log(
-    `seeded one workspace at ${workspacePath} and two agents (${id}, ${codexId}) into ${runtime}`,
+    `seeded one workspace at ${workspacePath} (${repoNames.length + 1} repos in its project.json) and two agents (${id}, ${codexId}) into ${runtime}`,
 );
