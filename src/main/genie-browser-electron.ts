@@ -35,6 +35,34 @@ export interface GenieBrowserWindowOptions {
     readonly log?: (line: string) => void;
 }
 
+/**
+ * THE GENIE BROWSER'S SESSION, made once for the process and shared by the window's tabs and the workspaces' live site
+ * panels (site-panels-electron.ts): `.gen` routed to the front door, a `.gen` certificate trusted only when Genie's CA
+ * signed it for that name, every request a page makes cancelled unless it travels secure. Its routing is awaited by every
+ * page load (a `.gen` load before it would go to DNS).
+ */
+let sharedSession: { ses: Session; routed: Promise<void> } | null = null;
+export function genieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): { ses: Session; routed: Promise<void> } {
+    if (sharedSession) return sharedSession;
+    const log = options.log ?? ((line: string) => console.log(line));
+    const ses = session.fromPartition('persist:genie-browser-window');
+    const verify = options.caPem !== null
+        ? genCertificateVerifier(options.caPem)
+        : (presented: PresentedCertificate) => certificateVerdict(presented.hostname, null);
+    ses.setCertificateVerifyProc((request, callback) => {
+        callback(verify({ hostname: request.hostname, certificatePem: request.certificate.data }));
+    });
+    ses.webRequest.onBeforeRequest((details, callback) => {
+        callback({ cancel: !isSecureBrowserUrl(details.url) });
+    });
+    const routed = ses.setProxy(genProxyConfig(options.frontDoorPort)).then(async () => {
+        const gen = await ses.resolveProxy('https://example.gen/');
+        if (gen !== `PROXY 127.0.0.1:${options.frontDoorPort}`) log(`[browser-window] .gen sites are NOT routed to the front door (Chromium answered ${JSON.stringify(gen)})`);
+    });
+    sharedSession = { ses, routed };
+    return sharedSession;
+}
+
 export interface GenieBrowserWindows {
     /** Bring the window up — made if it is not open — with `address` in a new tab; no address: the first site, once. */
     open(address?: string): { ok: true } | { ok: false; error: string };
@@ -73,27 +101,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         return true;
     });
 
-    // THE SESSION, made once: its routing is awaited by every page load.
-    let made: { ses: Session; routed: Promise<void> } | null = null;
-    const ensureSession = () => {
-        if (made) return made;
-        const ses = session.fromPartition('persist:genie-browser-window');
-        const verify = options.caPem !== null
-            ? genCertificateVerifier(options.caPem)
-            : (presented: PresentedCertificate) => certificateVerdict(presented.hostname, null);
-        ses.setCertificateVerifyProc((request, callback) => {
-            callback(verify({ hostname: request.hostname, certificatePem: request.certificate.data }));
-        });
-        ses.webRequest.onBeforeRequest((details, callback) => {
-            callback({ cancel: !isSecureBrowserUrl(details.url) });
-        });
-        const routed = ses.setProxy(genProxyConfig(options.frontDoorPort)).then(async () => {
-            const gen = await ses.resolveProxy('https://example.gen/');
-            if (gen !== `PROXY 127.0.0.1:${options.frontDoorPort}`) log(`[browser-window] .gen sites are NOT routed to the front door (Chromium answered ${JSON.stringify(gen)})`);
-        });
-        made = { ses, routed };
-        return made;
-    };
+    const ensureSession = () => genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
 
     const createView = (window: BrowserWindow, events: TabViewEvents): TabViewPort => {
         const { ses, routed } = ensureSession();

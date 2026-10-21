@@ -110,6 +110,13 @@ export const FEATURE_CHANNELS = {
 export interface GenieBridge {
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string): Promise<void> };
+    /** Live site panels (beta.35 item 36, step 5): main places each site panel's page over its box. Host-only. */
+    sitePanels?: {
+        show(panelKey: string, host: string, bounds: { x: number; y: number; width: number; height: number }): Promise<{ ok: true } | { ok: false; error: string }>;
+        hide(panelKey: string): Promise<void>;
+        reload(panelKey: string): Promise<void>;
+        openWindow(host: string): Promise<void>;
+    };
     /** The Genie browser window (beta.35 item 36): this machine's Genie sites. Host-only: absent on a remote bridge. */
     browserWindow?: { open(address?: string): Promise<{ ok: true } | { ok: false; error: string }> };
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
