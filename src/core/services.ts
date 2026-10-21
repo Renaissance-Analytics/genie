@@ -1,3 +1,4 @@
+import { mailpitNameOf } from './mailpit-name.js';
 import { assertGeneratedPassword, seaweedEntrypointScript } from './service-provision.js';
 import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOCKUDO_PORT, SOCKUDO_VERSION, websocketHostEnv } from './websockets.js';
 
@@ -510,6 +511,9 @@ export function customEnvToken(value: string): string {
  * `namespace` is that workspace's derived name (`ws_<slug>`, core/v1-services.ts — computed by the caller, so this
  * file stays free of node imports for the renderer): the tag and prefix the namespace engines emit.
  */
+/** The host an engine is reached at: a Mailpit by its `.gen` name when it has one (core/mailpit-name.ts), else loopback. */
+const hostOf = (one: ServiceInstance): string => (one.engine === 'mailpit' ? mailpitNameOf(one) ?? HOST : HOST);
+
 export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId?: string, options: { namespace?: string } = {}): Record<string, string> {
     const env: Record<string, string> = {};
     // Every custom engine emits its own names (each is namespaced by its own name) and its env, as Genie 1's did —
@@ -538,10 +542,10 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
             const slice = workspaceId === undefined ? undefined : one.slices[workspaceId];
             if (!slice) continue;
             // Genie 1 gave `DATABASE_URL`/`DB_*` to Postgres when a workspace had both Postgres and MySQL.
-            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres') }));
+            Object.assign(env, v1HostEnv(kind, one.publishedPort, slice, { primaryRelational: (kind !== 'mysql' && kind !== 'mariadb') || !chosen.has('postgres'), host: hostOf(one) }));
             continue;
         }
-        Object.assign(env, def.hostEnv(HOST, one.publishedPort, one.credentials, options.namespace));
+        Object.assign(env, def.hostEnv(hostOf(one), one.publishedPort, one.credentials, options.namespace));
     }
     Object.assign(env, custom);
     return env;
@@ -556,7 +560,7 @@ export function serviceEnvFor(instances: readonly ServiceInstance[], workspaceId
  * env that disagrees with the file the app reads, and the exported variable wins (dotenv is
  * immutable) — which is how Genie 1's genie#242 broke apps in the first place.
  */
-export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean }): Record<string, string> {
+export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, options: { primaryRelational: boolean; host?: string }): Record<string, string> {
     const id = slice.identifier;
     const pw = slice.password;
     const p = String(port);
@@ -582,7 +586,7 @@ export function v1HostEnv(engine: string, port: number, slice: AdoptedSlice, opt
         }
         case 'mailpit':
             // The plus address Mailpit auto-tags (genie#552), and the same tag for an app that sets its own From.
-            return { MAIL_MAILER: 'smtp', MAIL_HOST: HOST, MAIL_PORT: p, ...mailTagEnv(id) };
+            return { MAIL_MAILER: 'smtp', MAIL_HOST: options.host ?? HOST, MAIL_PORT: p, ...mailTagEnv(id) };
         case 'websockets':
             // The workspace's own app on the shared server: Genie 1's env-wiring.ts + hosting.ts names (core/websockets.ts).
             // The one secure address, every key (core/websockets.ts WEBSOCKETS_HOST); the workspace is its app.

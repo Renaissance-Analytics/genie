@@ -6,6 +6,7 @@ import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
 import { normalizeSiteName } from '../core/gen-name.js';
 import type { Stack } from '../core/serve-config.js';
+import { mailpitInboxUrl } from '../core/mailpit-name.js';
 import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, engineKindOf, imageFor, SERVICE_CATALOG, sliceIsDroppable, type ServiceInstance } from '../core/services.js';
 import {
     createService, createSite, detachService, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite, useService,
@@ -151,7 +152,7 @@ function serviceView(i: ServiceInstance, workspaceId: string, status?: Pick<Engi
         ...(sliceIsDroppable(i.engine) && workspaceId === OS_WORKSPACE && i.slices ? { apps: Object.entries(i.slices).map(([ws, s]) => ({ workspaceId: ws, id: s.identifier, key: s.identifier })) } : {}),
         // The surfaces beside the primary port, by name — and Mailpit's web inbox as the address to open.
         ...(i.publishedPorts && Object.keys(i.publishedPorts).length > 0 ? { surfaces: { ...i.publishedPorts } } : {}),
-        ...(i.engine === 'mailpit' && i.publishedPorts?.ui !== undefined ? { inbox: `http://127.0.0.1:${i.publishedPorts.ui}/` } : {}),
+        ...(mailpitInboxUrl(i) !== null ? { inbox: mailpitInboxUrl(i) } : {}),
         ...(i.engine === 'custom' && i.image ? { image: i.image } : {}),
         ...(i.adopted ? { takenOverFromGenie1: true } : {}),
         ...(status ? { status: status.status, ...(status.note ? { note: status.note } : {}) } : {}),

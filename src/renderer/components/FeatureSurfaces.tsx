@@ -20,6 +20,7 @@ import type { HostUpgradeStep } from '../../core/host-upgrade.js';
 import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
+import { mailpitInboxUrl } from '../../core/mailpit-name.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
@@ -547,8 +548,9 @@ function sameScope(a: ServiceInstance, b: ServiceInstance): boolean {
 }
 
 /** Mailpit's web inbox on its own loopback port, when the engine publishes it (Genie 1's `ui` surface). */
+/** Mailpit's web inbox at its .gen name (core/mailpit-name.ts) — what the Genie browser opens. */
 export function inboxUrlOf(i: ServiceInstance): string | null {
-    return i.engine === 'mailpit' && i.publishedPorts?.ui !== undefined ? `http://127.0.0.1:${i.publishedPorts.ui}/` : null;
+    return mailpitInboxUrl(i);
 }
 
 /**
