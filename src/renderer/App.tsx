@@ -50,6 +50,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, type DeletePlan } from '../core/agent-ops.js';
+import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
@@ -717,6 +718,37 @@ function DesktopApp({ bridge }: AppProps) {
 
     const [opsView, setOpsView] = useState<{ deletePreview: DeletePlan | null; diagnosis: Diagnosis | null; lastOutcome: string | null }>({ deletePreview: null, diagnosis: null, lastOutcome: null });
     useEffect(() => { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); }, [agentId]);
+    /*
+     * THE PROVIDER'S MODELS for the agent's picker (the owner, 2026-10-21: "make sure that the model selection for agents
+     * is using actual available options from the providers"). Asked when the agent's Settings are on screen — main keeps
+     * one answer per provider, so this starts no CLI after the first — and again after a change (the running session's
+     * `current` moves) or on Refresh. An older host with no `models` keeps the free-text field.
+     */
+    const [modelChoices, setModelChoices] = useState<ModelChoices | 'loading' | undefined>(undefined);
+    const [modelsAsked, setModelsAsked] = useState(0);
+    // A Refresh is ONE ask of the provider again (it starts its CLI), never carried over to the next agent opened.
+    const refreshModels = useRef(false);
+    const modelsAgent = useRef<string | null>(null);
+    const modelsWanted = parsed.surface === 'agent' && parsed.tab === 'settings';
+    const modelsProvider = detail?.agent.provider ?? null;
+    // Started or stopped: whose answer it is changes (the running session's own, or the provider's CLI's).
+    const modelsRunning = detail?.session?.running === true;
+    useEffect(() => {
+        const agents = resolvedBridge?.agents;
+        if (!agents?.models || !agentId || !modelsWanted) { setModelChoices(undefined); return; }
+        let live = true;
+        const refresh = refreshModels.current;
+        refreshModels.current = false;
+        // Another agent's list is never shown under this one while its own is asked.
+        const sameAgent = modelsAgent.current === agentId;
+        modelsAgent.current = agentId;
+        setModelChoices((v) => (v === undefined || refresh || !sameAgent ? 'loading' : v));
+        void agents.models(agentId, refresh).then(
+            (r) => { if (live) setModelChoices('provider' in r ? r : { ok: false, provider: modelsProvider ?? '', reason: r.reason }); },
+            (error: unknown) => { if (live) setModelChoices({ ok: false, provider: modelsProvider ?? '', reason: error instanceof Error ? error.message : String(error) }); },
+        );
+        return () => { live = false; };
+    }, [resolvedBridge, agentId, modelsWanted, modelsProvider, modelsRunning, modelsAsked]);
     const agentOps: AgentOpsProps | undefined = resolvedBridge && agentId
         ? {
               deletePreview: opsView.deletePreview,
@@ -731,7 +763,9 @@ function DesktopApp({ bridge }: AppProps) {
               ...(detail?.agent.issueWatch ? { issueWatch: detail.agent.issueWatch } : {}),
               permissions: detail?.agent.permissions ?? 'all',
               model: detail?.agent.model ?? null,
-              onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason }))); },
+              ...(modelChoices !== undefined ? { models: modelChoices } : {}),
+              onRefreshModels: () => { refreshModels.current = true; setModelsAsked((n) => n + 1); },
+              onSetModel: (model) => { void resolvedBridge.agents.setModel(agentId, model).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', model ?? 'the provider default', r.apply ?? { when: 'next-start' }) : r.reason })); if (r.ok) setModelsAsked((n) => n + 1); }); },
               onSetPermissions: (permissions) => { void resolvedBridge.agents.setPermissions(agentId, permissions).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? applyOutcome(detail?.agent.name ?? 'the agent', permissions === 'edits' ? 'edits only' : permissions === 'ask' ? 'asks before shell commands' : 'all tools', r.apply ?? { when: 'next-start' }) : r.reason }))); },
               onSetMode: (mode) => { void resolvedBridge.agents.setMode(agentId, mode).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetAccessScope: (scope) => { void resolvedBridge.agents.setAccessScope(agentId, scope).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },

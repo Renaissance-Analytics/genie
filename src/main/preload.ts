@@ -156,6 +156,7 @@ const bridge: GenieBridge = {
         setIssueWatch: (agentId, setting) => ipcRenderer.invoke('genie:agent-set-issue-watch', agentId, setting) as never,
         setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
         setModel: (agentId, model) => ipcRenderer.invoke('genie:agent-set-model', agentId, model) as never,
+        models: (agentId, refresh) => ipcRenderer.invoke('genie:agent-models', agentId, refresh === true) as never,
         diagnose: (agentId) => ipcRenderer.invoke('genie:agent-diagnose', agentId) as never,
     },
 

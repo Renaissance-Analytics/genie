@@ -1,4 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { ModelChoices } from '../core/provider-models.js';
 import type { AgentPermissions } from '../core/identity.js';
 import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -288,6 +289,11 @@ export interface GenieBridge {
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<{ ok: true; apply?: ApplyWhen } | { ok: false; reason: string }>;
         /** The model the agent starts with (any provider); `null` = the provider's default. Applies when it next starts. */
         setModel(agentId: string, model: string | null): Promise<{ ok: true; apply?: ApplyWhen } | { ok: false; reason: string }>;
+        /**
+         * The provider's own models for the agent's picker (prism-acp 0.22): the running session's when it can say, else
+         * the provider's CLI asked once and kept; `refresh` asks again. Optional: an older host has none.
+         */
+        models?(agentId: string, refresh?: boolean): Promise<ModelChoices | { ok: false; reason: string }>;
     };
 
     /**

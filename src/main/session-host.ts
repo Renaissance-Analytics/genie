@@ -1,4 +1,6 @@
-import type { McpServer } from '@particle-academy/prism-acp';
+import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
+import { homedir } from 'node:os';
+import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { LiveReadings } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
@@ -267,6 +269,28 @@ export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionI
         ...(mcpServers.some((s) => s.name === 'genie') ? { mcpToolApproval: { genie: 'approve' as const } } : {}),
     };
 }
+
+/** How long the picker waits for a provider's model list. Claude answered in about a second (prism-acp's measurement). */
+const MODEL_LIST_TIMEOUT_MS = 20_000;
+
+/**
+ * HOW GENIE ASKS A PROVIDER FOR ITS MODELS (prism-acp 0.22 `listModels`): the SAME binary — and, for a configured
+ * script, the same interpreter and `ELECTRON_RUN_AS_NODE` — an agent of that provider launches with
+ * (`providerLaunchOptions(providerBinary(…))`, as `realDriverFor` uses), so the list is the one that CLI and its
+ * signed-in account offer, not some other install's. No workspace's service variables: the list is the account's, and
+ * they are managed services, never credentials. Asked from the home folder, so no project's settings choose for it.
+ */
+export function listModelsOptionsFor(
+    provider: string,
+    env: Record<string, string | undefined>,
+    runtime: { readonly execPath: string; readonly electron: boolean },
+): ListModelsOptions {
+    return { ...providerLaunchOptions(providerBinary(provider, env), {}, runtime), cwd: homedir(), timeoutMs: MODEL_LIST_TIMEOUT_MS };
+}
+
+/** The real ask, for `ProviderModelCache`: a short-lived CLI, no turn, ended when it has answered. */
+export const realListModels: ListProviderModels = (provider) =>
+    listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
@@ -1083,6 +1107,16 @@ export class SessionHost {
      * can be lost: a `?? 0` in this method would turn "we have not heard" into "we looked and
      * it was none" for every row on the Dashboard at once.
      */
+    /** The running agent's own model state (no extra process), or `null`: not running here, or its driver cannot say. */
+    modelState(agentId: AgentId): Promise<SessionModelState> | null {
+        return this.#running.get(agentId)?.session.modelState() ?? null;
+    }
+
+    /** Switch the running agent's model without a restart, or `null`: not running here, or its driver cannot. */
+    switchModel(agentId: AgentId, modelId: string): Promise<void> | null {
+        return this.#running.get(agentId)?.session.switchModel(modelId) ?? null;
+    }
+
     probe(agentId: AgentId): LiveSession | null {
         const entry = this.#running.get(agentId);
         if (!entry) return null;

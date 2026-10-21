@@ -38,7 +38,8 @@ import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
-import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
+import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
@@ -66,7 +67,7 @@ import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareProcessTree } from '@particle-academy/prism-acp';
-import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
+import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
@@ -1118,6 +1119,7 @@ async function boot(): Promise<void> {
      * in" would send people to a login they already have. `linkedSystems` is empty until the
      * Tynn identity layer is wired — so a delete plan lists no external system, honestly.
      */
+    const providerModels = new ProviderModelCache(realListModels);
     const agentOps: AgentOpsPorts = {
         registry: {
             find: (id) => registry?.find(id as AgentId) ?? null,
@@ -1138,7 +1140,12 @@ async function boot(): Promise<void> {
             start: (record, cwd) => host!.start(record, cwd),
             stop: (id) => host!.stop(id),
             probe: (id) => host!.probe(id),
+            // A running agent's own models, and a switch with no restart (prism-acp 0.22).
+            modelState: (id) => host?.modelState(id) ?? null,
+            switchModel: (id, model) => host?.switchModel(id, model) ?? null,
         },
+        // Each provider's models, asked of the CLI an agent of it launches with — once, kept until Refresh.
+        models: providerModels,
         cwdFor,
         workspacePathFor: (record) => registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path ?? null,
         readManifest: async (record) => {
@@ -1230,6 +1237,10 @@ async function boot(): Promise<void> {
         (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
     ipcMain.handle('genie:agent-set-permissions', (_event, raw: unknown, permissions: unknown) =>
         (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits' || permissions === 'ask') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all, ask or edits' }));
+    // The provider's own model list for the agent's picker (the owner, 2026-10-21: "using actual available options from
+    // the providers"); `refresh` = ask the provider again.
+    ipcMain.handle('genie:agent-models', (_event, raw: unknown, refresh: unknown) =>
+        (typeof raw === 'string' ? listModels(agentOps, raw, refresh === true) : { ok: false, reason: 'unknown agent' }));
     ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
         (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
     // Autonomous or asked (Tynn #801): its next gated action reads it; nothing restarts.
@@ -1785,6 +1796,7 @@ async function boot(): Promise<void> {
                 setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting),
                 setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
                 setModel: (id, model) => setModel(agentOps, id, model),
+                models: (id, refresh) => listModels(agentOps, id, refresh),
                 diagnose: (id) => diagnose(agentOps, id),
             },
             features: {

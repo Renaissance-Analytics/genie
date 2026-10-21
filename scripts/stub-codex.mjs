@@ -139,6 +139,19 @@ function handle(frame) {
             respond(id, { thread: { id: THREAD_ID } });
             return;
 
+        // The model list (prism-acp 0.22 `listModels` / `modelState`): two models the picker shows, one it must not —
+        // Codex's own picker leaves `hidden` ones out, and so does prism.
+        case 'model/list':
+            respond(id, {
+                data: [
+                    { id: 'gpt-6.1-sol', model: 'gpt-6.1-sol', displayName: 'GPT-6.1 Sol', description: 'The everyday model', isDefault: true },
+                    { id: 'gpt-6.1-sol-mini', model: 'gpt-6.1-sol-mini', displayName: 'GPT-6.1 Sol mini', description: 'Smaller and faster' },
+                    { id: 'stub-hidden-model', model: 'stub-hidden-model', displayName: 'Hidden', hidden: true },
+                ],
+                nextCursor: null,
+            });
+            return;
+
         case 'turn/start': {
             respond(id, { turn: { id: TURN_ID } });
 

@@ -114,7 +114,12 @@ export type ApplyWhen =
     | { readonly when: 'next-start' }
     | { readonly when: 'now' }
     | { readonly when: 'after-turn' }
-    | { readonly when: 'after-shells'; readonly shells: number };
+    | { readonly when: 'after-shells'; readonly shells: number }
+    /**
+     * SWITCHED ON THE RUNNING SESSION, no restart (prism-acp 0.22 `setModel`; the model only). Claude's CLI switches at
+     * once (`now`); Codex sends the model with its next turn (`next-turn`), so a turn already running ends on its own.
+     */
+    | { readonly when: 'switched'; readonly timing: 'now' | 'next-turn' };
 
 export function applyWhen(session: { running: boolean; turnState: string; pendingApproval: unknown; failure: unknown } | null, shellsRunning: number): ApplyWhen {
     if (session === null || !session.running) return { when: 'next-start' };
@@ -131,5 +136,8 @@ export function applyOutcome(agentName: string, what: string, apply: ApplyWhen):
         case 'after-turn': return `${what} — applies when ${agentName} finishes this turn (it restarts on the same conversation)`;
         case 'after-shells': return `${what} — applies when ${agentName}’s ${apply.shells === 1 ? 'background task ends' : `${apply.shells} background tasks end`}; restarting now would stop ${apply.shells === 1 ? 'it' : 'them'}`;
         case 'next-start': return `${what} — applies when ${agentName} next starts`;
+        case 'switched': return apply.timing === 'now'
+            ? `${what} — switched now on the same conversation, no restart: ${agentName}’s next turn runs on it`
+            : `${what} — applies from ${agentName}’s next turn, on the same conversation, no restart (a turn already running finishes on its model)`;
     }
 }

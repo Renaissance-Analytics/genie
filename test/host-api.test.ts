@@ -73,6 +73,7 @@ function fakes() {
             setBudget: async (id, usd) => { calls.push(`agent-budget:${id}:${usd}`); return { ok: true, decision: { kind: 'proceed', remainingUsd: null } }; },
             setMode: async (id, mode) => { calls.push(`agent-mode:${id}:${mode}`); return { ok: true }; },
             setAccessScope: async (id, scope) => { calls.push(`agent-scope:${id}:${scope}`); return { ok: true }; },
+            models: async (id, refresh) => { calls.push(`agent-models:${id}:${refresh}`); return { ok: true }; },
             setAutoApprove: async (id, on) => { calls.push(`agent-auto:${id}:${on}`); return { ok: true }; },
             setManageTabs: async (id, on) => { calls.push(`agent-tabs:${id}:${on}`); return { ok: true }; },
             setDrivePages: async (id, on) => { calls.push(`agent-pages:${id}:${on}`); return { ok: true }; },
