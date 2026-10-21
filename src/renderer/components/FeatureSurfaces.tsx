@@ -862,6 +862,29 @@ export function formatSize(bytes: number): string {
 }
 
 
+
+/**
+ * PRIMARY WORKSPACE (Genie 1's Settings → General first row; the owner, 2026-10-21): where a new workspace lands, and
+ * where a folder picker opened from the workstation starts. A folder, chosen with Browse over the HOST's disk — never typed.
+ */
+function PrimaryWorkspaceRow({ value, onAction }: { value: string | null; onAction: SurfaceProps['onAction'] }) {
+    const pickHostPath = useHostPathPicker();
+    const browse = () => {
+        void pickHostPath?.({ mode: 'directory', title: 'Choose primary workspace folder', ...(value ? { initialPath: value } : {}) }).then((p) => {
+            if (typeof p === 'string') onAction({ kind: 'settings.set', key: 'primary_workspace', value: p });
+        });
+    };
+    return (
+        <div data-primary-workspace="" className="flex items-center gap-4 py-2.5">
+            <div className="flex-1">
+                <div className="text-sm font-medium">Primary workspace</div>
+                <div className="text-xs text-[var(--fg-3)]">Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint.</div>
+            </div>
+            <input readOnly value={value ?? ''} placeholder="No primary workspace chosen" className="w-64 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1 font-mono text-xs" />
+            {pickHostPath ? <button type="button" data-action="browse-primary-workspace" onClick={browse} className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]">Browse</button> : null}
+        </div>
+    );
+}
 function SettingControl({ def, value, onAction, customPath }: { def: SettingDef; value: boolean | string | null; onAction: SurfaceProps['onAction']; customPath?: boolean | string | undefined }) {
     // Your own sound file (Tynn #766 B2), picked over the HOST's disk in the window (Tynn #835): sound files only.
     const pickHostPath = useHostPathPicker();
@@ -974,6 +997,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'general' ? (
                                 <>
                                     {update ? <UpdatesBlock {...update} /> : null}
+                                    <SetSection title="Defaults for new projects" desc="Where Genie puts what it makes."><PrimaryWorkspaceRow value={values === null ? null : typeof values['primary_workspace'] === 'string' ? (values['primary_workspace'] as string) : ''} onAction={onAction} /></SetSection>
                                     <SetSection title="Startup and focus" desc="What Genie does when it starts, and Do not disturb.">{rows('general')}</SetSection>
                                 </>
                             ) : null}

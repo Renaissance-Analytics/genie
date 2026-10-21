@@ -1,8 +1,8 @@
 /**
  * WORKSPACES AND AGENTS (§6.1, §6.2) — the pure half of what was still missing.
  *
- * - Folder CLASSIFICATION and the add-workspace PLAN, shown before anything is written. A folder
- *   that is neither a repo nor an envelope has no plan; it is refused with the reason rather than
+ * - Folder CLASSIFICATION and the add-workspace PLAN, shown before anything is written. A plain folder is wrapped
+ *   in place (Genie 1's "Plain folder"); only a missing one is refused, with the reason, rather than
  *   guessed into one.
  * - SCHEMA STAMPING with a backup, and a refusal to overwrite a newer revision — a Genie that
  *   downgrades a manifest it does not understand destroys information it cannot see.
@@ -43,8 +43,10 @@ export function planAdd(kind: FolderKind, path: string): PlanStep[] {
     switch (kind) {
         case 'missing':
             throw new Error(`${path} does not exist; pick a folder that does`);
+        // A PLAIN FOLDER is a workspace too (the owner, 2026-10-21: "Look at Genie 1" — its wizard: "Plain folder … Genie
+        // can still make a workspace here"): wrapped in place, never git-inited, nothing of its own touched.
         case 'other':
-            throw new Error(`${path} is neither a repo nor an envelope; Genie will not guess what it is`);
+            return [step('write project.json'), step('create .ai/'), ...SCRATCH.map((a) => step(a)), step('register in Genie', false)];
         case 'empty':
             return [step('write project.json'), step('create repos/'), step('create .ai/'), ...SCRATCH.map((a) => step(a)), step('git init'), step('register in Genie', false)];
         case 'simple-repo':

@@ -83,6 +83,8 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
     notification_sounds: 'notifications',
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard',
+    // Drawn as its own row (a folder + Browse) on General, not a generic one.
+    primary_workspace: 'general',
     theme: 'appearance', sidebar_width: 'appearance',
     tynn_host: 'tynn',
     default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',

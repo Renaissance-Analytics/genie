@@ -40,9 +40,12 @@ describe('the add-workspace plan — shown BEFORE anything is written', () => {
         expect(planAdd('full-envelope', '/w/env')).toEqual([{ action: 'register in Genie', path: '/w/env', writes: false }]);
     });
 
-    it('a missing folder and an `other` folder have NO plan — they are refused with the reason', () => {
+    // Changed 2026-10-21 (the owner: "Look at Genie 1" — its "Plain folder … Genie can still make a workspace here"): a
+    // plain folder is wrapped in place, never git-inited; only a missing one has no plan.
+    it('a missing folder has NO plan — it is refused with the reason; a PLAIN folder is wrapped in place, no git init, no repos/', () => {
         expect(() => planAdd('missing', '/w/x')).toThrow(/does not exist/);
-        expect(() => planAdd('other', '/w/x')).toThrow(/neither a repo nor an envelope/);
+        const plain = planAdd('other', '/w/x').map((s) => s.action);
+        expect(plain).toEqual(['write project.json', 'create .ai/', 'create sandbox/ (gitignored)', 'create .trash/ (gitignored)', 'register in Genie']);
     });
 });
 

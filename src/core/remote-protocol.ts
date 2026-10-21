@@ -34,6 +34,7 @@ export const REMOTE_METHODS = [
     'agents.diagnose',
     'workspaces.previewAdd',
     'workspaces.confirmAdd',
+    'workspaces.create',
     'workspaces.previewAddFromGit',
     'workspaces.confirmAddFromGit',
     'workspaces.tynnProjects',
@@ -115,6 +116,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
     'host.listDir': 'read',
     'workspaces.confirmAdd': 'write',
+    'workspaces.create': 'write',
     'workspaces.previewAddFromGit': 'read',
     'workspaces.confirmAddFromGit': 'write',
     // The signed-in person's projects lead to the host's folder picker: the whole From Tynn is done on the host.

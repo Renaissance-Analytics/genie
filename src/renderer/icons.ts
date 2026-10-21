@@ -42,6 +42,8 @@ export const ICON_NAMES: readonly string[] = [
     'git-pull-request',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.
     'folder-tree',
+    // The Add workspace modal's header (Genie 1's): `folder-plus` · Add workspace.
+    'folder-plus',
     // The workspace's popped-out-files bar (the board).
     'external-link',
     // the workspace header's repo chips
