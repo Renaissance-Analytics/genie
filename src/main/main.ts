@@ -39,7 +39,7 @@ import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
-import { issueWatchPrefsFor } from '../core/issue-watch.js';
+import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
@@ -274,7 +274,7 @@ function issueWatchPanels(): Record<string, IssueWatchPanelView> {
     const out: Record<string, IssueWatchPanelView> = {};
     for (const w of registry?.snapshot().workspaces ?? []) {
         const projectId = tynnProjectFor(w.id);
-        out[w.id] = issueWatchPanelView(issueWatchSummaryFor(w.id), projectId === null ? [] : issueWatchRecent.get(projectId) ?? []);
+        out[w.id] = issueWatchPanelView(issueWatchSummaryFor(w.id), projectId === null ? [] : issueWatchRecent.get(projectId) ?? [], Date.now(), projectId === null ? null : issueWatchWatched.get(projectId) ?? null);
     }
     return out;
 }
@@ -285,7 +285,31 @@ async function issueWatchRefreshFor(workspaceId: string): Promise<IssueWatchRefr
     const projectId = tynnProjectFor(workspaceId);
     if (projectId === null) return { ok: false, reason: 'this workspace is not linked to a Tynn project' };
     if (!issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running' };
-    return issueWatchRunning.refresh(projectId);
+    const answer = await issueWatchRunning.refresh(projectId);
+    void issueWatchLoadRepos(projectId);
+    return answer;
+}
+/**
+ * WHICH REPOS FEED A PROJECT'S STREAM (the owner, 2026-10-21: Genie 1 let him choose) — Tynn's switches, per project,
+ * for the GitHub panel. Read when the project's first entry arrives, after a switch is set, and on Refresh: never on a
+ * timer.
+ */
+const issueWatchWatched = new Map<string, WatchedReposView>();
+/** Tells the windows the switches changed — main's pushFeatures, once the client runs (set beside it). */
+let issueWatchChanged: () => void = () => {};
+async function issueWatchLoadRepos(projectId: string): Promise<void> {
+    if (!issueWatchRunning) return;
+    const r = await issueWatchRunning.watchedRepos(projectId);
+    issueWatchWatched.set(projectId, r.ok ? { state: 'ok', ...r.repos } : { state: 'unavailable', reason: r.reason });
+    issueWatchChanged();
+}
+/** A Watched repos checkbox: Tynn's switch, then the switches read again (Tynn pushes the changed feed itself). */
+async function issueWatchSetRepoFor(workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }): Promise<unknown> {
+    const projectId = tynnProjectFor(workspaceId);
+    if (projectId === null || !issueWatchRunning) return { ok: false, reason: 'IssueWatch is not running for this workspace' };
+    const r = await issueWatchRunning.setWatchedRepo(projectId, owner, repo, change);
+    await issueWatchLoadRepos(projectId);
+    return r;
 }
 function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
@@ -1584,7 +1608,7 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -2141,7 +2165,13 @@ async function boot(): Promise<void> {
             for (const kind of issueWatchSoundKinds(events)) broadcast('genie:action', { agentId: null, kind });
             pushFeatures();
         },
-        onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); issueWatchDelivered.set(entry.projectId, Date.now()); pushFeatures(); },
+        onEntry: (entry) => {
+            issueWatchLatest.set(entry.projectId, entry);
+            issueWatchDelivered.set(entry.projectId, Date.now());
+            // The project's repo switches, read once when its first entry arrives (then after changes and Refresh).
+            if (!issueWatchWatched.has(entry.projectId)) void issueWatchLoadRepos(entry.projectId);
+            pushFeatures();
+        },
         onState: (state) => {
             issueWatchState = state.kind;
             pushFeatures();
@@ -2149,6 +2179,7 @@ async function boot(): Promise<void> {
         },
     });
     issueWatchRunning = issueWatchClient;
+    issueWatchChanged = pushFeatures;
     issueWatchClient.start();
     // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now.
     const restartIssueWatch = () => { issueWatchClient.stop(); issueWatchClient.start(); };

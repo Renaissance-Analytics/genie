@@ -1,5 +1,5 @@
-import { Icon } from '@particle-academy/react-fancy';
-import type { IssueWatchPanelView, IssueWatchRepo, IssueWatchRow } from '../../core/issue-watch.js';
+import { Checkbox, Icon } from '@particle-academy/react-fancy';
+import type { IssueWatchPanelView, IssueWatchRepo, IssueWatchRow, WatchedReposView } from '../../core/issue-watch.js';
 
 /**
  * A WORKSPACE'S GITHUB, THROUGH ISSUEWATCH (Tynn #806; Genie 1's IssueWatch flyout — "open issues, PRs and security alerts
@@ -56,7 +56,43 @@ function counts(r: IssueWatchRepo): string {
     return parts.filter(Boolean).join(' · ');
 }
 
-export function IssueWatchPanel({ view, onRefresh }: { view: IssueWatchPanelView; onRefresh?: () => void }) {
+/** A repo's switch, as the panel sets it: one field at a time (Tynn's rule — an upstream write never restates `enabled`). */
+export type WatchedRepoChange = { enabled: boolean } | { includeUpstream: boolean };
+
+/**
+ * WHICH REPOS FEED THE STREAM (the owner, 2026-10-21: Genie 1 let him choose): Tynn's switch per repo, as checkboxes; a
+ * fork also offers its upstream. A Tynn that does not offer the choice (or refuses it) says why — no checkbox that would
+ * do nothing.
+ */
+function WatchedRepos({ watched, onSetRepo }: { watched: WatchedReposView; onSetRepo?: ((owner: string, repo: string, change: WatchedRepoChange) => void) | undefined }) {
+    return (
+        <details data-issue-watch-watched="" className="rounded-md border border-[var(--border-1)] px-3 py-2" {...(watched.state !== 'ok' ? { open: true } : {})}>
+            <summary className="cursor-pointer text-[12px] font-semibold text-[var(--fg-2)]">Watched repos</summary>
+            {watched.state === 'unavailable' ? (
+                <p className="mt-2 text-[12px] text-[var(--fg-3)]">{watched.reason}</p>
+            ) : (
+                <ul className="mt-2 flex flex-col gap-1.5">
+                    {watched.repos.map((r) => (
+                        <li key={r.slug} className="flex flex-col gap-1">
+                            <span data-watched-repo={r.slug} data-enabled={String(r.enabled)}>
+                                <Checkbox checked={r.enabled} label={r.slug} disabled={!onSetRepo} onCheckedChange={(on) => onSetRepo?.(r.owner, r.repo, { enabled: on })} />
+                            </span>
+                            {r.isFork && r.upstreamSlug ? (
+                                <span data-watched-upstream={r.slug} className="pl-6">
+                                    <Checkbox checked={r.includeUpstream} label={`Include upstream ${r.upstreamSlug}`} disabled={!onSetRepo || !r.enabled} onCheckedChange={(on) => onSetRepo?.(r.owner, r.repo, { includeUpstream: on })} />
+                                </span>
+                            ) : null}
+                        </li>
+                    ))}
+                    {watched.repos.length === 0 ? <li className="text-[12px] text-[var(--fg-3)]">This workspace has no GitHub repos for IssueWatch to watch.</li> : null}
+                    {!watched.entitled ? <li className="text-[12px] text-[var(--warning)]">This workspace’s owner’s plan does not include IssueWatch, so these cannot be changed.</li> : null}
+                </ul>
+            )}
+        </details>
+    );
+}
+
+export function IssueWatchPanel({ view, onRefresh, onSetRepo }: { view: IssueWatchPanelView; onRefresh?: () => void; onSetRepo?: (owner: string, repo: string, change: WatchedRepoChange) => void }) {
     return (
         <section data-issue-watch-panel="" className="mx-auto flex w-full max-w-3xl flex-col gap-5 p-5 text-[13px]">
             <header className="flex items-center gap-2">
@@ -69,6 +105,8 @@ export function IssueWatchPanel({ view, onRefresh }: { view: IssueWatchPanelView
                     </button>
                 ) : null}
             </header>
+
+            {view.watched ? <WatchedRepos watched={view.watched} onSetRepo={onSetRepo} /> : null}
 
             {view.empty ? <p data-issue-watch-empty="" className="text-[var(--fg-3)]">{view.empty}</p> : null}
 

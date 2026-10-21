@@ -634,6 +634,7 @@ export function Shell({
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             onRefreshIssueWatch={() => onFeature({ kind: 'issueWatch.refresh', workspaceId: parsed.workspaceId })}
+                            onSetIssueWatchRepo={(owner, repo, change) => onFeature({ kind: 'issueWatch.setRepo', workspaceId: parsed.workspaceId, owner, repo, ...change })}
                             rows={snapshot.agents}
                             // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Deck.
                             deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}

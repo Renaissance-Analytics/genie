@@ -140,6 +140,8 @@ export interface WorkspaceProps {
     issueWatch?: IssueWatchPanelView | null | undefined;
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
     onRefreshIssueWatch?: (() => void) | undefined;
+    /** A Watched repos checkbox (Tynn's switch). Absent = the switches are shown, not settable. */
+    onSetIssueWatchRepo?: ((owner: string, repo: string, change: { enabled: boolean } | { includeUpstream: boolean }) => void) | undefined;
     panel?: 'files' | null | undefined;
     onTogglePanel?: (() => void) | undefined;
     /** The file panel's route keys (`?files=<path>&filter=changed`) and their write-back. */
@@ -188,7 +190,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -823,7 +825,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
             ) : null}
             {onScreen === 'terminals' ? terminalsBody : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
-            {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} /></div> : null}
+            {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);

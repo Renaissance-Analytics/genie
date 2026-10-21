@@ -129,7 +129,7 @@ describe('checkIssues(refresh: true) — Tynn reads GitHub now', () => {
 describe('main keeps the latest entry per project and answers for a workspace', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('the client reports every entry; the tools are given the summary for a workspace', () => {
-        expect(src).toMatch(/onEntry: \(entry\) => \{ issueWatchLatest\.set\(entry\.projectId, entry\); issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\); pushFeatures\(\); \}/);
+        expect(src).toMatch(/onEntry: \(entry\) => \{\s*issueWatchLatest\.set\(entry\.projectId, entry\);\s*issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\);[\s\S]*?pushFeatures\(\);\s*\}/);
         // Extended 2026-10-21: an agent that finds IssueWatch signed out has Genie ask Tynn again (main/tynn-account.ts recheck).
         expect(src).toMatch(/issueWatch: \{ forWorkspace: \(workspaceId\) => issueWatchSummaryFor\(workspaceId\), refresh: \(workspaceId\) => issueWatchRefreshFor\(workspaceId\), recheckSignIn: \(\) => \{ void tynnAccount\?\.recheck\(\); \} \}/);
     });
@@ -137,7 +137,8 @@ describe('main keeps the latest entry per project and answers for a workspace', 
         expect(src).toMatch(/async function issueWatchRefreshFor\(workspaceId: string\): Promise<IssueWatchRefreshAnswer> \{/);
         expect(src).toMatch(/if \(projectId === null\) return \{ ok: false, reason: 'this workspace is not linked to a Tynn project' \};/);
         expect(src).toMatch(/if \(!issueWatchRunning\) return \{ ok: false, reason: 'IssueWatch is not running' \};/);
-        expect(src).toMatch(/return issueWatchRunning\.refresh\(projectId\);/);
+        // The refresh, then the repo switches read again (the GitHub panel's Watched repos).
+        expect(src).toMatch(/const answer = await issueWatchRunning\.refresh\(projectId\);\s*void issueWatchLoadRepos\(projectId\);\s*return answer;/);
         expect(src).toMatch(/issueWatchRunning = issueWatchClient;/);
     });
 });
