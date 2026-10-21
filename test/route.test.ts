@@ -109,12 +109,13 @@ describe('routes are the application’s state, so they parse exactly', () => {
 
 describe('the feature surfaces — every v1 feature has a place in the URL', () => {
     // The AgentInbox is no longer a page (beta.33 item 19) — see 'the AgentInbox flyout' below.
-    it('parses and round-trips knowledge, flows, hosting, toolchain, settings (with a section) and browser (with a url)', () => {
+    it('parses and round-trips knowledge, flows, hosting, settings (with a section, Toolchain among them) and browser (with a url)', () => {
         const cases: Array<[string, Record<string, unknown>]> = [
             ['genie://knowledge', { surface: 'knowledge' }],
             ['genie://flows', { surface: 'flows' }],
             ['genie://hosting', { surface: 'hosting' }],
-            ['genie://toolchain', { surface: 'toolchain' }],
+            // The Toolchain is Settings → Toolchain (beta.33 item 20); the old genie://toolchain landing is test/toolchain-in-settings.
+            ['genie://settings/toolchain', { surface: 'settings', section: 'toolchain' }],
             ['genie://settings', { surface: 'settings', section: null }],
             // GENIE 1'S SIDEBAR (core/settings-nav.ts): one page per section, the section in the path.
             ['genie://settings/remote', { surface: 'settings', section: 'remote' }],

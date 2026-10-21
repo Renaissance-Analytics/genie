@@ -210,7 +210,6 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
-                {has('toolchain') ? <NavRow route="genie://toolchain" current={route} icon="wrench" label="Toolchain" onNavigate={onNavigate} compact /> : null}
                 {has('settings') ? <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact /> : null}
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
                 {(has('workspace') ? shown : []).map((w) => {
@@ -304,7 +303,6 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
             {/* Each named as its surface names itself: Sites / Processes / Services live in Hosting. */}
             {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} /> : null}
             {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} />) : null}
-            {has('toolchain') ? <NavRow route="genie://toolchain" current={route} icon="wrench" label="Toolchain" onNavigate={onNavigate} /> : null}
 
             {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
             {has('settings') ? (

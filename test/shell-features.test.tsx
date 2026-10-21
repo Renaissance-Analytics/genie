@@ -64,12 +64,15 @@ function render(route: string, features: Partial<FeatureData> = {}): string {
 
 describe('every feature surface is servable and draws its own body', () => {
     // The AgentInbox is no longer a surface: it is a flyout over every page (beta.33 item 19; test/inbox-flyout-ui.test.tsx).
+    // REWRITTEN for beta.33 item 20 (the owner: "Tool chain is a Settings thing, it should not be its own page in the menu"):
+    // the Toolchain is not a surface of its own any more; Settings → Toolchain draws it (test/toolchain-in-settings.test.tsx).
     it('SERVABLE names them all — a surface missing here is §0.4: built and unreachable', () => {
-        for (const s of ['knowledge', 'flows', 'hosting', 'toolchain', 'settings', 'browser']) expect(SERVABLE).toContain(s);
+        for (const s of ['knowledge', 'flows', 'hosting', 'settings', 'browser']) expect(SERVABLE).toContain(s);
+        expect(SERVABLE).not.toContain('toolchain');
     });
 
     it('each route renders exactly its surface and not the Dashboard underneath', () => {
-        for (const s of ['knowledge', 'flows', 'hosting', 'toolchain', 'settings', 'browser']) {
+        for (const s of ['knowledge', 'flows', 'hosting', 'settings', 'browser']) {
             const html = render(`genie://${s}`);
             expect(html, s).toContain(`data-surface="${s}"`);
             expect(html, s).not.toContain('data-surface="dashboard"');
@@ -94,7 +97,7 @@ describe('first paint — skeletons, never zeros or empty states', () => {
     });
 
     it('flows / hosting / toolchain with null data show a skeleton, not an empty-state sentence', () => {
-        for (const s of ['flows', 'hosting', 'toolchain']) {
+        for (const s of ['flows', 'hosting', 'settings/toolchain']) {
             const html = render(`genie://${s}`);
             expect(html, s).toContain('data-skeleton');
             expect(html, s).not.toMatch(/no flows|no sites|nothing installed|no messages/i);

@@ -66,7 +66,7 @@ function workspaceViewOf(raw: string | null): WorkspaceView {
 /** The Stream's two layouts (the board): the ledger, or one card per turn. */
 export type StreamLayout = 'ledger' | 'turns';
 /** Surfaces with no parameters of their own beyond the common modifiers. */
-export type PlainFeature = 'knowledge' | 'flows' | 'toolchain';
+export type PlainFeature = 'knowledge' | 'flows';
 /** Hosting's three tabs: `?tab=` opens it on one (the tray's Task Manager…, Tynn #761); absent = Sites. */
 export type HostingTab = 'sites' | 'processes' | 'services';
 const HOSTING_TABS: readonly HostingTab[] = ['sites', 'processes', 'services'];
@@ -110,7 +110,7 @@ export type Route =
 export const DEFAULT_ROUTE = 'genie://dashboard?group=workspace';
 
 const AGENT_TABS: readonly AgentTab[] = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
-const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows', 'toolchain'];
+const PLAIN_FEATURES: readonly PlainFeature[] = ['knowledge', 'flows'];
 
 function dashboard(group: DashboardGroup, common: Common): Route {
     return { surface: 'dashboard', group, ...common };
@@ -218,6 +218,11 @@ export function parseRoute(input: string): Route {
 
         case 'browser':
             return { surface: 'browser', url: params.get('url') || null, ...common };
+
+        // TOOLCHAIN LIVES IN SETTINGS (beta.33 item 20; the owner: "Tool chain is a Settings thing, it should not be its
+        // own page in the menu"): the old page's links land on its Settings section.
+        case 'toolchain':
+            return { surface: 'settings', section: 'toolchain', ...common };
 
         case 'hosting': {
             const tab = params.get('tab');
