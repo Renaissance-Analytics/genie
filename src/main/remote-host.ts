@@ -30,6 +30,8 @@ export interface HostApi {
     /** Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`. */
     onEvent(listener: (channel: string, payload: unknown) => void): () => void;
     workspaceOfAgent(agentId: string): string | null;
+    /** The workspace a terminal is in — what decides whether a guest receives its output. Absent = a guest receives none. */
+    workspaceOfTerminal?(terminalId: string): string | null;
     /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
     workspacePaths?(): Readonly<Record<string, string>>;
 }
@@ -66,6 +68,9 @@ interface Connection {
     readonly socket: ServerConnection;
     auth: { label: string; isOwner: boolean; workspaceId: string | null; readonly: boolean } | null;
 }
+
+/** A push a connection does not receive. */
+const NOT_SENT = Symbol('not sent');
 
 export class RemoteHost {
     readonly #api: HostApi;
@@ -319,8 +324,29 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
-            const scoped = channel === 'snapshot' && c.auth.workspaceId !== null ? filterSnapshotForWorkspace(payload as Parameters<typeof filterSnapshotForWorkspace>[0], c.auth.workspaceId) : payload;
-            this.#send(c, { kind: 'event', channel, payload: scoped });
+            if (c.auth.workspaceId === null) {
+                this.#send(c, { kind: 'event', channel, payload });
+                continue;
+            }
+            const scoped = this.#forGuest(channel, payload, c.auth.workspaceId);
+            if (scoped !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: scoped });
         }
+    }
+
+    /**
+     * WHAT A GUEST RECEIVES (beta.33 item 26, SECURITY — builder-lanes, 2026-10-20: every push but the snapshot went to every
+     * connection, another workspace's agent ledgers and terminal output included). Deny by default: only a push that is
+     * placed in the guest's workspace by the same rule its requests are — its snapshot filtered, its own agents' details,
+     * its own terminals' output and exit. The host's features and update state, and any channel not classified here, are
+     * not sent to a guest at all.
+     */
+    #forGuest(channel: string, payload: unknown, workspaceId: string): unknown {
+        if (channel === 'snapshot') return filterSnapshotForWorkspace(payload as Parameters<typeof filterSnapshotForWorkspace>[0], workspaceId);
+        if (channel.startsWith('agent:')) return this.#api.workspaceOfAgent(channel.slice('agent:'.length)) === workspaceId ? payload : NOT_SENT;
+        if (channel === 'terminal-data' || channel === 'terminal-exit') {
+            const id = (payload as { id?: unknown } | null)?.id;
+            return typeof id === 'string' && this.#api.workspaceOfTerminal?.(id) === workspaceId ? payload : NOT_SENT;
+        }
+        return NOT_SENT;
     }
 }

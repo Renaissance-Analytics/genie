@@ -295,9 +295,16 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         }
     };
 
+    const terminalWorkspaces = new Map<string, string>();
     return {
         invoke,
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
+        // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
+        workspaceOfTerminal: (terminalId) => {
+            const live = deps.terminals.list().find((t) => t.id === terminalId)?.workspaceId;
+            if (live) terminalWorkspaces.set(terminalId, live);
+            return live ?? terminalWorkspaces.get(terminalId) ?? null;
+        },
         workspacePaths: () => Object.fromEntries((deps.snapshot().workspaces ?? []).map((w) => [w.id, w.path])),
         onEvent: (listener) => {
             /*
