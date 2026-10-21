@@ -87,13 +87,22 @@ export function hostsFileBlock(names: readonly string[]): string {
     return blockLines(names).join('\n');
 }
 
-/** Drop the lines from `begin` to `end`; a BEGIN with no END runs to the end of the file, so an interrupted write heals. */
+/**
+ * Drop EVERY block from `begin` to `end` (hosting fixes 4.10: a second marked block — a healed interrupted write, a
+ * hand-pasted copy — used to survive every merge, stale names and all); `at` = where the first one was. A BEGIN with no
+ * END runs to the end of the file, so an interrupted write heals.
+ */
 function withoutBlock(lines: readonly string[], begin: string, end: string): { lines: string[]; at: number } {
-    const b = lines.findIndex((l) => l.trim() === begin);
-    if (b < 0) return { lines: [...lines], at: -1 };
-    const rel = lines.slice(b + 1).findIndex((l) => l.trim() === end);
-    const e = rel < 0 ? lines.length - 1 : b + 1 + rel;
-    return { lines: [...lines.slice(0, b), ...lines.slice(e + 1)], at: b };
+    let rest = [...lines];
+    let at = -1;
+    for (;;) {
+        const b = rest.findIndex((l) => l.trim() === begin);
+        if (b < 0) return { lines: rest, at };
+        const rel = rest.slice(b + 1).findIndex((l) => l.trim() === end);
+        const e = rel < 0 ? rest.length - 1 : b + 1 + rel;
+        if (at < 0) at = b;
+        rest = [...rest.slice(0, b), ...rest.slice(e + 1)];
+    }
 }
 
 /**
