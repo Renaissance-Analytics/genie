@@ -114,7 +114,7 @@ const bridge: GenieBridge = {
     workspaces: {
         previewAdd: (path) => ipcRenderer.invoke('genie:workspace-preview-add', path) as never,
         confirmAdd: (path) => ipcRenderer.invoke('genie:workspace-confirm-add', path) as never,
-        create: (name, parent) => ipcRenderer.invoke('genie:workspace-create', name, parent) as never,
+        create: (name, parent, tynnProjectId) => ipcRenderer.invoke('genie:workspace-create', name, parent, tynnProjectId ?? '') as never,
         previewAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-preview-add-git', url, parent) as never,
         confirmAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-confirm-add-git', url, parent) as never,
         tynnProjects: () => ipcRenderer.invoke('genie:workspace-tynn-projects') as never,

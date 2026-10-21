@@ -1209,13 +1209,15 @@ function DesktopApp({ bridge }: AppProps) {
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
-            create={async (name, parent) => {
+            create={async (name, parent, tynnProjectId) => {
                 const create = resolvedBridge?.workspaces.create;
                 if (!create) return { ok: false, reason: 'This Genie cannot create a workspace.' };
-                const r = await create(name, parent);
+                const r = await create(name, parent, tynnProjectId);
                 if (r.ok) navigate(`genie://workspace/${r.id}`);
                 return r.ok ? { ok: true } : r;
             }}
+            // Genie 1's optional Tynn project link on the New workspace form (the host's own list).
+            tynnProjects={resolvedBridge?.workspaces.tynnProjects}
             onOpenExisting={openExisting}
             onGit={startAddFromGit}
             onTynn={startAddFromTynn}

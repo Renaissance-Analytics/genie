@@ -223,7 +223,8 @@ export interface GenieBridge {
         previewAdd(path: string): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         /** A NEW workspace (Genie 1's): Genie makes <parent>/<slug>.agi, the envelope and its first commit. Refusals come before any write. */
-        create?(name: string, parent: string): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
+        /** A new workspace; optionally linked to one of the person's Tynn projects (by id, looked up on the host). */
+        create?(name: string, parent: string, tynnProjectId?: string): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;

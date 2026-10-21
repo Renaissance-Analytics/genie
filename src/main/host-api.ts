@@ -67,7 +67,7 @@ export interface HostApiDeps {
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
-        create(name: string, parent: string): Promise<unknown>;
+        create(name: string, parent: string, tynnProjectId?: string): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
         hibernate(workspaceId: string): Promise<unknown>;
@@ -216,7 +216,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.confirmAddFromTynn':
                 return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
             case 'workspaces.create':
-                return deps.workspaceOps.create(str(args[0]), str(args[1]));
+                return deps.workspaceOps.create(str(args[0]), str(args[1]), typeof args[2] === 'string' && args[2] !== '' ? args[2] : undefined);
             case 'workspaces.confirmAdd':
                 return deps.workspaceOps.confirmAdd(str(args[0]));
             case 'workspaces.hibernate':
