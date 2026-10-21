@@ -33,6 +33,8 @@ import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
 import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspaceWizard.js';
+import type { GithubAsk } from './components/AgiRemoteChoice.js';
+import { GITHUB_ROUTE } from '../core/github.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
 import { PanelHostContext } from './components/PluginPane.js';
@@ -536,6 +538,13 @@ function DesktopApp({ bridge }: AppProps) {
         });
     };
     useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'whatsNew.show' }, 'What’s new did not open'));
+    // The add-workspace remote choice's GitHub asks (Add workspace parity 10): sign in where Settings does it, GitHub's own
+    // install chooser, or read the installations again after installing.
+    const githubAsk = (ask: GithubAsk) => {
+        if (ask === 'sign-in') navigate(GITHUB_ROUTE);
+        else if (ask === 'install') featureAct({ kind: 'integrations.githubOpen', target: { page: 'install' } }, 'GitHub’s install page did not open');
+        else featureAct({ kind: 'integrations.githubRefresh' }, 'GitHub was not read again');
+    };
 
     const parsed = parseRoute(route);
     const agentId = parsed.surface === 'agent' ? parsed.agentId : null;
@@ -1283,13 +1292,14 @@ function DesktopApp({ bridge }: AppProps) {
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
-            create={async (name, parent) => {
+            create={async (name, parent, remote) => {
                 const create = resolvedBridge?.workspaces.create;
                 if (!create) return { ok: false, reason: 'This Genie cannot create a workspace.' };
-                const r = await create(name, parent);
-                if (r.ok) navigate(`genie://workspace/${r.id}`);
-                return r.ok ? { ok: true } : r;
+                return create(name, parent, remote);
             }}
+            github={features.integrations?.github ?? null}
+            onGithub={githubAsk}
+            onCreated={(id) => navigate(`genie://workspace/${id}`)}
             onOpenExisting={openExisting}
             onGit={startAddFromGit}
             onTynn={startAddFromTynn}
@@ -1301,12 +1311,13 @@ function DesktopApp({ bridge }: AppProps) {
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
-            build={async (plan) => {
+            build={async (plan, remote) => {
                 const build = resolvedBridge?.workspaces.buildEnvelope;
                 if (!build) return { ok: false, reason: 'This Genie cannot build a workspace.' };
-                const r = await build(plan);
-                return r.ok ? { ok: true, id: r.id } : r;
+                return build(plan, remote);
             }}
+            github={features.integrations?.github ?? null}
+            onGithub={githubAsk}
             registerExisting={async (path) => {
                 const register = resolvedBridge?.workspaces.registerExisting;
                 return register ? register(path) : { ok: false, reason: 'This Genie cannot add an existing workspace.' };

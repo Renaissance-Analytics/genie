@@ -1,7 +1,8 @@
 import { basename, join } from 'node:path';
 import { convertCommitMessage, envelopeRepos, isLocalPathLike, planProblem, type EntryKind, type EnvelopePlan, type SourceAnalysis } from '../core/envelope-plan.js';
 import { repoFolderName } from '../core/workspace-model.js';
-import { alreadyNamedReason, envelopeId, makeNewEnvelope, registeredEnvFile, stampExisting, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { remoteChoiceProblem, type Published, type RemoteChoice } from '../core/agi-remote.js';
+import { alreadyNamedReason, envelopeId, makeNewEnvelope, publishNew, registeredEnvFile, stampExisting, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 
 /**
  * BUILDING A NEW `<slug>.agi` AROUND THE PERSON'S REPOS (Add workspace parity item 7) — the main-process half of
@@ -85,8 +86,8 @@ export async function registerExisting(ops: WorkspaceOpsPorts, path: string): Pr
  * envelope inside the source, a Root item replacing the envelope's own). A git that refuses part-way leaves the envelope
  * on disk, unregistered, and says which repo and why in git's words.
  */
-export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, plan: EnvelopePlan): Promise<{ ok: true; id: string; path: string } | Refusal> {
-    const problem = planProblem(plan);
+export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, plan: EnvelopePlan, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
+    const problem = planProblem(plan) ?? (remote ? remoteChoiceProblem(remote) : null);
     if (problem) return { ok: false, reason: problem };
     const made = await makeNewEnvelope(ops, plan.name, plan.parent);
     if (!made.ok) return made;
@@ -130,7 +131,9 @@ export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, 
     }
     await ops.registry.addWorkspace({ id: made.id, path: ws, envFile: registeredEnvFile(ops) });
     if (plan.staged && env.staging.owns(plan.source)) await env.staging.remove(plan.source);
-    return { ok: true, id: made.id, path: ws };
+    // Then to the remote chosen on the Workspace step, both commits at once (Add workspace parity item 11).
+    const published = await publishNew(ops, ws, remote);
+    return published ? { ok: true, id: made.id, path: ws, published } : { ok: true, id: made.id, path: ws };
 }
 
 /** The wizard was cancelled on an import: its clone goes. A folder the stage did not make is never touched. */

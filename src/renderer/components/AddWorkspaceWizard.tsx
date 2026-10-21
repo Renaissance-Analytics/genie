@@ -1,6 +1,9 @@
 import { Badge, Icon, Modal, Select } from '@particle-academy/react-fancy';
 import { useEffect, useState, type ReactNode } from 'react';
 import { workspaceFolderName } from '../../core/add-workspace.js';
+import { defaultRemoteChoice, remoteChoiceProblem, type Published, type RemoteChoice } from '../../core/agi-remote.js';
+import type { GithubView } from '../../core/github.js';
+import { PublishedView, RemoteChoiceView, type GithubAsk } from './AgiRemoteChoice.js';
 import {
     buildPlan,
     choosePrimary,
@@ -239,8 +242,17 @@ export function KnowledgeStepView({ rows, other, onPatch }: { rows: readonly Kno
     );
 }
 
-/** Step 4 — the name and where the new workspace lands, and what it will hold. */
-export function WorkspaceStepView({ draft, sep, onName, onBrowse }: { draft: WizardDraft; sep: string; onName: (name: string) => void; onBrowse: () => void }) {
+/** Step 4 — the name, where the new workspace lands, what it will hold, and where it is kept (None / GitHub / Paste URL). */
+export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github, onRemote, onGithub }: {
+    draft: WizardDraft;
+    sep: string;
+    onName: (name: string) => void;
+    onBrowse: () => void;
+    remote?: RemoteChoice | undefined;
+    github?: GithubView | null | undefined;
+    onRemote?: ((choice: RemoteChoice) => void) | undefined;
+    onGithub?: ((ask: GithubAsk) => void) | undefined;
+}) {
     const plan = buildPlan(draft);
     const folder = workspaceFolderName(draft.name);
     const lands = draft.parent.trim() !== '' && folder !== '' ? `${draft.parent.trim().replace(/[\\/]+$/, '')}${sep}${folder}` : null;
@@ -262,6 +274,7 @@ export function WorkspaceStepView({ draft, sep, onName, onBrowse }: { draft: Wiz
             <p data-wizard-summary="" className={muted}>
                 Genie makes the folder and its first commit, adds <strong>{plan.repos.length}</strong> submodule{plan.repos.length === 1 ? '' : 's'}, copies <strong>{copies}</strong> knowledge item{copies === 1 ? '' : 's'}, and commits them. {draft.staged ? 'The staging clone is removed afterwards.' : 'Your folder is not changed.'}
             </p>
+            {remote && onRemote ? <RemoteChoiceView choice={remote} github={github ?? null} folder={folder} onChoice={onRemote} onGithub={onGithub ?? (() => {})} /> : null}
         </div>
     );
 }
@@ -293,6 +306,8 @@ export type SourceReadView =
     | { ok: true; existing: false; analysis: SourceAnalysis; staged: boolean; url?: string };
 
 type Outcome = { ok: true; id: string } | { ok: false; reason: string };
+/** A build: also where its remote went (Add workspace parity 11), when one was chosen. */
+type BuildOutcome = { ok: true; id: string; path?: string; published?: Published } | { ok: false; reason: string };
 
 export interface AddWorkspaceWizardProps {
     /** What was read — a folder, or an import's staging clone; `null` = closed. */
@@ -300,7 +315,10 @@ export interface AddWorkspaceWizardProps {
     readonly primaryWorkspace: string;
     readonly sep: string;
     readonly browseParent: (current: string) => Promise<string | null>;
-    readonly build: (plan: EnvelopePlan) => Promise<Outcome>;
+    readonly build: (plan: EnvelopePlan, remote: RemoteChoice) => Promise<BuildOutcome>;
+    /** The GitHub sign-in, as Settings shows it; `null` = none to show (the remote choice defaults to None). */
+    readonly github?: GithubView | null | undefined;
+    readonly onGithub?: ((ask: GithubAsk) => void) | undefined;
     readonly registerExisting: (path: string) => Promise<Outcome>;
     /** An import that turned out to be a workspace already: clone it where the person chose (the ordinary Git add). */
     readonly cloneExisting: (url: string, parent: string) => Promise<Outcome>;
@@ -315,15 +333,20 @@ export function canLeaveStep(draft: WizardDraft, step: number): boolean {
     return step !== 1 || repoNamesProblem(draft.repos) === null;
 }
 
-export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, build, registerExisting, cloneExisting, discard, onAdded, onClose }: AddWorkspaceWizardProps) {
+export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, build, github = null, onGithub = () => {}, registerExisting, cloneExisting, discard, onAdded, onClose }: AddWorkspaceWizardProps) {
     const [draft, setDraft] = useState<WizardDraft | null>(null);
     const [step, setStep] = useState(0);
     const [parent, setParent] = useState(primaryWorkspace);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Untouched, the remote follows the GitHub sign-in as it loads (None without one); once picked, the pick stays.
+    const [picked, setPicked] = useState<RemoteChoice | null>(null);
+    const remote = picked ?? defaultRemoteChoice(github);
+    // Built, but GitHub, git or Tynn did not go to plan: Genie 1's "<name> is ready".
+    const [partial, setPartial] = useState<{ id: string; path: string; published: Published } | null>(null);
     // Every new read starts the wizard over, at the Source step, landing beside the Primary workspace (else the source's parent).
     useEffect(() => {
-        setStep(0); setBusy(false); setError(null);
+        setStep(0); setBusy(false); setError(null); setPicked(null); setPartial(null);
         const sourceParent = read && !read.existing && !read.staged ? read.analysis.root.replace(/[\\/]+[^\\/]+[\\/]*$/, '') : '';
         const start = primaryWorkspace || sourceParent;
         setParent(start);
@@ -341,6 +364,16 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
 
     let body: ReactNode;
     let footer: ReactNode;
+    if (partial && draft) {
+        return (
+            <Modal open onClose={() => { setPartial(null); onAdded(partial.id); }} size="xl">
+                <Modal.Header><span className="flex items-center gap-2"><Icon name="layers" size="sm" />{read.staged ? 'Set up this repository' : 'Set up this folder'}</span></Modal.Header>
+                <Modal.Body>
+                    <PublishedView name={draft.name.trim()} path={partial.path} published={partial.published} onGithub={onGithub} onOpen={() => { setPartial(null); onAdded(partial.id); }} />
+                </Modal.Body>
+            </Modal>
+        );
+    }
     if (read.existing) {
         const ready = !busy && (!read.staged || parent.trim() !== '');
         body = <ExistingWorkspaceView path={read.path} staged={read.staged === true} url={read.url} parent={parent} sep={sep} onBrowse={() => pickParent(setParent, parent)} />;
@@ -352,7 +385,7 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
     } else if (draft) {
         const d = draft;
         const plan = buildPlan(d);
-        const finishProblem = planProblem(plan);
+        const finishProblem = planProblem(plan) ?? remoteChoiceProblem(remote);
         const go = (to: number) => { if (busy) return; if (to < step) { setStep(to); return; } for (let s = step; s < to; s++) if (!canLeaveStep(d, s)) return; setStep(to); };
         const knowledgeStep = usesDisposition(d.analysis.sourceKind) ? (
             <DispositionStepView
@@ -367,7 +400,7 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
             <SourceStepView key="source" analysis={d.analysis} staged={d.staged} url={read.url} />,
             <ReposStepView key="repos" draft={d} onPatch={(key, patch) => setDraft(patchRepo(d, key, patch))} onMode={(m) => setDraft(setMonorepoMode(d, m))} onPrimary={(n) => setDraft(choosePrimary(d, n))} />,
             knowledgeStep,
-            <WorkspaceStepView key="workspace" draft={d} sep={sep} onName={(n) => { setDraft(renameWorkspace(d, n)); setError(null); }} onBrowse={() => pickParent((p) => setDraft({ ...d, parent: p }), d.parent)} />,
+            <WorkspaceStepView key="workspace" draft={d} sep={sep} onName={(n) => { setDraft(renameWorkspace(d, n)); setError(null); }} onBrowse={() => pickParent((p) => setDraft({ ...d, parent: p }), d.parent)} remote={remote} github={github} onRemote={(c) => { setPicked(c); setError(null); }} onGithub={onGithub} />,
         ];
         body = (
             <div className="flex flex-col gap-4">
@@ -382,7 +415,14 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
                 {step < WIZARD_STEPS.length - 1 ? (
                     <button type="button" data-action="wizard-next" disabled={busy || !canLeaveStep(d, step)} onClick={() => go(step + 1)} className={primaryButton}>Next<Icon name="arrow-right" size="xs" /></button>
                 ) : (
-                    <button type="button" data-action="build-workspace" disabled={busy || finishProblem !== null} onClick={() => finish(() => build(plan))} className={primaryButton}><Icon name="check" size="xs" />{busy ? 'Building the workspace…' : 'Add workspace'}</button>
+                    <button type="button" data-action="build-workspace" disabled={busy || finishProblem !== null} onClick={() => {
+                        setBusy(true); setError(null);
+                        void build(plan, remote).then((r) => {
+                            if (!r.ok) { setError(r.reason); return; }
+                            if (r.published && r.published.problems.length > 0) { setPartial({ id: r.id, path: r.path ?? '', published: r.published }); return; }
+                            onAdded(r.id);
+                        }, (e: unknown) => setError(e instanceof Error ? e.message : String(e))).finally(() => setBusy(false));
+                    }} className={primaryButton}><Icon name="check" size="xs" />{busy ? 'Building the workspace…' : 'Add workspace'}</button>
                 )}
             </>
         );

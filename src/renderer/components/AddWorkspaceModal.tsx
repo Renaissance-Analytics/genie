@@ -1,6 +1,9 @@
 import { Icon, Modal } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { newWorkspaceProblem, workspaceFolderName } from '../../core/add-workspace.js';
+import { defaultRemoteChoice, remoteChoiceProblem, type Published, type RemoteChoice } from '../../core/agi-remote.js';
+import type { GithubView } from '../../core/github.js';
+import { PublishedView, RemoteChoiceView, type GithubAsk } from './AgiRemoteChoice.js';
 
 /**
  * ADD A WORKSPACE — GENIE 1'S MODAL (the owner, 2026-10-21: "WTf happened to my fucking new workspace UX … Look at Genie
@@ -65,12 +68,17 @@ export interface NewWorkspaceFormProps {
     readonly onBrowse: () => void;
     readonly onCreate: () => void;
     readonly onCancel: () => void;
+    /** Where it is kept (Add workspace parity 10 + 11): None / GitHub / Paste URL. Absent = the form has no such choice. */
+    readonly remote?: RemoteChoice | undefined;
+    readonly github?: GithubView | null | undefined;
+    readonly onRemote?: ((choice: RemoteChoice) => void) | undefined;
+    readonly onGithub?: ((ask: GithubAsk) => void) | undefined;
 }
 
-/** Genie 1's New workspace form: Workspace name, Folder (+ Browse), where it lands, Create workspace. */
-export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBrowse, onCreate, onCancel }: NewWorkspaceFormProps) {
+/** Genie 1's New workspace form: Workspace name, Folder (+ Browse), where it lands, where it is kept, Create workspace. */
+export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBrowse, onCreate, onCancel, remote, github, onRemote, onGithub }: NewWorkspaceFormProps) {
     const folder = workspaceFolderName(name);
-    const ready = newWorkspaceProblem(name, parent) === null && !busy;
+    const ready = newWorkspaceProblem(name, parent) === null && (!remote || remoteChoiceProblem(remote) === null) && !busy;
     const lands = parent.trim() !== '' && folder !== '' ? `${parent.trim().replace(/[\\/]+$/, '')}${sep}${folder}` : null;
     return (
         <div data-new-workspace="" className="flex flex-col gap-4 text-sm">
@@ -90,6 +98,7 @@ export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBro
                 </div>
                 <span data-lands-at="" className="text-xs text-[var(--fg-3)]">{lands ? `Lands at ${lands}` : 'Pick the folder your workspaces live in.'}</span>
             </div>
+            {remote && onRemote ? <RemoteChoiceView choice={remote} github={github ?? null} folder={folder} onChoice={onRemote} onGithub={onGithub ?? (() => {})} /> : null}
             {error ? <p data-add-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
                 <button type="button" data-action="cancel-add" onClick={onCancel} className={button}>Cancel</button>
@@ -106,26 +115,39 @@ export interface AddWorkspaceModalProps {
     readonly sep: string;
     /** Browse for the folder: the host's picker, opened where the folder field points (else the Primary workspace). */
     readonly browseParent: (current: string) => Promise<string | null>;
-    readonly create: (name: string, parent: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** Make it; `published` = what happened with its remote (Add workspace parity 11), when one was chosen. */
+    readonly create: (name: string, parent: string, remote: RemoteChoice) => Promise<{ ok: true; id: string; path: string; published?: Published } | { ok: false; reason: string }>;
+    /** The GitHub sign-in, as Settings shows it; `null` = none to show (the remote choice defaults to None). */
+    readonly github: GithubView | null;
+    readonly onGithub: (ask: GithubAsk) => void;
+    /** Made (and, after a partial success, the person pressed Open workspace): open it. */
+    readonly onCreated: (id: string) => void;
     readonly onOpenExisting: () => void;
     readonly onGit: () => void;
     readonly onTynn: () => void;
     readonly onClose: () => void;
 }
 
-export function AddWorkspaceModal({ open, primaryWorkspace, sep, browseParent, create, onOpenExisting, onGit, onTynn, onClose }: AddWorkspaceModalProps) {
+export function AddWorkspaceModal({ open, primaryWorkspace, sep, browseParent, create, github, onGithub, onCreated, onOpenExisting, onGit, onTynn, onClose }: AddWorkspaceModalProps) {
     const [stage, setStage] = useState<'source' | 'new'>('source');
     const [name, setName] = useState('');
     const [parent, setParent] = useState(primaryWorkspace);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    // Untouched, the choice follows the GitHub sign-in as it loads (None without one); once picked, the person's pick stays.
+    const [picked, setPicked] = useState<RemoteChoice | null>(null);
+    const remote = picked ?? defaultRemoteChoice(github);
+    // A partial success (Genie 1's "<name> is ready"): the workspace is made; GitHub, git or Tynn did not go to plan.
+    const [partial, setPartial] = useState<{ id: string; path: string; published: Published } | null>(null);
     // Every opening starts at the chooser, with the folder from the setting as it is now.
-    useEffect(() => { if (open) { setStage('source'); setName(''); setParent(primaryWorkspace); setError(null); setBusy(false); } }, [open, primaryWorkspace]);
+    useEffect(() => { if (open) { setStage('source'); setName(''); setParent(primaryWorkspace); setError(null); setBusy(false); setPicked(null); setPartial(null); } }, [open, primaryWorkspace]);
     return (
         <Modal open={open} onClose={onClose} size="lg">
             <Modal.Header><span className="flex items-center gap-2"><Icon name="folder-plus" size="sm" />Add workspace</span></Modal.Header>
             <Modal.Body>
-                {stage === 'source' ? (
+                {partial ? (
+                    <PublishedView name={name.trim()} path={partial.path} published={partial.published} onGithub={onGithub} onOpen={() => { onCreated(partial.id); onClose(); }} />
+                ) : stage === 'source' ? (
                     <AddWorkspaceSource onNew={() => setStage('new')} onOpenExisting={onOpenExisting} onGit={onGit} onTynn={onTynn} />
                 ) : (
                     <NewWorkspaceForm
@@ -136,11 +158,20 @@ export function AddWorkspaceModal({ open, primaryWorkspace, sep, browseParent, c
                         error={error}
                         onName={(n) => { setName(n); setError(null); }}
                         onBrowse={() => { void browseParent(parent).then((p) => { if (p) { setParent(p); setError(null); } }); }}
+                        remote={remote}
+                        github={github}
+                        onRemote={(c) => { setPicked(c); setError(null); }}
+                        onGithub={onGithub}
                         onCreate={() => {
                             setBusy(true);
                             setError(null);
-                            void create(name, parent)
-                                .then((r) => { if (r.ok) onClose(); else setError(r.reason); })
+                            void create(name, parent, remote)
+                                .then((r) => {
+                                    if (!r.ok) { setError(r.reason); return; }
+                                    if (r.published && r.published.problems.length > 0) { setPartial({ id: r.id, path: r.path, published: r.published }); return; }
+                                    onCreated(r.id);
+                                    onClose();
+                                })
                                 .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                                 .finally(() => setBusy(false));
                         }}

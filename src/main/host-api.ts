@@ -67,13 +67,14 @@ export interface HostApiDeps {
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
-        create(name: string, parent: string): Promise<unknown>;
+        /** `remote`: the window's None / GitHub / Paste URL choice, unparsed (main parses it; Add workspace parity 11). */
+        create(name: string, parent: string, remote?: unknown): Promise<unknown>;
         confirmAddFromGit(url: string, parent: string): Promise<unknown>;
         /** The Open existing / Import from Git wizard (Add workspace parity item 7); optional, refused where absent. */
         readSource?(path: string): Promise<unknown>;
         stageFromGit?(url: string): Promise<unknown>;
         registerExisting?(path: string): Promise<unknown>;
-        buildEnvelope?(plan: unknown): Promise<unknown>;
+        buildEnvelope?(plan: unknown, remote?: unknown): Promise<unknown>;
         discardStaged?(path: string): Promise<unknown>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
         hibernate(workspaceId: string): Promise<unknown>;
@@ -229,7 +230,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.registerExisting(str(args[0]));
             case 'workspaces.buildEnvelope':
                 if (!deps.workspaceOps.buildEnvelope) throw new Error('this host cannot build a workspace');
-                return deps.workspaceOps.buildEnvelope(args[0]);
+                return deps.workspaceOps.buildEnvelope(args[0], args[1]);
             case 'workspaces.discardStaged':
                 if (!deps.workspaceOps.discardStaged) throw new Error('this host cannot discard an import');
                 return deps.workspaceOps.discardStaged(str(args[0]));
@@ -245,7 +246,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.confirmAddFromTynn':
                 return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
             case 'workspaces.create':
-                return deps.workspaceOps.create(str(args[0]), str(args[1]));
+                return deps.workspaceOps.create(str(args[0]), str(args[1]), args[2]);
             case 'workspaces.confirmAdd':
                 return deps.workspaceOps.confirmAdd(str(args[0]));
             case 'workspaces.hibernate':

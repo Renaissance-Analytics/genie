@@ -136,7 +136,8 @@ import { ensureFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
-import { gitAddSubmodule, gitClone, gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
+import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
+import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
@@ -1522,6 +1523,34 @@ async function boot(): Promise<void> {
             const v = services?.settings.get('default_env_file');
             return typeof v === 'string' ? v : '';
         },
+        remote: {
+            git: {
+                setOrigin: (path, url) => gitSetOrigin(path, url),
+                pushMain: (path, url) => gitPushMain(path, githubAccount?.pushAuth(url) ?? undefined),
+            },
+            github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null),
+            // Read at call time: the Tynn account exists once main has opened it.
+            get tynn() { return tynnAccount ?? undefined; },
+            readJson: async (p) => { try { return JSON.parse(await readFileText(p, 'utf8')) as unknown; } catch { return null; } },
+        },
+    };
+    /*
+     * A NEW ENVELOPE'S REMOTE (Add workspace parity 10 + 11; agi-remote-host.ts): the window's None / GitHub / Paste URL,
+     * parsed here — never trusted. GitHub creates with the sign-in's writer; the push carries the sign-in only where the
+     * App may write (core/github.ts pushAuthFor), else the person's own credentials answer; a workspace linked to a Tynn
+     * project records the URL with declare-envelope over the signed-in Tynn session. No choice = None (an older window).
+     */
+    const remoteFromWindow = (raw: unknown): RemoteChoice | null | undefined => (raw === undefined || raw === null ? undefined : parseRemoteChoice(raw));
+    const NOT_A_REMOTE = { ok: false as const, reason: 'that is not a remote Genie understands; choose None, GitHub or Paste URL' };
+    const createFromWindow = (name: string, parent: string, raw: unknown) => {
+        const remote = remoteFromWindow(raw);
+        return remote === null ? Promise.resolve(NOT_A_REMOTE) : createWorkspaceOp(workspaceOps, name, parent, remote);
+    };
+    const buildFromWindow = (raw: unknown, rawRemote: unknown) => {
+        const plan = parseEnvelopePlan(raw);
+        if (!plan) return Promise.resolve({ ok: false as const, reason: 'that is not a plan Genie can build' });
+        const remote = remoteFromWindow(rawRemote);
+        return remote === null ? Promise.resolve(NOT_A_REMOTE) : buildEnvelope(workspaceOps, envelopePorts, plan, remote);
     };
     // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
     // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
@@ -1586,7 +1615,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-read-source', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? readSource(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:workspace-stage-git', (_event, raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? stageFromGit(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'give a git URL' }));
     ipcMain.handle('genie:workspace-register-existing', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? registerExisting(workspaceOps, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown) => { const plan = parseEnvelopePlan(raw); return plan ? buildEnvelope(workspaceOps, envelopePorts, plan) : { ok: false, reason: 'that is not a plan Genie can build' }; });
+    ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown, rawRemote: unknown) => buildFromWindow(raw, rawRemote));
     ipcMain.handle('genie:workspace-discard-staged', (_event, raw: unknown) => (typeof raw === 'string' ? discardStaged(envelopePorts, raw) : { ok: true }));
     // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
     // host, and the plan for THAT project before anything is written.
@@ -1597,8 +1626,8 @@ async function boot(): Promise<void> {
         (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createWorkspaceOp(workspaceOps, rawName, rawParent) : { ok: false, reason: 'give the workspace a name and a folder' }));
+    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawRemote: unknown) =>
+        (typeof rawName === 'string' && typeof rawParent === 'string' ? createFromWindow(rawName, rawParent, rawRemote) : { ok: false, reason: 'give the workspace a name and a folder' }));
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
@@ -1787,12 +1816,12 @@ async function boot(): Promise<void> {
                 previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
                 locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
-                create: (name, parent) => createWorkspaceOp(workspaceOps, name, parent),
+                create: (name, parent, remote) => createFromWindow(name, parent, remote),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 readSource: (path) => readSource(workspaceOps, envelopePorts, path),
                 stageFromGit: (url) => stageFromGit(workspaceOps, envelopePorts, url),
                 registerExisting: (path) => registerExisting(workspaceOps, path),
-                buildEnvelope: (raw) => { const plan = parseEnvelopePlan(raw); return plan ? buildEnvelope(workspaceOps, envelopePorts, plan) : Promise.resolve({ ok: false, reason: 'that is not a plan Genie can build' }); },
+                buildEnvelope: (raw, remote) => buildFromWindow(raw, remote),
                 discardStaged: (path) => discardStaged(envelopePorts, path),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),

@@ -19,6 +19,7 @@ import type { BytesResult, BytesWriteResult, FileOpResult, FilesState, OpenResul
 import type { RepoEntry } from '../core/repo-registry.js';
 import type { RepoCommit } from '../core/commits.js';
 import type { EnvelopePlan } from '../core/envelope-plan.js';
+import type { Published, RemoteChoice } from '../core/agi-remote.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -229,7 +230,7 @@ export interface GenieBridge {
         previewAdd(path: string): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         /** A NEW workspace (Genie 1's): Genie makes <parent>/<slug>.agi, the envelope and its first commit. Refusals come before any write. */
-        create?(name: string, parent: string): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
+        create?(name: string, parent: string, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | { ok: false; reason: string }>;
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
@@ -243,7 +244,7 @@ export interface GenieBridge {
         /** An existing envelope, added as it is. */
         registerExisting?(path: string): Promise<{ ok: true; id: string } | { ok: false; reason: string }>;
         /** The wizard's plan: a NEW `<slug>.agi` with the repos as submodules and the knowledge copied; the source untouched. */
-        buildEnvelope?(plan: EnvelopePlan): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
+        buildEnvelope?(plan: EnvelopePlan, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | { ok: false; reason: string }>;
         /** A cancelled import's staging clone, removed. Nothing else is ever removed. */
         discardStaged?(path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"); `added` = already a workspace here, by its id. */
