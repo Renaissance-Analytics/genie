@@ -145,13 +145,13 @@ describe('AgentSession', () => {
          * closes — not once per chunk, which would put a row in the thread every few tokens
          * and leave the joining rule to be re-implemented on read.
          *
-         * Asserted as exactly 1: a growing message must not leave a trail of prefixes behind
-         * it, which is what per-chunk writes produced.
+         * Asserted EXACTLY: a growing message must not leave a trail of prefixes behind it, which is what per-chunk
+         * writes produced. The one message, then the turn's `finished` row (beta.33 item 10: a clean turn end is recorded).
          */
         d.endTurn();
 
         await vi.waitFor(async () => {
-            expect(await openAgentThread(store, id).count()).toBe(1);
+            expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
         });
     });
 
@@ -178,10 +178,10 @@ describe('AgentSession', () => {
         await new Promise((r) => setTimeout(r, 150));
         expect(await openAgentThread(store, id).count()).toBe(0);
 
-        // POSITIVE CONTROL: it is not that persistence is broken — closing it writes it.
+        // POSITIVE CONTROL: it is not that persistence is broken — closing it writes it (and the turn's `finished` row).
         d.endTurn();
         await vi.waitFor(async () => {
-            expect(await openAgentThread(store, id).count()).toBe(1);
+            expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
         });
     });
 
@@ -284,7 +284,8 @@ describe('AgentSession', () => {
 
         // A storage fault must not take the turn down — and must not vanish either. A surface
         // can say "this conversation is not being saved" rather than showing a partial one.
-        await vi.waitFor(() => expect(session.unpersistedEvents).toBe(1));
+        // Both rows the turn wrote are counted: the message and the turn's `finished` row (beta.33 item 10).
+        await vi.waitFor(() => expect(session.unpersistedEvents).toBe(2));
     });
 });
 

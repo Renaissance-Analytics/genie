@@ -64,7 +64,8 @@ describe('an agent’s history', () => {
         await vi.waitFor(() => expect(second.host.turnsFor(record.id)).toBe(1), { timeout: 3000 });
         second.host.prompt(record.id, 'second question', 'you');
         await vi.waitFor(() => expect(said(second.host.ledgerFor(record.id))).toEqual(['first question', 'second question']), { timeout: 3000 });
-        expect(kinds(second.host.ledgerFor(record.id))).toEqual(['turn 1', 'message', 'run resumed', 'turn 2', 'message']);
+        // Turn 1 ended cleanly before the restart: its `finished` row is part of the history (beta.33 item 10).
+        expect(kinds(second.host.ledgerFor(record.id))).toEqual(['turn 1', 'message', 'finished', 'run resumed', 'turn 2', 'message']);
         // THIS run alone (the doctor channel, file attribution) is still this run alone.
         expect(said(second.host.rowsFor(record.id))).toEqual(['second question']);
     });

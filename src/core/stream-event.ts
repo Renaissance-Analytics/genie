@@ -133,6 +133,13 @@ export type StreamEvent =
      * `Stop this turn`) and `null` when nobody here asked — never guessed to be "you".
      */
     | { kind: 'stopped'; n: number; by: string | null }
+    /**
+     * A TURN FINISHED — written by the session when the provider ends a turn cleanly (not cancelled, not crashed, not
+     * held), not read off the wire. ACP reports the end and nothing a surface holds kept it, so "finished" could only be
+     * read off an `imDone` handoff the agent may never file (beta.33 item 10: "Last finished" never updated). `n` is the
+     * turn that finished.
+     */
+    | { kind: 'finished'; n: number }
     | {
           kind: 'notice';
           level: string;

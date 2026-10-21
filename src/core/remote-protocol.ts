@@ -29,6 +29,7 @@ export const REMOTE_METHODS = [
     'agents.setAccessScope',
     'agents.setAutoApprove',
     'agents.setManageTabs',
+    'activity',
     'agents.setIssueWatch',
     'agents.setPermissions',
     'agents.setModel',
@@ -109,6 +110,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     // Autonomy (Tynn #801): what an agent may do without asking — a write, agent-scoped like the other settings.
     'agents.setAutoApprove': 'write',
     'agents.setManageTabs': 'write',
+    // The Dashboard's lanes (beta.33 item 10): every agent's activity feed in one workspace — a read, workspace-scoped.
+    activity: 'read',
     'agents.setIssueWatch': 'write',
     'agents.setPermissions': 'write',
     'agents.setModel': 'write',
@@ -165,7 +168,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
 export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.commitsSince', 'workspaces.locateRepo'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.commitsSince', 'workspaces.locateRepo'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }

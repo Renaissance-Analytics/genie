@@ -1,3 +1,4 @@
+import type { ActivityFeed } from '../core/activity-feed.js';
 import { listHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -99,6 +100,11 @@ export interface HostApiDeps {
         setPermissions(agentId: string, permissions: AgentPermissions): Promise<unknown>;
         setModel(agentId: string, model: string | null): Promise<unknown>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;
+    };
+    /** Every agent's activity feed (the Dashboard's lanes, beta.33 item 10): one workspace's, and each as it changes. */
+    activity?: {
+        feeds(workspaceId: string): Readonly<Record<string, ActivityFeed>>;
+        subscribe(listener: (feed: ActivityFeed) => void): () => void;
     };
     features: {
         snapshot(): Promise<FeatureData>;
@@ -290,6 +296,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates ? deps.updates.download() : false;
             case 'updates.install':
                 return deps.updates?.install() ?? null;
+            case 'activity':
+                return deps.activity?.feeds(str(args[0])) ?? {};
             case 'inbox.sendFile':
                 return deps.uploads.sendFile(str(args[0]), str(args[1]), str(args[2]), Buffer.from(str(args[3]), 'base64'));
         }
@@ -322,6 +330,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 deps.features.onChange((data) => listener('features', data)),
                 deps.updates?.onChange((state) => listener('updates', state)) ?? (() => {}),
+                deps.activity?.subscribe((feed) => listener('activity', feed)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };
         },

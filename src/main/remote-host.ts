@@ -343,6 +343,11 @@ export class RemoteHost {
     #forGuest(channel: string, payload: unknown, workspaceId: string): unknown {
         if (channel === 'snapshot') return filterSnapshotForWorkspace(payload as Parameters<typeof filterSnapshotForWorkspace>[0], workspaceId);
         if (channel.startsWith('agent:')) return this.#api.workspaceOfAgent(channel.slice('agent:'.length)) === workspaceId ? payload : NOT_SENT;
+        // An agent's activity feed (the Dashboard's lanes): only for an agent of the guest's workspace.
+        if (channel === 'activity') {
+            const agentId = (payload as { agentId?: unknown } | null)?.agentId;
+            return typeof agentId === 'string' && this.#api.workspaceOfAgent(agentId) === workspaceId ? payload : NOT_SENT;
+        }
         if (channel === 'terminal-data' || channel === 'terminal-exit') {
             const id = (payload as { id?: unknown } | null)?.id;
             return typeof id === 'string' && this.#api.workspaceOfTerminal?.(id) === workspaceId ? payload : NOT_SENT;

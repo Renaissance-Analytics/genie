@@ -63,7 +63,10 @@ describe('the capability table', () => {
         // 61 since `host.listDir` (Tynn #835: every file and folder picker reads the HOST's disk): a read; a guest only inside its workspace(s).
         // 62 since `workspaces.create` (Genie 1's New workspace, 2026-10-21): a write — Genie makes the folder on the host.
         // 63 since `agents.setManageTabs` (May manage workspace tabs, beta.35 item 36): a write, agent-scoped.
-        expect(REMOTE_METHODS.length).toBe(63);
+        // 64 since `activity` (beta.33 item 10: the Dashboard's lanes read every agent's activity feed): a read, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(64);
+        expect(capabilityOf('activity')).toBe('read');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('activity');
         expect(capabilityOf('agents.setManageTabs')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('agents.setManageTabs');
         expect(capabilityOf('workspaces.setDefaultAgent')).toBe('write');

@@ -793,6 +793,9 @@ export class AgentSession {
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
+                    // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
+                    // never the agent's last handoff, which a session answering in chat never files.
+                    if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
                     // A QUEUED PROMPT IS NOT ASSUMED TO BECOME A TURN (the owner, 2026-10-20: idle agents not woken by
                     // mail). Claude Code FOLDS a prompt sent mid-turn into the running turn; opening its turn here left a
                     // phantom one that never ended — moic `working` for 36 minutes while idle, so no inbox notice and the

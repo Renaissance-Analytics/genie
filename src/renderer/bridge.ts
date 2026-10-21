@@ -107,10 +107,22 @@ export const FEATURE_CHANNELS = {
     soundData: 'genie:features-sound-data',
 } as const;
 
+/** The Dashboard lanes' feeds (beta.33 item 10). */
+export interface ActivityBridge {
+    feeds(workspaceId: string): Promise<Readonly<Record<string, import('../core/activity-feed.js').ActivityFeed>>>;
+    subscribe(onFeed: (feed: import('../core/activity-feed.js').ActivityFeed) => void): () => void;
+}
+
 export interface GenieBridge {
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string): Promise<void> };
     /** Live site panels (beta.35 item 36, step 5): main places each site panel's page over its box. Host-only. */
+    /**
+     * EVERY AGENT'S ACTIVITY FEED (beta.33 item 10) — what the workspace Dashboard's lanes draw. `feeds` reads a
+     * workspace's agents' feeds once; `subscribe` hears each agent's feed when its session changes (pushed by the host,
+     * never polled). Absent = no host to ask: the lanes draw what the snapshot says and claim nothing more.
+     */
+    activity?: ActivityBridge;
     sitePanels?: {
         show(panelKey: string, host: string, bounds: { x: number; y: number; width: number; height: number }): Promise<{ ok: true } | { ok: false; error: string }>;
         hide(panelKey: string): Promise<void>;
