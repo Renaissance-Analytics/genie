@@ -43,7 +43,7 @@ function open() {
 
 describe('prompts sent while a turn runs', () => {
     it('each gets its OWN number, written when its turn starts; nothing repeats, nothing is skipped', async () => {
-        const { session, end, markers, prompts } = open();
+        const { session, end, markers, prompts, events } = open();
         session.prompt('first', 'you');
         session.prompt('while you work', 'you');
         session.prompt('from a peer', 'kai');
@@ -52,9 +52,15 @@ describe('prompts sent while a turn runs', () => {
         await session.settled();
         expect(await markers()).toEqual(['1:you']);
 
+        // Changed 2026-10-20 (test/folded-turns.test.ts): a queued prompt's turn opens when the PROVIDER starts it — its
+        // first activity — not by assumption at the previous turn's end (Claude Code folds some into the running turn).
+        const say = (text: string) => events().onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
         end();
+        expect(session.turnState).toBe('idle');
+        say('second');
         expect(session.turnState).toBe('working');
         end();
+        say('third');
         expect(session.turnState).toBe('working');
         end();
         expect(session.turnState).toBe('idle');
