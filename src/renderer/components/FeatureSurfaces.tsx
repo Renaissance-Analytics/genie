@@ -1587,24 +1587,14 @@ function McpServerBlock({ integrations }: { integrations: FeatureData['integrati
 }
 
 /**
- * TYNN — the sign-in card (Genie 1's), the rows Tynn gates, and the host behind a Change (only a self-hosted Tynn
- * changes it; a bare text row on General was the wrong place for it).
+ * TYNN — the sign-in card (Genie 1's) and the rows Tynn gates. Tynn is tynn.ai (core/tynn.ts TYNN_HOST): there is no
+ * host to change (the owner, 2026-10-21: "tynn is not a changeable host").
  */
 function TynnBlock({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
-    const [editing, setEditing] = useState(false);
     if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
     return (
         <div data-integrations="" className="flex flex-col gap-2">
             <TynnSignIn tynn={integrations.tynn} onAction={onAction} />
-            {editing ? (
-                <form data-form="tynn-host" className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); const host = String(new FormData(e.currentTarget).get('host') ?? '').trim(); if (host) onAction({ kind: 'settings.set', key: 'tynn_host', value: host }); setEditing(false); }}>
-                    <Input name="host" type="url" defaultValue={integrations.tynn.host} aria-label="Tynn host" />
-                    <Button type="submit" size="sm">Save</Button>
-                    <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(false)}>Cancel</Button>
-                </form>
-            ) : (
-                <div><Button type="button" size="xs" variant="ghost" data-action="tynn-host-change" onClick={() => setEditing(true)}>Change Tynn host</Button></div>
-            )}
                         <ul className="mt-2 divide-y divide-[var(--border-1)]">
                             {integrations.gated.map((row) => (
                                 <li key={row.id} data-gated={row.id} data-gated-enabled={row.enabled ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
