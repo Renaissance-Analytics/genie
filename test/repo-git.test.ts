@@ -26,6 +26,9 @@ beforeEach(async () => {
     await run('git', ['init', '--quiet', '--initial-branch=main', ws]);
     await run('git', ['-C', ws, 'config', 'user.email', 't@example.invalid']);
     await run('git', ['-C', ws, 'config', 'user.name', 't']);
+    // The fixture's line endings are the fixture's, not the machine's: a Windows runner's global `core.autocrlf=true`
+    // checked `b.txt` out as "from elsewhere\r\n" and failed beta.35's Windows release job (genie#1101).
+    await run('git', ['-C', ws, 'config', 'core.autocrlf', 'false']);
     await writeFile(join(ws, 'a.txt'), 'one\n');
     await run('git', ['-C', ws, 'add', 'a.txt']);
     await run('git', ['-C', ws, ...ID, 'commit', '--quiet', '-m', 'first']);
@@ -72,7 +75,7 @@ describe('the repository panel\'s git, against a real git', () => {
 
     it('a new branch is created and switched to; pull fast-forwards a change made elsewhere', async () => {
         const other = join(dir, 'other');
-        await run('git', ['clone', '--quiet', origin, other]);
+        await run('git', ['clone', '--quiet', '-c', 'core.autocrlf=false', origin, other]);
         await writeFile(join(other, 'b.txt'), 'from elsewhere\n');
         await run('git', ['-C', other, 'add', 'b.txt']);
         await run('git', ['-C', other, ...ID, 'commit', '--quiet', '-m', 'elsewhere']);
