@@ -5,6 +5,9 @@ import { EMPTY_WORKBENCH, activeText, dirtyPaths, workbench, type Workbench, typ
 import { editorFor } from '../../core/plugin-editors.js';
 import { usePluginEditors } from '../plugin-editors-context.js';
 import { PluginEditorBody } from './PluginEditorBody.js';
+import { useTheme } from '@particle-academy/react-fancy';
+import { readPanelPrefs, writePanelPrefs, type PanelPrefs, type PrefsStorage } from '../../core/files-panel-prefs.js';
+import { DiscardModal } from './DiscardModal.js';
 import { routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
 import { resolveFileKind } from '@particle-academy/fancy-code';
@@ -58,18 +61,27 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
      */
     const lazy = typeof files.children === 'function';
     const [loaded, setLoaded] = useState<ReadonlyMap<string, readonly TreeNode[]>>(() => new Map());
-    const [expanded, setExpanded] = useState<readonly string[]>(() => revealFor(routeFile ?? null, []));
+    /*
+     * WHAT THE PANEL REMEMBERS, PER WORKSPACE (beta.33 item 15; Genie 1's view meta): word wrap, the tree hidden / pinned,
+     * the folder it is locked to, the open tabs and the open folders. A code pane (single) remembers nothing of its own.
+     */
+    const storage = useMemo<PrefsStorage | null>(() => { try { return typeof window === 'undefined' ? null : window.localStorage; } catch { return null; } }, []);
+    const [prefs, setPrefs] = useState<PanelPrefs>(() => readPanelPrefs(single ? null : storage, workspace.id));
+    const changePrefs = useCallback((patch: Partial<PanelPrefs>) => setPrefs((p) => ({ ...p, ...patch })), []);
+    const lockedRoot = prefs.lockedRoot ?? '';
+    const [expanded, setExpanded] = useState<readonly string[]>(() => revealFor(routeFile ?? null, prefs.expanded));
     const loadedRef = useRef(loaded);
     loadedRef.current = loaded;
     const loadDir = useCallback((dir: string) => {
         void settle(() => files.children!(workspace.id, dir)).then((r) => {
-            if (!r.ok) { if (dir === '') setTreeError(r.error); return; }
+            if (!r.ok) { if (dir === lockedRoot) setTreeError(r.error); return; }
             if (r.value === null) return;
-            if (dir === '') setTreeError(null);
+            if (dir === lockedRoot) setTreeError(null);
             setLoaded((m) => new Map(m).set(dir, r.value!));
         });
-    }, [files, workspace.id]);
-    const tree = lazy ? treeFromLoaded(loaded) : eagerTree;
+    }, [files, workspace.id, lockedRoot]);
+    // Locked to a folder (Genie 1's Lock to folder): the tree is rooted there; the ids stay workspace-relative.
+    const tree = lazy ? treeFromLoaded(loaded, lockedRoot) : eagerTree && lockedRoot ? subtreeAt(eagerTree, lockedRoot) : eagerTree;
     // The tree's read failed: the reason, shown in the tree's place (never skeletons forever).
     const [treeError, setTreeError] = useState<string | null>(null);
     // Every open SETTLES into something the panel can say — the file, or why not. A rejected ask left `open` as it was.
@@ -82,6 +94,11 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         return openOrError(() => files.open(workspace.id, path), path);
     }, [files, workspace.id]);
     const [state, setState] = useState<FilesPanelState | null>(null);
+    // Git's state of each changed file, for the tree's colours (Genie 1 FileTree) — re-read with the tree, on the host's push.
+    const [git, setGit] = useState<Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>>({});
+    const readGit = useCallback(() => { if (!single && files.gitStatus) void files.gitStatus(workspace.id).then(setGit, () => {}); }, [files, workspace.id, single]);
+    // The editor follows GENIE's theme, not the OS's (Genie 1 useResolvedTheme): a light Genie on a dark OS is a light editor.
+    const { resolved: theme } = useTheme();
     /*
      * THE TABS, ONE BUFFER EACH (beta.33 items 14 + 15; core/editor-workbench.ts). Genie 1 kept a buffer per tab; this panel
      * kept ONE and dropped it on every open, so an edit was lost by clicking another tab. A file an ENABLED plugin's editor
@@ -133,15 +150,16 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         // Single mode draws no tree (§4.6), so it does not walk one: on a large workspace that walk is the whole disk
         // under the root, re-run on every change the watcher sees.
         if (!single && lazy) {
-            // The root, and every folder already open, listed again — never a walk of the whole workspace.
-            for (const dir of new Set(['', ...loadedRef.current.keys()])) loadDir(dir);
+            // The root (or the locked folder), and every folder already open, listed again — never a walk of the whole workspace.
+            for (const dir of new Set([lockedRoot, ...loadedRef.current.keys()])) loadDir(dir);
         } else if (!single) {
             void settle(() => files.tree(workspace.id)).then((r) => {
                 if (r.ok) { setTree(r.value); setTreeError(null); } else setTreeError(r.error);
             });
         }
         void files.state(workspace.id).then((s) => setState(s));
-    }, [files, workspace.id, single, lazy, loadDir]);
+        readGit();
+    }, [files, workspace.id, single, lazy, loadDir, lockedRoot]);
 
     useEffect(() => {
         refresh();
@@ -153,6 +171,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             const dirs = new Set(paths.map((p) => ancestorsOf(p).at(-1) ?? ''));
             for (const dir of dirs) if (loadedRef.current.has(dir)) loadDir(dir);
             void files.state(workspace.id).then((s) => setState(s));
+            readGit();
         });
     }, [files, workspace.id, refresh, lazy, loadDir]);
 
@@ -186,7 +205,40 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     }, [editors, act, load]);
     // A code pane (§4.6) opens its one file on mount.
     useEffect(() => { if (single) openPath(single); }, [single]);
+    // The open tabs come back after a relaunch (Genie 1's open_files / active_file), the front one last so it is in front.
+    // A file gone since is dropped, not reopened as an error (Genie 1 reconcileTabs).
+    useEffect(() => {
+        if (single || routeFile || prefs.tabs.length === 0) return;
+        let alive = true;
+        void Promise.all(prefs.tabs.map(async (t) => {
+            const editor = editorFor(editors, t);
+            return { t, editor, file: editor ? null : await read(t) };
+        })).then((restored) => {
+            if (!alive) return;
+            const kept = restored.filter((r) => r.editor || r.file?.ok);
+            const front = kept.find((r) => r.t === prefs.active) ?? kept[kept.length - 1];
+            // In their order; then the front one brought forward (opening an open tab only brings it to the front).
+            for (const r of kept) {
+                act({ kind: 'open', path: r.t, editor: r.editor });
+                if (r.file) act({ kind: 'loaded', file: r.file });
+            }
+            if (front) { act({ kind: 'open', path: front.t, editor: front.editor }); setRequested(front.t); }
+        });
+        return () => { alive = false; };
+    }, []);
+    // The plugins' editors may be known only after the tabs came back: a clean text tab one claims moves to it.
+    useEffect(() => { act({ kind: 'claim', editors }); }, [editors, act]);
+    // Remembered — but not on the first run, which would write the empty panel over what is about to be restored.
+    const firstWrite = useRef(true);
+    useEffect(() => {
+        if (single) return;
+        if (firstWrite.current) { firstWrite.current = false; return; }
+        writePanelPrefs(storage, workspace.id, { ...prefs, tabs: bench.tabs, active: bench.active, expanded });
+    }, [prefs, bench.tabs, bench.active, expanded, single, storage, workspace.id]);
+
     const select = useCallback((path: string) => {
+        // Unpinned, the tree gets out of the way once a file opens (Genie 1); pinned, it stays.
+        if (!prefsRef.current.treePinned) setPrefs((p) => ({ ...p, treeHidden: true }));
         openPath(path);
         onRouteChange?.(path, filter === 'changed' ? 'changed' : null);
     }, [openPath, onRouteChange, filter]);
@@ -197,6 +249,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         if (path) openPath(path);
     }, [routeFile]);
     useEffect(() => { if (routeFilter !== undefined) setFilter(routeFilter === 'changed' ? 'changed' : 'all'); }, [routeFilter]);
+    const prefsRef = useRef(prefs);
+    prefsRef.current = prefs;
     const pickFilter = useCallback((f: 'all' | 'changed') => {
         setFilter(f);
         onRouteChange?.(requested ?? bench.active, f === 'changed' ? 'changed' : null);
@@ -218,6 +272,13 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     }, [onRouteChange, filter]);
 
     const shown: OpenFile | null = open;
+    // CLOSING WHAT YOU HAVE NOT SAVED ASKS FIRST (Genie 1 showPrompt): a dirty tab, "Close others / all", the panel itself.
+    const [discard, setDiscard] = useState<{ paths: readonly string[]; then: () => void } | null>(null);
+    const askClose = (paths: readonly string[], then: () => void) => {
+        const unsaved = dirtyPaths(benchRef.current).filter((p) => paths.includes(p));
+        if (unsaved.length === 0) then(); else setDiscard({ paths: unsaved, then });
+    };
+    const closeTabs = (paths: readonly string[]) => askClose(paths, () => { for (const t of paths) closeTab(t); });
     // A save that fails without a conflict is SAID (Tynn #840): it used to vanish, leaving a dirty buffer and no reason.
     const [saveError, setSaveError] = useState<string | null>(null);
     const save = (expected: string | null) => {
@@ -315,6 +376,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
         external: files.openExternal !== undefined,
         reveal: files.reveal !== undefined,
         edit: ops !== null && !single,
+        ...(single ? {} : { lock: { lockedRoot: prefs.lockedRoot } }),
         onAction: (action: FileMenuAction, path: string, target: FileMenuTarget = 'tree-file') => {
             switch (action) {
                 case 'new-file': case 'new-folder': case 'rename': case 'duplicate': case 'delete': startFileOp(action, path, target); break;
@@ -322,9 +384,11 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
                 case 'reveal': void files.reveal?.(workspace.id, path).then(say); break;
                 case 'copy-path': void navigator.clipboard?.writeText(absolutePath(path)); break;
                 case 'copy-relative-path': void navigator.clipboard?.writeText(path); break;
-                case 'close': closeTab(path); break;
-                case 'close-others': for (const t of tabs) if (t !== path) closeTab(t); break;
-                case 'close-all': for (const t of tabs) closeTab(t); break;
+                case 'close': closeTabs([path]); break;
+                case 'close-others': closeTabs(tabs.filter((t) => t !== path)); break;
+                case 'close-all': closeTabs(tabs); break;
+                case 'lock-folder': changePrefs({ lockedRoot: path }); break;
+                case 'unlock': changePrefs({ lockedRoot: null }); break;
             }
         },
     };
@@ -342,11 +406,21 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             node: <PluginEditorBody key={`${t}:${p.rev}`} pluginId={p.editor.pluginId} fancyExport={p.editor.fancyEditor.export} workspaceId={workspace.id} path={t} files={files} onDirtyChange={(d) => act({ kind: 'plugin-dirty', path: t, dirty: d })} registerSave={(fn) => { pluginSaves.current.set(t, fn); }} />,
         }];
     });
-    const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={closeTab} onPin={onPin} onClose={onClose} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={(t) => closeTabs([t])} onPin={onPin} onClose={() => askClose(tabs, onClose)} prefs={prefs} onPrefs={changePrefs} theme={theme} unsaved={dirty} git={git} {...(open?.ok && bench.texts[open.path]?.ok ? { baseline: (bench.texts[open.path] as { text: string }).text } : {})} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
     return (
         <>
             {panel}
+            {discard ? <DiscardModal paths={discard.paths} onCancel={() => setDiscard(null)} onDiscard={() => { const then = discard.then; setDiscard(null); then(); }} /> : null}
             {fileOp && fileOp.dialog.action !== 'duplicate' ? <FileOpModal key={`${fileOp.dialog.action}:${fileOp.dialog.node.path}`} dialog={fileOp.dialog} error={fileOp.error} busy={fileOp.busy} onConfirm={(name) => runFileOp(fileOp.dialog, name)} onCancel={() => setFileOp(null)} /> : null}
         </>
     );
+}
+
+/** The locked folder's subtree of an eagerly-walked tree (a host without `children`); `null` when it is not there. */
+function subtreeAt(tree: readonly TreeNode[], root: string): readonly TreeNode[] | null {
+    for (const node of tree) {
+        if (node.id === root) return node.children ?? [];
+        if (node.type === 'folder' && node.children && root.startsWith(`${node.id}/`)) return subtreeAt(node.children, root);
+    }
+    return null;
 }

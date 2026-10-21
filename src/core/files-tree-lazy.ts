@@ -18,8 +18,9 @@ import type { TreeNode } from './files-panel.js';
 /** What has been loaded: a folder's path (`''` = the workspace root) → its direct children. */
 export type LoadedFolders = ReadonlyMap<string, readonly TreeNode[]>;
 
-export function treeFromLoaded(loaded: LoadedFolders): TreeNode[] | null {
-    const root = loaded.get('');
+/** `rootDir` (beta.33 item 15, lock to a folder): the folder the tree is rooted at — its children are the top level. */
+export function treeFromLoaded(loaded: LoadedFolders, rootDir = ''): TreeNode[] | null {
+    const root = loaded.get(rootDir);
     if (!root) return null;
     const nest = (nodes: readonly TreeNode[]): TreeNode[] =>
         nodes.map((node) => {

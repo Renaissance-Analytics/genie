@@ -340,6 +340,8 @@ export interface GenieBridge {
          * only for an enabled plugin's own claimed and declared types. Absent on a bridge with no host files.
          */
         readBytes?(workspaceId: string, pluginId: string, path: string): Promise<BytesResult>;
+        /** Git's state of every changed file, for the tree's colours (beta.33 item 15). Absent on a bridge with no host files. */
+        gitStatus?(workspaceId: string): Promise<Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>>;
         writeBytes?(workspaceId: string, pluginId: string, path: string, base64: string, expectedSha: string | null): Promise<BytesWriteResult>;
         /** Right-click (Tynn #841): open with the host OS's own app / show in its file manager. Absent where this window is
          *  not the host (a window driving another machine) — those act on the host's screen. */

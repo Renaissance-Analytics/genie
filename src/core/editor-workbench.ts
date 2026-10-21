@@ -1,5 +1,5 @@
 import { tabsAfterDelete, tabsAfterRename } from './file-ops.js';
-import type { ClaimingEditor } from './plugin-editors.js';
+import { editorFor, type ClaimingEditor } from './plugin-editors.js';
 
 /**
  * THE FILE PANEL'S TABS — one buffer each (beta.33 items 14 + 15). Pure, so the rules are tested without a DOM.
@@ -42,7 +42,9 @@ export type WorkbenchAction =
     | { kind: 'plugin-dirty'; path: string; dirty: boolean }
     | { kind: 'disk-changed'; paths: readonly string[] }
     | { kind: 'renamed'; from: string; to: string }
-    | { kind: 'deleted'; path: string };
+    | { kind: 'deleted'; path: string }
+    /** The enabled plugins' editors became known: a CLEAN text tab one of them claims moves to it, in place. */
+    | { kind: 'claim'; editors: readonly ClaimingEditor[] };
 
 export interface TabState { readonly open: string[]; readonly active: string | null }
 
@@ -111,6 +113,13 @@ export function workbench(w: Workbench, action: WorkbenchAction): Workbench {
             const map = (k: string) => tabsAfterRename([k], action.from, action.to)[0]!;
             const texts = Object.fromEntries(Object.entries(w.texts).map(([k, v]) => [map(k), { ...v, path: map(k) }]));
             return { tabs: tabsAfterRename(w.tabs, action.from, action.to), active: w.active === null ? null : map(w.active), texts, buffers: moved(w.buffers, map), plugins: moved(w.plugins, map), reread: w.reread.map(map) };
+        }
+        case 'claim': {
+            const moving = w.tabs.filter((t) => !w.plugins[t] && w.buffers[t] === undefined && editorFor(action.editors, t) !== null);
+            if (moving.length === 0) return w;
+            const plugins = { ...w.plugins };
+            for (const t of moving) plugins[t] = { editor: editorFor(action.editors, t)!, dirty: false, rev: 0 };
+            return { ...w, plugins, texts: without(w.texts, (k) => !moving.includes(k)), reread: w.reread.filter((p) => !moving.includes(p)) };
         }
         case 'deleted': {
             const kept = tabsAfterDelete(w.tabs, action.path);

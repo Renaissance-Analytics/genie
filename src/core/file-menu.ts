@@ -9,7 +9,7 @@ import type { FileOpAction } from './file-ops.js';
  */
 
 export type FileMenuTarget = 'tree-file' | 'tree-folder' | 'tree-root' | 'tab';
-export type FileMenuAction = 'open-external' | 'reveal' | 'copy-path' | 'copy-relative-path' | 'close' | 'close-others' | 'close-all' | FileOpAction;
+export type FileMenuAction = 'open-external' | 'reveal' | 'copy-path' | 'copy-relative-path' | 'close' | 'close-others' | 'close-all' | 'lock-folder' | 'unlock' | FileOpAction;
 export type FileMenuItem = { readonly id: FileMenuAction; readonly label: string } | { readonly id: '-'; readonly label: '' };
 
 const LABELS: Readonly<Record<FileMenuAction, string>> = {
@@ -25,6 +25,8 @@ const LABELS: Readonly<Record<FileMenuAction, string>> = {
     rename: 'Rename',
     duplicate: 'Duplicate',
     delete: 'Delete',
+    'lock-folder': 'Lock Files panel to this folder',
+    unlock: 'Unlock Files panel',
 };
 
 const item = (id: FileMenuAction): FileMenuItem => ({ id, label: LABELS[id] });
@@ -35,9 +37,21 @@ const SEPARATOR: FileMenuItem = { id: '-', label: '' };
  * empty space), Rename, Duplicate (files only, as in Genie 1) and Delete (to the trash). Offered where the panel can do
  * them; a tab never offers them.
  */
-export function fileMenuItems(target: FileMenuTarget, available: { readonly external: boolean; readonly reveal: boolean; readonly edit?: boolean }): FileMenuItem[] {
+/**
+ * `lock` (beta.33 item 15; Genie 1 FileTreeContextMenu): a folder offers "Lock Files panel to this folder" — the tree is
+ * rooted there — and while locked every tree row offers Unlock. Absent where the panel cannot be locked (a code pane).
+ */
+export function fileMenuItems(target: FileMenuTarget, available: { readonly external: boolean; readonly reveal: boolean; readonly edit?: boolean; readonly lock?: { readonly lockedRoot: string | null } }): FileMenuItem[] {
     const edit = available.edit === true && target !== 'tab';
-    if (target === 'tree-root') return edit ? [item('new-file'), item('new-folder')] : [];
+    const lock: FileMenuItem[] = [];
+    if (available.lock && target !== 'tab') {
+        if (target === 'tree-folder') lock.push(item('lock-folder'));
+        if (available.lock.lockedRoot !== null) lock.push(item('unlock'));
+    }
+    if (target === 'tree-root') {
+        const root = edit ? [item('new-file'), item('new-folder')] : [];
+        return lock.length === 0 ? root : root.length === 0 ? lock : [...root, SEPARATOR, ...lock];
+    }
     const host: FileMenuItem[] = [];
     if (available.external && target !== 'tree-folder') host.push(item('open-external'));
     if (available.reveal) host.push(item('reveal'));
@@ -46,6 +60,7 @@ export function fileMenuItems(target: FileMenuTarget, available: { readonly exte
         groups.unshift([item('new-file'), item('new-folder')]);
         groups.push(target === 'tree-file' ? [item('rename'), item('duplicate'), item('delete')] : [item('rename'), item('delete')]);
     }
+    if (lock.length > 0) groups.push(lock);
     if (target === 'tab') groups.push([item('close'), item('close-others'), item('close-all')]);
     return groups.filter((g) => g.length > 0).flatMap((g, i) => (i === 0 ? g : [SEPARATOR, ...g]));
 }

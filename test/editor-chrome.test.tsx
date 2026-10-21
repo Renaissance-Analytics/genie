@@ -42,7 +42,8 @@ describe('in the panel', () => {
         const html = renderToStaticMarkup(<FilesPanel {...base} />);
         expect(html).toMatch(/data-file-crumb="api\/Login\.php"[^>]*>[\s\S]*?api[\s\S]*?Login\.php/);
         expect(html).toMatch(/data-file-status="api\/Login\.php"[^>]*>[\s\S]*?PHP · LF · UTF-8 · you and atlas in this file/);
-        expect(html).not.toMatch(/Ln \d/);
+        // The cursor is the EDITOR's own (fancy-code's useCodeEditor, item 15) — Genie 1's status bar showed it too.
+        expect(html).toMatch(/data-file-status="api\/Login\.php"[^>]*>[\s\S]*?data-editor-cursor=""[^>]*>Ln 1, Col 1/);
     });
 
     it('neither without an open file (positive control)', () => {

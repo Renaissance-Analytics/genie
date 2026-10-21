@@ -91,3 +91,39 @@ export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]>
         });
     });
 }
+
+/** A changed file's state, as the tree colours it (beta.33 item 15; Genie 1 FileTree's git colours). */
+export type GitTreeState = 'modified' | 'added' | 'deleted' | 'untracked';
+
+/**
+ * Every changed file under a workspace, by its git state, in ONE `git status` (Genie 1's `files.gitStatus`). Paths are
+ * relative to the WORKSPACE — which may sit inside a larger repository, so git's repo-relative paths are re-based on the
+ * workspace's prefix and anything outside it is dropped. Not a repository: an empty map, "nothing to show".
+ */
+export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState>> {
+    return new Promise((resolve) => {
+        execFile('git', ['rev-parse', '--show-prefix'], { cwd: root, windowsHide: true }, (error, prefixOut) => {
+            if (error) { resolve({}); return; }
+            const prefix = String(prefixOut).trim();
+            execFile('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
+                if (e2) { resolve({}); return; }
+                const out: Record<string, GitTreeState> = {};
+                const fields = String(stdout).split('\0');
+                for (let i = 0; i < fields.length; i++) {
+                    const entry = fields[i]!;
+                    if (entry.length < 4) continue;
+                    const x = entry[0]!;
+                    const y = entry[1]!;
+                    const path = entry.slice(3);
+                    // A rename or copy carries its ORIGINAL path in the next field; the entry's own path is the new one.
+                    if (x === 'R' || x === 'C') i++;
+                    if (!path.startsWith(prefix)) continue;
+                    const rel = path.slice(prefix.length);
+                    if (rel === '') continue;
+                    out[rel] = x === '?' ? 'untracked' : x === 'D' || y === 'D' ? 'deleted' : x === 'A' ? 'added' : 'modified';
+                }
+                resolve(out);
+            });
+        });
+    });
+}

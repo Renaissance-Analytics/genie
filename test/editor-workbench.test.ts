@@ -134,3 +134,21 @@ describe('plugin tabs', () => {
         expect(w.active).toBeNull();
     });
 });
+
+describe('a text tab claimed once the plugins are known (item 15: tabs restored before the host said which editors exist)', () => {
+    it('a CLEAN text tab a plugin now claims becomes that plugin\'s tab, in place; a dirty one keeps your text', () => {
+        let w = run(
+            (w) => workbench(w, { kind: 'open', path: 'README.md', editor: null }),
+            (w) => workbench(w, { kind: 'loaded', file: text('README.md', '# hi') }),
+            (w) => workbench(w, { kind: 'open', path: 'NOTES.md', editor: null }),
+            (w) => workbench(w, { kind: 'loaded', file: text('NOTES.md', 'n') }),
+            (w) => workbench(w, { kind: 'edit', path: 'NOTES.md', text: 'mine' }),
+        );
+        w = workbench(w, { kind: 'claim', editors: [doc] });
+        expect(w.tabs).toEqual(['README.md', 'NOTES.md']);
+        expect(w.plugins['README.md']).toMatchObject({ editor: { pluginId: 'ai.genie.document' }, dirty: false });
+        expect(w.texts['README.md']).toBeUndefined();
+        expect(w.plugins['NOTES.md']).toBeUndefined();
+        expect(activeText(w)).toMatchObject({ path: 'NOTES.md', text: 'mine' });
+    });
+});

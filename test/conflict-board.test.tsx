@@ -75,7 +75,8 @@ describe('the banner', () => {
 
     it('the status bar says conflict and the hunk count; Compare shows your buffer against the disk', () => {
         const html = renderToStaticMarkup(<FilesPanel {...props({ writing: true, told: 'atlas' })} />);
-        expect(html).toMatch(/data-file-status="src\/a\.ts"[^>]*>[^<]*· conflict · 1 hunk</);
+        // The bar leads with the editor's cursor now (item 15), then the file's facts — the conflict among them.
+        expect(html).toMatch(/data-file-status="src\/a\.ts"[^>]*>[\s\S]*?· conflict · 1 hunk</);
         expect(html).not.toContain('data-conflict-compare');
         const comparing = renderToStaticMarkup(<FilesPanel {...props({ writing: true, told: 'atlas', comparing: true })} />);
         expect(comparing).toContain('data-conflict-compare="src/a.ts"');

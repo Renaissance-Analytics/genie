@@ -1,4 +1,4 @@
-import type { GitFileState } from './git-ports.js';
+import type { GitFileState, GitTreeState } from './git-ports.js';
 import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, open as openFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
@@ -45,6 +45,8 @@ export interface FilesHostPorts {
     readonly gitStatus?: (root: string, rel: string) => Promise<GitFileState | null>;
     /** A file's last committed text (`git-ports.ts` `gitShowHead`); absent = no `Show diff` baseline. */
     readonly gitShowHead?: (root: string, rel: string) => Promise<string | null>;
+    /** Every changed file's git state under the workspace (`git-ports.ts` `gitTreeStatus`); absent = the tree shows none. */
+    readonly gitTree?: (root: string) => Promise<Record<string, GitTreeState>>;
     /** Move a host path to the OS trash (Electron's `shell.trashItem`); absent = Delete is refused and nothing is erased. */
     readonly trash?: (absolutePath: string) => Promise<void>;
 }
@@ -193,6 +195,13 @@ export class FilesHost {
         } catch (error) {
             return { ok: false, path: rel, error: error instanceof Error ? error.message : String(error) };
         }
+    }
+
+    /** Git's state of every changed file, for the tree's colours (beta.33 item 15). `{}` with no git port or no repository. */
+    async gitStatus(workspaceId: string): Promise<Record<string, GitTreeState>> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws || !this.#ports.gitTree) return {};
+        return this.#ports.gitTree(ws.path);
     }
 
     /** The file as of the last commit — the baseline for a change nobody reported. `null` outside the workspace or uncommitted. */
