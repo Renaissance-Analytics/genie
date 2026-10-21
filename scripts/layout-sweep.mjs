@@ -228,10 +228,23 @@ const HEADER_PROBE = `
         // the seed did not land and "nothing overflows" would mean nothing.
         const chips = header ? header.querySelectorAll('[data-repo-chip]').length : 0;
         const more = Number((header?.querySelector('[data-action="more-repos"]')?.textContent ?? '').match(/[0-9]+/)?.[0] ?? 0);
+        // WHAT spills, when something does: each child whose right edge passes the header's content box, by how much — so
+        // a failure names its element instead of only a number.
+        const box = header ? header.getBoundingClientRect() : null;
+        const padRight = header ? parseFloat(getComputedStyle(header).paddingRight) || 0 : 0;
+        const spills = header && box ? [...header.querySelectorAll('*')].map((el) => {
+            const r = el.getBoundingClientRect();
+            const over = Math.round(r.right - (box.right - padRight));
+            const tag = el.tagName.toLowerCase();
+            const mark = [...el.attributes].filter((a) => a.name.startsWith('data-')).map((a) => a.name + (a.value ? '=' + a.value : '')).join(' ');
+            return { over, what: (tag + ' ' + mark + ' ' + (el.textContent ?? '').trim().slice(0, 24)).trim(), width: Math.round(r.width) };
+        }).filter((x) => x.over > 1).sort((a, b) => b.over - a.over).slice(0, 3) : [];
         return JSON.stringify({
             repos: chips + more,
             header: header ? header.scrollWidth - header.clientWidth : null,
             column: column ? column.scrollWidth - column.clientWidth : null,
+            headerWidth: box ? Math.round(box.width) : null,
+            spills,
         });
     })()
 `;
@@ -240,7 +253,7 @@ for (const width of WIDTHS) {
     await new Promise((r) => setTimeout(r, 250));
     const r = JSON.parse(await evaluate(HEADER_PROBE));
     check(r.repos >= 12, `${width}px — the workspace header accounts for the seeded repos`, `${r.repos} of 12`);
-    check(r.header !== null && r.header <= 1, `${width}px — the workspace header fits its column`, r.header > 1 ? `${r.header}px wider than its column` : '');
+    check(r.header !== null && r.header <= 1, `${width}px — the workspace header fits its column`, r.header > 1 ? `${r.header}px wider than its column (header ${r.headerWidth}px; spilling: ${JSON.stringify(r.spills)})` : '');
     check(r.column !== null && r.column <= 1, `${width}px — the page column does not scroll sideways`, r.column > 1 ? `${r.column}px wider` : '');
 }
 
