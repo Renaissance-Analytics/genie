@@ -1662,6 +1662,8 @@ async function boot(): Promise<void> {
     const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
         host: () => { const h = String(composed.settings.get('tynn_host') ?? '').trim(); return h.length > 0 ? h : 'https://tynn.ai'; },
+        // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
+        schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {
             // As Genie 1 set genie_token (v1 main/auth.ts redeemToken).
             set: async (host, name, value) => {
@@ -1817,7 +1819,7 @@ async function boot(): Promise<void> {
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
-            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId) },
+            issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId), recheckSignIn: () => { void tynnAccount?.recheck(); } },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
@@ -2343,6 +2345,8 @@ if (launch.kind === 'boot') {
 app.on('window-all-closed', () => { /* Genie stays in the tray */ });
 
 // macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
+// Waking from sleep: a Genie that shows signed out to Tynn asks again (the network is often what was missing).
+powerMonitor.on('resume', () => { if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
 powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
     event?.preventDefault();
     quit.force();

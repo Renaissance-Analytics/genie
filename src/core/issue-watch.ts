@@ -292,7 +292,7 @@ export function issueWatchCountLine(c: IssueWatchCounts): string {
 /** Why there is nothing to show, said plainly — or `null` when there is an entry to show. */
 export function issueWatchWhyNot(s: IssueWatchSummary): string | null {
     if (!s.linked) return 'this workspace is not linked to a Tynn project (project.json tynn.projectId)';
-    if (s.state === 'signed-out') return 'not signed in to Tynn (Settings → Workstation → Integrations → Open Tynn in your browser)';
+    if (s.state === 'signed-out') return 'not signed in to Tynn (Settings → Accounts → Tynn → Open Tynn in your browser)';
     if (s.state !== 'live' && s.entry === undefined) return 'IssueWatch is not connected to Tynn yet';
     if (s.entry === undefined) return 'Tynn has sent nothing for this workspace yet';
     return null;

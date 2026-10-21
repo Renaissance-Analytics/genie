@@ -59,8 +59,8 @@ describe('listTynnProjects', () => {
     });
 
     it('signed out, or Tynn refusing, is a refusal in Tynn’s words', async () => {
-        const f = fakes({ tynn: async () => { throw new Error('Sign in to Tynn first (Settings → Workstation → Integrations → Open Tynn in your browser)'); } });
-        expect(await listTynnProjects(f.ports)).toEqual({ ok: false, reason: 'Sign in to Tynn first (Settings → Workstation → Integrations → Open Tynn in your browser)' });
+        const f = fakes({ tynn: async () => { throw new Error('Sign in to Tynn first (Settings → Accounts → Tynn → Open Tynn in your browser)'); } });
+        expect(await listTynnProjects(f.ports)).toEqual({ ok: false, reason: 'Sign in to Tynn first (Settings → Accounts → Tynn → Open Tynn in your browser)' });
     });
 });
 

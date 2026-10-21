@@ -55,7 +55,7 @@ describe('where a signed-out Genie is told to go', () => {
     it('IssueWatch points at the sign-in, not at a token field that no longer exists', async () => {
         const { issueWatchWhyNot } = await import('../src/core/issue-watch.js');
         const why = issueWatchWhyNot({ linked: true, state: 'signed-out' } as Parameters<typeof issueWatchWhyNot>[0]);
-        expect(why).toBe('not signed in to Tynn (Settings → Workstation → Integrations → Open Tynn in your browser)');
+        expect(why).toBe('not signed in to Tynn (Settings → Accounts → Tynn → Open Tynn in your browser)');
         expect(why).not.toMatch(/token/i);
     });
 });
