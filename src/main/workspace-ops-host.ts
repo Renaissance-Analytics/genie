@@ -6,7 +6,7 @@ import { ENVELOPE_DIRS, ENVELOPE_GITIGNORE, envelopeReadme, envelopeRules, first
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { routerText } from './agent-routers.js';
 import { DEFAULT_ENV_FILE, envFileName } from '../core/dotenv.js';
-import { parseTynnProject, tynnAddPlan, tynnEnvelopePath, type TynnAddPlan, type TynnLink, type TynnProject } from '../core/tynn.js';
+import { parseTynnOwner, parseTynnProject, tynnAddPlan, tynnEnvelopePath, tynnLink, type TynnAddPlan, type TynnLink, type TynnOwner, type TynnProject } from '../core/tynn.js';
 import { addRepo } from '../core/repo-registry.js';
 import { remoteChoiceProblem, type Published, type RemoteChoice } from '../core/agi-remote.js';
 import { publishEnvelope, type AgiRemotePorts } from './agi-remote-host.js';
@@ -63,7 +63,14 @@ export interface WorkspaceOpsPorts {
     now(): number;
     sleep(ms: number): Promise<void>;
     /** Tynn (§6.1 add from Tynn): the host, and the signed-in person's projects (main/tynn-account.ts); absent on a host without it. */
-    tynn?: { readonly host: string; projects(): Promise<unknown[]> } | undefined;
+    tynn?: {
+        readonly host: string;
+        projects(): Promise<unknown[]>;
+        /** Who a new project may belong to (Tynn's owner-options rows); absent on a host that cannot create one. */
+        ownerOptions?(): Promise<unknown[]>;
+        /** A new Tynn project (Tynn's POST /api/v1/projects body); resolves to Tynn's row for it. */
+        createProject?(body: { name: string; slug?: string; owner_type?: TynnOwner['kind']; owner_id?: string }): Promise<unknown>;
+    } | undefined;
     /** Settings → General "Env file name" (`default_env_file`), read at each add; absent = `.env`. */
     defaultEnvFile?: (() => string) | undefined;
     /** Where a new envelope goes once it is made (agi-remote-host.ts): GitHub, a pasted remote, Tynn. Absent = nowhere. */
@@ -371,11 +378,16 @@ export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: str
  * kept it in words only — a bare `git init`, no commit, no branch, no README, no .gitignore — until Add workspace parity
  * item 1. The scaffold is Genie 1's (core/add-workspace.ts). The workspace is registered only once the commit exists, so
  * a git that refuses leaves nothing half-added in Genie.
+ *
+ * Optionally LINKED to a Tynn project (Genie 1's "Project (optional)"; #1063, which #1064's rebase reverted — restored by
+ * Add workspace parity item 5): see `resolveTynnLink`. The link is in the first commit's project.json.
  */
-export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
+export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string, remote?: RemoteChoice, tynnProjectId?: string): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
     const problem = remote ? remoteChoiceProblem(remote) : null;
     if (problem) return { ok: false, reason: problem };
-    const made = await makeNewEnvelope(ports, name, parent);
+    const linked = await resolveTynnLink(ports, tynnProjectId);
+    if (!linked.ok) return linked;
+    const made = await makeNewEnvelope(ports, name, parent, linked.link);
     if (!made.ok) return made;
     await ports.registry.addWorkspace({ id: made.id, path: made.path, envFile: registeredEnvFile(ports) });
     const published = await publishNew(ports, made.path, remote);
@@ -404,7 +416,7 @@ export async function publishNew(ports: WorkspaceOpsPorts, path: string, remote:
  * WITHOUT registering it. New registers it at once; the Open existing / Import from Git wizard (envelope-wizard-host.ts)
  * first adds the person's repos and knowledge. One envelope writer for all three.
  */
-export async function makeNewEnvelope(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
+export async function makeNewEnvelope(ports: WorkspaceOpsPorts, name: string, parent: string, tynn: TynnLink | null = null): Promise<{ ok: true; id: string; path: string } | Refusal> {
     const problem = newWorkspaceProblem(name, parent);
     if (problem) return { ok: false, reason: problem };
     const at = parent.trim();
@@ -416,7 +428,7 @@ export async function makeNewEnvelope(ports: WorkspaceOpsPorts, name: string, pa
     const there = await ports.fs.exists(target);
     if (there && (await ports.fs.entries(target)).length > 0) return { ok: false, reason: `${target} is not empty. Choose another name or folder, or use Open existing folder on it.` };
     if (!there) await ports.fs.mkdir(target);
-    const failed = await scaffoldEnvelope(ports, target, folder, { name: name.trim() });
+    const failed = await scaffoldEnvelope(ports, target, folder, { name: name.trim(), ...(tynn ? { tynn } : {}) });
     if (failed) return { ok: false, reason: failed };
     return { ok: true, id, path: target };
 }
@@ -452,4 +464,54 @@ async function scaffoldEnvelope(ports: WorkspaceOpsPorts, target: string, folder
         return `Genie made ${target}, but git could not make its first commit: ${error instanceof Error ? error.message : String(error)}`;
     }
     return null;
+}
+
+
+/**
+ * THE OPTIONAL TYNN LINK (Genie 1's "Project (optional)", on New and on the Open existing / Import from Git wizard): the id
+ * the window chose is looked up in TYNN's own list of the person's projects, here on the host — never taken from the
+ * window — and becomes project.json's `tynn` {host, project, projectId}, as Import from Tynn writes it (what IssueWatch and
+ * the Tynn agent token read). No id = no link and Tynn is not asked. A project Tynn does not list, or no Tynn to ask, is a
+ * refusal — returned before the caller writes anything.
+ */
+export async function resolveTynnLink(ports: WorkspaceOpsPorts, tynnProjectId: string | null | undefined): Promise<{ ok: true; link: TynnLink | null } | Refusal> {
+    if (tynnProjectId === undefined || tynnProjectId === null || tynnProjectId === '') return { ok: true, link: null };
+    const listed = await listTynnProjects(ports);
+    if (!listed.ok) return listed;
+    const project = listed.projects.find((p) => p.id === tynnProjectId);
+    if (!project) return { ok: false, reason: `Tynn lists no project ${tynnProjectId} for you — it may have been deleted, or shared with someone else` };
+    return { ok: true, link: tynnLink(project, listed.host) };
+}
+
+/** Who a new Tynn project may belong to (Genie 1's Owner field), as Tynn lists them; a refusal in Tynn's words. */
+export async function listTynnOwners(ports: WorkspaceOpsPorts): Promise<{ ok: true; owners: TynnOwner[] } | Refusal> {
+    if (!ports.tynn?.ownerOptions) return { ok: false, reason: 'this Genie has no Tynn client that can create projects' };
+    try {
+        const rows = await ports.tynn.ownerOptions();
+        return { ok: true, owners: rows.map(parseTynnOwner).filter((o): o is TynnOwner => o !== null) };
+    } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+}
+
+/**
+ * CREATE A TYNN PROJECT INLINE (Genie 1's CreateProjectForm, ipc.ts tynn:create-project): a name, an optional slug (Tynn
+ * derives one when blank), an owner (none = the person's own account, Tynn's default). Genie 1 also sent `is_gapp`; Genie 2
+ * has no GApps, so it is never sent. The project comes back in the project list's own shape, so the picker can select it
+ * and the link is then looked up like any other.
+ */
+export async function createTynnProject(ports: WorkspaceOpsPorts, input: { name: string; slug: string; owner: { kind: TynnOwner['kind']; id: string } | null }): Promise<{ ok: true; project: TynnProject } | Refusal> {
+    if (!ports.tynn?.createProject) return { ok: false, reason: 'this Genie has no Tynn client that can create projects' };
+    const name = input.name.trim();
+    if (name === '') return { ok: false, reason: 'Give the project a name.' };
+    const slug = input.slug.trim();
+    const body = { name, ...(slug !== '' ? { slug } : {}), ...(input.owner ? { owner_type: input.owner.kind, owner_id: input.owner.id } : {}) };
+    let row: unknown;
+    try {
+        row = await ports.tynn.createProject(body);
+    } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+    }
+    const project = parseTynnProject(row);
+    return project ? { ok: true, project } : { ok: false, reason: 'Tynn answered, but what it sent back is not a project Genie can link' };
 }

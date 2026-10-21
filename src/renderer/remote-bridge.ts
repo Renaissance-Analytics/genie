@@ -169,7 +169,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         workspaces: {
             previewAdd: (path) => answer('workspaces.previewAdd', path),
             confirmAdd: (path) => answer('workspaces.confirmAdd', path),
-            create: (name, parent, remote) => answer('workspaces.create', name, parent, remote),
+            create: (name, parent, remote, tynnProjectId) => answer('workspaces.create', name, parent, remote, tynnProjectId ?? ''),
             previewAddFromGit: (url, parent) => answer('workspaces.previewAddFromGit', url, parent),
             confirmAddFromGit: (url, parent) => answer('workspaces.confirmAddFromGit', url, parent),
             readSource: (path) => answer('workspaces.readSource', path),
@@ -178,6 +178,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             buildEnvelope: (plan, remote) => answer('workspaces.buildEnvelope', plan, remote),
             discardStaged: (path) => answer<{ ok: true }>('workspaces.discardStaged', path),
             tynnProjects: () => answer('workspaces.tynnProjects'),
+            tynnOwnerOptions: () => answer('workspaces.tynnOwnerOptions'),
+            createTynnProject: (input) => answer('workspaces.createTynnProject', input),
             previewAddFromTynn: (projectId, parent) => answer('workspaces.previewAddFromTynn', projectId, parent),
             confirmAddFromTynn: (parent, projectId) => answer('workspaces.confirmAddFromTynn', parent, projectId),
             hibernate: (workspaceId) => answer('workspaces.hibernate', workspaceId),

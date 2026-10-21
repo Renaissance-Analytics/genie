@@ -106,6 +106,8 @@ export const ICON_NAMES: readonly string[] = [
     'wrap-text',
     // The Open existing / Import from Git wizard (Add workspace parity item 7): its header and its Next.
     'layers', 'arrow-right',
+    // The optional Tynn project's "Create new project" (Add workspace parity item 5): back to Select existing.
+    'arrow-left',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
 ];

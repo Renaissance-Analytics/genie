@@ -4,7 +4,7 @@ import type { AgentPermissions } from '../core/identity.js';
 import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
-import type { TynnContent, TynnProject } from '../core/tynn.js';
+import type { TynnContent, TynnOwner, TynnProject } from '../core/tynn.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
@@ -230,7 +230,8 @@ export interface GenieBridge {
         previewAdd(path: string): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         /** A NEW workspace (Genie 1's): Genie makes <parent>/<slug>.agi, the envelope and its first commit. Refusals come before any write. */
-        create?(name: string, parent: string, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | { ok: false; reason: string }>;
+        /** Optionally linked to one of the person's Tynn projects: its id, looked up in Tynn's own list on the host (parity 5). */
+        create?(name: string, parent: string, remote?: RemoteChoice, tynnProjectId?: string): Promise<{ ok: true; id: string; path: string; published?: Published } | { ok: false; reason: string }>;
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
@@ -249,6 +250,10 @@ export interface GenieBridge {
         discardStaged?(path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"); `added` = already a workspace here, by its id. */
         tynnProjects(): Promise<{ ok: true; host: string; projects: TynnProject[]; added?: Record<string, string> } | { ok: false; reason: string }>;
+        /** Who a new Tynn project may belong to (Genie 1's Owner field; Add workspace parity item 5). Optional: an older host has none. */
+        tynnOwnerOptions?(): Promise<{ ok: true; owners: TynnOwner[] } | { ok: false; reason: string }>;
+        /** A Tynn project created from the optional picker (Genie 1's "New project"), in the project list's shape. */
+        createTynnProject?(input: { name: string; slug: string; owner: { kind: TynnOwner['kind']; id: string } | null }): Promise<{ ok: true; project: TynnProject } | { ok: false; reason: string }>;
         /** The CHOSEN project: the parent picked on the host, then the plan before anything is written. */
         previewAddFromTynn(projectId: string, parent: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; content?: TynnContent; steps: PlanStep[] } | { ok: false; reason: string; workspaceId?: string }>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
