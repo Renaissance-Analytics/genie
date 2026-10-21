@@ -17,6 +17,7 @@ import {
     githubSignal,
     installationsFrom,
     pollOutcomeFrom,
+    pushAuthFor,
     rateLimitWaitMs,
     refreshOutcomeFrom,
     v1GithubLogin,
@@ -713,5 +714,10 @@ export class GithubAccount implements GithubAccountPort {
     /** The credential for a clone of `url`, when this sign-in can read it (core/github.ts cloneAuthFor). Main-side only. */
     cloneAuth(url: string): { config: Array<[string, string]>; secrets: string[] } | null {
         return this.#status === 'signed-in' ? cloneAuthFor(url, this.#token, this.#installations) : null;
+    }
+
+    /** The credential for a push to `url`, when the App may WRITE there (core/github.ts pushAuthFor). Main-side only. */
+    pushAuth(url: string): { config: Array<[string, string]>; secrets: string[] } | null {
+        return this.#status === 'signed-in' ? pushAuthFor(url, this.#token, this.#installations) : null;
     }
 }

@@ -84,6 +84,24 @@ export async function gitAddSubmodule(envelope: string, url: string, at: string,
 export interface GitAuth { config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }
 
 /**
+ * A NEW ENVELOPE'S REMOTE (Add workspace parity item 11): `git remote add origin <url>`. The URL comes after `--`, so a
+ * pasted one can never be read as an option of git's. Rejects with git's own words.
+ */
+export async function gitSetOrigin(path: string, url: string): Promise<void> {
+    await git(path, ['remote', 'add', '--', 'origin', url]);
+}
+
+/**
+ * `git push -u origin main` (Genie 1's pushEnvelopeToOrigin): `-u` so a later plain `git push` / `git pull` in the
+ * workspace just works. `auth` is the GitHub sign-in's credential where the App may write there (core/github.ts
+ * pushAuthFor), carried through git's environment for this one command as the clone's is; otherwise the person's own
+ * credential helper or ssh agent answers. Rejects with git's words, every secret scrubbed.
+ */
+export async function gitPushMain(path: string, auth?: GitAuth): Promise<void> {
+    await gitWithAuth(path, ['push', '--quiet', '-u', 'origin', 'main'], auth);
+}
+
+/**
  * `git clone`, optionally with config for THIS command only — the GitHub sign-in's credential (core/github.ts
  * cloneAuthFor). The config rides git's GIT_CONFIG_COUNT/KEY_n/VALUE_n environment (git ≥ 2.31), not `-c` arguments:
  * a process's arguments are readable by every user on the machine, its environment only by the same user. Nothing is

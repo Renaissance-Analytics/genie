@@ -184,8 +184,9 @@ export function grants(i: Pick<GithubInstallation, 'permissions'>, permission: s
  * - IssueWatch is NOT this App's: Tynn reads GitHub with its own GitHub App and pushes what it finds (Tynn #806). Listed
  *   so nobody looks here for why IssueWatch is quiet.
  *
- * Creating a repository exists in main (GithubAccount.createRepo) with no screen using it yet, and fork is not in Genie 2
- * yet; neither is listed until a person can use it.
+ * Creating a workspace's `<slug>.agi` repository is offered where it happens — Add workspace's "Where it is kept"
+ * (core/agi-remote.ts), which says per account whether the App is installed — rather than as a capability here. Fork is
+ * not in Genie 2 yet.
  */
 export function githubCapabilities(input: { signedIn: boolean; installations: readonly GithubInstallation[] | null }): GithubCapability[] {
     const issueWatch: GithubCapability = { id: 'issue-watch', label: 'IssueWatch (issues, pull requests, security alerts)', enabled: true, note: 'Comes through Tynn: Tynn reads GitHub with its own app. Link the workspace to a Tynn project.' };
@@ -240,10 +241,23 @@ function githubHttpsOwner(url: string): string | null {
  * never written into the clone; `secrets` are what any error must be scrubbed of.
  */
 export function cloneAuthFor(url: string, token: string | null, installations: readonly GithubInstallation[] | null): { config: Array<[string, string]>; secrets: string[] } | null {
+    return githubHeaderAuth(url, token, installations, 'read');
+}
+
+/**
+ * The PUSH credential (Add workspace parity item 11: the new `<slug>.agi`'s first push) — cloneAuthFor's rule with
+ * Contents WRITE: only an https github.com repository of an account whose installation may write. Anywhere else no header
+ * is sent, so the person's own credential helper or ssh agent answers, as Genie 1's plain `git push` did.
+ */
+export function pushAuthFor(url: string, token: string | null, installations: readonly GithubInstallation[] | null): { config: Array<[string, string]>; secrets: string[] } | null {
+    return githubHeaderAuth(url, token, installations, 'write');
+}
+
+function githubHeaderAuth(url: string, token: string | null, installations: readonly GithubInstallation[] | null, access: GhAccess): { config: Array<[string, string]>; secrets: string[] } | null {
     if (!token || !installations) return null;
     const owner = githubHttpsOwner(url);
     if (!owner) return null;
-    if (!installations.some((i) => i.account.toLowerCase() === owner && grants(i, 'contents', 'read'))) return null;
+    if (!installations.some((i) => i.account.toLowerCase() === owner && grants(i, 'contents', access))) return null;
     const basic = Buffer.from(`x-access-token:${token}`, 'utf8').toString('base64');
     return { config: [['http.https://github.com/.extraheader', `AUTHORIZATION: basic ${basic}`]], secrets: [token, basic] };
 }

@@ -8,6 +8,8 @@ import { routerText } from './agent-routers.js';
 import { DEFAULT_ENV_FILE, envFileName } from '../core/dotenv.js';
 import { parseTynnProject, tynnAddPlan, tynnEnvelopePath, type TynnAddPlan, type TynnLink, type TynnProject } from '../core/tynn.js';
 import { addRepo } from '../core/repo-registry.js';
+import { remoteChoiceProblem, type Published, type RemoteChoice } from '../core/agi-remote.js';
+import { publishEnvelope, type AgiRemotePorts } from './agi-remote-host.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -64,6 +66,8 @@ export interface WorkspaceOpsPorts {
     tynn?: { readonly host: string; projects(): Promise<unknown[]> } | undefined;
     /** Settings → General "Env file name" (`default_env_file`), read at each add; absent = `.env`. */
     defaultEnvFile?: (() => string) | undefined;
+    /** Where a new envelope goes once it is made (agi-remote-host.ts): GitHub, a pasted remote, Tynn. Absent = nowhere. */
+    remote?: AgiRemotePorts | undefined;
 }
 
 /**
@@ -368,11 +372,31 @@ export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: str
  * item 1. The scaffold is Genie 1's (core/add-workspace.ts). The workspace is registered only once the commit exists, so
  * a git that refuses leaves nothing half-added in Genie.
  */
-export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
+export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
+    const problem = remote ? remoteChoiceProblem(remote) : null;
+    if (problem) return { ok: false, reason: problem };
     const made = await makeNewEnvelope(ports, name, parent);
     if (!made.ok) return made;
     await ports.registry.addWorkspace({ id: made.id, path: made.path, envFile: registeredEnvFile(ports) });
-    return made;
+    const published = await publishNew(ports, made.path, remote);
+    return published ? { ...made, published } : made;
+}
+
+/**
+ * The made, registered envelope to the remote the person chose (Add workspace parity item 11; agi-remote-host.ts). None,
+ * or no choice at all, touches nothing. Whatever GitHub, git or Tynn answer, the workspace stays made and registered: the
+ * result carries each failed step in that service's words. A host with no remote ports wired says so as a problem.
+ */
+export async function publishNew(ports: WorkspaceOpsPorts, path: string, remote: RemoteChoice | undefined): Promise<Published | null> {
+    if (!remote) return null;
+    if (!ports.remote && remote.kind === 'none') return { remote: null, repo: null, pushed: false, tynn: 'not-linked', problems: [] };
+    if (!ports.remote) return { remote: null, repo: null, pushed: false, tynn: 'not-linked', problems: [{ step: remote.kind === 'github' ? 'github' : 'remote', message: 'This Genie cannot set a remote for a workspace; the workspace is on this machine.' }] };
+    try {
+        return await publishEnvelope(ports.remote, { path, name: basename(path) }, remote);
+    } catch (error) {
+        // publishEnvelope reports every step it knows; anything else is still not allowed to un-make the workspace.
+        return { remote: null, repo: null, pushed: false, tynn: 'not-linked', problems: [{ step: 'remote', message: `Genie could not finish setting the workspace's remote: ${error instanceof Error ? error.message : String(error)}` }] };
+    }
 }
 
 /**

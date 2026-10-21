@@ -179,6 +179,20 @@ describe('reads, writes, the baton', () => {
         }
     });
 
+    // Add workspace parity 11: New can now create a GitHub repository with the HOST's GitHub sign-in and push to it, and
+    // declare it on the host owner's Tynn project. Like every other add route, it changes the host itself: owner only.
+    it('New workspace (which may create a repository under the host owner’s GitHub) is the owner’s: a guest is refused (CONTROL: the owner)', async () => {
+        const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
+        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
+        const guest = connect();
+        await guest.hello({ kind: 'share', id: link.id, secret }, 'wren');
+        expect(await guest.call('baton.take')).toMatchObject({ ok: true });
+        expect(await guest.call('workspaces.create', 'acme', '/w', { kind: 'github', owner: 'ada', private: true })).toMatchObject({ ok: false, reason: expect.stringContaining('only its owner can') });
+        const o = await owner('laptop');
+        await o.call('baton.take');
+        expect(await o.call('workspaces.create', 'acme', '/w', { kind: 'none' })).toMatchObject({ ok: true });
+    });
+
     it('an upgrade is gated on OWNERSHIP, not the baton; lock is the owner’s kill-switch for every write', async () => {
         const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
         const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
