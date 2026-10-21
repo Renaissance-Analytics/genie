@@ -1,4 +1,6 @@
 import { listHostDir } from './host-fs.js';
+import { Coalescer, realSchedule } from '../core/coalesce.js';
+import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { CancelOutcome } from '../core/session.js';
@@ -20,6 +22,9 @@ import type { PtyOpened, TerminalOptions } from './terminal-host.js';
  */
 
 export interface HostApiDeps {
+    /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
+    schedule?: (ms: number, fn: () => void) => () => void;
+    now?: () => number;
     snapshot(): GenieSnapshot;
     subscribeSnapshot(listener: (snapshot: GenieSnapshot) => void): () => void;
     /** Which agent's RECORD changed (a saved setting) — its detail is pushed, as for a session event. */
@@ -289,10 +294,17 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         workspacePaths: () => Object.fromEntries((deps.snapshot().workspaces ?? []).map((w) => [w.id, w.path])),
         onEvent: (listener) => {
+            /*
+             * An agent's detail AT MOST every AGENT_PUSH_INTERVAL_MS, the latest state last (the owner, 2026-10-20: "severe
+             * UI lag"): a busy agent changes many times a second and its detail carries its ledger; built and sent per
+             * event, it cost main a core. The first change goes at once.
+             */
+            const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId)), schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
             const offs = [
                 deps.subscribeSnapshot((s) => listener('snapshot', s)),
-                deps.host.subscribe((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
-                deps.subscribeAgentRecords((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
+                deps.host.subscribe((agentId) => agents.request(agentId)),
+                deps.subscribeAgentRecords((agentId) => agents.request(agentId)),
+                () => agents.stop(),
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 deps.features.onChange((data) => listener('features', data)),

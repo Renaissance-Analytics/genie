@@ -1,6 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { FEATURE_CHANNELS, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
+import { AgentDetailReceiver, type AgentPushPayload } from '../core/agent-push-wire.js';
+import type { TimedEvent } from '../core/stream-view.js';
+
+/**
+ * The agents this window shows: one channel listener and one receiver each, however many views subscribe. Main pushes an
+ * agent only while it is watched here, and only the rows that changed (main/agent-push.ts); the receiver rebuilds the
+ * whole detail, so every view gets exactly what it always got.
+ */
+const watching = new Map<string, { receiver: AgentDetailReceiver<Omit<AgentDetail, 'rows'>, TimedEvent>; views: Set<{ onChange: (detail: AgentDetail | null) => void }>; off: () => void }>();
 
 /**
  * THE PRELOAD — the entire surface the renderer is given.
@@ -46,13 +55,34 @@ const bridge: GenieBridge = {
     },
 
     subscribeAgent: (agentId, onChange) => {
-        // Filtered HERE, in the preload, rather than by broadcasting every agent's ledger to
-        // every renderer and letting each one discard what it does not want. A ledger is
-        // thousands of rows; the wire should carry the one being looked at.
-        const channel = `genie:agent-changed:${agentId}`;
-        const listener = (_event: unknown, detail: AgentDetail | null): void => onChange(detail);
-        ipcRenderer.on(channel, listener);
-        return () => ipcRenderer.removeListener(channel, listener);
+        // Filtered in MAIN: the window says which agents it shows, and only those are pushed. A ledger is thousands of
+        // rows; the wire carries the one being looked at, and of it only what changed.
+        let watch = watching.get(agentId);
+        if (watch === undefined) {
+            const channel = `genie:agent-changed:${agentId}`;
+            const receiver = new AgentDetailReceiver<Omit<AgentDetail, 'rows'>, TimedEvent>();
+            const views = new Set<{ onChange: (detail: AgentDetail | null) => void }>();
+            const listener = (_event: unknown, payload: AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>): void => {
+                const detail = receiver.apply(payload);
+                // A patch for rows this window does not hold: the whole ledger main sends a new watcher is on its way.
+                if (detail === undefined) return;
+                for (const view of views) view.onChange(detail);
+            };
+            ipcRenderer.on(channel, listener);
+            watch = { receiver, views, off: () => ipcRenderer.removeListener(channel, listener) };
+            watching.set(agentId, watch);
+            ipcRenderer.send('genie:agent-watch', agentId, true);
+        }
+        const view = { onChange };
+        const w = watch;
+        w.views.add(view);
+        return () => {
+            w.views.delete(view);
+            if (w.views.size > 0 || watching.get(agentId) !== w) return;
+            watching.delete(agentId);
+            w.off();
+            ipcRenderer.send('genie:agent-watch', agentId, false);
+        };
     },
 
     openAgent: (agentId) => {

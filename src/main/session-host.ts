@@ -1,6 +1,6 @@
 import type { McpServer } from '@particle-academy/prism-acp';
-import { deliveryFrom } from '../core/delivery.js';
-import { turnNow } from '../core/turn-now.js';
+import type { SessionStore } from '@particle-academy/prism-harness';
+import { LiveReadings } from '../core/live-readings.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
@@ -60,7 +60,7 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { openDurableStore, readHistory } from '../core/thread-store.js';
-import { lastNumberedTurn, numberTurns } from '../core/turn-numbers.js';
+import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
 /**
@@ -255,10 +255,22 @@ interface Running {
     cancelDeclared: boolean;
     /** Which run this is, unique in this host — what tells a restarted agent's session from the one before it. */
     run: number;
+    /** What `probe()` reports from the rows, kept as they arrive (core/live-readings.ts) — never read again from all of them. */
+    readings: LiveReadings;
+    /** The row that says where this run begins, made once: the same object on every read, so the window's patch keeps it. */
+    marker: TimedEvent;
+    /** This run's rows numbered on from the history's turns (`base`), kept as they arrive; `null` until needed. */
+    numbered: { base: number; n: number; rows: TimedEvent[] } | null;
+    /** The ledger last served, for the history it was served with: ONE array per run, grown in place as rows arrive (see `rowAdded`); `null` = rebuild it. */
+    ledger: { history: object | null; rows: TimedEvent[] } | null;
 }
+
+/** A stopped agent's ledger before its history is read: one empty array, so two reads are the same ledger. */
+const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionHost {
     readonly #userData: string;
+    readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
@@ -354,8 +366,11 @@ export class SessionHost {
          * Defaults: a 2-minute margin, the real setTimeout.
          */
         rateLimit?: { gate?: RateLimitGate; schedule?: (ms: number, fn: () => void) => () => void };
+        /** Where the threads are kept. Default: the durable file store under `userData` — a test may hand in its own. */
+        store?: () => SessionStore;
     }) {
         this.#userData = options.userData;
+        this.#store = options.store ?? (() => openDurableStore(sessionsDir(this.#userData)));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#onTurnNumbered = options.onTurnNumbered;
@@ -551,14 +566,15 @@ export class SessionHost {
         this.refusals.delete(record.id);
 
         const rows: TimedEvent[] = [];
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt: this.#clock(), nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs };
+        const startedAt = this.#clock();
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
         let reportedTurns = record.lastTurn ?? 0;
         let numberedTurn = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
             agentId: record.id,
             cwd,
-            store: openDurableStore(sessionsDir(this.#userData)),
+            store: this.#store(),
             driverFactory,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
@@ -630,8 +646,10 @@ export class SessionHost {
                 const last = rows.at(-1);
                 if (meta?.replacesLast && last) {
                     rows[rows.length - 1] = { ...last, event };
+                    rowReplaced(entry, last.event);
                 } else {
                     rows.push({ id: `${record.id}:${entry.nextRowId++}`, event, at: this.#clock() });
+                    rowAdded(entry);
                 }
                 this.#emit(record.id);
             },
@@ -843,7 +861,7 @@ export class SessionHost {
         const cached = this.#histories.get(agentId);
         if (cached === undefined || (cached !== 'loading' && cached.before !== before)) {
             this.#histories.set(agentId, 'loading');
-            void readHistory(openDurableStore(sessionsDir(this.#userData)), agentId, { ...(before !== null ? { before } : {}), limit: HISTORY_LIMIT })
+            void readHistory(this.#store(), agentId, { ...(before !== null ? { before } : {}), limit: HISTORY_LIMIT })
                 .then((h) => {
                     // NUMBERED as a person reads them (core/turn-numbers.ts): 1, 2, 3 … on from the turns the window cut off.
                     const rows = numberTurns([
@@ -856,13 +874,30 @@ export class SessionHost {
                 .catch(() => { this.#histories.set(agentId, { before, rows: [], turns: 0 }); });
         }
         const loaded = cached !== undefined && cached !== 'loading' && cached.before === before ? cached : null;
-        const history = loaded ? loaded.rows : [];
+        const history = loaded ? loaded.rows : NO_ROWS;
         if (!entry) return history;
+        /*
+         * SERVED FROM WHAT IS KEPT (the owner, 2026-10-20: the window lagged seconds behind a busy agent): built again only
+         * when a row changed, from rows that keep their identity while unchanged — which is what lets main send the window
+         * only the rows that changed (core/agent-push-wire.ts).
+         */
+        if (entry.ledger !== null && entry.ledger.history === loaded) return entry.ledger.rows;
         // Where this run begins: said once, when there is something before it to tell it from — recorded rows, or a
         // conversation the provider resumed (which it remembers even when Genie recorded none of it).
-        const marker: TimedEvent[] = history.length > 0 || entry.resumed ? [{ id: `${agentId}:run`, event: { kind: 'run', resumed: entry.resumed }, at: entry.startedAt }] : [];
+        const marker: TimedEvent[] = history.length > 0 || entry.resumed ? [entry.marker] : [];
         // This run's turns number on from the history's — once it is read; until then they keep the session's own numbers.
-        return [...history, ...marker, ...(loaded ? numberTurns(entry.rows, loaded.turns) : entry.rows)];
+        let run: readonly TimedEvent[] = entry.rows;
+        if (loaded) {
+            if (entry.numbered === null || entry.numbered.base !== loaded.turns) {
+                const state = { n: loaded.turns };
+                entry.numbered = { base: loaded.turns, rows: entry.rows.map((r) => numberRow(r, state)), n: 0 };
+                entry.numbered.n = state.n;
+            }
+            run = entry.numbered.rows;
+        }
+        const rows = [...history, ...marker, ...run];
+        entry.ledger = { history: loaded, rows };
+        return rows;
     }
 
     /** THIS RUN's ledger only (what the doctor channel and file attribution read). Empty for one not running. */
@@ -884,15 +919,11 @@ export class SessionHost {
         const { session, rows, startedAt, mcp } = entry;
 
         // The last usage report, if any. Not a running total we maintain — the provider's own
-        // figure, or nothing.
-        let contextUsed: number | null = null;
-        let contextSize: number | null = null;
-        for (const row of rows) {
-            if (row.event.kind === 'usage') {
-                contextUsed = row.event.used;
-                contextSize = row.event.size;
-            }
-        }
+        // figure, or nothing. Every reading from the rows is KEPT as they arrive (core/live-readings.ts): a probe never
+        // reads the ledger again.
+        const { readings } = entry;
+        const contextUsed: number | null = readings.usage?.used ?? null;
+        const contextSize: number | null = readings.usage?.size ?? null;
 
         /*
          * A failure, with the provider's LAST WORDS attached when it said any.
@@ -936,12 +967,12 @@ export class SessionHost {
             contextUsed,
             contextSize,
             // The Dashboard's Latest delivery (core/delivery.ts): its own commit, file, handoff or answer, newest first.
-            lastDelivery: deliveryFrom(rows, this.#clock()),
+            lastDelivery: readings.delivery(rows, this.#clock()),
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
-            plan: planFrom(rows),
+            plan: readings.plan,
             // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
-            ...(({ prompt, tool }) => ({ asked: prompt, tool }))(turnNow(rows)),
-            model: modelFrom(rows),
+            ...(({ prompt, tool }) => ({ asked: prompt, tool }))(readings.turnNow()),
+            model: readings.model,
             extensions: session.extensions,
             // Both, because each alone is a claim: the driver's declaration, and the driver this session actually holds.
             cancelTurn: entry.cancelDeclared && session.canCancelTurn,
@@ -973,38 +1004,45 @@ export class SessionHost {
     }
 }
 
-/** The latest plan the agent reported, or `null`. Never a fabricated `0/0`. */
-function planFrom(rows: readonly TimedEvent[]): LiveSession['plan'] {
-    for (let i = rows.length - 1; i >= 0; i -= 1) {
-        const event = rows[i]?.event;
-        if (event?.kind !== 'plan') continue;
-
-        const steps = event.entries.flatMap((e) => {
-            if (typeof e !== 'object' || e === null) return [];
-            const r = e as Record<string, unknown>;
-            return typeof r['content'] === 'string' && typeof r['status'] === 'string'
-                ? [{ content: r['content'], status: r['status'] }]
-                : [];
-        });
-        if (steps.length === 0) return null;
-
-        const done = steps.filter((s) => s.status === 'completed').length;
-        const doing = steps.find((s) => s.status === 'in_progress');
-        return { step: done, of: steps.length, doing: doing?.content ?? '' };
+/**
+ * A row was appended: the readings and the numbered rows take it, and so does the ledger last served — GROWN IN PLACE,
+ * not rebuilt (measured 2026-10-21: rebuilding 60k rows per change was 1.32 ms of an event's 1.18–2.12). The push reads
+ * what changed from the length and last row it held (core/agent-push-wire.ts `rowsPatch`).
+ */
+function rowAdded(entry: Running): void {
+    const index = entry.rows.length - 1;
+    entry.readings.added(entry.rows, index);
+    if (entry.numbered !== null) {
+        const state = { n: entry.numbered.n };
+        entry.numbered.rows.push(numberRow(entry.rows[index]!, state));
+        entry.numbered.n = state.n;
     }
-    return null;
+    if (entry.ledger === null) return;
+    // Built over the numbered rows once the history was read (`ledgerFor`); over this run's own until then.
+    if (entry.ledger.history !== null && entry.numbered === null) { entry.ledger = null; return; }
+    entry.ledger.rows.push(entry.ledger.history !== null ? entry.numbered!.rows[index]! : entry.rows[index]!);
 }
 
-/**
- * The model the provider last REPORTED running (a notice carrying it), or `null`. The latest report wins — Codex
- * reroutes mid-session — and it is never the model Genie asked for: that is the agent's setting, not a reading.
- */
-function modelFrom(rows: readonly TimedEvent[]): string | null {
-    for (let i = rows.length - 1; i >= 0; i -= 1) {
-        const event = rows[i]?.event;
-        if (event?.kind === 'notice' && typeof event.model === 'string' && event.model.length > 0) return event.model;
+/** The newest row was replaced (a reply or a thought grew): `before` is the event it held. */
+function rowReplaced(entry: Running, before: StreamEvent): void {
+    const index = entry.rows.length - 1;
+    const row = entry.rows[index]!;
+    entry.readings.replaced(entry.rows, index, before);
+    if (entry.numbered !== null) {
+        // Only a turn, a stop or the earlier-rows marker carries or sets a number (core/turn-numbers.ts `numberRow`): a row
+        // that was none of them and is none of them now (a reply growing, a tool call completing) keeps every number
+        // where it was. Anything else is numbered again from the start — once per tool update over a 60k-row ledger was
+        // most of what an event still cost (test/agent-stream-perf.test.ts).
+        const numbers = (k: StreamEvent['kind']) => k === 'turn' || k === 'stopped' || k === 'earlier';
+        const plain = !numbers(row.event.kind) && !numbers(before.kind);
+        if (plain) entry.numbered.rows[index] = row;
+        else entry.numbered = null;
     }
-    return null;
+    if (entry.ledger === null) return;
+    // Renumbered from the start: the ledger is built again. Otherwise its newest row is this one (only the newest is ever
+    // replaced, which is what lets the push find the change without comparing the rows).
+    if (entry.ledger.history !== null && entry.numbered === null) { entry.ledger = null; return; }
+    entry.ledger.rows[entry.ledger.rows.length - 1] = row;
 }
 
 /** A measured comms reading as the row fields; `null` (not measured) leaves all three `null`, never `0`. */

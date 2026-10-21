@@ -5,7 +5,7 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
@@ -869,7 +869,9 @@ function DesktopApp({ bridge }: AppProps) {
             void Promise.resolve(resolvedBridge.openAgent(draft.agentId)).then(send);
         }
     };
-    const chatBase = chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now);
+    // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
+    // thread reads every row of the subject's ledger.
+    const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now)), [chatDetail, chatSubject, snapshot.agents]);
     const chatThread: ChatThread | null = chatBase === null
         ? null
         : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatDetail?.agent.id === chatBase.agentId && chatDetail.session?.running === true });

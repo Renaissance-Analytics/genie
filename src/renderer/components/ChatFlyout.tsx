@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
@@ -60,6 +60,15 @@ const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]
 export function GenieMark() {
     return <span data-genie-mark="" className="size-2 shrink-0 rounded-[2px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />;
 }
+
+/**
+ * An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default.
+ * MEMOISED on its text: the chat re-rendered EVERY reply's Markdown on every push of a busy agent, which is many a second
+ * (the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all"). Only the reply that grew renders again.
+ */
+const ChatReply = memo(function ChatReply({ text, linkFiles }: { text: string; linkFiles: boolean }) {
+    return <ContentRenderer value={linkFiles ? linkFileRefs(text) : text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />;
+});
 
 function clock(at: number): string {
     const d = new Date(at);
@@ -491,7 +500,7 @@ export function ChatFlyout({
                         <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
                             {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
-                            <ContentRenderer value={onOpenFile ? linkFileRefs(m.text) : m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+                            <ChatReply text={m.text} linkFiles={Boolean(onOpenFile)} />
                         </div>
                     );
                 })}

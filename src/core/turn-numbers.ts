@@ -15,20 +15,27 @@ import type { StreamEvent } from './stream-event.js';
  * is returned as it is, so ids, selections and open rows survive.
  */
 export function numberTurns<T extends { readonly event: StreamEvent }>(rows: readonly T[], before = 0): T[] {
-    let n = before;
-    return rows.map((row) => {
-        const e = row.event;
-        if (e.kind === 'earlier') {
-            if (e.turns !== undefined) n = e.turns;
-            return row;
-        }
-        if (e.kind === 'turn') {
-            n += 1;
-            return e.n === n ? row : { ...row, event: { ...e, n } };
-        }
-        if (e.kind === 'stopped') return e.n === n || n === 0 ? row : { ...row, event: { ...e, n } };
+    const state = { n: before };
+    return rows.map((row) => numberRow(row, state));
+}
+
+/**
+ * ONE row numbered, `state.n` being the turns before it (and after it, on return) — what `numberTurns` does to each row,
+ * for a host that numbers its rows as they ARRIVE rather than all of them again on every read. The row itself when its
+ * number stands, so an unchanged row keeps its identity.
+ */
+export function numberRow<T extends { readonly event: StreamEvent }>(row: T, state: { n: number }): T {
+    const e = row.event;
+    if (e.kind === 'earlier') {
+        if (e.turns !== undefined) state.n = e.turns;
         return row;
-    });
+    }
+    if (e.kind === 'turn') {
+        state.n += 1;
+        return e.n === state.n ? row : { ...row, event: { ...e, n: state.n } };
+    }
+    if (e.kind === 'stopped') return e.n === state.n || state.n === 0 ? row : { ...row, event: { ...e, n: state.n } };
+    return row;
 }
 
 /** The number of the last turn in rows already numbered (0 when none). */

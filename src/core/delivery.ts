@@ -67,22 +67,38 @@ function deliveryOfCall(c: Call, now: number): Delivery | null {
     return null;
 }
 
+/** A call with one more of its rows folded in: the first name, kind and input; the latest status, output and time. */
+function withRow(c: Call | undefined, r: TimedEvent, index: number): Call | null {
+    const e = r.event;
+    if (e.kind !== 'tool' || !e.toolCallId) return null;
+    const was = c ?? { name: null, toolKind: null, input: null, status: null, output: null, at: null, index };
+    return {
+        name: was.name ?? e.name,
+        toolKind: was.toolKind ?? e.toolKind,
+        input: was.input ?? e.rawInput ?? null,
+        status: e.status ?? was.status,
+        output: e.output ?? was.output,
+        at: r.at ?? was.at,
+        index,
+    };
+}
+
+/** An agent message that answers as a delivery: its first line, when it has one. */
+function answerOf(r: TimedEvent, now: number): Delivery | null {
+    const e = r.event;
+    if (e.kind === 'message' && e.speaker === 'agent' && firstLine(e.text).length > 0) {
+        return { kind: 'answer', main: firstLine(e.text), sub: null, plus: null, minus: null, age: ageOf(r.at, now) };
+    }
+    return null;
+}
+
 export function deliveryFrom(rows: readonly TimedEvent[], now: number): Delivery | null {
     // A tool call arrives as several rows: its input on the call, its status and output on the updates.
     const calls = new Map<string, Call>();
     rows.forEach((r, index) => {
         const e = r.event;
         if (e.kind !== 'tool' || !e.toolCallId) return;
-        const c = calls.get(e.toolCallId) ?? { name: null, toolKind: null, input: null, status: null, output: null, at: null, index };
-        calls.set(e.toolCallId, {
-            name: c.name ?? e.name,
-            toolKind: c.toolKind ?? e.toolKind,
-            input: c.input ?? e.rawInput ?? null,
-            status: e.status ?? c.status,
-            output: e.output ?? c.output,
-            at: r.at ?? c.at,
-            index,
-        });
+        calls.set(e.toolCallId, withRow(calls.get(e.toolCallId), r, index)!);
     });
     const byCallEnd = [...calls.values()].sort((a, b) => b.index - a.index);
     let next = 0;
@@ -93,14 +109,65 @@ export function deliveryFrom(rows: readonly TimedEvent[], now: number): Delivery
             if (d) return d;
             next += 1;
         }
-        const e = rows[i]!.event;
-        if (e.kind === 'message' && e.speaker === 'agent' && firstLine(e.text).length > 0) {
-            return { kind: 'answer', main: firstLine(e.text), sub: null, plus: null, minus: null, age: ageOf(rows[i]!.at, now) };
-        }
+        const answer = answerOf(rows[i]!, now);
+        if (answer) return answer;
     }
     for (; next < byCallEnd.length; next += 1) {
         const d = deliveryOfCall(byCallEnd[next]!, now);
         if (d) return d;
     }
     return null;
+}
+
+/**
+ * `deliveryFrom`, KEPT AS THE ROWS ARRIVE instead of read again from all of them (the owner, 2026-10-20: Genie's main
+ * process pegged at a full core while one agent streamed into a 66k-row thread — every event read every row for this).
+ *
+ * The rule is the same: the newest delivery wins, a call standing at the row of its LATEST update, an agent's message at
+ * its own row. Whether a call is a delivery depends on the call alone (`now` only ages it), and a call changes only by a
+ * new row — the newest row there is. So each row either puts one candidate on top or takes its own call's older standing
+ * away, and the answer is the newest candidate still standing: O(1) a row, amortised (a stale candidate is dropped once).
+ * `test/live-readings.test.ts` holds it equal to `deliveryFrom`.
+ */
+export class DeliveryTracker {
+    readonly #calls = new Map<string, Call>();
+    /** Where each standing candidate stands (its row); a stack entry at another row is stale. */
+    readonly #standing = new Map<string, number>();
+    readonly #stack: { key: string; index: number }[] = [];
+
+    /** The row at `index` arrived (appended). */
+    add(rows: readonly TimedEvent[], index: number): void {
+        const r = rows[index]!;
+        const e = r.event;
+        if (e.kind === 'tool') {
+            if (!e.toolCallId) return;
+            const c = withRow(this.#calls.get(e.toolCallId), r, index)!;
+            this.#calls.set(e.toolCallId, c);
+            this.#stand(`c:${e.toolCallId}`, index, deliveryOfCall(c, 0) !== null);
+            return;
+        }
+        this.#stand(`m:${index}`, index, answerOf(r, 0) !== null);
+    }
+
+    /** The message at `index` (the newest row) grew in place. */
+    grew(rows: readonly TimedEvent[], index: number): void {
+        this.#stand(`m:${index}`, index, answerOf(rows[index]!, 0) !== null);
+    }
+
+    current(rows: readonly TimedEvent[], now: number): Delivery | null {
+        for (;;) {
+            const top = this.#stack.at(-1);
+            if (top === undefined) return null;
+            if (this.#standing.get(top.key) !== top.index) { this.#stack.pop(); continue; }
+            if (top.key.startsWith('m:')) return answerOf(rows[top.index]!, now);
+            return deliveryOfCall(this.#calls.get(top.key.slice(2))!, now);
+        }
+    }
+
+    #stand(key: string, index: number, stands: boolean): void {
+        if (!stands) { this.#standing.delete(key); return; }
+        if (this.#standing.get(key) === index) return;
+        this.#standing.set(key, index);
+        this.#stack.push({ key, index });
+    }
 }
