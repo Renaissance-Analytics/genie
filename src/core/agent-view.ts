@@ -121,6 +121,8 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     }
 
     const running = session.running && session.turnState === 'working';
+    // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): what it started in the background still runs.
+    if (!running && session.running && (session.background ?? 0) > 0) return { word: `Working · ${session.background} in the background`, elapsed: null, tone: 'ok' };
     if (!running) return { word: ctx.turns === 0 && session.running ? 'No turns yet' : 'Idle', elapsed: null, tone: 'muted' };
 
     return {

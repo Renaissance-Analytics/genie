@@ -56,6 +56,8 @@ export interface AgentRow {
     signedOut?: boolean | undefined;
     /** Its account is paused by the provider: said, with why. Absent/`null` = not paused. */
     accountPaused?: AccountPause | null | undefined;
+    /** Background shells and tasks still running after its turn ended: it reads Working, not Idle. */
+    background?: number | null | undefined;
     id: string;
     name: string;
     provider: string;
@@ -151,6 +153,8 @@ export function statusOf(row: AgentRow): StatusCell {
         case 'working':
             return { word: row.fidelity === 'observed' ? 'Active' : 'Working', detail: row.duration, tone: 'ok' };
         default:
+            // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks still running read Working.
+            if (row.fidelity !== 'observed' && (row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: row.fidelity === 'observed' ? 'Quiet' : 'Idle', detail: row.duration, tone: 'muted' };
     }
 }

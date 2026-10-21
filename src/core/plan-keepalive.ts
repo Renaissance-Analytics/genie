@@ -17,6 +17,8 @@ export interface KeepGoingState {
     readonly promptable: boolean;
     /** Its own open ForceTheQuestion, or a parked approval: the next move is the person's. */
     readonly waitingOnPerson: boolean;
+    /** Background shells and tasks of its own still running (core/background-count.ts): their end wakes it, so no nudge. */
+    readonly background?: number | null | undefined;
 }
 
 export interface PlanKeepalivePorts {
@@ -40,7 +42,7 @@ export function keepGoingPrompt(plan: NonNullable<KeepGoingState['plan']>): stri
 }
 
 function shouldNudge(s: KeepGoingState | null): s is KeepGoingState & { plan: NonNullable<KeepGoingState['plan']> } {
-    return s !== null && s.mode === 'automated' && s.lastTurnEnd === 'replied' && s.plan !== null && s.plan.step < s.plan.of && !s.waitingOnPerson;
+    return s !== null && s.mode === 'automated' && s.lastTurnEnd === 'replied' && s.plan !== null && s.plan.step < s.plan.of && !s.waitingOnPerson && (s.background ?? 0) === 0;
 }
 
 export class PlanKeepalive {
