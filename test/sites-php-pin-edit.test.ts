@@ -103,6 +103,8 @@ beforeEach(async () => {
         elevate: async () => ({ ok: true }), hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null },
         workspaces: () => [{ id: 'acme', path: acme }],
         resolvePhpCgi: (pin) => resolvePhpCgi(pin, { platform: 'win32', root: phpRoot, fs: phpFs() }),
+        // One worker: these tests are about the pin; several workers are test/php-fast.test.ts's.
+        phpWorkers: 1,
     } as Parameters<typeof composeServices>[0]);
     await settle();
     caller = { agentId: mintAgentId(), agentName: 'atlas', workspaceId: 'acme', workspacePath: acme };

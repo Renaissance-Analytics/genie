@@ -85,6 +85,8 @@ async function launch(): Promise<ComposedServices> {
         hostsIo, elevate: async () => ({ ok: true }), hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null },
         workspaces: () => workspaces,
         onWorkspacesChange: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; },
+        // One PHP worker: these tests are about which sites start; several workers are test/php-fast.test.ts's.
+        phpWorkers: 1,
     } as Parameters<typeof composeServices>[0]);
     await settle();
     return services;

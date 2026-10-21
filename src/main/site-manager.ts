@@ -94,12 +94,16 @@ export interface SiteManagerDeps {
      * reaches the next site started without a relaunch. The site's own env wins over it.
      */
     readonly phpWorkerEnv?: () => Readonly<Record<string, string>>;
+    /** How many php-cgi workers a PHP site runs; absent = PHP_WORKERS. */
+    readonly phpWorkers?: number;
     /**
      * The php-cgi for a site's pin (T4): unpinned → the one on PATH; pinned → that Genie-managed version's binary, or the
      * reason it cannot start. Read at each start, so a version installed or removed is seen by the next one. Absent = no
      * managed PHP in this Genie: an unpinned site runs `php-cgi`, a pinned one is refused — never served on another PHP.
      */
     readonly resolvePhpCgi?: (pin: string | undefined) => PhpCgiResolution;
+    /** Called right before a php site's workers start (never by a lookup): a pinned version's ini brought current. */
+    readonly preparePhpCgi?: (pin: string | undefined) => void;
     /**
      * The workspace's service env NOW (its engines' DB_*, REDIS_URL…), read at every start and by
      * {@link SiteManager.serviceEnvChanged}. Never captured at declare time: a site declared before its engine existed
@@ -121,7 +125,7 @@ interface SiteRecord {
     /** The env its processes were last started with (canonical JSON) — what an engine change is compared against. */
     startedEnv?: string;
     /** A running PHP site's worker: what an engine change restarts ALONE, on the same port (Tynn #756). */
-    phpWorker?: { readonly command: string; readonly fcgiPort: number };
+    phpWorker?: { readonly command: string; readonly fcgiPorts: readonly number[] };
 }
 
 /** An env as one comparable string: keys sorted, so the same variables in another order are the same env. */
@@ -136,6 +140,18 @@ function canonicalEnv(env: Readonly<Record<string, string>>): string {
  * parent to replace it, so it must not count requests at all.
  */
 export const PHP_WORKER_ENV: Readonly<Record<string, string>> = { PHP_FCGI_MAX_REQUESTS: '0' };
+
+/**
+ * HOW MANY php-cgi WORKERS A PHP SITE RUNS (genie#1043; moic, 2026-10-21: 4 parallel fetches served one after another,
+ * a cold page's ~35 API calls ~1.1 s apart). php-cgi answers one request at a time and ignores PHP_FCGI_CHILDREN on
+ * Windows, so concurrency is several processes; the site's Caddy sends each request to the least busy one.
+ */
+export const PHP_WORKERS = 4;
+
+/** The supervisor ids of a site's PHP workers: `<site>-fcgi` (the first, as it always was), then `<site>-fcgi-2` …. */
+export function phpWorkerIds(siteId: string, count: number): string[] {
+    return Array.from({ length: count }, (_, i) => (i === 0 ? `${siteId}-fcgi` : `${siteId}-fcgi-${i + 1}`));
+}
 
 export class SiteManager {
     readonly #deps: SiteManagerDeps;
@@ -318,18 +334,20 @@ export class SiteManager {
                 const cgi = this.phpCgiFor(input.serve.version);
                 if (!cgi.ok) throw new Error(`${host} was not started: ${cgi.reason}`);
                 cgiCommand = cgi.command;
+                this.#deps.preparePhpCgi?.(input.serve.version);
             }
             const port = this.#deps.allocatePort();
             const processIds: string[] = [];
             let spec: ServeSpec;
             if (input.serve.mode === 'php') {
-                const fcgiPort = this.#deps.allocatePort();
-                spec = { mode: 'php', root: input.serve.root, fcgiPort };
+                // SEVERAL WORKERS, each on its own port (genie#1043): php-cgi serves one request at a time.
+                const fcgiPorts = Array.from({ length: Math.max(1, this.#deps.phpWorkers ?? PHP_WORKERS) }, () => this.#deps.allocatePort());
+                spec = { mode: 'php', root: input.serve.root, fcgiPort: fcgiPorts[0]!, fcgiPorts };
                 // Rendered BEFORE anything starts: a root that escapes the repo is refused with nothing running.
                 const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
-                record.phpWorker = { command: cgiCommand, fcgiPort };
+                record.phpWorker = { command: cgiCommand, fcgiPorts };
                 this.#startPhpWorker(record, baseEnv);
-                processIds.push(`${id}-fcgi`);
+                processIds.push(...phpWorkerIds(id, fcgiPorts.length));
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {
                 spec = input.serve;
@@ -364,7 +382,7 @@ export class SiteManager {
                 // Caddy, its port and the front door's route stay — and Caddy retries the dial while the worker comes
                 // back (serve-config's lb_try_duration). Stopping everything 502'd the site (Tynn #756, moic run 11).
                 const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
-                this.#deps.supervisor.stop(`${record.id}-fcgi`);
+                for (const workerId of phpWorkerIds(record.id, record.phpWorker.fcgiPorts.length)) this.#deps.supervisor.stop(workerId);
                 this.#startPhpWorker(record, Object.keys(merged).length > 0 ? merged : undefined);
                 record.startedEnv = canonicalEnv(merged);
                 restarted.push(record.id);
@@ -438,7 +456,7 @@ export class SiteManager {
         return true;
     }
 
-    /** The PHP worker of a site, with the service env given; the fcgi port and php-cgi are the site's own. */
+    /** The PHP workers of a site, with the service env given; each on its own fcgi port, all running the site's php-cgi. */
     #startPhpWorker(record: SiteRecord, baseEnv: Readonly<Record<string, string>> | undefined): void {
         const input = record.input!;
         const worker = record.phpWorker!;
@@ -447,14 +465,17 @@ export class SiteManager {
         const env = { ...phpEnv, ...(baseEnv ?? {}), ...PHP_WORKER_ENV };
         // ALWAYS back, a clean exit included: php-cgi's own exits are clean (status 0). A site the person stops stays
         // stopped (the supervisor checks that first).
-        this.#deps.supervisor.start({
-            id: `${record.id}-fcgi`,
-            workspaceId: input.workspaceId,
-            name: `${record.host} php worker`,
-            command: `${worker.command} -b 127.0.0.1:${worker.fcgiPort}`,
-            cwd: input.repoPath,
-            restart: 'always',
-            env,
+        const ids = phpWorkerIds(record.id, worker.fcgiPorts.length);
+        worker.fcgiPorts.forEach((port, i) => {
+            this.#deps.supervisor.start({
+                id: ids[i]!,
+                workspaceId: input.workspaceId,
+                name: worker.fcgiPorts.length > 1 ? `${record.host} php worker ${i + 1}` : `${record.host} php worker`,
+                command: `${worker.command} -b 127.0.0.1:${port}`,
+                cwd: input.repoPath,
+                restart: 'always',
+                env,
+            });
         });
     }
 

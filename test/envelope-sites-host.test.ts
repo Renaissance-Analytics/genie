@@ -27,7 +27,7 @@ function harness(files: Record<string, string>, over: { failWrite?: boolean; sto
         write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {},
     };
     let port = 4100;
-    const sites = new SiteManager({ supervisor: new ProcessSupervisor(pty, { now: () => 0, schedule: () => () => {} }), allocatePort: () => ++port, caddyBin: '/opt/caddy', configDir: '/cfg', writeConfig: () => {} });
+    const sites = new SiteManager({ supervisor: new ProcessSupervisor(pty, { now: () => 0, schedule: () => () => {} }), allocatePort: () => ++port, caddyBin: '/opt/caddy', configDir: '/cfg', writeConfig: () => {}, phpWorkers: 1 });
     const ports: EnvelopeSitesPorts = {
         fs: {
             readText: async (p) => fs.get(p) ?? null,
