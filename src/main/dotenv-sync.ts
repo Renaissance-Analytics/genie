@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { dotEnvServiceVars, dotEnvTargets, parseDotEnv, upsertDotEnv } from '../core/dotenv.js';
+import { dotEnvServiceVars, dotEnvTargets, envFileName, parseDotEnv, upsertDotEnv } from '../core/dotenv.js';
 
 /**
  * THE SERVICE CONNECTION, KEPT CURRENT IN EACH SITE REPO'S `.env` (§6.6, hosting ship line H4) — the main-process
@@ -35,6 +35,11 @@ export interface DotEnvSyncPorts {
     };
     /** Does git ignore `file` (a name) in `dir`? */
     readonly gitIgnored: (dir: string, file: string) => Promise<GitIgnoreAnswer>;
+    /**
+     * The env file name the workspace was registered with (`WorkspaceRecord.envFile`, from Settings → General "Env file
+     * name"). `undefined` — a workspace from before the setting, or no lookup — is `.env`, which is what this always wrote.
+     */
+    readonly envFileOf?: (workspaceId: string) => string | undefined;
     readonly log?: (line: string) => void;
 }
 
@@ -121,12 +126,22 @@ export class DotEnvSync {
     }
 
     async #write(workspaceId: string, dir: string, vars: Record<string, string>): Promise<DotEnvOutcome> {
-        const file = join(dir, '.env');
+        const recorded = this.#ports.envFileOf?.(workspaceId);
+        const name = envFileName(recorded);
+        if (name === null) {
+            return {
+                workspaceId,
+                file: join(dir, String(recorded)),
+                outcome: 'refused',
+                reason: `the service connection was NOT written: the workspace's env file ${JSON.stringify(recorded)} is not a file name in ${dir} (no folders, no "..")`,
+            };
+        }
+        const file = join(dir, name);
         try {
             const before = (await this.#ports.fs.readText(file)) ?? '';
             const after = upsertDotEnv(before, vars);
             if (after === before) return { workspaceId, file, outcome: 'current' };
-            const ignored = await this.#ports.gitIgnored(dir, '.env');
+            const ignored = await this.#ports.gitIgnored(dir, name);
             if (ignored !== 'ignored') {
                 const why = ignored === 'no-repo'
                     ? `${dir} is not a git repository git could answer for, so Genie cannot confirm the file would never be committed`
@@ -135,7 +150,7 @@ export class DotEnvSync {
                     workspaceId,
                     file,
                     outcome: 'refused',
-                    reason: `the service connection (with its password) was NOT written: ${why}. Add \`.env\` to the repository’s .gitignore (and \`git rm --cached .env\` if git tracks it); Genie writes it on the next change. The file was left as it was.`,
+                    reason: `the service connection (with its password) was NOT written: ${why}. Add \`${name}\` to the repository’s .gitignore (and \`git rm --cached ${name}\` if git tracks it); Genie writes it on the next change. The file was left as it was.`,
                 };
             }
             await this.#ports.fs.writeTextAtomic(file, after);

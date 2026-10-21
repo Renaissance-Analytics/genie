@@ -36,6 +36,12 @@ export interface WorkspaceRecord {
     governs?: string[];
     /** Its DEFAULT AGENT (Genie 1's): one of its own agents, the one an action uses when it names none. Absent = none. */
     defaultAgentId?: string;
+    /**
+     * Its ENV FILE (Genie 1's `env_file`): the file in each site folder Genie writes the service connection to. Stamped at
+     * register from Settings → General "Env file name" (`default_env_file`), so changing the setting later changes new
+     * workspaces only, as in Genie 1. Absent (a workspace registered before it existed) = `.env`.
+     */
+    envFile?: string;
 }
 
 export async function readJson<T>(file: string, fallback: T): Promise<T> {

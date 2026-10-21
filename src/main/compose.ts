@@ -794,6 +794,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         sites: () => sites.list(),
         fs: nodeEnvelopeFs(),
         gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
+        // The name each workspace was registered with (Settings → General "Env file name"); none recorded is `.env`.
+        envFileOf: (workspaceId) => workspacesNow().find((w) => w.id === workspaceId)?.envFile,
         log: (line) => console.error(line),
     });
     const syncEnvFiles = () => { envFiles.syncAll().catch((error: unknown) => console.error(`[env] ${error instanceof Error ? error.message : String(error)}`)); };
