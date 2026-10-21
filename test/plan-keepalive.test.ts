@@ -12,7 +12,7 @@ import { PlanKeepalive, type KeepGoingState } from '../src/core/plan-keepalive.j
  */
 
 const PLAN = { step: 2, of: 5, doing: 'wire the tray' };
-const base: KeepGoingState = { mode: 'automated', lastTurnEnd: 'replied', plan: PLAN, promptable: true, waitingOnPerson: false };
+const base: KeepGoingState = { mode: 'automated', lastTurnEnd: 'replied', plan: PLAN, promptable: true, waitingOnPerson: false, background: 0 };
 
 function harness(initial: Partial<KeepGoingState> = {}) {
     let state: KeepGoingState | null = { ...base, ...initial };
@@ -63,6 +63,9 @@ describe('never when it should not', () => {
         ['a turn HELD for the limit', { lastTurnEnd: 'held' }],
         ['a SIGNED-OUT login', { lastTurnEnd: 'signed-out' }],
         ['an agent waiting on the person (its question, its approval)', { waitingOnPerson: true }],
+        // Its own background work still runs (the owner, 2026-10-21: nudged twice while it waited on a VM run): that work's
+        // end wakes it; a nudge now is a turn spent on nothing, and three of them would stop the nudging for good.
+        ['an agent whose background work is still running', { background: 2 }],
     ];
     for (const [name, over] of cases) {
         it(name, () => {

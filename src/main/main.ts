@@ -714,7 +714,7 @@ async function boot(): Promise<void> {
             const live = host?.probe(id as AgentId) ?? null;
             if (!record || !live) return null;
             const asked = services?.attention.pending().some((q) => q.agentId === id) ?? false;
-            return { mode: record.mode, lastTurnEnd: host?.lastTurnEnd(id as AgentId) ?? null, plan: live.plan ?? null, promptable: host?.promptable(id as AgentId) != null, waitingOnPerson: asked || live.pendingApproval !== null };
+            return { mode: record.mode, lastTurnEnd: host?.lastTurnEnd(id as AgentId) ?? null, plan: live.plan ?? null, promptable: host?.promptable(id as AgentId) != null, waitingOnPerson: asked || live.pendingApproval !== null, background: live.background ?? null };
         },
         prompt: (id, text) => { host?.prompt(id as AgentId, text, 'genie'); },
         stalled: (id, text) => { host?.notice(id as AgentId, text); },

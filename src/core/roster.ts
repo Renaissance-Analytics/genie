@@ -44,6 +44,8 @@ export interface LiveSession {
     signedOut?: boolean | undefined;
     /** Its account is paused by the provider (core/account-pause.ts): the account is put right, then `Try again`. */
     accountPaused?: AccountPause | null | undefined;
+    /** Background shells and tasks it still has running (core/background-count.ts); absent/`null` = not reported. */
+    background?: number | null | undefined;
     running: boolean;
     turnState: TurnState;
     /** Epoch ms. `null` when the session never recorded a start. */
@@ -182,5 +184,6 @@ export function agentRowFor(
         limit: session?.limit ?? null,
         signedOut: session?.signedOut === true,
         accountPaused: session?.accountPaused ?? null,
+        background: session?.background ?? null,
     };
 }

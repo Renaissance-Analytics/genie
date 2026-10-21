@@ -1,6 +1,7 @@
 import type { McpServer } from '@particle-academy/prism-acp';
 import type { SessionStore } from '@particle-academy/prism-harness';
 import { LiveReadings } from '../core/live-readings.js';
+import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
@@ -257,6 +258,8 @@ interface Running {
     run: number;
     /** What `probe()` reports from the rows, kept as they arrive (core/live-readings.ts) — never read again from all of them. */
     readings: LiveReadings;
+    /** What it still has running in the background (core/background-count.ts), kept like the readings. */
+    background: BackgroundCount;
     /** The row that says where this run begins, made once: the same object on every read, so the window's patch keeps it. */
     marker: TimedEvent;
     /** This run's rows numbered on from the history's turns (`base`), kept as they arrive; `null` until needed. */
@@ -577,7 +580,7 @@ export class SessionHost {
 
         const rows: TimedEvent[] = [];
         const startedAt = this.#clock();
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
         let reportedTurns = record.lastTurn ?? 0;
         let numberedTurn = record.lastTurn ?? 0;
@@ -974,6 +977,8 @@ export class SessionHost {
         return {
             limit: this.#gate.view(this.#loginOf(entry.provider), this.#clock()),
             signedOut: entry.session.signedOut,
+            // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
+            background: entry.background.count(rows),
             accountPaused: entry.session.accountPaused,
             running: session.running,
             turnState: session.turnState,
@@ -1037,6 +1042,7 @@ export class SessionHost {
 function rowAdded(entry: Running): void {
     const index = entry.rows.length - 1;
     entry.readings.added(entry.rows, index);
+    entry.background.changed(entry.rows[index]!.event);
     if (entry.numbered !== null) {
         const state = { n: entry.numbered.n };
         entry.numbered.rows.push(numberRow(entry.rows[index]!, state));
@@ -1053,6 +1059,8 @@ function rowReplaced(entry: Running, before: StreamEvent): void {
     const index = entry.rows.length - 1;
     const row = entry.rows[index]!;
     entry.readings.replaced(entry.rows, index, before);
+    entry.background.changed(before);
+    entry.background.changed(entry.rows[index]!.event);
     if (entry.numbered !== null) {
         // Only a turn, a stop or the earlier-rows marker carries or sets a number (core/turn-numbers.ts `numberRow`): a row
         // that was none of them and is none of them now (a reply growing, a tool call completing) keeps every number
