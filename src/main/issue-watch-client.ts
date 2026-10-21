@@ -1,5 +1,5 @@
 import { IssueWatchFeed, parseIssueWatchActivity, parseIssueWatchEntry, type IwEntry, type IwEvent, isRepoName, parseWatchedRepos, type WatchedRepos } from '../core/issue-watch.js';
-import { encodePong, encodeSubscribe, parsePusherFrame, pusherWsUrl, socketIdOf } from '../core/pusher.js';
+import { encodePong, encodeSubscribe, parsePusherFrame, socketIdOf, socketUrlFor } from '../core/pusher.js';
 
 /**
  * ISSUEWATCH, LISTENING TO TYNN (Tynn #806). Genie never polls GitHub: Tynn does, with its GitHub App, and pushes each
@@ -163,7 +163,7 @@ export class IssueWatchClient {
         const tynn = this.#ports.tynn();
         if (tynn === null) { this.#set({ kind: 'signed-out' }); return; }
         this.#set({ kind: 'connecting' });
-        let config: { key?: unknown; cluster?: unknown };
+        let config: Parameters<typeof socketUrlFor>[0];
         try {
             const res = await tynn.request('/api/v1/broadcasting-config', { method: 'GET' });
             if (!res.ok) return this.#retry(`Tynn answered the push config with HTTP ${res.status}`);
@@ -171,11 +171,12 @@ export class IssueWatchClient {
         } catch (error) {
             return this.#retry(`Tynn could not be reached: ${(error as Error).message}`);
         }
-        if (typeof config.key !== 'string' || config.key === '') return this.#retry('Tynn has no push configured');
+        const url = socketUrlFor(config);
+        if (url === null) return this.#retry('Tynn has no push configured');
         if (this.#stopped) return;
         // The person's own channel (Tynn's routes/channels.php `App.Models.User.{id}`).
         this.#channel = `private-App.Models.User.${tynn.userId}`;
-        const socket = this.#ports.socket(pusherWsUrl(config.key, typeof config.cluster === 'string' && config.cluster !== '' ? config.cluster : 'us2'));
+        const socket = this.#ports.socket(url);
         this.#socket = socket;
         socket.addEventListener('message', (e) => { if (this.#socket === socket) void this.#onFrame(socket, String(e.data), tynn); });
         socket.addEventListener('close', () => { if (this.#socket === socket) this.#onDrop(); });

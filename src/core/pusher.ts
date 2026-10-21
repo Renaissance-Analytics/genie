@@ -1,6 +1,6 @@
 /**
- * THE PUSHER PROTOCOL, the part Genie speaks (protocol 7): Tynn broadcasts on Pusher channels (Laravel's `pusher`
- * driver), and Genie listens on the person's own private channel for IssueWatch (Tynn #806). Ported from Genie 1's
+ * THE PUSHER PROTOCOL, the part Genie speaks (protocol 7): Tynn broadcasts on channels of this protocol (Laravel's
+ * `reverb` or `pusher` driver), and Genie listens on the person's own private channel for IssueWatch (Tynn #806). Ported from Genie 1's
  * main/tynn/pusher-protocol.ts, which ran against Tynn in production. Pure: frames in, frames out.
  */
 
@@ -13,6 +13,26 @@ export interface PusherFrame {
 /** The socket endpoint for an app key and cluster (Pusher's own hosts). */
 export function pusherWsUrl(appKey: string, cluster: string): string {
     return `wss://ws-${encodeURIComponent(cluster)}.pusher.com/app/${encodeURIComponent(appKey)}?protocol=7&client=genie&version=2.0`;
+}
+
+/**
+ * Where to dial, from what Tynn's `/api/v1/broadcasting-config` answers, or `null` when there is nothing to dial.
+ *
+ * Tynn broadcasts on whichever connection it is configured for: Reverb — Laravel Cloud's in production, Genie's own
+ * WebSocket service in development — answered as `{broadcaster: 'reverb', key, host, port, scheme}`; or Pusher, as
+ * `{key, cluster}` (with `broadcaster: 'pusher'` from a Tynn that says it). Both speak this protocol; only the host differs.
+ */
+export function socketUrlFor(config: { broadcaster?: unknown; key?: unknown; cluster?: unknown; host?: unknown; port?: unknown; scheme?: unknown }): string | null {
+    if (typeof config.key !== 'string' || config.key === '') return null;
+    const broadcaster = config.broadcaster ?? 'pusher';
+    if (broadcaster === 'reverb') {
+        if (typeof config.host !== 'string' || config.host === '') return null;
+        const secure = config.scheme !== 'http';
+        const port = typeof config.port === 'number' && config.port > 0 ? config.port : secure ? 443 : 80;
+        return `${secure ? 'wss' : 'ws'}://${config.host}:${port}/app/${encodeURIComponent(config.key)}?protocol=7&client=genie&version=2.0`;
+    }
+    if (broadcaster !== 'pusher') return null;
+    return pusherWsUrl(config.key, typeof config.cluster === 'string' && config.cluster !== '' ? config.cluster : 'us2');
 }
 
 /**
