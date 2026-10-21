@@ -176,6 +176,8 @@ export interface ShellProps {
     /** `Resume now` while the agent's provider login is held for its rate limit (Tynn #794). */
     onResumeLimit?: ((agentId: string) => void) | undefined;
     onProviderLogin?: ((agentId: string) => void) | undefined;
+    /** `Try again` for an agent whose account the provider paused (core/account-pause.ts). */
+    onAccountRetry?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
@@ -272,6 +274,7 @@ export function Shell({
     onCancelTurn,
     onResumeLimit,
     onProviderLogin,
+    onAccountRetry,
     onStartAgent,
     onOpenPalette,
     onSelectRow,
@@ -581,6 +584,7 @@ export function Shell({
                                 onCancelTurn={onCancelTurn}
                                 onResumeLimit={onResumeLimit}
                                 onProviderLogin={onProviderLogin}
+                                onAccountRetry={onAccountRetry}
                                 onStart={onStartAgent}
                                 terminals={terminals}
                             />
@@ -730,6 +734,7 @@ export function Shell({
                         onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
+                        onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
                     />
                 </div>
             </div>

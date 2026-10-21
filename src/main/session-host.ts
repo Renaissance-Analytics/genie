@@ -445,6 +445,16 @@ export class SessionHost {
     }
 
     /** The running agents a provider's login signed out — brought back once the person has signed in again. */
+    /** The logins whose ACCOUNT the provider paused (core/account-pause.ts), for the tray and the one alert per login. */
+    pausedProviders(): string[] {
+        return [...new Set([...this.#running.values()].filter((e) => e.session.accountPaused !== null).map((e) => e.provider))].sort();
+    }
+
+    /** The agents a paused account stopped — what `Try again` brings back. */
+    pausedAgents(provider: string): AgentId[] {
+        return [...this.#running].filter(([, e]) => e.provider === provider && e.session.accountPaused !== null).map(([id]) => id);
+    }
+
     signedOutAgents(provider: string): AgentId[] {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);
     }
@@ -919,6 +929,7 @@ export class SessionHost {
         return {
             limit: this.#gate.view(this.#loginOf(entry.provider), this.#clock()),
             signedOut: entry.session.signedOut,
+            accountPaused: entry.session.accountPaused,
             running: session.running,
             turnState: session.turnState,
             startedAt,

@@ -28,6 +28,8 @@ export interface TrayHandlers {
     readonly onScratchTerminal?: () => void;
     /** `Log in to <provider>` for a signed-out login: the provider's own login, in a window of its own (#967). */
     readonly onProviderLogin?: (provider: string) => void;
+    /** `Try <provider> again` for a login whose ACCOUNT the provider paused: every agent on it, once the account is put right. */
+    readonly onAccountRetry?: (provider: string) => void;
 }
 
 /** An update on offer, as the tray shows it. */
@@ -58,7 +60,7 @@ export interface TrayItem {
 }
 
 /** The login's name: the limit belongs to the account, not to the CLI. */
-function loginName(provider: string): string {
+export function loginName(provider: string): string {
     return provider === 'claude' ? 'Claude' : provider === 'codex' ? 'Codex' : provider;
 }
 
@@ -66,7 +68,7 @@ function loginName(provider: string): string {
  * The menu, as labels and handlers — pure enough for a test to hold the verbs. A held login (Tynn #794) leads: its line,
  * then Resume now for it — the tray is where Genie is seen when its window is not.
  */
-export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null, signedOut: readonly string[] = []): TrayItem[] {
+export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null, signedOut: readonly string[] = [], paused: readonly string[] = []): TrayItem[] {
     const limits: TrayItem[] = [
         ...held.flatMap((h) => [
             { label: `${loginName(h.provider)}: ${h.words}`, enabled: false },
@@ -76,6 +78,11 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
         ...(handlers.onProviderLogin ? signedOut.flatMap((provider) => [
             { label: `${loginName(provider)}: signed out`, enabled: false },
             { label: `Log in to ${loginName(provider)}`, click: () => handlers.onProviderLogin?.(provider) },
+        ]) : []),
+        // ACCOUNT PAUSED (the owner, 2026-10-21: a payment failure): the login named, and Try again for all of its agents.
+        ...(handlers.onAccountRetry ? paused.flatMap((provider) => [
+            { label: `${loginName(provider)}: account paused`, enabled: false },
+            { label: `Try ${loginName(provider)} again`, click: () => handlers.onAccountRetry?.(provider) },
         ]) : []),
     ];
     const offer: TrayItem[] = update && handlers.onUpdate ? [{ label: `⬆ Update to v${update.version}…`, click: handlers.onUpdate }, { type: 'separator' }] : [];
@@ -93,8 +100,8 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
 }
 
 /** The tray's tooltip: what is held, or just Genie. */
-export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = []): string {
-    const parts = [...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`)];
+export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = []): string {
+    const parts = [...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`)];
     return parts.length === 0 ? 'Genie' : `Genie — ${parts.join('; ')}`;
 }
 

@@ -55,7 +55,8 @@ import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
-import { SIGNED_IN_AGAIN } from '../core/provider-login.js';
+import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
+import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
@@ -69,7 +70,7 @@ import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
-import { createTray, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
+import { createTray, loginName, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { showOnBoot } from '../core/tray-resident.js';
@@ -189,19 +190,44 @@ let tray: Tray | null = null;
 let trayHandlers: TrayHandlers | null = null;
 let trayHeldKey = '';
 /** The tray says which provider logins the rate limit holds, with Resume now — redrawn only when that CHANGES. */
+/** One alert per paused login (core/account-pause.ts): the person is told once, however many of its agents stop. */
+const pauseAlerts = new PauseAlerts();
+
 function refreshTray(): void {
+    // A PAUSED ACCOUNT ALERTS, window or no window (the owner, 2026-10-21: a payment failure paused his subscription and
+    // nothing said so). Read here because every agent change refreshes the tray.
+    const paused = host?.pausedProviders() ?? [];
+    for (const provider of pauseAlerts.update(paused)) alertAccountPaused(provider);
     if (!tray || !trayHandlers) return;
     const held = (host?.heldLogins() ?? []).flatMap((l) => { const words = limitWords(l.view); return words ? [{ provider: l.provider, words }] : []; });
     // An update on offer leads the menu (Tynn #761).
     const update = trayUpdate(updates?.state() ?? null);
     // Signed-out logins (#967): named in the tray with their own `Log in to …`.
     const signedOut = host?.signedOutProviders() ?? [];
-    const key = JSON.stringify({ held, update, signedOut });
+    const key = JSON.stringify({ held, update, signedOut, paused });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
-    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut)));
-    tray.setToolTip(trayTooltip(held, signedOut));
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut, paused)));
+    tray.setToolTip(trayTooltip(held, signedOut, paused));
 }
+
+/** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
+function alertAccountPaused(provider: string): void {
+    const first = host?.pausedAgents(provider)[0];
+    const pause = first ? host?.probe(first)?.accountPaused ?? null : null;
+    const count = host?.pausedAgents(provider).length ?? 0;
+    console.warn(`[genie] ${provider} account paused (${pause?.reason ?? 'unknown'}): ${count} agent(s) stopped`);
+    if (!Notification.isSupported()) return;
+    const n = new Notification({
+        title: `${loginName(provider)}: account paused`,
+        body: `${pause ? `${pause.words[0]!.toUpperCase()}${pause.words.slice(1)}` : 'The provider refused this account'}. Genie stopped ${count === 1 ? 'the agent' : `${count} agents`} on it. Check the subscription and its billing with ${loginName(provider)}, then use Try again.`,
+    });
+    n.on('click', revealMainWindow);
+    n.show();
+}
+
+/** `Try again` for a paused login (set where the agent operations are built): every agent it stopped, brought back. */
+let retryPausedAccount: ((provider: string) => void) | null = null;
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
 let autoCheckStop: (() => void) | null = null;
 let registry: Registry | null = null;
@@ -1002,6 +1028,18 @@ async function boot(): Promise<void> {
         },
     });
     loginHost = logins;
+    // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
+    retryPausedAccount = (provider) => {
+        for (const id of host?.pausedAgents(provider) ?? []) {
+            void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, ACCOUNT_BACK, 'genie'); }).finally(() => registry?.touch());
+        }
+    };
+    ipcMain.handle('genie:account-retry', (_event, raw: unknown) => {
+        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
+        if (!record) return { ok: false, reason: 'No agent named.' };
+        retryPausedAccount?.(record.provider);
+        return { ok: true };
+    });
     ipcMain.handle('genie:provider-login', (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
@@ -2113,6 +2151,8 @@ async function boot(): Promise<void> {
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: requestQuit,
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
+        // A paused account named in the tray: Try again brings its agents back.
+        onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
     };
     tray = createTray(trayHandlers, trayIconPath());
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W

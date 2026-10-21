@@ -1145,6 +1145,7 @@ function DesktopApp({ bridge }: AppProps) {
             onCancelTurn={(agentId) => { void resolvedBridge?.cancelTurn(agentId); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
+            onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onStartAgent={(agentId) => { resolvedBridge?.openAgent(agentId); }}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.

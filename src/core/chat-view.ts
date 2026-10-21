@@ -111,6 +111,7 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (detail.agent.fidelity === 'observed') return { text: `Observed · ${detail.agent.provider} runs in a terminal`, tone: 'muted' };
     const s = detail.session;
     if (!s) return { text: 'Not started', tone: 'muted' };
+    if (s.accountPaused) return { text: `Account paused · ${s.accountPaused.words}`, tone: 'bad' };
     if (s.signedOut) return { text: 'Signed out · log in to continue', tone: 'warn' };
     if (s.pendingApproval !== null) return { text: 'Parked · waiting on you', tone: 'warn' };
     // Held for its provider's limit (Tynn #794): until when, never Idle.
