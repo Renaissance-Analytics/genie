@@ -186,6 +186,8 @@ export interface ShellProps {
     onProviderLogin?: ((agentId: string) => void) | undefined;
     /** `Try again` for an agent whose account the provider paused (core/account-pause.ts). */
     onAccountRetry?: ((agentId: string) => void) | undefined;
+    /** `Log in to Claude Design` for an agent a tool refused for want of `/design-login` (#1081). */
+    onDesignLogin?: ((agentId: string) => void) | undefined;
     /** Start an agent that is not running (the Agent view's Start). */
     onStartAgent?: ((agentId: string) => void) | undefined;
     onOpenPalette: () => void;
@@ -286,6 +288,7 @@ export function Shell({
     onResumeLimit,
     onProviderLogin,
     onAccountRetry,
+    onDesignLogin,
     onStartAgent,
     onOpenPalette,
     onSelectRow,
@@ -607,6 +610,7 @@ export function Shell({
                                 onResumeLimit={onResumeLimit}
                                 onProviderLogin={onProviderLogin}
                                 onAccountRetry={onAccountRetry}
+                                onDesignLogin={onDesignLogin}
                                 onStart={onStartAgent}
                                 terminals={terminals}
                             />
@@ -763,6 +767,7 @@ export function Shell({
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
                         onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
+                        onDesignLogin={chatThread && onDesignLogin && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
                     />
                 </div>
             </div>

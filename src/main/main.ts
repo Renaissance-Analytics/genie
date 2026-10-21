@@ -70,6 +70,7 @@ import { raisesApprovals, SessionHost, providerBinary } from './session-host.js'
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
+import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
 import { PlanKeepalive } from '../core/plan-keepalive.js';
 import { ActivityFeeds } from './activity-feeds.js';
 import type { ActivityFeed } from '../core/activity-feed.js';
@@ -225,11 +226,13 @@ function refreshTray(): void {
     const update = trayUpdate(updates?.state() ?? null);
     // Signed-out logins (#967): named in the tray with their own `Log in to …`.
     const signedOut = host?.signedOutProviders() ?? [];
-    const key = JSON.stringify({ held, update, signedOut, paused });
+    // Claude Design's login (#1081): per machine, so one line however many agents wait on it.
+    const designLogin = (host?.designLoginAgents().length ?? 0) > 0;
+    const key = JSON.stringify({ held, update, signedOut, paused, designLogin });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
-    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut, paused)));
-    tray.setToolTip(trayTooltip(held, signedOut, paused));
+    tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut, paused, designLogin)));
+    tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin));
 }
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
@@ -1175,6 +1178,12 @@ async function boot(): Promise<void> {
                 void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
             }
         },
+        // CLAUDE DESIGN (#1081): no status to ask, so the agents that waited are told it was RUN and to retry; a retry that
+        // is refused again raises the prompt again. They are not restarted: only a tool failed, never their session.
+        onDesignLoginEnded: () => {
+            if (host) tellDesignLoginRan(host);
+            registry?.touch();
+        },
     });
     loginHost = logins;
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
@@ -1188,6 +1197,12 @@ async function boot(): Promise<void> {
         if (!record) return { ok: false, reason: 'No agent named.' };
         retryPausedAccount?.(record.provider);
         return { ok: true };
+    });
+    ipcMain.handle('genie:design-login', (_event, raw: unknown) => {
+        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
+        if (!record) return { ok: false, reason: 'No agent named.' };
+        const started = logins.start(DESIGN_LOGIN);
+        return started.ok ? { ok: true } : started;
     });
     ipcMain.handle('genie:provider-login', (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
@@ -2362,6 +2377,11 @@ async function boot(): Promise<void> {
         onProviderLogin: (provider) => {
             const r = loginHost?.start(provider);
             if (r && !r.ok) console.error('[genie] provider login:', r.reason);
+        },
+        // Claude Design's login (#1081): the same login window, running the interactive `claude`.
+        onDesignLogin: () => {
+            const r = loginHost?.start(DESIGN_LOGIN);
+            if (r && !r.ok) console.error('[genie] Claude Design login:', r.reason);
         },
         onScratchTerminal: () => {
             if (!terminals) return;

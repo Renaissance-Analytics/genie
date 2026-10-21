@@ -220,6 +220,8 @@ export interface AgentViewProps {
     onProviderLogin?: ((agentId: string) => void) | undefined;
     /** `Try again` for an agent whose ACCOUNT the provider paused (the owner, 2026-10-21): every agent on that login comes back. */
     onAccountRetry?: ((agentId: string) => void) | undefined;
+    /** `Log in to Claude Design` for an agent a tool refused for want of `/design-login` (#1081). */
+    onDesignLogin?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
 }
@@ -258,7 +260,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -574,6 +576,18 @@ export function AgentView({
                             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--danger)]/20"
                         >
                             Try again
+                        </button>
+                    ) : null}
+                    {/* CLAUDE DESIGN'S LOGIN (#1081): a tool was refused for want of /design-login; one click opens it. */}
+                    {actions.designLogin && onDesignLogin ? (
+                        <button
+                            type="button"
+                            data-action="design-login"
+                            title="Open Claude Code in a window of its own to run /design-login; the agents waiting on it are told to retry once it has run"
+                            onClick={() => onDesignLogin(agent.id)}
+                            className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            Log in to Claude Design
                         </button>
                     ) : null}
                     {actions.resumeLimit && onResumeLimit ? (

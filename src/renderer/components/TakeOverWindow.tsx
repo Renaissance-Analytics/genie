@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ComponentType } from 'react';
 import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
+import { DESIGN_LOGIN } from '../../core/design-login.js';
 import { providerLogin } from '../../core/provider-login.js';
 
 /**
@@ -30,6 +31,19 @@ export interface TakeOverWindowProps {
  * what is running in the terminal below, and every step. A provider Genie has no login for gets the steps by hand.
  */
 function LoginNotice({ provider }: { provider: string }) {
+    // CLAUDE DESIGN (#1081): Claude Code's interactive CLI is open; `/design-login` is typed by the person, never passed in.
+    if (provider === DESIGN_LOGIN) {
+        return (
+            <section data-login-notice={provider} className="shrink-0 border-b-2 border-[var(--warning)] bg-[var(--warning)]/15 px-5 py-3 text-[var(--fg-1)]">
+                <h1 className="text-base font-semibold">Log in to Claude Design</h1>
+                <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[13px]">
+                    <li>Genie has opened Claude Code in the terminal below, in a scratch folder of its own.</li>
+                    <li>Type <code className="font-mono">/design-login</code> and press Enter, then follow it. A browser may open: sign in there, then come back to this window.</li>
+                    <li>When it says you are logged in, close this window. Genie tells the agents that were waiting to try again.</li>
+                </ol>
+            </section>
+        );
+    }
     const known = providerLogin(provider);
     return (
         <section data-login-notice={provider} className="shrink-0 border-b-2 border-[var(--warning)] bg-[var(--warning)]/15 px-5 py-3 text-[var(--fg-1)]">

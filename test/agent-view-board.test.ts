@@ -52,16 +52,16 @@ describe('statePill — the board’s words', () => {
 
 describe('headerActions — the board’s action set by state', () => {
     it('Stop this turn while a turn runs that can be stopped; Restart only when broken; Open terminal only when broken; Take over and Chat always', () => {
-        expect(headerActions(session({ cancelTurn: true }), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, start: false, takeOver: true, chat: true });
+        expect(headerActions(session({ cancelTurn: true }), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: false, takeOver: true, chat: true });
         // A driver that cannot stop a turn (or an unknown one) gets NO turn Stop: the old one ended the agent instead.
         expect(headerActions(session({ cancelTurn: false }), 'declared').stop).toBe(false);
         expect(headerActions(session(), 'declared').stop).toBe(false);
-        expect(headerActions(session({ cancelTurn: true, failure: { reason: 'x', fixes: [] } }), 'declared')).toEqual({ stop: false, restart: true, openTerminal: true, resumeLimit: false, login: false, retryAccount: false, start: false, takeOver: true, chat: true });
+        expect(headerActions(session({ cancelTurn: true, failure: { reason: 'x', fixes: [] } }), 'declared')).toEqual({ stop: false, restart: true, openTerminal: true, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: false, takeOver: true, chat: true });
         // Not running and not broken: Start (the owner: there was no way to start the genie agent).
-        expect(headerActions(session({ running: false, turnState: 'idle' }), 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, start: true, takeOver: true, chat: true });
-        expect(headerActions(null, 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, start: true, takeOver: true, chat: true });
+        expect(headerActions(session({ running: false, turnState: 'idle' }), 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: true, takeOver: true, chat: true });
+        expect(headerActions(null, 'declared')).toEqual({ stop: false, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: true, takeOver: true, chat: true });
         // An observed agent is not managed: nothing to stop or restart; its window IS the terminal.
-        expect(headerActions(null, 'observed')).toEqual({ stop: false, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, start: false, takeOver: true, chat: true });
+        expect(headerActions(null, 'observed')).toEqual({ stop: false, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: false, takeOver: true, chat: true });
     });
 });
 

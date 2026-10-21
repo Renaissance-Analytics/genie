@@ -121,6 +121,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (s.running && s.turnState === 'working') {
         return { text: s.plan ? `Working · Plan ${s.plan.step}/${s.plan.of} · ${s.plan.doing}` : 'Working', tone: 'ok' };
     }
+    // Waiting on the Claude Design login (#1081): the line's `Log in to Claude Design` fixes it.
+    if (s.designLogin) return { text: 'Claude Design login needed', tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21).
     if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
     return { text: 'Idle', tone: 'muted' };
