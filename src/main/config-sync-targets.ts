@@ -1,6 +1,7 @@
 import { providerProtocol, sharedProtocol, type ProtocolTool } from '../core/genie-protocol.js';
 import { join } from 'node:path';
 import type { SyncTarget } from '../core/integrations.js';
+import { TYNN_SERVER_KEY, TYNN_TOML_BEGIN, TYNN_TOML_END } from './tynn-agent-token.js';
 
 /**
  * CONFIG SYNC TARGETS (§6.9) — Genie's MCP endpoint written into FOUR independent places in a
@@ -49,12 +50,31 @@ async function readJson(fs: SyncFs, path: string): Promise<Record<string, unknow
     return typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};
 }
 
+/**
+ * THE TYNN SERVER (main/tynn-agent-token.ts decides the url and token): written by the same targets, beside `genie`, only
+ * when the payload carries it. Absent, whatever `tynn` entry is there stays as it was.
+ */
+function tynnOf(payload: Payload): { url: string; token: string } | null {
+    return payload.TYNN_MCP_URL && payload.TYNN_MCP_TOKEN ? { url: payload.TYNN_MCP_URL, token: payload.TYNN_MCP_TOKEN } : null;
+}
+
 function mergeMcpServers(current: Record<string, unknown>, payload: Payload): Record<string, unknown> {
     const servers = typeof current.mcpServers === 'object' && current.mcpServers !== null ? { ...(current.mcpServers as Record<string, unknown>) } : {};
     // UPGRADE: Genie 1's channel entry goes; every other server a person or tool wrote stays.
     delete servers[V1_CHANNEL_KEY];
-    return { ...current, mcpServers: { ...servers, [SERVER_KEY]: serverEntry(payload) } };
+    const tynn = tynnOf(payload);
+    return { ...current, mcpServers: { ...servers, [SERVER_KEY]: serverEntry(payload), ...(tynn ? { [TYNN_SERVER_KEY]: { type: 'http', url: tynn.url, headers: { Authorization: `Bearer ${tynn.token}` } } } : {}) } };
 }
+
+/** Replace the marked block (or append it); `block` null leaves the text as it is. */
+function putTomlBlock(current: string, begin: string, end: string, block: string): string {
+    const b = current.indexOf(begin);
+    const e = current.indexOf(end);
+    return b >= 0 && e > b ? current.slice(0, b) + block + current.slice(e + end.length) : `${current}${current.length === 0 || current.endsWith('\n') ? '' : '\n'}${block}\n`;
+}
+
+/** Genie 1's Codex tynn block (`bearer_token_env_var`): a second `[mcp_servers.tynn]` beside Genie 2's is invalid TOML. */
+const V1_CODEX_TYNN = /# BEGIN GENIE MCP: tynn\r?\n[\s\S]*?# END GENIE MCP: tynn[^\n]*\n?/g;
 
 function stopHook(payload: Payload): Record<string, unknown> {
     // Fires imDone for this terminal when the agent stops; the token rides the header the server checks.
@@ -106,9 +126,11 @@ export function configSyncTargets(input: { workspacePath: string; fs: SyncFs; fl
                 // UPGRADE: Genie 1's own genie table and SessionStart hook go; a person's lines and other blocks stay.
                 const current = V1_CODEX_BLOCKS.reduce((text, block) => text.replace(block, ''), (await fs.read(file)) ?? '');
                 const block = `${TOML_BEGIN}\n[mcp_servers.${SERVER_KEY}]\nurl = ${JSON.stringify(payload.GENIE_MCP_URL)}\n${payload.GENIE_MCP_TOKEN ? `http_headers = { Authorization = ${JSON.stringify(`Bearer ${payload.GENIE_MCP_TOKEN}`)} }\n` : ''}${TOML_END}`;
-                const begin = current.indexOf(TOML_BEGIN);
-                const end = current.indexOf(TOML_END);
-                const next = begin >= 0 && end > begin ? current.slice(0, begin) + block + current.slice(end + TOML_END.length) : `${current}${current.length === 0 || current.endsWith('\n') ? '' : '\n'}${block}\n`;
+                let next = putTomlBlock(current, TOML_BEGIN, TOML_END, block);
+                const tynn = tynnOf(payload);
+                if (tynn) {
+                    next = putTomlBlock(next.replace(V1_CODEX_TYNN, ''), TYNN_TOML_BEGIN, TYNN_TOML_END, `${TYNN_TOML_BEGIN}\n[mcp_servers.${TYNN_SERVER_KEY}]\nurl = ${JSON.stringify(tynn.url)}\nhttp_headers = { Authorization = ${JSON.stringify(`Bearer ${tynn.token}`)} }\n${TYNN_TOML_END}`);
+                }
                 await fs.write(file, next);
             },
         },
