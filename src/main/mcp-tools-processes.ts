@@ -110,7 +110,8 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                 const named = rows.filter((p) => p.name === key);
                 if (named.length === 1) return named[0]!;
                 if (named.length > 1) return `more than one process here is called "${key}"; use its id: ${named.map((p) => p.id).join(', ')}`;
-                return `${key} is not one of this workspace’s processes; \`processes list\` shows them. Nothing was done`;
+                // A site's server, worker or dev server is not a background process (the owner, 2026-10-21): the `sites` tool's.
+                return `${key} is not one of this workspace’s background processes; \`processes list\` shows them. A site’s server, worker or dev server is the \`sites\` tool’s (\`sites logs\` reads its output). Nothing was done`;
             };
             const kept = (key: string | undefined): HostedProcess | string => {
                 const p = find(key);

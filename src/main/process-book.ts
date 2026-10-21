@@ -171,11 +171,11 @@ export class ProcessBook {
      */
     list(workspaceId?: string): HostedProcess[] {
         const byId = new Map(this.#data.processes.map((p) => [p.id, p]));
-        const live = this.#deps.supervisor.list(workspaceId);
-        const rows: HostedProcess[] = live.map((s) => {
-            const kept = byId.get(s.id);
-            return kept ? { ...s, durable: true, command: kept.command } : s;
-        });
+        // THE BOOK'S OWN, ONLY (the owner, 2026-10-21: sites showing in the background-process list — "they are two
+        // different things"). The supervisor also runs every site's server, worker and dev server and the front door; those
+        // are listed and controlled as SITES, never here, where a Stop or Restart would act on a site behind its back.
+        const live = this.#deps.supervisor.list(workspaceId).filter((s) => byId.has(s.id));
+        const rows: HostedProcess[] = live.map((s) => ({ ...s, durable: true, command: byId.get(s.id)!.command }));
         const seen = new Set(live.map((s) => s.id));
         for (const p of this.#data.processes) {
             if (seen.has(p.id) || (workspaceId !== undefined && p.workspaceId !== workspaceId)) continue;
