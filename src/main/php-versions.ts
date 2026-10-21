@@ -16,6 +16,8 @@ import {
     phpIniContents,
     phpZipName,
     pickPinned,
+    commandWord,
+    toolchainOpcacheFlags,
     type ManagedPhp,
     type PhpPlatform,
 } from '../core/php-versions.js';
@@ -106,12 +108,52 @@ export function sitesOn(version: string, pins: readonly SitePin[], managed: read
     return pins.filter((p) => pickPinned(managed, p.pin)?.version === version).map((p) => p.host);
 }
 
+/** What a site start reads: the managed versions, and (optional) where Genie's toolchain PHP is — see {@link toolchainCgiDir}. */
+export type PhpCgiPorts = Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'> & {
+    readonly toolchainPhp?: {
+        /** PATH, as the workers get it. */
+        readonly path: string;
+        /** Genie's toolchain directories (Genie 1's `%APPDATA%\genie\toolchain`, Genie 2's own). */
+        readonly genieRoots: readonly string[];
+        /** Where that PHP's opcache file cache lives — Genie's, never inside Genie 1's folders. */
+        readonly cacheDir: string;
+    };
+};
+
+const underRoot = (dir: string, root: string): boolean => {
+    const d = dir.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+    const r = root.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+    return d === r || d.startsWith(`${r}\\`);
+};
+
 /**
- * THE php-cgi A SITE STARTS. Unpinned: the one on PATH, exactly as before T4. Pinned: that managed version's own binary
+ * GENIE'S TOOLCHAIN PHP, when it is what an unpinned site runs (genie#1043 part B): the FIRST php-cgi on PATH (the one a
+ * plain `php-cgi` starts), only when it lives under one of Genie's toolchain roots and has its opcache extension — else
+ * `null`, and the site runs `php-cgi` exactly as before (Herd's, a person's own: theirs, not Genie's to configure).
+ * Windows only: php_opcache.dll and the ASLR start-up failure the file cache answers are Windows'.
+ */
+function toolchainCgiDir(ports: PhpCgiPorts): string | null {
+    const tc = ports.toolchainPhp;
+    if (!tc || ports.platform !== 'win32') return null;
+    for (const raw of tc.path.split(';')) {
+        const dir = raw.trim().replace(/^"|"$/g, '').replace(/[\\/]+$/, '');
+        if (dir === '' || !ports.fs.exists(`${dir}\\php-cgi.exe`)) continue;
+        return tc.genieRoots.some((root) => underRoot(dir, root)) && ports.fs.exists(`${dir}\\ext\\php_opcache.dll`) ? dir : null;
+    }
+    return null;
+}
+
+/**
+ * THE php-cgi A SITE STARTS. Unpinned: the one on PATH — Genie's toolchain PHP by its full path with opcache switched on
+ * (genie#1043 part B), any other exactly as before T4. Pinned: that managed version's own binary
  * and php.ini — or a refusal naming the pin, what to install, and what Genie does manage. Never another PHP.
  */
-export function resolvePhpCgi(pin: string | undefined, ports: Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'>): { ok: true; command: string } | { ok: false; reason: string } {
-    if (pin === undefined || pin === '') return { ok: true, command: 'php-cgi' };
+export function resolvePhpCgi(pin: string | undefined, ports: PhpCgiPorts): { ok: true; command: string } | { ok: false; reason: string } {
+    if (pin === undefined || pin === '') {
+        const dir = toolchainCgiDir(ports);
+        if (dir === null || !ports.toolchainPhp) return { ok: true, command: 'php-cgi' };
+        return { ok: true, command: [`${dir}\\php-cgi.exe`, ...toolchainOpcacheFlags(dir, ports.toolchainPhp.cacheDir)].map(commandWord).join(' ') };
+    }
     if (!PHP_VERSION.test(pin)) return { ok: false, reason: `this site is pinned to "${pin}", which is not a PHP version (8, 8.3 or 8.3.35)` };
     const managed = managedPhp(ports);
     const found = pickPinned(managed, pin);
@@ -125,8 +167,13 @@ export function resolvePhpCgi(pin: string | undefined, ports: Pick<PhpVersionsPo
  * this ini and rewrites it whole. Separate from `resolvePhpCgi`, which is a lookup (Edit's preview, the agents' tool).
  * Unpinned (PATH php-cgi): not Genie's ini — nothing is written.
  */
-export function refreshManagedIni(pin: string | undefined, ports: Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'>): void {
-    if (pin === undefined || pin === '' || !PHP_VERSION.test(pin)) return;
+export function refreshManagedIni(pin: string | undefined, ports: PhpCgiPorts): void {
+    if (pin === undefined || pin === '') {
+        // Genie's toolchain PHP: its ini is Genie 1's (not written); only the file cache's directory is made.
+        if (ports.toolchainPhp && toolchainCgiDir(ports) !== null) ports.fs.mkdirp(ports.toolchainPhp.cacheDir);
+        return;
+    }
+    if (!PHP_VERSION.test(pin)) return;
     const found = pickPinned(managedPhp(ports), pin);
     if (!found) return;
     ports.fs.writeText(join(found.dir, 'php.ini'), phpIniContents(found.dir));
