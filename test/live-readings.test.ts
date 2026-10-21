@@ -70,6 +70,8 @@ function ledger(seed: number, length: number, check: (rows: readonly TimedEvent[
             append({ kind: 'notice', level: 'debug', message: 'm', headroom: null, model: pick(rand, [null, '', 'opus', 'sonnet']), estimate: null } as StreamEvent);
         } else if (x < 0.95) {
             append({ kind: 'think', text: 'hmm', tokens: null });
+        } else if (x < 0.975) {
+            append({ kind: 'divider', variant: 'compaction', before: 150_000, after: rand() < 0.2 ? null : Math.floor(rand() * 2e4) });
         } else {
             append({ kind: 'turn', n: step, by: null } as StreamEvent);
         }
@@ -111,10 +113,12 @@ describe('the readings a live session keeps as its rows arrive', () => {
     });
 
     it('the random ledgers reach every reading (a positive control: an equality over nulls proves nothing)', () => {
-        const seen = { usage: 0, plan: 0, model: 0, commit: 0, file: 0, handoff: 0, answer: 0, prompt: 0, tool: 0 };
+        const seen = { usage: 0, compacted: 0, plan: 0, model: 0, commit: 0, file: 0, handoff: 0, answer: 0, prompt: 0, tool: 0 };
         for (let seed = 1; seed <= 40; seed += 1) {
             ledger(seed, 400, (rows, readings) => {
                 if (readings.usage) seen.usage += 1;
+                const lastFigure = rows.findLast((r) => r.event.kind === 'usage' || (r.event.kind === 'divider' && r.event.variant === 'compaction' && r.event.after !== null));
+                if (readings.usage && lastFigure?.event.kind === 'divider') seen.compacted += 1;
                 if (readings.plan) seen.plan += 1;
                 if (readings.model) seen.model += 1;
                 const d = readings.delivery(rows, NOW);
@@ -125,5 +129,39 @@ describe('the readings a live session keeps as its rows arrive', () => {
             });
         }
         for (const [k, v] of Object.entries(seen)) expect(v, k).toBeGreaterThan(50);
+    });
+});
+
+describe('the context figure after a compaction', () => {
+    /*
+     * The owner, 2026-10-21: "Compacted the context from 967,656 to 13,757 tokens" in the chat, and the meter still read
+     * 959.4k / 1000.0k. The provider reports usage once, at the END of a turn, so a compaction in the middle of a long turn
+     * left the meter on the old figure until the turn ended (17 minutes, once). The compaction carries the CLI's own
+     * post-compaction count; that is the newest figure the provider has given.
+     */
+    const at = (event: StreamEvent, i: number): TimedEvent => ({ id: `r${i}`, event, at: NOW + i });
+    const rowsOf = (...events: StreamEvent[]) => events.map(at);
+    const usage = (used: number): StreamEvent => ({ kind: 'usage', used, size: 1_000_000, cost: null });
+    const compaction = (after: number | null): StreamEvent => ({ kind: 'divider', variant: 'compaction', before: 967_656, after });
+    const tool: StreamEvent = { kind: 'tool', toolCallId: 't', name: 'Bash', title: null, status: 'completed', toolKind: 'execute', rawInput: null };
+    const kept = (rows: TimedEvent[]) => { const r = new LiveReadings(); rows.forEach((_, i) => r.added(rows, i)); return r.usage; };
+
+    it('reads the compaction’s own count, against the window the provider last reported', () => {
+        const rows = rowsOf(usage(959_427), compaction(13_757), tool, tool);
+        expect(usageFrom(rows)).toEqual({ used: 13_757, size: 1_000_000 });
+        expect(kept(rows)).toEqual({ used: 13_757, size: 1_000_000 });
+    });
+
+    it('the next usage report wins over the compaction', () => {
+        const rows = rowsOf(usage(959_427), compaction(13_757), tool, usage(78_345));
+        expect(usageFrom(rows)).toEqual({ used: 78_345, size: 1_000_000 });
+        expect(kept(rows)).toEqual({ used: 78_345, size: 1_000_000 });
+    });
+
+    it('a compaction that did not say its size changes nothing; one before any usage report invents no window', () => {
+        expect(usageFrom(rowsOf(usage(959_427), compaction(null)))).toEqual({ used: 959_427, size: 1_000_000 });
+        expect(kept(rowsOf(usage(959_427), compaction(null)))).toEqual({ used: 959_427, size: 1_000_000 });
+        expect(usageFrom(rowsOf(compaction(13_757), tool))).toBeNull();
+        expect(kept(rowsOf(compaction(13_757), tool))).toBeNull();
     });
 });
