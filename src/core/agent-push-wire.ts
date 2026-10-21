@@ -35,12 +35,34 @@ export interface AgentPushPayload<D, R> {
  * a row's object while it is unchanged, and replaces it when it changes — a reply's growing text, a renumbered turn), and
  * the rest. O(n) reference comparisons, no serialisation.
  */
-export function rowsPatch<R>(prev: { seq: number; rows: readonly R[] } | null, next: readonly R[]): RowsPatch<R> {
-    if (prev === null) return { base: null, keep: 0, append: next };
+export function rowsPatch<R>(prev: HeldRows<R> | null, next: readonly R[]): RowsPatch<R> {
+    // Sent rows are always a COPY: the host grows its array in place, and a receiver sharing it would change underneath.
+    if (prev === null) return { base: null, keep: 0, append: next.slice() };
+    /*
+     * THE SAME ARRAY, GROWN IN PLACE (session-host `ledgerFor`): the host only appends to it and replaces its newest row,
+     * so what changed is read from the length and last row held — O(changes). Compared with itself it would match
+     * everywhere and send nothing.
+     */
+    if (prev.rows === next) {
+        const keep = prev.length > 0 && next[prev.length - 1] !== prev.last ? prev.length - 1 : prev.length;
+        return { base: prev.seq, keep, append: next.slice(keep) };
+    }
     const max = Math.min(prev.rows.length, next.length);
     let keep = 0;
     while (keep < max && prev.rows[keep] === next[keep]) keep += 1;
-    return { base: prev.seq, keep, append: keep === 0 ? next : next.slice(keep) };
+    return { base: prev.seq, keep, append: next.slice(keep) };
+}
+
+/** What a sender holds of its last push: the rows, and their length and last row AT THAT PUSH (the array may grow since). */
+export interface HeldRows<R> {
+    readonly seq: number;
+    readonly rows: readonly R[];
+    readonly length: number;
+    readonly last: R | undefined;
+}
+
+export function heldRows<R>(seq: number, rows: readonly R[]): HeldRows<R> {
+    return { seq, rows, length: rows.length, last: rows[rows.length - 1] };
 }
 
 /**

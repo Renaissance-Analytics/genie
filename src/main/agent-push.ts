@@ -1,4 +1,4 @@
-import { rowsPatch, type AgentPushPayload } from '../core/agent-push-wire.js';
+import { heldRows, rowsPatch, type AgentPushPayload, type HeldRows } from '../core/agent-push-wire.js';
 import { Coalescer } from '../core/coalesce.js';
 
 export interface AgentPushPorts<D extends { readonly rows: readonly R[] }, R> {
@@ -31,7 +31,7 @@ export class AgentPush<D extends { readonly rows: readonly R[] }, R> {
     readonly #ports: AgentPushPorts<D, R>;
     readonly #watched = new Set<string>();
     /** What the window holds per agent: the push it applied last. */
-    readonly #held = new Map<string, { seq: number; rows: readonly R[] }>();
+    readonly #held = new Map<string, HeldRows<R>>();
     #seq = 0;
     readonly #coalescer: Coalescer<string>;
 
@@ -69,7 +69,7 @@ export class AgentPush<D extends { readonly rows: readonly R[] }, R> {
         const rows = detail?.rows ?? [];
         const seq = ++this.#seq;
         const patch = rowsPatch(this.#held.get(agentId) ?? null, rows);
-        this.#held.set(agentId, { seq, rows });
+        this.#held.set(agentId, heldRows(seq, rows));
         let rest: Omit<D, 'rows'> | null = null;
         if (detail !== null) {
             const { rows: _rows, ...others } = detail;

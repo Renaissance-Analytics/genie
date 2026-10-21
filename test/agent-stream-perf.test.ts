@@ -218,6 +218,48 @@ describe('what main pushes to the window when an agent changes', () => {
         check();
     });
 
+    it('a ledger the host GROWS IN PLACE (appends, the newest row replaced) still arrives exactly — and the window never shares the host’s array', () => {
+        /*
+         * The host keeps ONE array per run and grows it (session-host `ledgerFor`): rebuilding 60k rows per change was
+         * most of what an event still cost (measured 2026-10-21: 1.32 ms of 1.18–2.12). So the array the push held last
+         * time IS the one it gets now, longer. The patch is read from the length and last row it held, not by comparing
+         * the array with itself — which would find nothing changed and send nothing.
+         */
+        const live: Row[] = ledgerOf(50);
+        const h = harness(live);
+        const r = new AgentDetailReceiver<Omit<Detail, 'rows'>, Row>();
+        let shown: Detail | null | undefined;
+        const check = () => {
+            for (const p of h.sent.splice(0)) { const d = r.apply(p); if (d !== undefined) shown = d; }
+            expect(shown?.rows).toEqual([...h.ledger]);
+            // The window's rows are its own: what the host does to its array next does not reach them.
+            expect(shown?.rows).not.toBe(h.ledger);
+        };
+        h.push.watch('a', true);
+        h.advance(1_000);
+        check();
+        let seed = 11;
+        const rand = () => { seed = (seed * 1_103_515_245 + 12_345) % 2 ** 31; return seed / 2 ** 31; };
+        let appended = 0;
+        let replaced = 0;
+        for (let i = 0; i < 400; i += 1) {
+            const arr = h.ledger as Row[];
+            const x = rand();
+            if (x < 0.55) { arr.push({ id: `n:${i}`, event: { kind: 'tool', text: `${i}` } }); appended += 1; }
+            else if (x < 0.95) { const last = arr.at(-1)!; arr[arr.length - 1] = { ...last, event: { kind: 'message', text: `${last.event.text}+` } }; replaced += 1; }
+            // A renumber or the history landing: a NEW array, as the host makes one then.
+            else h.ledger = [{ id: `h:${i}`, event: { kind: 'earlier', text: '' } }, ...arr];
+            h.push.changed('a');
+            h.advance(Math.floor(rand() * 120));
+            if (i % 29 === 0) { h.advance(1_000); check(); }
+        }
+        h.advance(1_000);
+        check();
+        // COUNTED: both in-place kinds happened, so "exact" was not measured on appends alone.
+        expect(appended).toBeGreaterThan(50);
+        expect(replaced).toBeGreaterThan(50);
+    });
+
     it('a window that stops watching and starts again is sent the whole ledger again, and a stale patch is never applied', () => {
         const h = harness(ledgerOf(100));
         const r = new AgentDetailReceiver<Omit<Detail, 'rows'>, Row>();
