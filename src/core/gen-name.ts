@@ -32,9 +32,21 @@ function labelsProblem(n: string): string | null {
     return bad === '' ? `"${n}" has an empty label (two dots together, or a dot at an end)` : `"${bad}" is not a hostname label (a-z, 0-9, hyphens inside, at most 63 characters)`;
 }
 
-/** Why `name` cannot be a site's name, or `null` when it can. */
+/**
+ * The names Genie serves itself, kept from sites — the name and everything under it (the owner, 2026-10-21: Mailpit's
+ * `mail.gen` "one of the protected names so other workspace agents don't try using that for their sites").
+ */
+const KEPT_FOR_GENIE: Readonly<Record<string, string>> = {
+    mail: 'its mail inbox (Mailpit)',
+    websockets: 'its WebSockets server',
+};
+
+/** Why `name` cannot be a site's name, or `null` when it can. Kept names are refused for SITES only — still routable. */
 export function siteNameProblem(name: string): string | null {
-    return labelsProblem(normalizeSiteName(name));
+    const n = normalizeSiteName(name);
+    const kept = Object.keys(KEPT_FOR_GENIE).find((k) => n === k || n.endsWith(`.${k}`));
+    if (kept !== undefined) return `${n}.gen is kept for Genie — ${KEPT_FOR_GENIE[kept]} — so no site can have it; pick another name`;
+    return labelsProblem(n);
 }
 
 /**

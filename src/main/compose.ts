@@ -10,6 +10,7 @@ import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandsha
 import { PortAllocator } from '../core/port-allocator.js';
 import type { ServiceInstance } from '../core/services.js';
 import { websocketRoutes } from './websocket-front-door.js';
+import { mailpitRoutes } from '../core/mailpit-name.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenRoute } from '../core/gen-router.js';
 import { frontDoorCaddyfile, hostsFilePath, type FrontDoorTls } from '../core/front-door-caddy.js';
@@ -694,7 +695,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
     engines.onChange(() => { sites.serviceEnvChanged(); });
     // The sites' routes and the shared WebSockets server's browser-facing ones (core/services.ts websocketRoutes).
-    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list())];
+    // Mailpit's web inbox at its .gen name (core/mailpit-name.ts): the Genie browser opens .gen sites only.
+    const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list())];
     // The person's site Stops are machine-local (never in the git-tracked envelope): one small file here.
     const siteRunState = join(runtimeDir(input.userData), 'site-run-state.json');
     const envelopeSites = new EnvelopeSites(sites, {

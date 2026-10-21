@@ -79,7 +79,8 @@ describe('the Services tab: logs, the web inbox, deleting data (H6)', () => {
 
     it('a Mailpit row opens its web inbox — the URL on the button; a row without an inbox has none (control)', () => {
         const html = render({ ...base, services: { instances: [{ instance: mailpit, status: 'running' }, { instance: pg('17', true, 54301), status: 'running' }], adding: null } });
-        expect(html.match(/data-open-inbox="([^"]+)"/g)).toEqual(['data-open-inbox="http://127.0.0.1:4102/"']);
+        // At its .gen name, which the Genie browser opens (core/mailpit-name.ts).
+        expect(html.match(/data-open-inbox="([^"]+)"/g)).toEqual(['data-open-inbox="https://mail.gen/"']);
         expect(html.match(/Open inbox/g)).toHaveLength(1);
     });
 

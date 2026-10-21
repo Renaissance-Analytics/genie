@@ -186,7 +186,8 @@ describe('Mailpit (H6): its SMTP AND its web inbox, each workspace’s mail tagg
         const mail = await added({ engine: 'mailpit', major: '1.30', scope: SHARED, consent: true, workspaceId: A });
         expect(docker.published()).toEqual(['127.0.0.1:4101:1025', '127.0.0.1:4102:8025']);
         expect(mail.publishedPorts).toEqual({ ui: 4102 });
-        expect(registry.envFor(A)).toEqual({ MAIL_MAILER: 'smtp', MAIL_HOST: '127.0.0.1', MAIL_PORT: '4101', MAIL_FROM_ADDRESS: 'genie+ws_example_a@mail.gen', GENIE_MAIL_TAG: 'ws_example_a' });
+        // The shared Mailpit is reached at mail.gen (core/mailpit-name.ts; the owner, 2026-10-21).
+        expect(registry.envFor(A)).toEqual({ MAIL_MAILER: 'smtp', MAIL_HOST: 'mail.gen', MAIL_PORT: '4101', MAIL_FROM_ADDRESS: 'genie+ws_example_a@mail.gen', GENIE_MAIL_TAG: 'ws_example_a' });
         const b = registry.envFor(B);
         expect(b.GENIE_MAIL_TAG).toBe('ws_example_b');
         // COUNTED: nothing in B's env names A.

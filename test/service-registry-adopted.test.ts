@@ -75,7 +75,8 @@ const ALPHA_ENV_FROM_GENIE_1 = {
     DATABASE_URL: 'postgresql://ws_ws_alpha:alpha-pg-pw@127.0.0.1:35432/ws_ws_alpha',
     DB_CONNECTION: 'pgsql', DB_HOST: '127.0.0.1', DB_PORT: '35432', DB_DATABASE: 'ws_ws_alpha', DB_USERNAME: 'ws_ws_alpha', DB_PASSWORD: 'alpha-pg-pw',
     REDIS_URL: 'redis://ws_ws_alpha:alpha-redis-pw@127.0.0.1:36379', REDIS_HOST: '127.0.0.1', REDIS_PORT: '36379', REDIS_USERNAME: 'ws_ws_alpha', REDIS_PASSWORD: 'alpha-redis-pw', REDIS_PREFIX: 'ws_ws_alpha:',
-    MAIL_MAILER: 'smtp', MAIL_HOST: '127.0.0.1', MAIL_PORT: '31025', MAIL_FROM_ADDRESS: 'genie+ws_ws_alpha@mail.gen', GENIE_MAIL_TAG: 'ws_ws_alpha',
+    // Genie 1's Mailpit publishes its inbox, so it has the shared name too (core/mailpit-name.ts).
+    MAIL_MAILER: 'smtp', MAIL_HOST: 'mail.gen', MAIL_PORT: '31025', MAIL_FROM_ADDRESS: 'genie+ws_ws_alpha@mail.gen', GENIE_MAIL_TAG: 'ws_ws_alpha',
     AWS_ENDPOINT: 'http://127.0.0.1:39000', AWS_ACCESS_KEY_ID: 'ws-ws-alpha', AWS_SECRET_ACCESS_KEY: 'alpha-s3-pw', AWS_BUCKET: 'ws-ws-alpha', AWS_DEFAULT_REGION: 'us-east-1', AWS_USE_PATH_STYLE_ENDPOINT: 'true',
 };
 
