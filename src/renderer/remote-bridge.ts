@@ -1,3 +1,4 @@
+import type { ActivityFeed } from '../core/activity-feed.js';
 import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
@@ -130,6 +131,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     const bridge: GenieBridge = {
         snapshot: () => read<GenieSnapshot>('snapshot'),
         subscribe: (onChange) => on('snapshot', (p) => onChange(p as GenieSnapshot)),
+        // The Dashboard's lanes (beta.33 item 10): the host's feeds, read once and pushed after (a guest: its workspace's).
+        activity: {
+            feeds: (workspaceId) => read<Record<string, ActivityFeed>>('activity', workspaceId),
+            subscribe: (onFeed) => on('activity', (p) => onFeed(p as ActivityFeed)),
+        },
         agentDetail: (agentId) => read<AgentDetail | null>('agentDetail', agentId),
         subscribeAgent: (agentId, onChange) => on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null)),
         openAgent: (agentId) => fire('openAgent', agentId),

@@ -1,3 +1,4 @@
+import { useActivityFeeds } from './use-activity-feeds.js';
 import { readChatDockWidth } from '../core/chat-width.js';
 import { providerLogin } from '../core/provider-login.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
@@ -147,6 +148,8 @@ export interface ShellProps {
     terminals?: GenieBridge['terminals'];
     /** The file panel's half of the bridge (§4.3); the Workspace surface mounts it for `?panel=files`. */
     files?: GenieBridge['files'] | undefined;
+    /** Every agent's activity feed (beta.33 item 10), for the open workspace's lanes. Absent = no host to ask. */
+    activity?: GenieBridge['activity'] | undefined;
     /** Live site panels (beta.35 item 36, step 5); absent = not live in this window. */
     sitePanels?: GenieBridge['sitePanels'] | undefined;
     /** The commits in a workspace's repos since a moment (an observed agent's Activity tab); absent = no section. */
@@ -264,6 +267,7 @@ export function Shell({
     terminals = NO_TERMINALS,
     files = NO_FILES,
     sitePanels,
+    activity,
     filesPopped = [],
     readCommits,
     onPopOutFiles,
@@ -312,6 +316,8 @@ export function Shell({
     onCancelAdd,
 }: ShellProps) {
     const parsed = parseRoute(route);
+    // The open workspace's agents' activity feeds, kept live by the host's pushes — its Dashboard's lanes.
+    const activityFeeds = useActivityFeeds(activity, parsed.surface === 'workspace' ? parsed.workspaceId : null);
     const updateState = useUpdateState(updates);
     // The update window (what is in the update): open from the header's update button until closed.
     const [updateOpen, setUpdateOpen] = useState(false);
@@ -622,6 +628,8 @@ export function Shell({
                             terminals={terminals}
                             files={files}
                             sitePanels={sitePanels}
+                            feeds={activityFeeds}
+                            onStartAgent={onStartAgent}
                             panel={parsed.panel}
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}

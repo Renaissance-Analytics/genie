@@ -251,6 +251,7 @@ describe('a guest receives ONLY its workspace’s pushes (beta.33 item 26, SECUR
 
     const leaks: Array<[string, string, unknown]> = [
         ['another workspace’s agent ledger', 'agent:agent_b', { agent: { id: 'agent_b' }, rows: [{ text: 'fancy secrets' }] }],
+        ['another workspace’s agent activity (the Dashboard lanes, beta.33 item 10)', 'activity', { agentId: 'agent_b', items: [{ text: 'fancy secrets' }] }],
         ['another workspace’s terminal output', 'terminal-data', { id: 'term_f', data: 'fancy shell output' }],
         ['another workspace’s terminal exit', 'terminal-exit', { id: 'term_f', exitCode: 0 }],
         ['a terminal nobody can place', 'terminal-data', { id: 'term_unknown', data: 'x' }],
@@ -276,5 +277,7 @@ describe('a guest receives ONLY its workspace’s pushes (beta.33 item 26, SECUR
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-exit', payload: { id: 'term_t' } });
         api.emit('agent:agent_a', ownAgent);
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'agent:agent_a' });
+        api.emit('activity', { agentId: 'agent_a', items: [] });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'activity', payload: { agentId: 'agent_a' } });
     });
 });

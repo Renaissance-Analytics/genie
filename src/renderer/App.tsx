@@ -1150,6 +1150,7 @@ function DesktopApp({ bridge }: AppProps) {
             files={resolvedBridge?.files}
             // Live site panels — this machine's only (a remote bridge has none).
             sitePanels={resolvedBridge?.sitePanels}
+            activity={resolvedBridge?.activity}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}

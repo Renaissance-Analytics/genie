@@ -1,18 +1,19 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { ActivityFeed } from '../src/core/activity-feed.js';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import type { DeckItem } from '../src/core/deck.js';
 import { NO_FILES, NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
 
 /**
- * SELECTING A WORKSPACE OPENS ITS DASHBOARD (the owner, 2026-10-19: "get rid of the fucking Agents in the workspace. That
- * should be a Workspace dashboard showing all work being done by any running agents, not some lame agent list with file
- * changes"; the design approved in q_09d1f4a0). The first tab is the dashboard: what waits on you in this workspace, a
- * card per running or waiting agent (asked · tool · plan step · time), then the last finished turns with their handoffs.
- * No file-change list. Terminals and Settings stay the other views of the same route, reached by a labelled tab.
+ * SELECTING A WORKSPACE OPENS ITS DASHBOARD — A LANE PER AGENT (beta.33 item 10; the owner, 2026-10-20: "this workspace
+ * dashboard is useless. Each agent should have a full lane that shows me a heartbeat of activity. Not some stupid card
+ * that contains my msg … THINK BETTER"; ROWS, q_99659edf). Every agent of the workspace gets a full-width lane, stopped
+ * ones too: state and how long, a heartbeat, PLAN, NOW and its own waiting-on-you on the left, its live feed on the right.
+ * The lane REPLACES the cards, the "Waiting on you" band and "Last finished" this file pinned before (q_09d1f4a0) — the
+ * old contract is rewritten here, not loosened. Terminals and Settings stay the other views of the same route.
  */
-
 const base: AgentRow = {
     id: 'a', name: 'kai', provider: 'claude', workspaceId: 'tynn', fidelity: 'declared', state: 'working',
     duration: '12m', ask: null, reason: null, fixes: [], step: '3/7', target: 'Write the tests', activity: null, delivery: null,
@@ -29,6 +30,16 @@ const deckItems: DeckItem[] = [
     { id: 'q1', source: 'agent-question', agentId: 'a2', agentName: 'wren', workspaceId: 'tynn', title: 'Merge #990 now?', blocking: true, priority: 'normal', at: 1, answer: { kind: 'form', fields: 1 }, forwardedFrom: null },
     { id: 'q2', source: 'agent-question', agentId: 'x', agentName: 'x', workspaceId: 'fancy', title: 'Not ours', blocking: true, priority: 'normal', at: 1, answer: { kind: 'form', fields: 1 }, forwardedFrom: null },
 ];
+const T = Date.now();
+const MIN = 60_000;
+/** The host's pushed feeds (core/activity-feed.ts): a1 at work, a3 stopped two hours ago; a2's has not arrived. */
+const feeds: Record<string, ActivityFeed> = {
+    a1: { agentId: 'a1', running: true, since: T - 14 * MIN, lastAt: T - MIN, plan: { step: 2, of: 5, doing: 'Write the tests' }, beats: [{ minute: Math.floor(T / MIN), n: 3 }], items: [
+        { id: 'r2', at: T - MIN, kind: 'finished', text: 'Turn 4 finished', by: null, plus: null, minus: null, status: null },
+        { id: 'r1', at: T - 3 * MIN, kind: 'edit', text: 'src/a.ts', by: null, plus: 2, minus: 1, status: null },
+    ] },
+    a3: { agentId: 'a3', running: false, since: T - 125 * MIN, lastAt: T - 125 * MIN, plan: null, beats: [], items: [] },
+};
 const workspace = { id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' };
 const ops: WorkspaceOpsProps = {
     asleep: false, agentCount: 2, lastOutcome: null, removePreview: false,
@@ -37,43 +48,69 @@ const ops: WorkspaceOpsProps = {
     settings: { values: {}, overridden: [], onSet: () => {}, onReset: () => {} },
 };
 const render = (props: Partial<Parameters<typeof Workspace>[0]> = {}) =>
-    renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} rows={rows} deckItems={deckItems} ops={ops} {...props} />);
+    renderToStaticMarkup(<Workspace workspace={workspace} terminals={NO_TERMINALS} rows={rows} deckItems={deckItems} feeds={feeds} ops={ops} {...props} />);
 const count = (html: string, attr: string) => (html.match(new RegExp(`${attr}="`, 'g')) ?? []).length;
 
 describe('the workspace route opens on its dashboard', () => {
-    it('a card per running or waiting agent OF THIS WORKSPACE (COUNTED); the idle one is not a card', () => {
+    it('a LANE per agent of THIS workspace — idle and stopped ones too (COUNTED); the old cards and bands are gone', () => {
         const html = render({ view: 'home' });
         expect(html).toContain('data-workspace-dashboard="tynn"');
-        expect(count(html, 'data-dash-card')).toBe(2);
-        expect(html).toContain('data-dash-card="a1"');
-        expect(html).toContain('data-dash-card="a2"');
-        expect(html).not.toContain('data-dash-card="a3"');
-        expect(html).not.toContain('data-dash-card="elsewhere"');
+        expect(count(html, 'data-dash-lane')).toBe(3);
+        for (const id of ['a1', 'a2', 'a3']) expect(html).toContain(`data-dash-lane="${id}"`);
+        expect(html).not.toContain('data-dash-lane="elsewhere"');
+        expect(html).not.toContain('data-dash-card');
+        expect(html).not.toContain('data-dash-handoff');
+        expect(html).not.toContain('Last finished');
     });
 
-    it('a card says what it was asked, the tool it is in, its plan step, and how long', () => {
+    const lane = (html: string, id: string): string => {
+        const start = html.indexOf(`data-dash-lane="${id}"`);
+        const next = html.indexOf('data-dash-lane="', start + 1);
+        return html.slice(start, next < 0 ? undefined : next);
+    };
+
+    it('the left of a lane: state and how long, the heartbeat, PLAN and NOW; the feed runs to its right', () => {
         const html = render({ view: 'home' });
-        const card = html.slice(html.indexOf('data-dash-card="a1"'), html.indexOf('data-dash-card="a2"') > html.indexOf('data-dash-card="a1"') ? html.indexOf('data-dash-card="a2"') : undefined);
-        expect(card).toContain('Build the workspace dashboard');
-        expect(card).toContain('npm test');
-        expect(card).toContain('3/7');
-        expect(card).toContain('Write the tests');
-        expect(card).toContain('12m');
+        const a1 = lane(html, 'a1');
+        expect(a1).toContain('Working');
+        expect(a1).toContain('14m');
+        expect(a1).toContain('data-lane-heartbeat');
+        expect(a1).toContain('data-react-fancy-chart-sparkline');
+        expect(a1).toMatch(/data-lane-plan[^>]*>[\s\S]*2\/5[\s\S]*Write the tests/);
+        expect(a1).toMatch(/data-lane-now[^>]*>[\s\S]*npm test/);
+        // The feed, newest first, AFTER the left column.
+        expect(a1.indexOf('data-lane-feed')).toBeGreaterThan(a1.indexOf('data-lane-now'));
+        expect(count(a1, 'data-feed-item')).toBe(2);
+        expect(a1.indexOf('Turn 4 finished')).toBeLessThan(a1.indexOf('src/a.ts'));
+        expect(a1).toContain('+2');
     });
 
-    it('above the cards: what waits on you in THIS workspace (COUNTED), and it comes before the first card', () => {
+    it("its OWN waiting-on-you, with Open, in the lane of the agent that asks (and not in another's)", () => {
         const html = render({ view: 'home' });
-        expect(count(html, 'data-dash-waiting')).toBe(1);
-        expect(html).toContain('data-dash-waiting="q1"');
-        expect(html).toContain('Merge #990 now?');
-        expect(html.indexOf('data-dash-waiting="q1"')).toBeLessThan(html.indexOf('data-dash-card='));
+        expect(lane(html, 'a2')).toContain('data-lane-waiting="q1"');
+        expect(lane(html, 'a2')).toContain('Merge #990 now?');
+        expect(lane(html, 'a1')).not.toContain('data-lane-waiting');
+        expect(html).not.toContain('Not ours');
     });
 
-    it('below the cards: the last finished turns with their handoffs', () => {
-        const html = render({ view: 'home' });
-        expect(html).toContain('data-dash-handoff="a3"');
-        expect(html).toContain('Drawer merged.');
-        expect(html.indexOf('data-dash-handoff="a3"')).toBeGreaterThan(html.indexOf('data-dash-card="a1"'));
+    it('a stopped agent: Stopped, its last activity, and Start', () => {
+        // Start is offered where a window can start an agent (Shell passes onStartAgent); a Start that does nothing is not.
+        const html = render({ view: 'home', onStartAgent: () => {} });
+        const a3 = lane(html, 'a3');
+        expect(a3).toContain('Stopped');
+        expect(a3).toContain('2h 5m');
+        expect(a3).toContain('data-lane-start="a3"');
+        // CONTROL: a running agent is not offered Start.
+        expect(lane(html, 'a1')).not.toContain('data-lane-start');
+    });
+
+    it('a workspace with no agents says so and offers + Add agent', () => {
+        const none = render({ view: 'home', rows: [row({ workspaceId: 'fancy' })], deckItems: [] });
+        expect(none).toContain('No agents in Tynn.ai.');
+        expect(none).toContain('data-add-agent="tynn"');
+        expect(count(none, 'data-dash-lane')).toBe(0);
+        // CONTROL: with agents, no such sentence.
+        expect(render({ view: 'home' })).not.toContain('No agents in Tynn.ai.');
     });
 
     it('no file-change list and no "Agents in" rail — the old home is gone', () => {
@@ -114,20 +151,6 @@ describe('the workspace route opens on its dashboard', () => {
         expect(html).toContain('data-terminal-add');
         expect(html).not.toContain('data-workspace-dashboard');
         expect(html).not.toContain('data-workspace-settings');
-    });
-
-    it('a workspace with no agents says so and offers + Add agent; one whose agents are all idle says nothing is running', () => {
-        const none = render({ view: 'home', rows: [row({ workspaceId: 'fancy' })], deckItems: [] });
-        expect(none).toContain('No agents in Tynn.ai.');
-        expect(none).toContain('data-add-agent="tynn"');
-        expect(count(none, 'data-dash-card')).toBe(0);
-        const quiet = render({ view: 'home', rows: [row({ state: 'idle' })], deckItems: [] });
-        expect(quiet).toContain('Nothing is running in Tynn.ai.');
-        expect(quiet).not.toContain('data-add-agent=');
-        // CONTROL: with agents at work neither sentence is said.
-        const busy = render({ view: 'home' });
-        expect(busy).not.toContain('No agents in Tynn.ai.');
-        expect(busy).not.toContain('Nothing is running in Tynn.ai.');
     });
 
     it('?panel=files is the Files TAB — the files take the body, the dashboard is not drawn beside them (beta.35 #41) — and the bring-back bar when popped out', () => {

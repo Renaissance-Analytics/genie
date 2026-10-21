@@ -67,6 +67,8 @@ import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { PlanKeepalive } from '../core/plan-keepalive.js';
+import { ActivityFeeds } from './activity-feeds.js';
+import type { ActivityFeed } from '../core/activity-feed.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
@@ -292,6 +294,16 @@ let filesWindows: FilesWindows | null = null;
 let host: SessionHost | null = null;
 /** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
 let keepaliveNow: PlanKeepalive | null = null;
+/** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
+let activityFeeds: ActivityFeeds | null = null;
+
+/** One workspace's agents' activity feeds, by agent id — the lanes' first paint; each change is pushed after. */
+function activityOf(raw: unknown): Record<string, ActivityFeed> {
+    const out: Record<string, ActivityFeed> = {};
+    if (typeof raw !== 'string' || activityFeeds === null) return out;
+    for (const agent of registry?.listAgents() ?? []) if (agent.workspaceId === raw) out[agent.id] = activityFeeds.feedFor(agent.id);
+    return out;
+}
 /**
  * Has Genie heard the roster and the session host ONCE? Until then a question's agent cannot be judged: "we have not
  * heard" is not "it is gone", so the Deck marks nothing stale (`askerLive` answers `undefined`). Set after the
@@ -1619,6 +1631,8 @@ async function boot(): Promise<void> {
          * — so nothing listens and Settings → Workstation says devices cannot connect yet.
          */
         remoteApi: buildHostApi({
+            // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
+            activity: { feeds: (workspaceId) => activityOf(workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
@@ -2218,6 +2232,11 @@ async function boot(): Promise<void> {
      * session and pushed the whole estate to the window many times a second for one busy agent (the owner, 2026-10-20).
      */
     const estate = new Coalescer<'estate'>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: () => registry?.touch(), schedule: realSchedule, now: () => Date.now() });
+    // EVERY AGENT'S ACTIVITY FEED (beta.33 item 10): built from the session host's own ledgers and pushed to the window as
+    // each session changes — what the workspace Dashboard's lanes draw. Never polled; one small feed per agent.
+    activityFeeds = new ActivityFeeds({ host });
+    activityFeeds.subscribe((feed) => broadcast('genie:activity-changed', feed));
+    ipcMain.handle('genie:activity', (_event, raw: unknown) => activityOf(raw));
     host.subscribe((agentId) => {
         refreshTray();
         pushAgent(agentId);

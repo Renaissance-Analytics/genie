@@ -1,3 +1,5 @@
+import type { ActivityFeed } from '../../core/activity-feed.js';
+import { useMinuteTick } from '../use-activity-feeds.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
@@ -128,6 +130,10 @@ export interface WorkspaceProps {
     files?: GenieBridge['files'] | undefined;
     /** Live site panels (beta.35 item 36, step 5): main places each site panel's page over its box. Absent = not live here. */
     sitePanels?: GenieBridge['sitePanels'] | undefined;
+    /** Each agent's activity feed, pushed by the host (beta.33 item 10): the lanes' heartbeat, plan and feed. Absent = none yet. */
+    feeds?: Readonly<Record<string, ActivityFeed>> | undefined;
+    /** Start a stopped agent from its lane. Absent = no Start is offered. */
+    onStartAgent?: ((agentId: string) => void) | undefined;
     /** The panels ENABLED plugins contribute (§4.6 `+plugin`); absent or empty = no `+plugin`. */
     pluginPanels?: readonly PluginPanelView[] | undefined;
     /** IssueWatch's view of this workspace (Tynn #806); absent = none to show, and no GitHub tab. */
@@ -180,7 +186,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -198,7 +204,10 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     };
     const [designNotice, setDesignNotice] = useState<string | null>(null);
     // THE WORKSPACE DASHBOARD (q_09d1f4a0): what waits on you, the work in flight, the last finished — no file changes.
-    const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, now: Date.now() });
+    // THE WORKSPACE DASHBOARD (beta.33 item 10): a lane per agent — heartbeat, plan, now, its own waiting-on-you, its live
+    // feed. The minute tick slides the heartbeat while nothing is pushed.
+    useMinuteTick();
+    const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, ...(feeds ? { feeds } : {}), now: Date.now() });
     const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
     // What the body shows: the Files tab while the files are open here (beta.35 #41), else the route's view.
     const onScreen: WorkspaceView | 'files' = filesInline ? 'files' : view;
@@ -807,7 +816,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
             {/* HOME — the workspace dashboard. */}
             {onScreen === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
-                    <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />
+                    <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />
                 </div>
             ) : null}
             {onScreen === 'terminals' ? terminalsBody : null}
@@ -853,7 +862,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 );
                             }
                             if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
-                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />;
+                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />;
                             if (p.kind === 'artboard') {
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
                                 return board ? <PluginPane panel={board} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;

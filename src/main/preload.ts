@@ -201,6 +201,16 @@ const bridge: GenieBridge = {
     // A known remote host in its own window (Tynn #819).
     remoteWindows: { open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void> },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
+    // Every agent's activity feed (beta.33 item 10): the workspace Dashboard's lanes. Pushed, never polled.
+    activity: {
+        feeds: (workspaceId) => ipcRenderer.invoke('genie:activity', workspaceId) as Promise<never>,
+        subscribe: (onFeed) => {
+            // A feed is small (its newest items, 30 minutes of beats), so one channel carries every agent's.
+            const listener = (_event: unknown, feed: unknown): void => onFeed(feed as never);
+            ipcRenderer.on('genie:activity-changed', listener);
+            return () => { ipcRenderer.removeListener('genie:activity-changed', listener); };
+        },
+    },
     sitePanels: {
         show: (panelKey, host, bounds) => ipcRenderer.invoke('site-panel:show', panelKey, host, bounds) as Promise<never>,
         hide: (panelKey) => ipcRenderer.invoke('site-panel:hide', panelKey) as Promise<void>,

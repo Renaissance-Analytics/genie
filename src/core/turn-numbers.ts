@@ -34,7 +34,7 @@ export function numberRow<T extends { readonly event: StreamEvent }>(row: T, sta
         state.n += 1;
         return e.n === state.n ? row : { ...row, event: { ...e, n: state.n } };
     }
-    if (e.kind === 'stopped') return e.n === state.n || state.n === 0 ? row : { ...row, event: { ...e, n: state.n } };
+    if (e.kind === 'stopped' || e.kind === 'finished') return e.n === state.n || state.n === 0 ? row : { ...row, event: { ...e, n: state.n } };
     return row;
 }
 
