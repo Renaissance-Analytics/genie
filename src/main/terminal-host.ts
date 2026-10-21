@@ -1,3 +1,5 @@
+import { fanOut } from '../core/fan-out.js';
+
 /**
  * TERMINALS — for shells, builds, services and hosted sites. **No agent has one.**
  *
@@ -136,7 +138,8 @@ export class TerminalHost {
         this.#pty.onData((id, data) => {
             const tail = (this.#tails.get(id) ?? '') + data;
             this.#tails.set(id, tail.length > TAIL_MAX ? tail.slice(-TAIL_MAX) : tail);
-            for (const listener of this.#dataListeners) listener(id, data);
+            // Each listener on its own (core/fan-out.ts): one that throws never reaches the engine's flush (a lost exit).
+            fanOut(this.#dataListeners, [id, data], 'terminal data');
         });
 
         this.#pty.onCwd?.((id, cwd) => {
@@ -162,7 +165,7 @@ export class TerminalHost {
             }
             this.#tails.delete(id);
             this.#terminals = this.#terminals.filter((t) => t.id !== id);
-            for (const listener of this.#exitListeners) listener(id, exitCode);
+            fanOut(this.#exitListeners, [id, exitCode], 'terminal exit');
         });
     }
 
