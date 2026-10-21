@@ -24,7 +24,10 @@ export interface FilesPanelState {
     readonly changed: readonly ChangedGroup[] | null;
 }
 
-export type OpenFile = { ok: true; path: string; text: string; sha: string; git?: 'committed' | 'modified' | 'untracked' | null | undefined } | { ok: false; path: string; error: string };
+/** A media tab fills its pane edge to edge: fancy-code frames media in a device FauxClient by default, and an unframed image sits in a rounded box. */
+const SEAMLESS_MEDIA = { imageProps: { frame: false, className: 'h-full w-full rounded-none' }, pdfProps: { frame: false } } as const;
+
+export type OpenFile = { ok: true; path: string; text: string; sha: string; /** A media tab's bytes as a data: URL (core/files-media.ts); absent for text. */ src?: string; git?: 'committed' | 'modified' | 'untracked' | null | undefined } | { ok: false; path: string; error: string };
 
 /** Editing (§4.3): the buffer's state and the choices when a save is refused. Absent = read-only viewer. */
 export interface FilesEdit {
@@ -381,7 +384,8 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                         // fancy-code 0.13+: an Office file is binary, never text. Unclaimed (its plugin off), it is said, not shown as bytes.
                                         if (kind.kind === 'office') return <p data-office-unclaimed={open.path} className="p-4 text-sm text-[var(--fg-3)]">No enabled plugin opens .{kind.officeKind} files here. Turn one on in Settings → Plugins.</p>;
                                         return kind.kind === 'media' ? (
-                                            <FileViewer filename={open.path} value={open.text} theme="auto" className="min-h-0 flex-1" />
+                                            // SEAMLESS (the owner, 2026-10-21: "they shouldn't have that stupid border"): no device frame, no rounded box.
+                                            <FileViewer filename={open.path} value={open.text} {...(open.src ? { src: open.src } : {})} mediaProps={SEAMLESS_MEDIA} theme="auto" className="min-h-0 flex-1" />
                                         ) : (
                                             <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme="auto">
                                                 <CodeEditor.Panel className="min-h-0 flex-1" />

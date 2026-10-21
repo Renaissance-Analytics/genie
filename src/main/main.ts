@@ -1120,6 +1120,10 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:files-children', (_event, workspaceId: unknown, dir: unknown) => (typeof workspaceId === 'string' && typeof dir === 'string' ? filesHost?.children(workspaceId, dir) ?? null : null));
     ipcMain.handle('genie:files-open', (_event, workspaceId: unknown, path: unknown) =>
         typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.open(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
+    // A MEDIA TAB'S BYTES (the owner, 2026-10-21: an image showed broken): the Files panel's own viewer, so no plugin gate —
+    // the same confinement and size cap as the text read (files-host `readBytes`).
+    ipcMain.handle('genie:files-read-media', (_event, workspaceId: unknown, path: unknown) =>
+        typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.readBytes(workspaceId, path) ?? { ok: false, path, error: 'no files host' } : { ok: false, path: String(path), error: 'bad arguments' });
     // RIGHT-CLICK A FILE (Tynn #841): the host OS's own app for it, or its file manager — a path confined to the workspace.
     ipcMain.handle('genie:files-open-external', async (_event, workspaceId: unknown, path: unknown) => {
         const abs = typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.absolute(workspaceId, path) ?? null : null;

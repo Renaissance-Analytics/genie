@@ -296,6 +296,8 @@ export interface GenieBridge {
         /** ONE folder's direct children (`''` = the root), listed when the panel opens it; `null` outside the workspace. Absent on an older host. */
         children?(workspaceId: string, dir: string): Promise<readonly TreeNode[] | null>;
         open(workspaceId: string, path: string): Promise<OpenResult>;
+        /** A media file's BYTES, for the Files panel's viewer (an image read as text is not the image). Absent on an older host. */
+        readMedia?(workspaceId: string, path: string): Promise<BytesResult>;
         /** The file as of the last commit — `Show diff` on a change nobody reported. Absent on a bridge with no host files. */
         lastCommitted?(workspaceId: string, path: string): Promise<string | null>;
         state(workspaceId: string): Promise<FilesState | null>;
