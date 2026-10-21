@@ -111,7 +111,7 @@ export interface GenieBridge {
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string): Promise<void> };
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
-    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing> };
+    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
     tynnNetwork?: TynnNetworkBridge;
     /**
@@ -201,6 +201,8 @@ export interface GenieBridge {
         /** The plan for adding `path` — a folder picked in the window over the host's disk (Tynn #835). */
         previewAdd(path: string): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
+        /** A NEW workspace (Genie 1's): Genie makes <parent>/<slug>.agi, the envelope and its first commit. Refusals come before any write. */
+        create?(name: string, parent: string): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;

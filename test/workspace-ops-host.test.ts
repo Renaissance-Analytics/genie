@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
 import type { LiveSession } from '../src/core/roster.js';
-import { addWorkspace, hibernateWorkspace, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from '../src/main/workspace-ops-host.js';
+import { addWorkspace, createWorkspace, hibernateWorkspace, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from '../src/main/workspace-ops-host.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over the pure plans in
@@ -32,7 +32,8 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
             entries: async (p) => entries[key(p)] ?? [],
             readJson: async (p) => files[key(p)] ?? null,
             writeJson: async (p, v) => { calls.push(`writeJson:${key(p)}`); files[key(p)] = v; },
-            mkdir: async (p) => { calls.push(`mkdir:${key(p)}`); },
+            // A folder made exists afterwards, empty (createWorkspace makes the target, then adds it).
+            mkdir: async (p) => { calls.push(`mkdir:${key(p)}`); if (!(key(p) in entries)) entries[key(p)] = []; },
             gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
             gitClone: async (url, into) => { calls.push(`gitClone:${url}:${key(into)}`); },
         },
@@ -71,7 +72,9 @@ describe('adding a workspace', () => {
         expect(await previewAddWorkspace(f.ports, '/w/pre')).toMatchObject({ ok: true, kind: 'pre-init' });
         expect(await previewAddWorkspace(f.ports, '/w/env')).toMatchObject({ ok: true, kind: 'full-envelope' });
         expect(await previewAddWorkspace(f.ports, '/w/none')).toEqual({ ok: false, reason: '/w/none does not exist; pick a folder that does' });
-        expect(await previewAddWorkspace(f.ports, '/w/other')).toMatchObject({ ok: false, reason: expect.stringMatching(/will not guess/) });
+        // Changed 2026-10-21 (the owner: "Look at Genie 1"): a PLAIN folder is a workspace too, as Genie 1's "Plain folder
+        // … Genie can still make a workspace here" — wrapped, never git-inited, nothing of its own touched.
+        expect(await previewAddWorkspace(f.ports, '/w/other')).toMatchObject({ ok: true, kind: 'other', steps: expect.not.arrayContaining([expect.objectContaining({ action: 'git init' })]) });
         expect(f.calls).toEqual([]);
     });
 
@@ -101,6 +104,64 @@ describe('adding a workspace', () => {
         const newer = fakes({ entries: { '/w/env': ['project.json', 'repos', '.ai'] }, files: { '/w/env/project.json': { $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json', name: 'Env' } } });
         expect(await addWorkspace(newer.ports, '/w/env')).toEqual({ ok: false, reason: 'project.json declares schema 0.3.0, newer than the 0.2.0 this Genie writes; not touching it' });
         expect(newer.calls).toEqual([]);
+    });
+});
+
+/**
+ * A NEW WORKSPACE, AS GENIE 1 MADE ONE (the owner, 2026-10-21: "WTf happened to my fucking new workspace UX … Look at
+ * Genie 1 … I can't create workspaces at all right now"). Genie 1 asked for a NAME and a FOLDER (prefilled from Settings
+ * → Primary workspace) and made `<folder>/<slug>.agi` itself — mkdir, the envelope, git init. Genie 2 could only adopt a
+ * folder that already existed and was empty, and its picker could not make one. Refusals come BEFORE any write.
+ */
+describe('creating a new workspace', () => {
+    it('makes <parent>/<slug>.agi, writes the envelope named as typed, git-inits it and registers it', async () => {
+        const f = fakes({ entries: { '/w': ['tynn'] } });
+        const r = await createWorkspace(f.ports, 'Acme Storefront', '/w');
+        expect(r).toMatchObject({ ok: true, id: 'acme-storefront', path: expect.stringMatching(/[\\/]w[\\/]acme-storefront\.agi$/) });
+        expect(f.calls[0]).toBe('mkdir:/w/acme-storefront.agi');
+        expect(f.calls).toContain('gitInit:/w/acme-storefront.agi');
+        expect(f.calls.at(-1)).toMatch(/^addWorkspace:acme-storefront:.*acme-storefront\.agi$/);
+        expect(f.files['/w/acme-storefront.agi/project.json']).toMatchObject({ name: 'Acme Storefront', $schema: SCHEMA });
+    });
+
+    it('an EMPTY folder of that name already there is used, not refused', async () => {
+        const f = fakes({ entries: { '/w': ['acme.agi'], '/w/acme.agi': [] } });
+        expect(await createWorkspace(f.ports, 'acme', '/w')).toMatchObject({ ok: true, id: 'acme' });
+    });
+
+    it('refuses, BEFORE writing anything: no name, no folder, a name it cannot make a folder of, a folder not empty, a missing parent, a name already taken', async () => {
+        const f = fakes({ entries: { '/w': ['acme.agi'], '/w/acme.agi': ['notes.txt'] } });
+        expect(await createWorkspace(f.ports, '  ', '/w')).toEqual({ ok: false, reason: 'Give the workspace a name.' });
+        expect(await createWorkspace(f.ports, 'acme', ' ')).toEqual({ ok: false, reason: 'Choose where the workspace should live.' });
+        expect(await createWorkspace(f.ports, '!!!', '/w')).toEqual({ ok: false, reason: 'Give the workspace a name it can be a folder for.' });
+        expect(await createWorkspace(f.ports, 'acme', '/w')).toMatchObject({ ok: false, reason: expect.stringMatching(/acme\.agi is not empty/) });
+        expect(await createWorkspace(f.ports, 'acme', '/nowhere')).toMatchObject({ ok: false, reason: expect.stringMatching(/\/nowhere does not exist/) });
+        // `tynn` is registered already (the fakes'): a second one of that id is refused, not silently dropped after the writes.
+        expect(await createWorkspace(f.ports, 'tynn', '/w')).toMatchObject({ ok: false, reason: expect.stringMatching(/already a workspace named tynn/) });
+        expect(f.calls).toEqual([]);
+    });
+});
+
+describe('adding a folder you already have', () => {
+    it('a folder whose name is already a workspace is refused BEFORE anything is written (it was scaffolded, then silently not registered)', async () => {
+        const f = fakes({ entries: { '/elsewhere/tynn': [] } });
+        expect(await addWorkspace(f.ports, '/elsewhere/tynn')).toMatchObject({ ok: false, reason: expect.stringMatching(/already a workspace named tynn/) });
+        expect(f.calls).toEqual([]);
+    });
+
+    it('a plain folder is wrapped (no repos/, no git init) and registered', async () => {
+        const f = fakes({ entries: { '/w/notes': ['todo.md'] } });
+        expect(await addWorkspace(f.ports, '/w/notes')).toMatchObject({ ok: true, id: 'notes', kind: 'other' });
+        expect(f.calls.some((c) => c.startsWith('gitInit:'))).toBe(false);
+        expect(f.calls).toContain('mkdir:/w/notes/.ai');
+        expect(f.calls).not.toContain('mkdir:/w/notes/repos');
+    });
+
+    it('a whole drive or the filesystem root is never made a workspace', async () => {
+        const f = fakes({ entries: { 'C:/': ['Users', 'Windows'], '/': ['home', 'etc'] } });
+        expect(await previewAddWorkspace(f.ports, 'C:\\')).toMatchObject({ ok: false, reason: expect.stringMatching(/a whole drive/) });
+        expect(await previewAddWorkspace(f.ports, '/')).toMatchObject({ ok: false, reason: expect.stringMatching(/a whole drive/) });
+        expect(f.calls).toEqual([]);
     });
 });
 

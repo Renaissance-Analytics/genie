@@ -31,6 +31,8 @@ import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remot
 import { ipcRelayTransport, watchTynnSignIn, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
+import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
+import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
 import type { ClaimingEditor } from '../core/plugin-editors.js';
 
@@ -625,8 +627,30 @@ function DesktopApp({ bridge }: AppProps) {
     const pickHostPath: PickHostPath | null = resolvedBridge?.host ? (opts) => new Promise((resolve) => setPickerAsk({ opts, resolve })) : null;
     const pickFolder = (title: string, initialPath?: string): Promise<string | null> =>
         pickHostPath ? pickHostPath({ mode: 'directory', title, ...(initialPath ? { initialPath } : {}) }).then((p) => (typeof p === 'string' ? p : null)) : Promise.resolve(null);
-    const previewAdd = () => {
-        void pickFolder('Add a workspace: pick its folder').then((path) => { if (path) void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview); });
+    /*
+     * ADD A WORKSPACE — GENIE 1'S MODAL (the owner, 2026-10-21: "Look at Genie 1 … I can't create workspaces at all right
+     * now"): "How should Genie start?", then New workspace (a name and a folder; Genie makes it), Open existing folder,
+     * Import from Git, Import from Tynn. Every folder picker here opens at the Primary workspace (Settings → General), else
+     * the host's home — never the bare drive list when anything better is known (core/add-workspace.ts `pickerStart`).
+     */
+    const [addOpen, setAddOpen] = useState(false);
+    const [hostHome, setHostHome] = useState<string | null>(null);
+    useEffect(() => { void resolvedBridge?.host?.home?.().then(setHostHome, () => {}); }, [resolvedBridge]);
+    const primaryWorkspace = typeof features.settings.values?.['primary_workspace'] === 'string' ? (features.settings.values['primary_workspace'] as string) : '';
+    const addStart = pickerStart({ primaryWorkspace, home: hostHome });
+    const hostSep = /\\/.test(primaryWorkspace || hostHome || '') ? '\\' : '/';
+    const previewAdd = () => { setAddPreview(null); setAddFromGit(false); setTynnPick(undefined); setAddOpen(true); };
+    const openExisting = () => {
+        setAddOpen(false);
+        void pickFolder('Open an existing folder', addStart).then((path) => { if (path) void resolvedBridge?.workspaces.previewAdd(path).then(setAddPreview); });
+    };
+    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnPick(undefined); setAddFromGit(true); };
+    const startAddFromTynn = () => {
+        setAddOpen(false);
+        setAddFromGit(false);
+        setAddPreview(null);
+        setTynnPick(null);
+        void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
@@ -1100,20 +1124,15 @@ function DesktopApp({ bridge }: AppProps) {
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={previewAdd}
             addFromGit={addFromGit}
-            onAddWorkspaceFromGit={() => { setAddPreview(null); setAddFromGit(true); }}
+            onAddWorkspaceFromGit={startAddFromGit}
             onCancelAddGit={() => setAddFromGit(false)}
-            onPreviewFromGit={(url) => { void pickFolder('Where should the clone land? Pick the parent folder').then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromGit(url, parent).then((p) => { setAddFromGit(false); setAddPreview(p); }); }); }}
+            onPreviewFromGit={(url) => { void pickFolder('Where should the clone land? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromGit(url, parent).then((p) => { setAddFromGit(false); setAddPreview(p); }); }); }}
             onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
             // From Tynn (§6.1, Genie 1's): the person's projects first; the one picked goes to the host's folder picker and its plan.
             tynnPick={tynnPick}
-            onAddWorkspaceFromTynn={() => {
-                setAddFromGit(false);
-                setAddPreview(null);
-                setTynnPick(null);
-                void resolvedBridge?.workspaces.tynnProjects().then((r) => setTynnPick(r));
-            }}
+            onAddWorkspaceFromTynn={startAddFromTynn}
             onPickTynnProject={(projectId) => {
-                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder').then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromTynn(projectId, parent).then((p) => { setTynnPick(undefined); setAddPreview(p); }); });
+                void pickFolder('Where should the Tynn envelope be created? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromTynn(projectId, parent).then((p) => { setTynnPick(undefined); setAddPreview(p); }); });
             }}
             onCancelTynnPick={() => setTynnPick(undefined)}
             onConfirmAddTynn={(parent, projectId) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
@@ -1138,7 +1157,7 @@ function DesktopApp({ bridge }: AppProps) {
             onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
-            pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files' }).then((p) => (Array.isArray(p) ? p : typeof p === 'string' ? [p] : [])) : undefined}
+            pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files', initialPath: pickerStart({ workspacePath: workspaceRow?.path ?? null, primaryWorkspace, home: hostHome }) }).then((p) => (Array.isArray(p) ? p : typeof p === 'string' ? [p] : [])) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
@@ -1171,6 +1190,24 @@ function DesktopApp({ bridge }: AppProps) {
                 onClose={() => featureAct({ kind: 'whatsNew.close', version: features.whatsNew!.version }, 'What’s new was not recorded as seen')}
             />
         ) : null}
+        {/* ADD A WORKSPACE (Genie 1's modal). Before the picker, so Browse opens on top of it. */}
+        <AddWorkspaceModal
+            open={addOpen}
+            primaryWorkspace={primaryWorkspace}
+            sep={hostSep}
+            browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
+            create={async (name, parent) => {
+                const create = resolvedBridge?.workspaces.create;
+                if (!create) return { ok: false, reason: 'This Genie cannot create a workspace.' };
+                const r = await create(name, parent);
+                if (r.ok) navigate(`genie://workspace/${r.id}`);
+                return r.ok ? { ok: true } : r;
+            }}
+            onOpenExisting={openExisting}
+            onGit={startAddFromGit}
+            onTynn={startAddFromTynn}
+            onClose={() => setAddOpen(false)}
+        />
         {pickerAsk && resolvedBridge?.host ? (
             <HostPathPicker
                 mode={pickerAsk.opts.mode}

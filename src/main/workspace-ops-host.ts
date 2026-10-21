@@ -2,6 +2,7 @@ import { basename, join } from 'node:path';
 import type { AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSchema, SCHEMA_REVISION, type FolderKind, type GitAddPlan, type PlanStep } from '../core/workspace-model.js';
+import { newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
 import { parseTynnProject, tynnAddPlan, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
 
 /**
@@ -51,7 +52,15 @@ type Refusal = { ok: false; reason: string };
 
 export type AddPreview = { ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | Refusal;
 
-export async function previewAddWorkspace(ports: WorkspaceOpsPorts, path: string): Promise<AddPreview> {
+/** A workspace's id is its folder's name; two of one name were scaffolded, then the second silently not registered. */
+const alreadyNamed = (id: string) => `There is already a workspace named ${id}. Rename the folder, or open that workspace instead.`;
+
+/** The root of a drive or of the filesystem: a plain folder now, and never a workspace. */
+const isRoot = (path: string) => /^(?:[A-Za-z]:)?[\\/]*$/.test(path.trim());
+
+export async function previewAddWorkspace(ports: WorkspaceOpsPorts, path: string, id: string = basename(path)): Promise<AddPreview> {
+    if (isRoot(path)) return { ok: false, reason: `${path} is a whole drive; pick a folder on it` };
+    if (ports.registry.workspace(id)) return { ok: false, reason: alreadyNamed(id) };
     const exists = await ports.fs.exists(path);
     const kind = classifyFolder({ exists, entries: exists ? await ports.fs.entries(path) : [] });
     try {
@@ -76,8 +85,8 @@ function freshManifest(path: string, kind: FolderKind): Record<string, unknown> 
     };
 }
 
-export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overlay?: Record<string, unknown>): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | Refusal> {
-    const preview = await previewAddWorkspace(ports, path);
+export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overlay?: Record<string, unknown>, id: string = basename(path)): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | Refusal> {
+    const preview = await previewAddWorkspace(ports, path, id);
     if (!preview.ok) return preview;
     const manifestPath = join(path, 'project.json');
     let stamped: { from: string | null; backup: string } | null = null;
@@ -102,7 +111,8 @@ export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overl
         if (preview.kind === 'empty') await ports.fs.gitInit(path);
     }
 
-    const id = basename(path);
+    // The id the preview checked is free (see `alreadyNamed`).
+
     await ports.registry.addWorkspace({ id, path });
     return { ok: true, id, kind: preview.kind, stamped };
 }
@@ -224,4 +234,26 @@ export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: str
     const forgotten = await ports.registry.forgetWorkspace(workspaceId);
     if (!forgotten) return { ok: false, reason: `no workspace ${workspaceId}` };
     return { ok: true, agentsForgotten: forgotten.agentsForgotten, path: workspace.path, folderUntouched: true };
+}
+
+/**
+ * A NEW WORKSPACE, AS GENIE 1 MADE ONE (the owner, 2026-10-21: "I can't create workspaces at all right now"; Genie 1's
+ * createAgiEnvelope): a NAME and a FOLDER; Genie makes `<folder>/<slug>.agi`, the envelope, and its first git commit. Every
+ * refusal comes before anything is written: no name, no folder, a folder that does not exist, a name already a
+ * workspace, a target that is not empty ("use Open existing folder on it").
+ */
+export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
+    const problem = newWorkspaceProblem(name, parent);
+    if (problem) return { ok: false, reason: problem };
+    const at = parent.trim();
+    if (!(await ports.fs.exists(at))) return { ok: false, reason: `${at} does not exist; pick a folder that does` };
+    const folder = workspaceFolderName(name);
+    const id = folder.replace(/\.agi$/, '');
+    if (ports.registry.workspace(id)) return { ok: false, reason: alreadyNamed(id) };
+    const target = join(at, folder);
+    const there = await ports.fs.exists(target);
+    if (there && (await ports.fs.entries(target)).length > 0) return { ok: false, reason: `${target} is not empty. Choose another name or folder, or use Open existing folder on it.` };
+    if (!there) await ports.fs.mkdir(target);
+    const added = await addWorkspace(ports, target, { name: name.trim() }, id);
+    return added.ok ? { ok: true, id: added.id, path: target } : added;
 }

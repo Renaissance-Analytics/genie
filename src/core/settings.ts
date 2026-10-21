@@ -50,6 +50,9 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'agent_cap', group: 'agents', scope: 'workspace', label: 'Running agents cap', description: 'How many agents may run at once in a workspace. A start past the cap is refused and says so; nothing queues.', type: 'enum', options: ['1', '2', '4', '8', '16'], default: '8' },
     { key: 'default_agent', group: 'agents', scope: 'workspace', label: 'Provider for new agents', description: 'The provider a new agent in this workspace uses unless told otherwise.', type: 'enum', options: ['claude', 'codex'], default: 'claude' },
     { key: 'approval_gates', group: 'agents', scope: 'workspace', label: 'Approval gates', description: 'Which tool calls park for your approval.', type: 'enum', options: ['all', 'writes', 'none'], default: 'writes' },
+    // PRIMARY WORKSPACE (Genie 1's `primary_workspace`, Settings → General): where a new workspace lands, and where a folder
+    // picker opened from the workstation starts (core/add-workspace.ts). Drawn as a folder with Browse, not a text box.
+    { key: 'primary_workspace', group: 'general', scope: 'host', label: 'Primary workspace', description: 'Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint.', type: 'string', default: '', hidden: true },
     { key: 'tynn_host', group: 'general', scope: 'host', label: 'Tynn host', description: 'Where Tynn lives. Only a self-hosted Tynn changes this.', type: 'string', default: 'https://tynn.ai' },
     // THIS MACHINE AS A HOST (Tynn #820; the owner: remote access "Off by default", as Genie 1 had it). Drawn in Settings →
     // Remote access as its switch, not as a row.
@@ -112,6 +115,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
     // Genie 1's two remappable keys (Tynn #759), as written: a malformed one disables its binding where it is read.
     command_window_hotkey: 'command_window_hotkey',
     ftq_nudge_hotkey: 'ftq_nudge_hotkey',
+    // Genie 1's default destination for new projects (the owner, 2026-10-21: "like it was for genie 1").
+    primary_workspace: 'primary_workspace',
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {
