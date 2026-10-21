@@ -124,16 +124,18 @@ describe('services: reading', () => {
     it('list: its own engines and the shared ones, with live status, and never another workspace’s — counted; no credential in the answer', async () => {
         await handleFeatureAction(services, { kind: 'services.create', form: pg, consent: true }, state());
         await handleFeatureAction(services, { kind: 'services.create', form: { ...pg, workspaceId: 'example-other', major: '16' }, consent: true }, state());
-        await handleFeatureAction(services, { kind: 'services.create', form: { workspaceId: 'example', engine: 'redis', major: '7', scope: 'shared' }, consent: true }, state());
+        // A shared, sliced Postgres (Redis is never shared now: hosting fixes 3.2, the owner's D2) — a superuser AND this
+        // workspace's own role, so the leak check below still has two shared passwords to find.
+        await handleFeatureAction(services, { kind: 'services.create', form: { workspaceId: 'example', engine: 'postgres', major: '17', scope: 'shared' }, consent: true }, state());
         expect(services.engines.list()).toHaveLength(3);
 
         const mine = await call('services', 't-example', { action: 'list' });
-        expect((mine.json.services as Array<Record<string, unknown>>).map((s) => [s.engine, s.version, s.scope, s.status])).toEqual([['postgres', '17', 'dedicated', 'running'], ['redis', '7', 'shared', 'running']]);
+        expect((mine.json.services as Array<Record<string, unknown>>).map((s) => [s.engine, s.version, s.scope, s.status])).toEqual([['postgres', '17', 'dedicated', 'running'], ['postgres', '17', 'shared', 'running']]);
         const theirs = await call('services', 't-other', { action: 'list' });
-        expect((theirs.json.services as Array<Record<string, unknown>>).map((s) => [s.engine, s.version])).toEqual([['postgres', '16'], ['redis', '7']]);
+        expect((theirs.json.services as Array<Record<string, unknown>>).map((s) => [s.engine, s.version])).toEqual([['postgres', '16'], ['postgres', '17']]);
 
         // The absence is the claim; the positive control is that each engine HAS a password to leak — the two dedicated
-        // Postgres credentials, and the shared Redis's superuser and the workspace's own ACL user (H3).
+        // Postgres credentials, and the shared Postgres's superuser and the workspace's own role (H3).
         const passwords = services.engines.list()
             .flatMap((i) => [i.credentials.password, i.admin?.password, ...Object.values(i.slices ?? {}).map((s) => s.password)])
             .filter((p): p is string => typeof p === 'string');
@@ -256,7 +258,7 @@ describe('services: start, stop, remove', () => {
     });
 
     it('a SHARED engine is seen and started by an agent, never stopped or removed by one (it serves every workspace)', async () => {
-        await handleFeatureAction(services, { kind: 'services.create', form: { workspaceId: 'example', engine: 'redis', major: '7', scope: 'shared' }, consent: true }, state());
+        await handleFeatureAction(services, { kind: 'services.create', form: { workspaceId: 'example', engine: 'mongo', major: '7', scope: 'shared' }, consent: true }, state());
         const id = services.engines.list()[0]!.id;
         expect((await call('services', 't-other', { action: 'start', id })).isError).toBe(false);
         const stop = await call('services', 't-other', { action: 'stop', id });
@@ -318,18 +320,19 @@ describe('services: start, stop, remove', () => {
 
 describe('services: logs (H6)', () => {
     it('the end of the engine’s output, bounded — and every credential Genie holds for that engine MASKED in it (another workspace’s password is the control: present in the raw log)', async () => {
-        const shared = { engine: 'redis', major: '7', scope: 'shared' as const };
+        // A shared, sliced POSTGRES: each workspace its own role and password (Redis is never shared now — hosting fixes 3.2).
+        const shared = { engine: 'postgres', major: '17', scope: 'shared' as const };
         await handleFeatureAction(services, { kind: 'services.create', form: { ...shared, workspaceId: 'example' }, consent: true }, state());
         await handleFeatureAction(services, { kind: 'services.create', form: { ...shared, workspaceId: 'example-other' }, consent: true }, state());
-        const redis = services.engines.list()[0]!;
-        const theirs = redis.slices!['example-other']!.password;
-        const admin = redis.admin!.password;
-        docker.engineLog.text = `ACL SETUSER ws_example_other reset on >${theirs} ~ws_example_other:*\nrequirepass ${admin}\nready\n`;
+        const engine = services.engines.list()[0]!;
+        const theirs = engine.slices!['example-other']!.password;
+        const admin = engine.admin!.password;
+        docker.engineLog.text = `ALTER ROLE ws_example_other WITH LOGIN PASSWORD '${theirs}'\nsuperuser password ${admin}\nready\n`;
 
-        const r = await call('services', 't-example', { action: 'logs', id: redis.id, tail: 999_999 });
+        const r = await call('services', 't-example', { action: 'logs', id: engine.id, tail: 999_999 });
         expect(r.isError).toBe(false);
-        expect(docker.calls.filter((c) => c[0] === 'logs')).toEqual([['logs', '--timestamps', '--tail', '5000', 'genie-shared-redis-7']]);
-        expect(r.json).toMatchObject({ ok: true, id: redis.id, tail: 5000 });
+        expect(docker.calls.filter((c) => c[0] === 'logs')).toEqual([['logs', '--timestamps', '--tail', '5000', 'genie-shared-postgres-17']]);
+        expect(r.json).toMatchObject({ ok: true, id: engine.id, tail: 5000 });
         expect(r.text).not.toContain(theirs);
         expect(r.text).not.toContain(admin);
         expect((r.json.logs as string).match(/\*{8}/g)).toHaveLength(2);

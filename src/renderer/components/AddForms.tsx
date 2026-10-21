@@ -230,6 +230,8 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
     // Which engine is picked decides which fields there are: a custom image has no version, and needs its image and port.
     const [engine, setEngine] = useState(defaults.engine);
     const custom = engine === 'custom';
+    // An engine that is never shared (Redis, the owner's D2): the choice is not offered, and the form says why.
+    const onlyDedicated = SERVICE_CATALOG.find((d) => d.engine === engine)?.sharing === 'dedicated-only';
     // An engine with variants (postgres → pgvector) offers them; the engine's own image is the first choice.
     const variants = Object.entries(SERVICE_CATALOG.find((d) => d.engine === engine)?.variants ?? {});
     return (
@@ -324,13 +326,14 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
             <fieldset className="flex flex-col gap-1 text-sm">
                 <span className="font-medium">Scope</span>
                 <label className="flex items-center gap-2">
-                    <input type="radio" name="scope" value="dedicated" defaultChecked={defaults.scope === 'dedicated'} />
+                    <input type="radio" name="scope" value="dedicated" defaultChecked={defaults.scope === 'dedicated' || onlyDedicated} />
                     Dedicated to {workspaceName ?? defaults.workspaceId} — its own data and port
                 </label>
                 <label className="flex items-center gap-2">
-                    <input type="radio" name="scope" value="shared" defaultChecked={defaults.scope === 'shared'} />
+                    <input type="radio" name="scope" value="shared" defaultChecked={defaults.scope === 'shared' && !onlyDedicated} disabled={onlyDedicated} />
                     Shared — one per workstation, every workspace reaches it
                 </label>
+                {onlyDedicated && !custom ? <span data-dedicated-only="" className="text-xs text-[var(--fg-3)]">{engine} is always its own: {SERVICE_CATALOG.find((d) => d.engine === engine)?.dedicatedBecause}.</span> : null}
                 <ProblemLine field="scope" problems={problems} />
             </fieldset>
             {consent ? (
