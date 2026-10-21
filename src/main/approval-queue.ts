@@ -49,10 +49,13 @@ const VERBS: Record<string, string> = {
     'processes.remove': 'remove a background process',
     // An agent's `workspaceTabs` tool (mcp-tools-workspace-tabs.ts): the detail says which tab and what changes.
     'workspace.tabs': 'change this workspace’s tabs',
+    // An agent's `pages` tool (mcp-tools-pages.ts): the detail names the button or form and the page.
+    'page.submit': 'submit a form on a page',
+    'page.click': 'click something that changes or deletes on a page',
 };
 
 /** Actions an agent's autonomy never approves for it: each waits for the person. */
-export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create'];
+export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click'];
 
 export class ApprovalQueue {
     readonly #now: () => number;
