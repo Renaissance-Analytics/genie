@@ -28,6 +28,16 @@ export function composerMeter(session: Pick<LiveSession, 'contextUsed' | 'contex
 }
 
 /**
+ * ## Pasted text becomes a pill from 200 characters
+ *
+ * `PromptInput`'s `pasteThreshold` is a character count (it has no line count). At 500 an ordinary paste — the top of
+ * a stack trace, a few lines of code, a log excerpt — went in as raw text and the owner never saw a pill (2026-10-20:
+ * "Pasted text isn't showing me the pill either"). 200 is about three full lines: a pasted path, URL or sentence stays
+ * text you can edit, and anything longer is a pill you can open by clicking it.
+ */
+export const PASTE_PILL_CHARS = 200;
+
+/**
  * ## A pasted image keeps its marker, and is named after it
  *
  * With `pasteImages`, `onSubmit` hands over the text with `[Pasted image N]` where each image sat, and the images
