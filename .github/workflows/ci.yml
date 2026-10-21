@@ -285,10 +285,15 @@ jobs:
 
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log
+          # pwsh does not stop on a native command's failure, and a step's result is its LAST command's exit code: each
+          # smoke ends the step itself, or only the last one would ever gate (genie#1050's job passed with FAIL lines).
           try {
               node scripts/agents-hold-no-pty-cdp.mjs
+              if ($LASTEXITCODE -ne 0) { throw "agents-hold-no-pty-cdp failed (exit $LASTEXITCODE)" }
               node scripts/smoke-cdp.mjs
+              if ($LASTEXITCODE -ne 0) { throw "smoke-cdp failed (exit $LASTEXITCODE)" }
               node scripts/layout-sweep.mjs
+              if ($LASTEXITCODE -ne 0) { throw "layout-sweep failed (exit $LASTEXITCODE)" }
           } finally {
               if (-not $app.HasExited) { Stop-Process -Id $app.Id -Force }
           }
