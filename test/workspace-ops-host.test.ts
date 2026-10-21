@@ -143,6 +143,13 @@ describe('creating a new workspace', () => {
         expect(ok.calls.some((c) => c.startsWith('addWorkspace:acme:'))).toBe(true);
     });
 
+    it('a name that already ends in .agi gets ONE .agi folder and the same id as the bare name (parity row 3)', async () => {
+        const f = fakes({ entries: { '/w': [] } });
+        expect(await createWorkspace(f.ports, 'foo.agi', '/w')).toMatchObject({ ok: true, id: 'foo' });
+        expect(f.calls[0]).toBe('mkdir:/w/foo.agi');
+        expect(f.calls.at(-1)).toMatch(/^addWorkspace:foo:.*[\\/]foo\.agi$/);
+    });
+
     it('an EMPTY folder of that name already there is used, not refused', async () => {
         const f = fakes({ entries: { '/w': ['acme.agi'], '/w/acme.agi': [] } });
         expect(await createWorkspace(f.ports, 'acme', '/w')).toMatchObject({ ok: true, id: 'acme' });

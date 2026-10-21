@@ -6,10 +6,16 @@ import { GENIE_FALLBACK_IDENTITY } from './github.js';
  * picker opens.
  */
 
-/** Genie 1's `workspaceFolderName`: lowercase, runs of anything else to one dash, `.agi`. Empty = no folder can be made. */
+/**
+ * Genie 1's `workspaceFolderName` (workspace-onboarding.ts): lowercase; letters, digits and dots kept; runs of anything
+ * else to one dash; dots and dashes trimmed from the ends; then `.agi` — unless the name already ends in it, so "foo.agi"
+ * stays "foo.agi" and never becomes "foo-agi.agi". Empty = no folder can be made. (Genie 1 also left `.gapp` alone;
+ * GApps are not part of Genie 2.)
+ */
 export function workspaceFolderName(name: string): string {
-    const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-    return slug === '' ? '' : `${slug}.agi`;
+    const slug = name.trim().toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/-{2,}/g, '-').replace(/^[-.]+|[-.]+$/g, '');
+    if (slug === '') return '';
+    return slug.endsWith('.agi') ? slug : `${slug}.agi`;
 }
 
 /** Genie 1's refusals (add-workspace.ts `addWorkspacePlan`), in its words; `null` = a workspace can be made. */

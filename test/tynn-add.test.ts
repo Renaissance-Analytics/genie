@@ -45,11 +45,12 @@ describe('tynnAddPlan', () => {
         expect(plan.ok).toBe(true);
         if (!plan.ok) return;
         expect(plan.source).toBe('tynn');
-        expect(plan.path).toBe('/w/tynn');
+        // An envelope folder, `.agi` like New's (parity row 30) — the link still names the project by its slug.
+        expect(plan.path).toBe('/w/tynn.agi');
         expect(plan.kind).toBe('empty');
         expect(plan.project).toEqual(p);
         expect(plan.manifest).toMatchObject({ name: 'Tynn.ai', description: 'Agentic project management.', tynn: { host: 'https://tynn.ai', project: 'tynn', projectId: '42' } });
-        expect(plan.steps[0]).toEqual({ action: 'create /w/tynn', path: '/w/tynn', writes: true });
+        expect(plan.steps[0]).toEqual({ action: 'create /w/tynn.agi', path: '/w/tynn.agi', writes: true });
         expect(plan.steps.map((s) => s.action)).toContain('write project.json');
         expect(plan.steps.map((s) => s.action)).toContain('link to Tynn project Tynn.ai (https://tynn.ai)');
         expect(plan.steps.map((s) => s.action)).toContain('register in Genie');
@@ -58,7 +59,7 @@ describe('tynnAddPlan', () => {
 
     it('refuses a folder that already exists — add that folder instead of writing into it', () => {
         const plan = tynnAddPlan({ project: p, parent: '/w', folderExists: true, host: 'https://tynn.ai' });
-        expect(plan).toEqual({ ok: false, reason: '/w/tynn already exists; add that folder instead of creating the Tynn envelope over it' });
+        expect(plan).toEqual({ ok: false, reason: '/w/tynn.agi already exists; add that folder instead of creating the Tynn envelope over it' });
     });
 
     it('a project with no vision gets an empty description, not the word null', () => {

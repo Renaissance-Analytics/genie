@@ -1,3 +1,4 @@
+import { workspaceFolderName } from './add-workspace.js';
 import { planAdd, type PlanStep } from './workspace-model.js';
 
 /**
@@ -5,7 +6,7 @@ import { planAdd, type PlanStep } from './workspace-model.js';
  *
  * Signed in (main/tynn-account.ts), Genie lists the person's projects (Genie 1's `GET /api/v1/projects`, over the session) and the
  * person picks one, as in Genie 1. Tynn exposes no repositories there. So "from Tynn" is the ENVELOPE from the
- * project: a folder named by the slug under the parent you pick, `project.json` carrying the
+ * project: a `<slug>.agi` folder under the parent you pick, `project.json` carrying the
  * project's name, its vision as the description, and the `tynn` link the envelope schema defines
  * (`host`, `project`, `projectId`; `owner` only when known — never guessed). Repos follow through
  * the repo registry. The plan is shown before anything is written, like every other source.
@@ -53,10 +54,18 @@ export type TynnAddPlan =
     | { ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: 'empty'; steps: PlanStep[]; manifest: { name: string; description: string; tynn: TynnLink } }
     | { ok: false; reason: string };
 
+/**
+ * Where a Tynn project's envelope is made: `<parent>/<slug>.agi`, the `.agi` folder New makes (parity row 30; Genie 2 made a
+ * bare `<parent>/<slug>`). The workspace's id stays the slug, as New's id is its folder without `.agi`.
+ */
+export function tynnEnvelopePath(parent: string, project: TynnProject): string {
+    return `${parent.replace(/[\\/]+$/, '')}/${workspaceFolderName(project.slug)}`;
+}
+
 /** The plan: create the folder (a write), then the empty-envelope steps, with the Tynn link named; nothing written here. */
 export function tynnAddPlan(input: { project: TynnProject; parent: string; folderExists: boolean; host: string }): TynnAddPlan {
     const parent = input.parent.replace(/[\\/]+$/, '');
-    const path = `${parent}/${input.project.slug}`;
+    const path = tynnEnvelopePath(parent, input.project);
     if (input.folderExists) return { ok: false, reason: `${path} already exists; add that folder instead of creating the Tynn envelope over it` };
     const link = tynnLink(input.project, input.host);
     const steps: PlanStep[] = [

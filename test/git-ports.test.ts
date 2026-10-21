@@ -70,6 +70,55 @@ describe('gitClone / gitInit against a real git', () => {
         expect(await readFile(join(into, '.git', 'config'), 'utf8')).not.toContain('insteadOf');
     }, 30_000);
 
+    /*
+     * A CLONE BRINGS ITS SUBMODULES (parity row 23; Genie 1 clone.ts:63 and create-agi.ts:860-864 cloned with
+     * `--recurse-submodules`). An envelope is a superproject: its code lives in submodules under repos/, and a clone without
+     * them is an envelope of empty folders. The private-repo credential must reach the SUBMODULE clones too, or a private
+     * envelope's private repos fail (Genie 1 clone.ts:42-63). Measured with real git: both URLs name a place that does not
+     * exist, and only config handed to the clone redirects them — so the submodule's file is there only if the clone
+     * recursed AND the config reached git's submodule clone, which runs as its own process.
+     */
+    it('clones the submodules too, and the config handed to the clone reaches the submodule clones', async () => {
+        const commit = ['-c', 'user.email=t@example.invalid', '-c', 'user.name=t', 'commit', '--quiet', '-m'];
+        const subBare = join(dir, 'sub.git');
+        const subWork = join(dir, 'sub-work');
+        await run('git', ['init', '--bare', '--quiet', '--initial-branch=main', subBare]);
+        await run('git', ['init', '--quiet', '--initial-branch=main', subWork]);
+        await writeFile(join(subWork, 'sub.txt'), 'from the submodule\n');
+        await run('git', ['-C', subWork, 'add', 'sub.txt']);
+        await run('git', ['-C', subWork, ...commit, 'sub first']);
+        await run('git', ['-C', subWork, 'push', '--quiet', subBare, 'HEAD:refs/heads/main']);
+
+        const superBare = join(dir, 'super.git');
+        const superWork = join(dir, 'super-work');
+        await run('git', ['init', '--bare', '--quiet', '--initial-branch=main', superBare]);
+        await run('git', ['init', '--quiet', '--initial-branch=main', superWork]);
+        // git ≥ 2.38.1 refuses file:// submodules unless told; this is the test's own setup, not the clone's.
+        await run('git', ['-C', superWork, '-c', 'protocol.file.allow=always', 'submodule', 'add', '--quiet', subBare, 'repos/sub']);
+        // The recorded URL is one only the clone's config can resolve.
+        await run('git', ['-C', superWork, 'config', '-f', '.gitmodules', 'submodule.repos/sub.url', 'https://example.invalid/ada/sub.git']);
+        await run('git', ['-C', superWork, 'add', '.gitmodules']);
+        await run('git', ['-C', superWork, ...commit, 'envelope with a submodule']);
+        await run('git', ['-C', superWork, 'push', '--quiet', superBare, 'HEAD:refs/heads/main']);
+
+        const into = join(dir, 'clone');
+        const slash = (p: string) => p.replace(/\\/g, '/');
+        await gitClone('https://example.invalid/ada/super.git', into, {
+            config: [
+                [`url.${slash(superBare)}.insteadOf`, 'https://example.invalid/ada/super.git'],
+                [`url.${slash(subBare)}.insteadOf`, 'https://example.invalid/ada/sub.git'],
+                ['protocol.file.allow', 'always'],
+            ],
+            secrets: [],
+        });
+        // Positive control: the superproject's own file arrived, so a missing submodule file is the submodule's absence.
+        expect(await readdir(into)).toContain('.gitmodules');
+        expect((await readFile(join(into, 'repos', 'sub', 'sub.txt'), 'utf8')).replace(/\r\n/g, '\n')).toBe('from the submodule\n');
+        // The credential is for THIS command only: not in the clone's config, nor the submodule's.
+        expect(await readFile(join(into, '.git', 'config'), 'utf8')).not.toContain('insteadOf');
+        expect(await readFile(join(into, '.git', 'modules', 'repos', 'sub', 'config'), 'utf8')).not.toContain('insteadOf');
+    }, 60_000);
+
     it('a failing clone’s words have every secret scrubbed out', async () => {
         const secret = 'ghu_exampletoken0000000000000000000000';
         const into = join(dir, 'nope');

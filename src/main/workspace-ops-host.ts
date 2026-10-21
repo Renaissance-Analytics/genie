@@ -5,7 +5,7 @@ import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSc
 import { ENVELOPE_DIRS, ENVELOPE_GITIGNORE, envelopeReadme, envelopeRules, firstCommitMessage, newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { routerText } from './agent-routers.js';
-import { parseTynnProject, tynnAddPlan, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
+import { parseTynnProject, tynnAddPlan, tynnEnvelopePath, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -212,7 +212,7 @@ export async function previewAddFromTynn(ports: WorkspaceOpsPorts, parent: strin
     if (!listed.ok) return listed;
     const project = listed.projects.find((p) => p.id === projectId);
     if (!project) return { ok: false, reason: `Tynn lists no project ${projectId} for you — it may have been deleted, or shared with someone else` };
-    const path = `${parent.replace(/[\\/]+$/, '')}/${project.slug}`;
+    const path = tynnEnvelopePath(parent, project);
     return tynnAddPlan({ project, parent, folderExists: await ports.fs.exists(path), host: listed.host });
 }
 
@@ -221,7 +221,8 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
     const plan = await previewAddFromTynn(ports, parent, projectId);
     if (!plan.ok) return plan;
     await ports.fs.mkdir(plan.path);
-    return addWorkspace(ports, plan.path, plan.manifest);
+    // The id is the folder without `.agi`, as New's is (createWorkspace) — the slug, which was the id before the suffix.
+    return addWorkspace(ports, plan.path, plan.manifest, basename(plan.path).replace(/\.agi$/, ''));
 }
 
 export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
