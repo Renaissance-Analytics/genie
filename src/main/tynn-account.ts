@@ -30,7 +30,16 @@ export interface TynnAccountPorts {
     readonly fetch: SessionFetch;
     /** Opens the person's browser; absent, or failing, the link stays on screen to open elsewhere. */
     readonly openExternal?: (url: string) => Promise<void>;
+    /** One timer (`setTimeout` in the app): the retry after Tynn could not be reached. Absent = no retry (tests, headless). */
+    readonly schedule?: (ms: number, fn: () => void) => () => void;
 }
+
+/**
+ * How long after an UNREACHABLE check Genie asks again (the owner, 2026-10-21: an issue was filed and no agent was told —
+ * one unreachable moment at launch had left Genie signed out for good). A bounded backoff, then it stops: never a poll.
+ * Waking the computer and an agent asking IssueWatch ask again too (`recheck`).
+ */
+export const TYNN_RETRY_MS: readonly number[] = [30_000, 120_000, 600_000, 1_800_000];
 
 export interface TynnUser {
     readonly name: string;
@@ -76,9 +85,26 @@ export class TynnAccount implements TynnAccountPort {
         try {
             await account.#whoami();
         } catch {
-            // Offline at launch: shown signed out; nothing is cleared.
+            // Offline at launch: shown signed out; nothing is cleared, and Genie asks again on the backoff.
+            account.#retryAfter(0);
         }
         return account;
+    }
+
+    /** The pending retry, if any, and which step of the backoff it is. */
+    #retry: { step: number; cancel: () => void } | null = null;
+
+    #retryAfter(step: number): void {
+        this.#retry?.cancel();
+        this.#retry = null;
+        const schedule = this.#ports.schedule;
+        const ms = TYNN_RETRY_MS[step];
+        if (!schedule || ms === undefined) return;
+        const cancel = schedule(ms, () => {
+            this.#retry = null;
+            void this.#whoami().catch(() => this.#retryAfter(step + 1));
+        });
+        this.#retry = { step, cancel };
     }
 
     host(): string {
@@ -120,12 +146,15 @@ export class TynnAccount implements TynnAccountPort {
         return me;
     }
 
-    /** Ask Tynn again (after being offline at launch). */
+    /** Ask Tynn again now (waking from sleep, an agent asking IssueWatch): a pending retry gives way to it. */
     async recheck(): Promise<TynnStatus> {
+        this.#retry?.cancel();
+        this.#retry = null;
         try {
             await this.#whoami();
         } catch {
-            // Still unreachable: unchanged.
+            // Still unreachable: unchanged, and the backoff starts again.
+            this.#retryAfter(0);
         }
         return this.status();
     }
@@ -216,7 +245,7 @@ export class TynnAccount implements TynnAccountPort {
 
     /** The person's projects — Genie 1's GET /api/v1/projects. Signed out is refused before any request. */
     async projects(): Promise<unknown[]> {
-        if (!this.status().signedIn) throw new Error('Sign in to Tynn first (Settings → Workstation → Integrations → Open Tynn in your browser)');
+        if (!this.status().signedIn) throw new Error('Sign in to Tynn first (Settings → Accounts → Tynn → Open Tynn in your browser)');
         const res = await this.request('/api/v1/projects', { method: 'GET' });
         if (!res.ok) {
             const body = (await res.json().catch(() => null)) as { message?: unknown } | null;

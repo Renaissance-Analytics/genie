@@ -236,3 +236,70 @@ describe('TynnAccount.projects — Genie 1’s GET /api/v1/projects', () => {
         expect(t.calls.length).toBe(before);
     });
 });
+
+/**
+ * UNREACHABLE AT LAUNCH IS NOT SIGNED OUT FOR GOOD (the owner, 2026-10-21: an issue was filed and no agent was told).
+ * MEASURED: Genie checks the session once at launch; if Tynn cannot be reached then, it shows signed out and keeps the
+ * cookies "for recheck" — and nothing ever called `recheck`, so IssueWatch stayed signed-out until a fresh sign-in.
+ * Now an unreachable check is retried on a short backoff (30 s, 2 min, 10 min, 30 min — then it stops: no poll), and a
+ * Tynn that ANSWERS "not you" is final and never retried.
+ */
+describe('TynnAccount — a launch with Tynn unreachable', () => {
+    function scheduler() {
+        const timers: Array<{ ms: number; fn: () => void; live: boolean }> = [];
+        return {
+            timers,
+            schedule: (ms: number, fn: () => void) => { const t = { ms, fn, live: true }; timers.push(t); return () => { t.live = false; }; },
+            /** Run the oldest live timer, as time passing would. */
+            async fire() { const t = timers.find((x) => x.live); if (!t) return false; t.live = false; t.fn(); await new Promise((r) => setTimeout(r, 0)); await new Promise((r) => setTimeout(r, 0)); return true; },
+        };
+    }
+    async function signedInSession() {
+        const t = fakeTynn();
+        const first = await TynnAccount.open(t.ports);
+        expect((await first.signIn(CODE)).ok).toBe(true);
+        return t;
+    }
+
+    it('retries once Tynn answers again: signed in, and the change is announced (IssueWatch restarts on it)', async () => {
+        const t = await signedInSession();
+        t.state.reachable = false;
+        const s = scheduler();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        expect(account.status().signedIn).toBe(false);
+        expect(s.timers.map((x) => x.ms)).toEqual([30_000]);
+        let changed = 0;
+        account.onChange(() => { changed += 1; });
+        t.state.reachable = true;
+        await s.fire();
+        expect(account.status()).toMatchObject({ signedIn: true, user: { name: 'Ada' } });
+        expect(changed).toBe(1);
+    });
+
+    it('backs off 30 s, 2 min, 10 min, 30 min while still unreachable — then stops (COUNTED: four tries, no poll)', async () => {
+        const t = await signedInSession();
+        t.state.reachable = false;
+        const s = scheduler();
+        await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        while (await s.fire()) { /* time passes */ }
+        expect(s.timers.map((x) => x.ms)).toEqual([30_000, 120_000, 600_000, 1_800_000]);
+    });
+
+    it('CONTROL: Tynn answered "not you" — signed out, and nothing is scheduled', async () => {
+        const t = fakeTynn();
+        const s = scheduler();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        expect(account.status().signedIn).toBe(false);
+        expect(s.timers).toEqual([]);
+    });
+
+    it('an asked-for recheck (waking from sleep, an agent asking IssueWatch) signs in at once and drops the pending retry', async () => {
+        const t = await signedInSession();
+        t.state.reachable = false;
+        const s = scheduler();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        t.state.reachable = true;
+        expect((await account.recheck()).signedIn).toBe(true);
+        expect(s.timers.filter((x) => x.live)).toEqual([]);
+    });
+});

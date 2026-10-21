@@ -81,7 +81,7 @@ export interface GenieToolsDeps {
     /** DND (§6.3): whether the person is away, and what to tell an agent that asks. */
     readonly dnd?: () => { on: boolean; reply: string };
     /** IssueWatch (Tynn #806): what is open on GitHub for a workspace, as Genie last heard it from Tynn. Absent = no IssueWatch. */
-    readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer> };
+    readonly issueWatch?: { forWorkspace(workspaceId: string): IssueWatchSummary; refresh?(workspaceId: string): Promise<IssueWatchRefreshAnswer>; /** Ask Tynn again whether this Genie is signed in (an agent found it signed out). */ recheckSignIn?(): void };
 }
 
 /**
@@ -184,6 +184,8 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
             const s = deps.issueWatch?.forWorkspace(caller.workspaceId);
             if (!s) return ok({ ok: false, reason: 'IssueWatch is not available in this Genie' });
             const why = issueWatchWhyNot(s);
+            // Signed out may be an unreachable moment that has passed: ask Tynn again, so the next ask finds it live.
+            if (s.state === 'signed-out') deps.issueWatch?.recheckSignIn?.();
             if (why !== null || !s.entry) return ok({ ok: false, reason: why ?? 'Tynn has sent nothing for this workspace yet', ...(refresh ? { refresh } : {}) });
             const all = [...s.entry.items, ...s.entry.feedback];
             return ok({
