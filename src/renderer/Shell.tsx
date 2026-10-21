@@ -27,7 +27,8 @@ import { WorkspaceTabs } from './components/WorkspaceTabs.js';
 import { readPlanOpen, writePlanOpen } from '../core/plan-column.js';
 import { addTab, agentTabsOf, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
 import { FilesPanelContainer } from './components/FilesPanelContainer.js';
-import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
+import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView, type GithubBrowseAsk } from './components/AddWorkspacePreview.js';
+import type { RepoListing } from '../core/github.js';
 import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProjectPicker.js';
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
@@ -209,6 +210,10 @@ export interface ShellProps {
     onAddWorkspaceFromGit?: (() => void) | undefined;
     onPreviewFromGit?: ((url: string) => void) | undefined;
     onConfirmAddGit?: ((url: string, parent: string) => void) | undefined;
+    /** Import from Git's browser (Add workspace parity item 8): the host's listing (`null` = loading, absent = cannot list). */
+    gitRepos?: RepoListing | null | undefined;
+    onReloadGitRepos?: (() => void) | undefined;
+    onGitGithub?: ((ask: GithubBrowseAsk) => void) | undefined;
     /** From Tynn (§6.1, Genie 1's): the person's projects to pick from (`undefined` = not picking); then the host's folder picker and the plan. */
     tynnPick?: TynnProjectsView | undefined;
     onAddWorkspaceFromTynn?: (() => void) | undefined;
@@ -312,6 +317,9 @@ export function Shell({
     onAddWorkspaceFromGit,
     onPreviewFromGit,
     onConfirmAddGit,
+    gitRepos,
+    onReloadGitRepos,
+    onGitGithub,
     onAddWorkspaceFromTynn,
     onConfirmAddTynn,
     tynnPick,
@@ -482,7 +490,7 @@ export function Shell({
                         />
                     ) : null}
                     {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
-                    {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} /> : null}
+                    {addFromGit && !addPreview ? <AddFromGitForm busy={addBusy === true} onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} repos={gitRepos} onReloadRepos={onReloadGitRepos} onGithub={onGitGithub} /> : null}
                     {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onOpen={(workspaceId) => { onCancelTynnPick?.(); onNavigate(`genie://workspace/${workspaceId}`); }} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*
                      * ONE first-run invitation. With no workspaces the Onboarding above IS the first run (§6.9's two

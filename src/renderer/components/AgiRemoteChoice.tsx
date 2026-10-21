@@ -79,24 +79,9 @@ export function RemoteChoiceView({ choice, github, folder, onChoice, onGithub }:
 
 /** Genie 1's OwnerSelect and the private toggle — a call, not a component, so the tree stays one a test can walk. */
 function GithubOwner({ choice, github, onChoice, onGithub }: { choice: Extract<RemoteChoice, { kind: 'github' }>; github: GithubView; onChoice: (c: RemoteChoice) => void; onGithub: (a: GithubAsk) => void }) {
-    const options = githubOwnerOptions(github);
-    const chosen = options.find((o) => o.login.toLowerCase() === choice.owner.toLowerCase());
     return (
         <div className="flex flex-col gap-1.5">
-            <span className="text-xs font-semibold">Create under</span>
-            <Select
-                data-field="remote-owner"
-                aria-label="Create under"
-                list={options.map((o) => ({ value: o.login, label: `${o.login} · ${o.personal ? 'personal' : 'org'}` }))}
-                value={choice.owner}
-                onValueChange={(v: string) => onChoice({ ...choice, owner: v })}
-            />
-            {chosen && chosen.installed === false ? (
-                <span className="flex items-center gap-2 text-xs text-[var(--amber-400)]">
-                    <span className="flex-1">Genie isn&apos;t installed on <strong>{chosen.login}</strong> — install it there to create the repository under this account.</span>
-                    <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install here…</button>
-                </span>
-            ) : null}
+            {OwnerPicker({ label: 'Create under', field: 'remote-owner', value: choice.owner, github, why: 'to create the repository under this account', onOwner: (v) => onChoice({ ...choice, owner: v }), onGithub })}
             <label className="inline-flex items-center gap-2 text-xs">
                 <input type="checkbox" data-field="remote-private" checked={choice.private} onChange={(e) => onChoice({ ...choice, private: e.target.checked })} />
                 Private repository
@@ -107,6 +92,34 @@ function GithubOwner({ choice, github, onChoice, onGithub }: { choice: Extract<R
                 <button type="button" data-action="github-refresh" onClick={() => onGithub('refresh')} className={link}>Check again</button>
             </span>
         </div>
+    );
+}
+
+/**
+ * Genie 1's OwnerSelect, shared by "Where it is kept" and the Repos step's Fork (Add workspace parity item 12): the person
+ * and every org the App is installed on, and — when the chosen account has no installation — the install, right there.
+ * A call, not a component, so the tree stays one a test can walk.
+ */
+export function OwnerPicker({ label, field, value, github, why, onOwner, onGithub }: { label: string; field: string; value: string; github: GithubView; why: string; onOwner: (login: string) => void; onGithub: (a: GithubAsk) => void }) {
+    const options = githubOwnerOptions(github);
+    const chosen = options.find((o) => o.login.toLowerCase() === value.toLowerCase());
+    return (
+        <>
+            <span className="text-xs font-semibold">{label}</span>
+            <Select
+                data-field={field}
+                aria-label={label}
+                list={options.map((o) => ({ value: o.login, label: `${o.login} · ${o.personal ? 'personal' : 'org'}` }))}
+                value={value}
+                onValueChange={(v: string) => onOwner(v)}
+            />
+            {chosen && chosen.installed === false ? (
+                <span className="flex items-center gap-2 text-xs text-[var(--amber-400)]">
+                    <span className="flex-1">Genie isn&apos;t installed on <strong>{chosen.login}</strong> — install it there {why}.</span>
+                    <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install here…</button>
+                </span>
+            ) : null}
+        </>
     );
 }
 

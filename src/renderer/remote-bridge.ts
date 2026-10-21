@@ -1,4 +1,5 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import type { RepoListing } from '../core/github.js';
 import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
@@ -177,6 +178,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             registerExisting: (path) => answer('workspaces.registerExisting', path),
             buildEnvelope: (plan, remote) => answer('workspaces.buildEnvelope', plan, remote),
             discardStaged: (path) => answer<{ ok: true }>('workspaces.discardStaged', path),
+            // A refusal (an older host, or not the owner) reads as a failure in the host's words; the URL box still works.
+            githubRepos: async (): Promise<RepoListing> => { const r = await call('workspaces.githubRepos'); return r.ok ? (r.value as RepoListing) : { status: 'failed', message: r.reason }; },
             tynnProjects: () => answer('workspaces.tynnProjects'),
             tynnOwnerOptions: () => answer('workspaces.tynnOwnerOptions'),
             createTynnProject: (input) => answer('workspaces.createTynnProject', input),

@@ -2,6 +2,7 @@ import { basename, join } from 'node:path';
 import { convertCommitMessage, envelopeRepos, isLocalPathLike, planProblem, type EntryKind, type EnvelopePlan, type SourceAnalysis } from '../core/envelope-plan.js';
 import { repoFolderName } from '../core/workspace-model.js';
 import { remoteChoiceProblem, type Published, type RemoteChoice } from '../core/agi-remote.js';
+import type { CreatedRepo } from '../core/github.js';
 import { alreadyNamedReason, envelopeId, makeNewEnvelope, publishNew, registeredEnvFile, resolveTynnLink, stampExisting, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 
 /**
@@ -22,6 +23,16 @@ export interface EnvelopePorts {
     copyEnvFiles(from: string, to: string): Promise<void>;
     /** Where an Import from Git clone waits for the wizard. Only a folder it made is ever removed. */
     staging: { make(): Promise<string>; owns(path: string): boolean; remove(path: string): Promise<void> };
+    /**
+     * The GitHub sign-in's forker (main/github-account.ts), or `null` when signed out; absent on a host without one. Only a
+     * plan with Fork rows asks for it (Add workspace parity item 12).
+     */
+    github?: (() => EnvelopeForker | null) | undefined;
+}
+
+export interface EnvelopeForker {
+    forkRepo(opts: { owner: string; repo: string; into: string }): Promise<CreatedRepo>;
+    waitUntilReady(fullName: string): Promise<void>;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -86,12 +97,17 @@ export async function registerExisting(ops: WorkspaceOpsPorts, path: string): Pr
  * envelope inside the source, a Root item replacing the envelope's own). A git that refuses part-way leaves the envelope
  * on disk, unregistered, and says which repo and why in git's words.
  */
-export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, plan: EnvelopePlan, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
-    const problem = planProblem(plan) ?? (remote ? remoteChoiceProblem(remote) : null);
+export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, wanted: EnvelopePlan, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | Refusal> {
+    const problem = planProblem(wanted) ?? (remote ? remoteChoiceProblem(remote) : null);
     if (problem) return { ok: false, reason: problem };
     // The optional Tynn link (item 5): looked up in Tynn's own list BEFORE the envelope exists, and in its first commit.
-    const linked = await resolveTynnLink(ops, plan.tynnProjectId);
+    // Checked before any fork, so a bad link never leaves forks behind on GitHub.
+    const linked = await resolveTynnLink(ops, wanted.tynnProjectId);
     if (!linked.ok) return linked;
+    // Forks first, every one READY, before a single file is written: the build never starts half-forked.
+    const forked = await forkFirst(env, wanted);
+    if (!forked.ok) return forked;
+    const plan = forked.plan;
     const made = await makeNewEnvelope(ops, plan.name, plan.parent, linked.link);
     if (!made.ok) return made;
     const ws = made.path;
@@ -137,6 +153,36 @@ export async function buildEnvelope(ops: WorkspaceOpsPorts, env: EnvelopePorts, 
     // Then to the remote chosen on the Workspace step, both commits at once (Add workspace parity item 11).
     const published = await publishNew(ops, ws, remote);
     return published ? { ok: true, id: made.id, path: ws, published } : { ok: true, id: made.id, path: ws };
+}
+
+/**
+ * FORK EACH REPO INTO THE CHOSEN OWNER (Add workspace parity item 12; Genie 1's InteractiveUpgradeWizard :605-632): every
+ * Fork row is forked on GitHub into `plan.forkInto` and waited for until GitHub has finished copying it, then its clone
+ * URL replaces the upstream's as the submodule. Any refusal stops here, in GitHub's words, before anything is written.
+ * Forks already made cannot be taken back from here and are named: they stay on GitHub, and a retry gets the same fork
+ * back from GitHub.
+ */
+async function forkFirst(env: EnvelopePorts, plan: EnvelopePlan): Promise<{ ok: true; plan: EnvelopePlan } | Refusal> {
+    if (!plan.repos.some((r) => r.fork)) return { ok: true, plan };
+    const github = env.github?.() ?? null;
+    const into = plan.forkInto ?? '';
+    if (!github) return { ok: false, reason: `Nothing was built: forking needs GitHub — sign in to GitHub in Settings → Accounts → GitHub, or add these repositories from Origin.` };
+    const made: string[] = [];
+    const repos: EnvelopePlan['repos'][number][] = [];
+    for (const r of plan.repos) {
+        if (!r.fork) { repos.push(r); continue; }
+        const from = `${r.fork.owner}/${r.fork.repo}`;
+        try {
+            const fork = await github.forkRepo({ owner: r.fork.owner, repo: r.fork.repo, into });
+            made.push(fork.fullName);
+            await github.waitUntilReady(fork.fullName);
+            repos.push({ name: r.name, url: fork.cloneUrl, local: false });
+        } catch (error) {
+            const kept = made.length > 0 ? ` Already forked on GitHub (they stay there; trying again gets the same fork${made.length === 1 ? '' : 's'} back): ${made.join(', ')}.` : '';
+            return { ok: false, reason: `Nothing was built: GitHub could not fork ${from} into ${into}: ${message(error)}${kept}` };
+        }
+    }
+    return { ok: true, plan: { ...plan, repos } };
 }
 
 /** The wizard was cancelled on an import: its clone goes. A folder the stage did not make is never touched. */

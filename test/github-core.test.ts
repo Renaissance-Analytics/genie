@@ -142,13 +142,15 @@ describe('the clone credential', () => {
         expect(auth!.secrets).toEqual([TOKEN, basic]);
     });
 
-    it('anything else clones with the person’s own git credentials, untouched: no token, another account, no Contents, not github.com, ssh', () => {
+    it('anything else clones with the person’s own git credentials, untouched: no token, another account, no Contents, not github.com', () => {
         expect(cloneAuthFor('https://github.com/ada/x.git', null, [inst()])).toBeNull();
         // Another account: a header would SHADOW the person's own credential helper, which may well reach it.
         expect(cloneAuthFor('https://github.com/someone-else/x.git', TOKEN, [inst()])).toBeNull();
         expect(cloneAuthFor('https://github.com/ada/x.git', TOKEN, [inst({ permissions: { metadata: 'read' } })])).toBeNull();
         expect(cloneAuthFor('https://gitlab.com/ada/x.git', TOKEN, [inst()])).toBeNull();
-        expect(cloneAuthFor('git@github.com:ada/x.git', TOKEN, [inst()])).toBeNull();
+        // An SSH URL of a covered account is no longer left alone: it clones over HTTPS with the sign-in (Add workspace
+        // parity item 8, Genie 1's githubCloneAuth) — test/github-browse-fork-core.test.ts.
+        expect(cloneAuthFor('git@github.com:ada/x.git', TOKEN, [inst()])?.url).toBe('https://github.com/ada/x.git');
         expect(cloneAuthFor('https://github.com/ada/x.git', TOKEN, null)).toBeNull();
     });
 

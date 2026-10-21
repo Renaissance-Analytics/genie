@@ -46,6 +46,7 @@ export const REMOTE_METHODS = [
     'workspaces.registerExisting',
     'workspaces.buildEnvelope',
     'workspaces.discardStaged',
+    'workspaces.githubRepos',
     'workspaces.tynnProjects',
     'workspaces.tynnOwnerOptions',
     'workspaces.createTynnProject',
@@ -145,6 +146,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.registerExisting': 'write',
     'workspaces.buildEnvelope': 'write',
     'workspaces.discardStaged': 'write',
+    // Import from Git's browser (Add workspace parity item 8): the repositories the HOST's GitHub sign-in reaches.
+    'workspaces.githubRepos': 'read',
     // The signed-in person's projects lead to the host's folder picker: the whole From Tynn is done on the host.
     'workspaces.tynnProjects': 'read',
     // The optional link's "New project" (Add workspace parity item 5): who may own it is a read; creating it writes on Tynn.

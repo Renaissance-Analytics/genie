@@ -21,6 +21,7 @@ import type { RepoEntry } from '../core/repo-registry.js';
 import type { RepoCommit } from '../core/commits.js';
 import type { EnvelopePlan } from '../core/envelope-plan.js';
 import type { Published, RemoteChoice } from '../core/agi-remote.js';
+import type { RepoListing } from '../core/github.js';
 import type { SourceRead } from '../main/envelope-wizard-host.js';
 
 /**
@@ -249,6 +250,8 @@ export interface GenieBridge {
         buildEnvelope?(plan: EnvelopePlan, remote?: RemoteChoice): Promise<{ ok: true; id: string; path: string; published?: Published } | { ok: false; reason: string }>;
         /** A cancelled import's staging clone, removed. Nothing else is ever removed. */
         discardStaged?(path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** IMPORT FROM GIT's browser (Add workspace parity item 8): the repositories the host's GitHub sign-in reaches. */
+        githubRepos?(): Promise<RepoListing>;
         /** From Tynn (§6.1): the signed-in person's projects, to pick from (Genie 1's "your Tynn projects"); `added` = already a workspace here, by its id. */
         tynnProjects(): Promise<{ ok: true; host: string; projects: TynnProject[]; added?: Record<string, string> } | { ok: false; reason: string }>;
         /** Who a new Tynn project may belong to (Genie 1's Owner field; Add workspace parity item 5). Optional: an older host has none. */

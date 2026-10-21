@@ -8,6 +8,7 @@ import {
     GithubAuthError,
     GithubNotInstalledError,
     GithubRateLimitError,
+    accessibleRepoFrom,
     cloneAuthFor,
     createdRepoFrom,
     deviceCodeFrom,
@@ -21,7 +22,9 @@ import {
     rateLimitWaitMs,
     refreshOutcomeFrom,
     v1GithubLogin,
+    type AccessibleRepo,
     type CreatedRepo,
+    type RepoListing,
     type GithubInstallation,
     type GithubStatus,
     type GithubView,
@@ -124,6 +127,11 @@ const PLACEHOLDER_LOGIN = 'your GitHub account';
 const EXPIRY_SKEW_MS = 60_000;
 /** The longest rate-limit wait Genie sits out by itself; a longer one is an error that says when to try again. */
 const MAX_RATE_WAIT_MS = 60_000;
+/** Import from Git's browser reads at most this many pages (of 100) per installation, and says when it stopped there. */
+const MAX_REPO_PAGES = 50;
+const MAX_INSTALL_PAGES = 10;
+/** Tries before a fork still being copied is given up on: waits of 1, 2, 4, 8, then 15 s — about two minutes in all. */
+const FORK_READY_TRIES = 12;
 
 type Answer = { status: number; json: unknown; text: string; headers?: { get(name: string): string | null } };
 
@@ -711,8 +719,93 @@ export class GithubAccount implements GithubAccountPort {
         return new GithubNotInstalledError(account, githubInstallUrl(id), error.status, error.message);
     }
 
+    /**
+     * Every repository this sign-in reaches, for Import from Git's browser (Add workspace parity item 8; Genie 1's
+     * `listAccessibleRepositories`): each installation's repositories — "all" and "selected" alike — page by page until a
+     * short page or GitHub's `total_count`, the installations list paged too. A repository two installations reach is
+     * listed once. A listing longer than the bound is cut there and SAYS so (`truncated`); a page GitHub refuses fails the
+     * whole listing in GitHub's words rather than passing a short list off as complete.
+     */
+    async repoListing(): Promise<RepoListing> {
+        if (this.#status !== 'signed-in' || !this.#token) return { status: 'signed-out' };
+        try {
+            const installs: Array<{ id: number }> = [];
+            for (let page = 1; page <= MAX_INSTALL_PAGES; page++) {
+                const body = await this.#call('GET', `/user/installations?per_page=100&page=${page}`) as { total_count?: unknown; installations?: unknown } | null;
+                installs.push(...installationsFrom(body));
+                const total = typeof body?.total_count === 'number' ? body.total_count : null;
+                const rows = Array.isArray(body?.installations) ? (body!.installations as unknown[]).length : 0;
+                if (rows < 100 || (total !== null && installs.length >= total)) break;
+            }
+            if (installs.length === 0) return { status: 'not-installed' };
+            const byName = new Map<string, AccessibleRepo>();
+            let truncated = false;
+            for (const i of installs) {
+                let seen = 0;
+                let page = 1;
+                for (; page <= MAX_REPO_PAGES; page++) {
+                    const body = await this.#call('GET', `/user/installations/${i.id}/repositories?per_page=100&page=${page}`) as { total_count?: unknown; repositories?: unknown } | null;
+                    const batch: unknown[] = Array.isArray(body?.repositories) ? (body!.repositories as unknown[]) : [];
+                    seen += batch.length;
+                    for (const raw of batch) {
+                        const repo = accessibleRepoFrom(raw);
+                        if (repo && !byName.has(repo.fullName.toLowerCase())) byName.set(repo.fullName.toLowerCase(), repo);
+                    }
+                    const total = typeof body?.total_count === 'number' ? body.total_count : null;
+                    if (batch.length < 100 || (total !== null && seen >= total)) break;
+                }
+                if (page > MAX_REPO_PAGES) truncated = true;
+            }
+            const repos = [...byName.values()].sort((a, b) => a.fullName.localeCompare(b.fullName, 'en', { sensitivity: 'base' }));
+            return { status: 'listed', repos, truncated };
+        } catch (error) {
+            if (error instanceof GithubAuthError) return { status: 'signed-out' };
+            return { status: 'failed', message: error instanceof GithubApiError ? error.message : reach(error) };
+        }
+    }
+
+    /**
+     * Fork `owner/repo` into `into` (Add workspace parity item 12; Genie 1's `forkRepo`, `v1:main/github/api.ts:1118-1134`):
+     * `POST /repos/{owner}/{repo}/forks`, with `organization` when `into` is an organization (without it GitHub forks to
+     * the signed-in person). GitHub answers at once with the fork it is still copying — wait for it with
+     * {@link waitUntilReady} before cloning. An existing fork is handed back by GitHub as it is. A 403/404 is the App not
+     * being installed on `into` → GithubNotInstalledError with the install chooser for it, GitHub's words kept.
+     */
+    async forkRepo(opts: { owner: string; repo: string; into: string }): Promise<CreatedRepo> {
+        const personal = await this.#isPersonal(opts.into);
+        const body = personal ? { default_branch_only: false } : { organization: opts.into, default_branch_only: false };
+        let json: unknown;
+        try {
+            json = await this.#call('POST', `/repos/${encodeURIComponent(opts.owner)}/${encodeURIComponent(opts.repo)}/forks`, body);
+        } catch (error) {
+            if (error instanceof GithubApiError && !(error instanceof GithubRateLimitError) && (error.status === 403 || error.status === 404)) throw await this.#notInstalled(error, opts.into);
+            throw error;
+        }
+        const fork = createdRepoFrom(json, true);
+        if (!fork) throw new GithubApiError(0, `GitHub answered without the fork of ${opts.owner}/${opts.repo}.`);
+        return fork;
+    }
+
+    /**
+     * Wait until GitHub has finished copying a fork: `GET /repos/{full}/commits?per_page=1` answers 200 once its commits are
+     * there; 404 (not there yet) and 409 (still empty) mean try again. Each wait is longer than the last (1 s doubling, at
+     * most 15 s), and after FORK_READY_TRIES tries (about 2 minutes) it gives up in words. Any other answer stops at once,
+     * in GitHub's words.
+     */
+    async waitUntilReady(fullName: string): Promise<void> {
+        const path = `/repos/${fullName.split('/').map(encodeURIComponent).join('/')}/commits?per_page=1`;
+        const sleep = this.#ports.sleep ?? defaultSleep;
+        for (let attempt = 0; attempt < FORK_READY_TRIES; attempt++) {
+            if (attempt > 0) await sleep(Math.min(1000 * 2 ** (attempt - 1), 15_000), new AbortController().signal);
+            const answer = await this.#request('GET', path);
+            if (answer.status >= 200 && answer.status < 300) return;
+            if (answer.status !== 404 && answer.status !== 409) throw new GithubApiError(answer.status, githubErrorMessage(answer.status, answer.json, answer.text));
+        }
+        throw new GithubApiError(0, `GitHub has not finished making the fork ${fullName} (it is not ready after about two minutes). Try again in a moment — GitHub hands the same fork back.`);
+    }
+
     /** The credential for a clone of `url`, when this sign-in can read it (core/github.ts cloneAuthFor). Main-side only. */
-    cloneAuth(url: string): { config: Array<[string, string]>; secrets: string[] } | null {
+    cloneAuth(url: string): { url: string; config: Array<[string, string]>; secrets: string[] } | null {
         return this.#status === 'signed-in' ? cloneAuthFor(url, this.#token, this.#installations) : null;
     }
 

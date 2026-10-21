@@ -3,7 +3,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { workspaceFolderName } from '../../core/add-workspace.js';
 import { defaultRemoteChoice, remoteChoiceProblem, type Published, type RemoteChoice } from '../../core/agi-remote.js';
 import type { GithubView } from '../../core/github.js';
-import { PublishedView, RemoteChoiceView, type GithubAsk } from './AgiRemoteChoice.js';
+import { OwnerPicker, PublishedView, RemoteChoiceView, type GithubAsk } from './AgiRemoteChoice.js';
 import { TynnProjectLink, type TynnLinkApi } from './TynnProjectLink.js';
 import {
     buildPlan,
@@ -55,7 +55,7 @@ export const KIND_COPY: Record<SourceKind, { title: string; body: string; icon: 
     'plain-folder': { title: 'Plain folder', body: 'No git repos found at the top level. Genie can still make a workspace here and copy your notes into its shared knowledge — repositories can be added later.', icon: 'folder' },
 };
 
-const SOURCE_LABEL: Record<RepoSource, string> = { origin: 'Origin (clone)', local: 'Local path' };
+const SOURCE_LABEL: Record<RepoSource, string> = { origin: 'Origin (clone)', local: 'Local path', fork: 'Fork on GitHub' };
 
 export function WizardStepper({ step, onStep }: { step: number; onStep: (i: number) => void }) {
     return (
@@ -99,10 +99,20 @@ export interface ReposStepProps {
     readonly onPatch: (key: string, patch: { included?: boolean; name?: string; source?: RepoSource }) => void;
     readonly onMode: (mode: 'explode' | 'wrap') => void;
     readonly onPrimary: (name: string) => void;
+    /** The GitHub sign-in: signed in, a GitHub repository may also be forked (Add workspace parity item 12). */
+    readonly github?: GithubView | null | undefined;
+    /** Where Fork rows go — the owner picker's choice. */
+    readonly onForkInto?: ((owner: string) => void) | undefined;
+    readonly onGithub?: ((ask: GithubAsk) => void) | undefined;
 }
 
-/** Step 2 — Genie 1's repos table: include, `repos/<name>`, Origin or Local; for a monorepo, explode or wrap and the host. */
-export function ReposStepView({ draft, onPatch, onMode, onPrimary }: ReposStepProps) {
+/**
+ * Step 2 — Genie 1's repos table: include, `repos/<name>`, Origin, Local or Fork; for a monorepo, explode or wrap and the
+ * host. With a Fork row, the owner the forks go to (the remote's owner picker, item 12).
+ */
+export function ReposStepView({ draft, onPatch, onMode, onPrimary, github = null, onForkInto = () => {}, onGithub = () => {} }: ReposStepProps) {
+    const canFork = github?.status === 'signed-in';
+    const forking = canFork && draft.repos.some((r) => r.included && r.source === 'fork');
     const kind = draft.analysis.sourceKind;
     const members = draft.analysis.submodules.length;
     const exploding = kind === 'monorepo' && draft.monorepoMode === 'explode';
@@ -123,7 +133,7 @@ export function ReposStepView({ draft, onPatch, onMode, onPrimary }: ReposStepPr
             ) : (
                 <>
                     <p className={muted}>
-                        Each becomes a git submodule under <span className="font-mono">repos/</span>. <strong>Origin</strong> clones it from its remote; <strong>Local</strong> from the folder on disk.
+                        Each becomes a git submodule under <span className="font-mono">repos/</span>. <strong>Origin</strong> clones it from its remote; <strong>Local</strong> from the folder on disk{canFork ? <>; <strong>Fork</strong> forks it on GitHub into the account you choose, and the fork becomes the submodule</> : null}.
                         {exploding ? ' The host is the repo the workspace builds; the rest are packages it uses.' : ''}
                     </p>
                     <table className={table}>
@@ -132,7 +142,7 @@ export function ReposStepView({ draft, onPatch, onMode, onPrimary }: ReposStepPr
                         </thead>
                         <tbody>
                             {draft.repos.map((r) => {
-                                const options = sourceOptions(r, draft.staged);
+                                const options = sourceOptions(r, draft.staged, canFork);
                                 return (
                                     <tr key={r.key} data-repo-row={r.key}>
                                         <td><input type="checkbox" aria-label={`Include ${r.relPath}`} checked={r.included} onChange={(e) => onPatch(r.key, { included: e.target.checked })} /></td>
@@ -157,6 +167,12 @@ export function ReposStepView({ draft, onPatch, onMode, onPrimary }: ReposStepPr
                     </table>
                 </>
             )}
+            {forking && github ? (
+                <div data-fork-into="" className="flex flex-col gap-1.5">
+                    {OwnerPicker({ label: 'Fork into', field: 'fork-owner', value: draft.forkInto ?? '', github, why: 'to fork repositories into this account', onOwner: onForkInto, onGithub })}
+                    <span className={muted}>GitHub makes each fork first; the workspace is built only once every fork is ready.</span>
+                </div>
+            ) : null}
             {problem ? <p data-repos-problem="" className="text-xs text-[var(--danger)]">{problem}</p> : null}
         </div>
     );
@@ -275,7 +291,7 @@ export function WorkspaceStepView({ draft, sep, onName, onBrowse, remote, github
             </div>
             {tynnLink ?? null}
             <p data-wizard-summary="" className={muted}>
-                Genie makes the folder and its first commit, adds <strong>{plan.repos.length}</strong> submodule{plan.repos.length === 1 ? '' : 's'}, copies <strong>{copies}</strong> knowledge item{copies === 1 ? '' : 's'}, and commits them. {draft.staged ? 'The staging clone is removed afterwards.' : 'Your folder is not changed.'}
+                {plan.forkInto ? <>Genie first forks {plan.repos.filter((r) => r.fork).length} on GitHub into <strong>{plan.forkInto}</strong> and waits until each fork is ready. Then it </> : 'Genie '}makes the folder and its first commit, adds <strong>{plan.repos.length}</strong> submodule{plan.repos.length === 1 ? '' : 's'}, copies <strong>{copies}</strong> knowledge item{copies === 1 ? '' : 's'}, and commits them. {draft.staged ? 'The staging clone is removed afterwards.' : 'Your folder is not changed.'}
             </p>
             {remote && onRemote ? <RemoteChoiceView choice={remote} github={github ?? null} folder={folder} onChoice={onRemote} onGithub={onGithub ?? (() => {})} /> : null}
         </div>
@@ -405,7 +421,17 @@ export function AddWorkspaceWizard({ read, primaryWorkspace, sep, browseParent, 
         );
         const views = [
             <SourceStepView key="source" analysis={d.analysis} staged={d.staged} url={read.url} />,
-            <ReposStepView key="repos" draft={d} onPatch={(key, patch) => setDraft(patchRepo(d, key, patch))} onMode={(m) => setDraft(setMonorepoMode(d, m))} onPrimary={(n) => setDraft(choosePrimary(d, n))} />,
+            <ReposStepView
+                key="repos"
+                draft={d}
+                // Choosing Fork with no owner yet starts at the person (Genie 1: the owner picker's default).
+                onPatch={(key, patch) => setDraft(patchRepo(patch.source === 'fork' && !d.forkInto && github?.user ? { ...d, forkInto: github.user.login } : d, key, patch))}
+                onMode={(m) => setDraft(setMonorepoMode(d, m))}
+                onPrimary={(n) => setDraft(choosePrimary(d, n))}
+                github={github}
+                onForkInto={(owner) => { setDraft({ ...d, forkInto: owner }); setError(null); }}
+                onGithub={onGithub}
+            />,
             knowledgeStep,
             <WorkspaceStepView key="workspace" draft={d} sep={sep} onName={(n) => { setDraft(renameWorkspace(d, n)); setError(null); }} onBrowse={() => pickParent((p) => setDraft({ ...d, parent: p }), d.parent)} remote={remote} github={github} onRemote={(c) => { setPicked(c); setError(null); }} onGithub={onGithub} tynnLink={tynn ? <TynnProjectLink api={tynn} projectId={projectId} onProject={(id) => { setProjectId(id); setError(null); }} /> : undefined} />,
         ];

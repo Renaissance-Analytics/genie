@@ -50,6 +50,7 @@ import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-si
 import { TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
+import type { RepoListing } from '../core/github.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
 import { listHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
@@ -60,7 +61,7 @@ import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
-import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit } from './envelope-wizard-host.js';
+import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
@@ -1565,7 +1566,10 @@ async function boot(): Promise<void> {
     };
     // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
     // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
-    const envelopePorts = nodeEnvelopePorts();
+    // Fork rows (Add workspace parity item 12) fork with the GitHub sign-in, only while it is signed in.
+    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts(), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
+    // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
+    const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
     const repoOps: RepoOpsPorts = {
         fs: {
@@ -1628,6 +1632,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-register-existing', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? registerExisting(workspaceOps, raw) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown, rawRemote: unknown) => buildFromWindow(raw, rawRemote));
     ipcMain.handle('genie:workspace-discard-staged', (_event, raw: unknown) => (typeof raw === 'string' ? discardStaged(envelopePorts, raw) : { ok: true }));
+    ipcMain.handle('genie:workspace-github-repos', () => githubRepos());
     // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
     // host, and the plan for THAT project before anything is written.
     ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
@@ -1860,6 +1865,7 @@ async function boot(): Promise<void> {
                 registerExisting: (path) => registerExisting(workspaceOps, path),
                 buildEnvelope: (raw, remote) => buildFromWindow(raw, remote),
                 discardStaged: (path) => discardStaged(envelopePorts, path),
+                githubRepos: () => githubRepos(),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
                 wake: (id) => wakeWorkspace(workspaceOps, id),

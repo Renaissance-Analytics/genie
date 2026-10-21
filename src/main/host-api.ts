@@ -85,6 +85,8 @@ export interface HostApiDeps {
         registerExisting?(path: string): Promise<unknown>;
         buildEnvelope?(plan: unknown, remote?: unknown): Promise<unknown>;
         discardStaged?(path: string): Promise<unknown>;
+        /** Import from Git's browser: the repositories this host's GitHub sign-in reaches (Add workspace parity item 8). */
+        githubRepos?(): Promise<unknown>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<unknown>;
         hibernate(workspaceId: string): Promise<unknown>;
         wake(workspaceId: string): Promise<unknown>;
@@ -243,6 +245,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.discardStaged':
                 if (!deps.workspaceOps.discardStaged) throw new Error('this host cannot discard an import');
                 return deps.workspaceOps.discardStaged(str(args[0]));
+            case 'workspaces.githubRepos':
+                if (!deps.workspaceOps.githubRepos) throw new Error('this host cannot list GitHub repositories');
+                return deps.workspaceOps.githubRepos();
             case 'workspaces.locateRepo':
                 if (!deps.workspaceOps.locateRepo) throw new Error('this host cannot locate a repo');
                 return deps.workspaceOps.locateRepo(str(args[0]), str(args[1]), str(args[2]));

@@ -72,7 +72,10 @@ describe('the capability table', () => {
         // and `workspaces.createTynnProject` (a write) — owner-only on a host.
         // 75 since "It came with agents" (Add workspace parity item 6): `workspaces.importedAgents` (a read) and
         // `workspaces.adoptAgent` (a write) — owner-only on a host.
-        expect(REMOTE_METHODS.length).toBe(75);
+        // 76 since `workspaces.githubRepos` (Import from Git's browser, Add workspace parity item 8): a read of what the
+        // HOST's GitHub sign-in reaches — owner-only, like the import it feeds.
+        expect(REMOTE_METHODS.length).toBe(76);
+        expect(capabilityOf('workspaces.githubRepos')).toBe('read');
         expect(capabilityOf('workspaces.tynnOwnerOptions')).toBe('read');
         expect(capabilityOf('workspaces.createTynnProject')).toBe('write');
         expect(capabilityOf('workspaces.importedAgents')).toBe('read');

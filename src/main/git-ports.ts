@@ -81,7 +81,13 @@ export async function gitAddSubmodule(envelope: string, url: string, at: string,
     return head;
 }
 
-export interface GitAuth { config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }
+/**
+ * A credential for one git command: config carried in git's environment and the secrets to scrub from its words. `url`,
+ * when present, is what a CLONE fetches instead of the URL it was given — the HTTPS twin of a github.com SSH URL the
+ * sign-in covers (core/github.ts cloneAuthFor; Add workspace parity item 8). A submodule add keeps its URL as given, so
+ * `.gitmodules` records what the person chose.
+ */
+export interface GitAuth { url?: string; config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }
 
 /**
  * A NEW ENVELOPE'S REMOTE (Add workspace parity item 11): `git remote add origin <url>`. The URL comes after `--`, so a
@@ -115,7 +121,7 @@ export async function gitPushMain(path: string, auth?: GitAuth): Promise<void> {
  * `branch`: the one to check out (Tynn's `default_branch` for the envelope it names); none = the remote's HEAD.
  */
 export function gitClone(url: string, into: string, auth?: GitAuth, branch?: string | null): Promise<void> {
-    return gitWithAuth(undefined, ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), '--', url, into], auth).then(() => {});
+    return gitWithAuth(undefined, ['clone', '--recurse-submodules', ...(branch ? ['--branch', branch] : []), '--', auth?.url ?? url, into], auth).then(() => {});
 }
 
 /** Config entries as git's environment: GIT_CONFIG_COUNT and GIT_CONFIG_KEY_n / GIT_CONFIG_VALUE_n, appended after any already there. */
