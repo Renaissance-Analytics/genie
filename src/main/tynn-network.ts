@@ -1,6 +1,6 @@
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { verifyMemberGrant, type GrantCheck, type TynnJwk } from './relay-grant.js';
-import { relayHostLink } from './relay-host.js';
+import { relayHostLink, type RelayHostLinkDeps } from './relay-host.js';
 import { buildTicketHostHello, type PopJwk, type RelaySocketFactory } from './relay-wire.js';
 
 /**
@@ -159,6 +159,8 @@ export function startRelayHost(input: {
     onStatus?: (status: RelayHostStatus) => void;
     reconnect?: { minMs: number; maxMs: number };
     log?: (message: string) => void;
+    /** This host's `.gen` sites for the owner's windows elsewhere (relay-site.ts `dialFrontDoor`). */
+    site?: RelayHostLinkDeps['site'];
 }): RelayHostHandle {
     let status: RelayHostStatus = { state: 'connecting' };
     let stopped = false;
@@ -193,6 +195,7 @@ export function startRelayHost(input: {
             },
             validateGrant: grantValidator({ workstationId: input.workstationId, keys: () => input.ports.keys(), introspect: (t) => input.ports.introspect(t) }),
             ...(input.reconnect ? { reconnect: input.reconnect } : {}),
+            ...(input.site ? { site: input.site } : {}),
             onState: (state, detail) => {
                 if (stopped) return;
                 if (state === 'open') set({ state: 'reachable', relay });
