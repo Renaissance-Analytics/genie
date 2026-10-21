@@ -360,10 +360,10 @@ function GroupHeader({
 }) {
     return (
         <>
-            <div className="relative flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+            <div className="relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
                 <Lanes segments={lanes} />
                 <span className="font-semibold">{name}</span>
-                <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
+                <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
                 {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
                 {group.governedBy ? <span data-governed-by={group.governedBy} className="ml-2.5 shrink-0 text-[var(--fg-4)]">governed by {group.governedBy}</span> : null}
                 {/* THE WORKSPACE-LEVEL FAULT (the board): `⚠ repo site not found in moic.agi` and its own fix button. */}
@@ -636,7 +636,7 @@ export function Dashboard({ rows, genie = null, workspaces, onOpenAgent, onAddAg
                 <div data-group-by="status">
                     {statusGroups.map((g) => (
                         <div key={g.state} data-status-group={g.state}>
-                            <div className="relative flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                            <div className="relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
                                 <Lanes segments={lanes?.[`head:${g.state}`]} />
                                 <span className={`mr-2 size-2 rounded-full ${CHIP_DOT[g.state]}`} />
                                 <span className="font-semibold">{g.label}</span>
@@ -656,10 +656,10 @@ export function Dashboard({ rows, genie = null, workspaces, onOpenAgent, onAddAg
             {/* GENIE'S OWN GROUP (the design mockup): first, `genie · default agent · not in a workspace · 1 agent`. */}
             {genie ? (
                 <div data-genie-group="">
-                    <div className="relative flex h-7 items-center border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+                    <div className="relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
                         <Lanes segments={lanes?.['head:genie']} />
                         <span className="font-semibold">genie</span>
-                        <span className="ml-2.5 truncate font-mono text-[11px] text-[var(--fg-4)]">default agent · not in a workspace</span>
+                        <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">default agent · not in a workspace</span>
                         <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">1 agent</span>
                     </div>
                     <AgentRowView row={genie} onOpen={onOpenAgent} onFix={onFix} focused={genie.id === focused} reveal={reveal} lanes={lanes?.[genie.id]} onReveal={setOwnReveal} />

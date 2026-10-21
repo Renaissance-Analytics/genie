@@ -6,7 +6,7 @@ import { fileLinkTarget, linkFileRefs } from '../../core/chat-file-links.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
-import { chatFollowKey, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, type ComposerMeter } from '../../core/composer.js';
@@ -98,8 +98,9 @@ export function ChatWaiting({ id, agentName, waiting, onInterruptAndSend }: { id
 
 /**
  * A PIECE OF AGENTINBOX MAIL in the chat (beta.33 items 7 + 18; the owner: "I need to be able to see the context in
- * agentInbox deliveries … click an inbox post and have it open the agent inbox"). Who to whom and when, then the whole
- * message rendered — an FTQ answer reads as its question's header, the option chosen and the note. The head opens that
+ * agentInbox deliveries … click an inbox post and have it open the agent inbox"). Who to whom and when, then a short
+ * preview (2026-10-21: no longer the whole message) — an FTQ answer reads as its question's header, the option chosen and
+ * the note, on one line. The head opens that
  * message in the AgentInbox; with nowhere to open it (the doctor window), it is plain text, never a dead button.
  * Hook-free, so a test can press it.
  */
@@ -121,7 +122,9 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
             ) : (
                 <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--violet-400)]">{head}</div>
             )}
-            <ContentRenderer value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+            {/* A SHORT PREVIEW, not the message (the owner, 2026-10-21: "I don't need to see so much content, that is what the
+                link to open it is for"): one plain line of it, at most two lines tall; the head opens it in full. */}
+            <p data-mail-preview={m.id} className="line-clamp-2 text-[13px] text-[var(--fg-2)]">{mailSubject(m.text)}</p>
         </div>
     );
 }
