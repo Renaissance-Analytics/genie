@@ -188,8 +188,10 @@ describe('reads, writes, the baton', () => {
         await guest.hello({ kind: 'share', id: link.id, secret }, 'wren');
         expect(await guest.call('baton.take')).toMatchObject({ ok: true });
         expect(await guest.call('workspaces.create', 'acme', '/w', { kind: 'github', owner: 'ada', private: true })).toMatchObject({ ok: false, reason: expect.stringContaining('only its owner can') });
+        // The control: the same call by the owner, once the guest has handed the baton back, goes through.
+        expect(await guest.call('baton.release')).toMatchObject({ ok: true });
         const o = await owner('laptop');
-        await o.call('baton.take');
+        expect(await o.call('baton.take')).toMatchObject({ ok: true });
         expect(await o.call('workspaces.create', 'acme', '/w', { kind: 'none' })).toMatchObject({ ok: true });
     });
 
