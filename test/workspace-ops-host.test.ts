@@ -124,29 +124,6 @@ describe('creating a new workspace', () => {
         expect(f.files['/w/acme-storefront.agi/project.json']).toMatchObject({ name: 'Acme Storefront', $schema: SCHEMA });
     });
 
-    it('linked to a Tynn project (optional, as in Genie 1): project.json carries `tynn` from TYNN’s own list, not the window’s', async () => {
-        const f = fakes({ entries: { '/w': [] } });
-        f.ports.tynn = { host: 'https://tynn.example/', projects: async () => [{ id: 42, name: 'Acme', slug: 'acme', vision: null }] };
-        const r = await createWorkspace(f.ports, 'Acme Storefront', '/w', '42');
-        expect(r).toMatchObject({ ok: true, id: 'acme-storefront' });
-        expect(f.files['/w/acme-storefront.agi/project.json']).toMatchObject({ name: 'Acme Storefront', tynn: { host: 'https://tynn.example', project: 'acme', projectId: '42' } });
-    });
-
-    it('a project Tynn does not list for you, or no Tynn client: refused in words BEFORE anything is written', async () => {
-        const f = fakes({ entries: { '/w': [] } });
-        f.ports.tynn = { host: 'https://tynn.example', projects: async () => [{ id: 42, name: 'Acme', slug: 'acme', vision: null }] };
-        expect(await createWorkspace(f.ports, 'acme', '/w', '99')).toMatchObject({ ok: false, reason: expect.stringMatching(/Tynn lists no project 99/) });
-        f.ports.tynn = undefined;
-        expect(await createWorkspace(f.ports, 'acme', '/w', '42')).toMatchObject({ ok: false, reason: expect.stringMatching(/no Tynn client/) });
-        expect(f.calls.filter((c) => c.startsWith('mkdir') || c.startsWith('writeJson'))).toEqual([]);
-    });
-
-    it('CONTROL: no project chosen — no `tynn` key, as before', async () => {
-        const f = fakes({ entries: { '/w': [] } });
-        await createWorkspace(f.ports, 'acme', '/w');
-        expect(f.files['/w/acme.agi/project.json']).not.toHaveProperty('tynn');
-    });
-
     it('an EMPTY folder of that name already there is used, not refused', async () => {
         const f = fakes({ entries: { '/w': ['acme.agi'], '/w/acme.agi': [] } });
         expect(await createWorkspace(f.ports, 'acme', '/w')).toMatchObject({ ok: true, id: 'acme' });

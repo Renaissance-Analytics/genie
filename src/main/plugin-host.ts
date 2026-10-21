@@ -109,9 +109,10 @@ export class PluginHost {
     }
 
     /** The MCP tools of ENABLED plugins (§6.7), each with its folder and manifest — what the MCP surface offers agents. */
-    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool }[] {
+    tools(): readonly { pluginId: string; dir: string; manifest: NonNullable<Loaded['manifest']>; tool: PluginTool; official: boolean }[] {
+        // `official`: Genie's own tool, run in-process (main/official-tools.ts) — there is no plugin folder to launch from.
         return this.#entries.flatMap((e) =>
-            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: e.manifest!, tool })) : [],
+            e.state === 'enabled' && e.manifest ? e.manifest.mcpTools.map((tool) => ({ pluginId: e.id, dir: join(this.#dir, e.folder), manifest: e.manifest!, tool, official: e.folder === OFFICIAL_FOLDER })) : [],
         );
     }
 

@@ -10,7 +10,9 @@
  * (v1's owner rule, kept).
  */
 
-export const VETTED_FANCY_EXPORTS = ['ContentRenderer', 'JsonEditor', 'Callout'] as const;
+// `RepoChangesPanel` and `ArtBoardPanel` (beta.33 item 14) are Genie's own first-party panels for the official Repository and
+// ArtBoard plugins (Genie 1's compile-time adapter registry): built from Fancy components, still no plugin code.
+export const VETTED_FANCY_EXPORTS = ['ContentRenderer', 'JsonEditor', 'Callout', 'RepoChangesPanel', 'ArtBoardPanel'] as const;
 export type VettedFancyExport = (typeof VETTED_FANCY_EXPORTS)[number];
 
 /** A panel in the workspace grid mounting one vetted Fancy component with the manifest's props. */

@@ -17,6 +17,8 @@ export interface PluginToolRef {
     readonly dir: string;
     readonly manifest: PluginManifest;
     readonly tool: PluginTool;
+    /** Genie's own (an official plugin, beta.33 item 14): run in-process, not launched from a plugin folder. */
+    readonly official?: boolean;
 }
 
 export interface PluginToolsDeps {
@@ -26,7 +28,7 @@ export interface PluginToolsDeps {
         /** The plugin's guard, or null when it is not enabled any more. */
         guard(pluginId: string): ((request: AccessRequest) => AccessDecision) | null;
     };
-    readonly run: (input: { dir: string; manifest: PluginManifest; tool: PluginTool; args: unknown; caller: Caller; guard: (request: AccessRequest) => AccessDecision }) => Promise<RunResult>;
+    readonly run: (input: { dir: string; manifest: PluginManifest; tool: PluginTool; args: unknown; caller: Caller; guard: (request: AccessRequest) => AccessDecision; official?: boolean; pluginId?: string }) => Promise<RunResult>;
     readonly approve: (caller: Caller, action: 'plugin', detail: string) => Promise<'allowed' | 'denied'>;
     readonly resolveCaller: (terminalId: string) => Caller | null;
 }
@@ -54,7 +56,7 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
                 const verdict = await deps.approve(caller, 'plugin', name);
                 if (verdict !== 'allowed') return err(`${name} was denied by the person; nothing ran`);
             }
-            const result = await deps.run({ dir: ref.dir, manifest: ref.manifest, tool: ref.tool, args: rest, caller, guard });
+            const result = await deps.run({ dir: ref.dir, manifest: ref.manifest, tool: ref.tool, args: rest, caller, guard, official: ref.official === true, pluginId: ref.pluginId });
             return result.ok ? ok(result) : err(result.reason);
         };
         return { definition, handler: handler as Registration['handler'] };

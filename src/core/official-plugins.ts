@@ -12,8 +12,10 @@
  * Not carried from Genie 1, with the reason:
  *  - Presentation's `.odp`: dark-slide reads and writes PPTX only. Claiming `.odp` would route the file to an editor that
  *    cannot open it. Asked of dark-slide (an ODP reader) in the builder's report.
- *  - The generation tools (`presentation.createDeck`, `spreadsheet.createWorkbook`) and the Repository / ArtBoard panels
- *    land in their own change (item 14, part two); these three manifests declare editors only.
+ *
+ * Their TOOLS run inside Genie (main/official-tools.ts, `run: 'official'`), under the same declared-capability guard as any
+ * plugin's; their PANELS are first-party components on the vetted list (core/plugin-panels.ts): the Repository changes panel
+ * and the ArtBoard (Tynn #784).
  */
 
 export interface OfficialPlugin {
@@ -27,6 +29,8 @@ const publisher = { name: 'Genie', keyId: 'genie-official', url: 'https://github
 const DOCUMENT_TYPES = ['.md', '.markdown', '.mdc', '.docx'];
 const SHEET_TYPES = ['.xlsx', '.csv', '.ods'];
 const DECK_TYPES = ['.pptx'];
+const BOARD_TYPES = ['.json', '.html', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp'];
+const tool = (name: string, description: string, inputSchema: Record<string, unknown>) => ({ name, description, inputSchema, run: 'official', process: 'worker', gated: false });
 
 export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
     {
@@ -48,6 +52,18 @@ export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
             version: '2.0.0',
             publisher,
             editors: [{ id: 'sheet', title: 'Sheets', extensions: SHEET_TYPES, fancyEditor: { export: 'SheetWorkbook' } }],
+            mcpTools: [tool('createWorkbook', 'Generate an .xlsx workbook from structured data and write it into the workspace. Provide sheets (name + columns + rows), or a flat rows array (with optional headers), or csv text; optional title and a workspace-relative output path (default <title>.xlsx). Open it in Genie to edit it.', {
+                type: 'object',
+                properties: {
+                    title: { type: 'string' },
+                    path: { type: 'string', description: 'Workspace-relative output path; defaults to <title>.xlsx.' },
+                    sheetName: { type: 'string' },
+                    headers: { type: 'array', items: { type: 'string' } },
+                    rows: { type: 'array', description: 'Flat rows (each an array of cell values) when not using sheets.', items: { type: 'array' } },
+                    csv: { type: 'string', description: 'CSV text; the first row is the headers.' },
+                    sheets: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, columns: { type: 'array' }, rows: { type: 'array' } } } },
+                },
+            })],
             capabilities: { fs: { scope: 'workspace', extensions: SHEET_TYPES }, network: { hosts: [] } },
         },
     },
@@ -59,7 +75,51 @@ export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
             version: '2.0.0',
             publisher,
             editors: [{ id: 'deck', title: 'Slides', extensions: DECK_TYPES, fancyEditor: { export: 'DeckEditor' } }],
+            mcpTools: [tool('createDeck', 'Generate a .pptx slide deck from a structured outline and write it into the workspace. Provide slides (each with a title and a markdown body or bullets); optional title, theme and a workspace-relative output path (default <title>.pptx). Open it in Genie to edit it and Present it.', {
+                type: 'object',
+                properties: {
+                    title: { type: 'string', description: 'Deck title (also the default file name).' },
+                    theme: { type: 'string', description: 'Theme name (default: default).' },
+                    path: { type: 'string', description: 'Workspace-relative output path; defaults to <title>.pptx.' },
+                    slides: { type: 'array', description: 'The slides, in order.', items: { type: 'object', properties: { title: { type: 'string' }, body: { type: 'string', description: 'Markdown body.' }, bullets: { type: 'array', items: { type: 'string' } }, layout: { type: 'string' } } } },
+                },
+                required: ['slides'],
+            })],
             capabilities: { fs: { scope: 'workspace', extensions: DECK_TYPES }, network: { hosts: [] } },
+        },
+    },
+    {
+        description: 'The workspace repository in a panel: review the changes and their diff, stage, commit, branch, push and pull — your clicks, the real git on the host.',
+        manifest: {
+            id: 'ai.genie.repository',
+            name: 'Repository',
+            version: '2.0.0',
+            publisher,
+            panels: [{ id: 'changes', title: 'Repository', fancyComponent: { export: 'RepoChangesPanel' } }],
+            capabilities: { network: { hosts: [] } },
+        },
+    },
+    {
+        description: 'A review surface for what agents MAKE: an agent posts a rendered mockup or an image; you approve or reject it with a comment, and the verdict goes back to that agent.',
+        manifest: {
+            id: 'ai.genie.artboard',
+            name: 'ArtBoard',
+            version: '2.0.0',
+            publisher,
+            mcpTools: [tool('post', 'Put something you MADE on the ArtBoard for a person to review — a rendered HTML mockup, or an image you generated. Not for plans or written proposals (those are text: send a message). Provide a title and either html (the markup) or kind "image" with imagePath (workspace-relative; it is COPIED onto the board). Pass a stable id and post again with the same id to REPLACE that card when you revise. Returns at once; the approve / reject verdict, with any comment, arrives in your AgentInbox — carry on with work that does not depend on it.', {
+                type: 'object',
+                properties: {
+                    title: { type: 'string', description: 'What the reviewer sees on the card.' },
+                    kind: { type: 'string', enum: ['html', 'image'], description: 'html (default) or image.' },
+                    html: { type: 'string', description: 'For kind html: the full markup to render.' },
+                    imagePath: { type: 'string', description: 'For kind image: the workspace-relative path of the image you made.' },
+                    id: { type: 'string', description: 'Stable id; posting again with it REPLACES that card.' },
+                    note: { type: 'string', description: 'One line on what you want looked at.' },
+                },
+                required: ['title'],
+            })],
+            panels: [{ id: 'board', title: 'ArtBoard', fancyComponent: { export: 'ArtBoardPanel' } }],
+            capabilities: { fs: { scope: 'workspace', extensions: BOARD_TYPES }, network: { hosts: [] } },
         },
     },
 ];

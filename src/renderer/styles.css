@@ -13,6 +13,8 @@
 /* And the official plugins' editors (beta.33 item 14): the sheet editor and the slide editor ship Tailwind classes too. */
 @source "../../node_modules/@particle-academy/fancy-sheets/dist/**/*.js";
 @source "../../node_modules/@particle-academy/fancy-slides/dist/**/*.js";
+/* The Repository panel's git components (beta.33 item 14). */
+@source "../../node_modules/@particle-academy/fancy-git-ui/dist/**/*.js";
 
 @import "./tokens.css";
 

@@ -485,7 +485,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 const panel = pluginPanels.find((x) => x.pluginId === plugin.pluginId && x.id === plugin.panelId);
                                 return (
                                     <div key={id} data-pane-slot={id} data-pane-kind="plugin" {...(id === state.active ? { 'data-pane-active': '' } : {})} className="min-h-0 min-w-0 bg-[var(--bg-0)]" onFocusCapture={() => { if (id !== state.active) setState((s) => activate(s, id)); }}>
-                                        {panel ? <PluginPane panel={panel} /> : (
+                                        {panel ? <PluginPane panel={panel} workspace={workspace} /> : (
                                             <p data-plugin-pane-missing={`${plugin.pluginId}/${plugin.panelId}`} className="p-3 text-[13px] text-[var(--fg-3)]">The plugin {plugin.pluginId} is not enabled any more (or no longer offers this panel); close this pane.</p>
                                         )}
                                     </div>
@@ -865,7 +865,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />;
                             if (p.kind === 'artboard') {
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
-                                return board ? <PluginPane panel={board} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;
+                                return board ? <PluginPane panel={board} workspace={workspace} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;
                             }
                             const at = tab.cells.indexOf(p);
                             const live = sitePanels && at >= 0 ? {
