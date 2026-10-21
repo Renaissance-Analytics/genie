@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeSubscribe, parsePusherFrame, pusherWsUrl } from '../src/core/pusher.js';
+import { encodeSubscribe, parsePusherFrame, pusherWsUrl, socketUrlFor } from '../src/core/pusher.js';
 import type { IwEvent } from '../src/core/issue-watch.js';
 import { IssueWatchClient, type IssueWatchClientPorts, type SocketLike } from '../src/main/issue-watch-client.js';
 
@@ -15,7 +15,7 @@ const PROJECT = 'proj_1';
 const item = (key: string, kind = 'issue', updatedAt = '2026-10-17T10:00:00Z') => ({ kind, key, number: 1, title: 't', url: 'u', createdAt: updatedAt, updatedAt, owner: 'acme', repo: 'app' });
 const entry = (items: unknown[]) => ({ workspaceId: PROJECT, projectId: PROJECT, counts: {}, items, feedbackItems: [], tracking: {} });
 
-function harness(opts: { signedIn?: boolean; authStatus?: number; refresh?: { status?: number; json: unknown } } = {}) {
+function harness(opts: { signedIn?: boolean; authStatus?: number; refresh?: { status?: number; json: unknown }; config?: unknown } = {}) {
     const requests: Array<{ method: string; path: string; body: unknown }> = [];
     const sockets: Array<SocketLike & { sent: string[]; url: string; closed: boolean; emit(frame: unknown): void; drop(): void }> = [];
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
@@ -27,7 +27,7 @@ function harness(opts: { signedIn?: boolean; authStatus?: number; refresh?: { st
             userId: '42',
             request: async (path, init) => {
                 requests.push({ method: init.method, path, body: init.body ?? null });
-                const json = path === '/api/v1/broadcasting-config' ? { key: 'pk_test', cluster: 'us2' }
+                const json = path === '/api/v1/broadcasting-config' ? (opts.config ?? { key: 'pk_test', cluster: 'us2' })
                     : path === '/api/v1/user/broadcasting-auth' ? { auth: 'pk_test:sig' }
                     : path === '/api/v1/user/issue-watch/refresh' ? opts.refresh?.json
                     : reconcile;
@@ -71,6 +71,18 @@ describe('the Pusher protocol', () => {
         expect(pusherWsUrl('pk', 'us2')).toBe('wss://ws-us2.pusher.com/app/pk?protocol=7&client=genie&version=2.0');
         expect(JSON.parse(encodeSubscribe('private-x', 'pk:sig'))).toEqual({ event: 'pusher:subscribe', data: { auth: 'pk:sig', channel: 'private-x' } });
     });
+    it('Tynn’s own socket server (Reverb — Laravel Cloud, or Genie’s WebSocket service in development) is dialled at the host Tynn names', () => {
+        expect(socketUrlFor({ broadcaster: 'reverb', key: 'rk', host: 'ws.example.test', port: 443, scheme: 'https' }))
+            .toBe('wss://ws.example.test:443/app/rk?protocol=7&client=genie&version=2.0');
+        expect(socketUrlFor({ broadcaster: 'reverb', key: 'rk', host: 'websockets.gen', port: 8080, scheme: 'http' }))
+            .toBe('ws://websockets.gen:8080/app/rk?protocol=7&client=genie&version=2.0');
+        // Pusher (and a Tynn from before `broadcaster` was said): the cluster's host.
+        expect(socketUrlFor({ key: 'pk', cluster: 'eu' })).toBe('wss://ws-eu.pusher.com/app/pk?protocol=7&client=genie&version=2.0');
+        expect(socketUrlFor({ broadcaster: 'pusher', key: 'pk' })).toBe('wss://ws-us2.pusher.com/app/pk?protocol=7&client=genie&version=2.0');
+        // No key, or Reverb without a host: nothing to dial.
+        expect(socketUrlFor({ broadcaster: 'reverb', key: 'rk' })).toBeNull();
+        expect(socketUrlFor({ broadcaster: 'log', key: null })).toBeNull();
+    });
 });
 
 describe('the client', () => {
@@ -81,6 +93,15 @@ describe('the client', () => {
         expect(h.client.state()).toEqual({ kind: 'signed-out' });
         expect(h.requests).toEqual([]);
         expect(h.sockets).toEqual([]);
+    });
+
+    it('dials the Reverb host Tynn names, and goes live on it exactly as on Pusher', async () => {
+        const h = harness({ config: { broadcaster: 'reverb', key: 'rk', host: 'ws.example.test', port: 443, scheme: 'https' } });
+        h.client.start();
+        await h.settle();
+        expect(h.sockets.map((s) => s.url)).toEqual(['wss://ws.example.test:443/app/rk?protocol=7&client=genie&version=2.0']);
+        await h.connect(h.sockets[0]!);
+        expect(h.client.state()).toEqual({ kind: 'live' });
     });
 
     it('connects over the session, on Genie 1’s routes: push config, the socket, the channel signed for THIS socket, subscribed, reconciled', async () => {
