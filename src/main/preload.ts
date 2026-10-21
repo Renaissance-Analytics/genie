@@ -196,6 +196,7 @@ const bridge: GenieBridge = {
         tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
         children: (workspaceId, dir) => ipcRenderer.invoke('genie:files-children', workspaceId, dir) as Promise<never>,
         open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
+        readMedia: (workspaceId, path) => ipcRenderer.invoke('genie:files-read-media', workspaceId, path) as Promise<never>,
         openExternal: (workspaceId, path) => ipcRenderer.invoke('genie:files-open-external', workspaceId, path) as Promise<never>,
         reveal: (workspaceId, path) => ipcRenderer.invoke('genie:files-reveal', workspaceId, path) as Promise<never>,
         create: (workspaceId, path, kind) => ipcRenderer.invoke('genie:files-create', workspaceId, path, kind) as Promise<never>,

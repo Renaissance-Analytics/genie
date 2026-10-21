@@ -7,6 +7,8 @@ import { usePluginEditors } from '../plugin-editors-context.js';
 import { PluginEditorBody } from './PluginEditorBody.js';
 import { routeFileToOpen, type TreeNode } from '../../core/files-panel.js';
 import { pauseRequests, resumed, type Pause } from '../../core/files-popout.js';
+import { resolveFileKind } from '@particle-academy/fancy-code';
+import { mediaOpen } from '../../core/files-media.js';
 import { openOrError, settle } from '../../core/files-reads.js';
 import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-lazy.js';
 import type { GenieBridge } from '../bridge.js';
@@ -71,7 +73,14 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     // The tree's read failed: the reason, shown in the tree's place (never skeletons forever).
     const [treeError, setTreeError] = useState<string | null>(null);
     // Every open SETTLES into something the panel can say — the file, or why not. A rejected ask left `open` as it was.
-    const read = useCallback((path: string) => openOrError(() => files.open(workspace.id, path), path), [files, workspace.id]);
+    // A media file (fancy-code's call, as the panel makes it) is read as BYTES: its text is not the image (core/files-media.ts).
+    const read = useCallback((path: string) => {
+        if (files.readMedia && resolveFileKind({ filename: path }).kind === 'media') {
+            const readMedia = files.readMedia;
+            return openOrError(async () => mediaOpen(await readMedia(workspace.id, path), path), path);
+        }
+        return openOrError(() => files.open(workspace.id, path), path);
+    }, [files, workspace.id]);
     const [state, setState] = useState<FilesPanelState | null>(null);
     /*
      * THE TABS, ONE BUFFER EACH (beta.33 items 14 + 15; core/editor-workbench.ts). Genie 1 kept a buffer per tab; this panel
