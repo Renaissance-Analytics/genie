@@ -16,6 +16,20 @@
 /** The `genie-aos` App's public client id (Genie 1's `GENIE_GITHUB_CLIENT_ID`). Public: the device flow needs no secret. */
 export const GENIE_GITHUB_CLIENT_ID = 'Iv23liPssWsCpaUIxtIT';
 export const GENIE_GITHUB_APP_SLUG = 'genie-aos';
+/**
+ * The `genie-aos[bot]` ACCOUNT's user id (Genie 1's `GENIE_GITHUB_BOT_USER_ID`), NOT the App id: GitHub links a commit to
+ * an account only when its email resolves to one, and the bot's noreply address is built from this id.
+ */
+export const GENIE_GITHUB_BOT_USER_ID = 294734720;
+/**
+ * Who a commit Genie makes is by when the machine has NO git identity (Genie 1's `GENIE_FALLBACK_IDENTITY`, genie#215):
+ * the App's bot, an address GitHub links and nobody can mistake for a person. Only a fallback — a configured identity
+ * is the person's and is kept.
+ */
+export const GENIE_FALLBACK_IDENTITY = {
+    name: `${GENIE_GITHUB_APP_SLUG}[bot]`,
+    email: `${GENIE_GITHUB_BOT_USER_ID}+${GENIE_GITHUB_APP_SLUG}[bot]@users.noreply.github.com`,
+} as const;
 /** Install the App on more accounts or repositories: GitHub's own chooser. */
 export const GITHUB_INSTALL_URL = `https://github.com/apps/${GENIE_GITHUB_APP_SLUG}/installations/new`;
 /** Where a person revokes Genie's access to their account entirely (sign-out here only forgets the token). */

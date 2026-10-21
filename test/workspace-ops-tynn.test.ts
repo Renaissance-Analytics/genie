@@ -25,7 +25,9 @@ function fakes(over: { entries?: Record<string, string[]>; tynn?: () => Promise<
             readJson: async (p) => files[key(p)] ?? null,
             writeJson: async (p, v) => { calls.push(`writeJson:${key(p)}`); files[key(p)] = v; },
             mkdir: async (p) => { calls.push(`mkdir:${key(p)}`); entries[key(p)] = entries[key(p)] ?? []; },
+            writeText: async (p) => { calls.push(`writeText:${key(p)}`); },
             gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
+            gitFirstCommit: async (p) => { calls.push(`gitFirstCommit:${key(p)}`); },
             gitClone: async (url, into) => { calls.push(`gitClone:${url}:${key(into)}`); },
         },
         registry: {

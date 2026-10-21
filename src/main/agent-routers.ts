@@ -93,7 +93,8 @@ function migrationBlock(sections: ReadonlyArray<{ heading: string; body: string 
     return `${BEGIN}\n## Migrated agent instructions\n\n${sections.map((s) => `### ${s.heading}\n\n${s.body}\n`).join('\n')}${END}\n`;
 }
 
-function routerText(harness: 'codex' | 'claude', has: { readme: boolean; operator: boolean }): string {
+/** A harness's router as the sync writes it — exported so a new workspace's first commit holds exactly this. */
+export function routerText(harness: 'codex' | 'claude', has: { readme: boolean; operator: boolean }): string {
     return ['# Agent instructions', '', ...(has.readme ? ['@README.md'] : []), '@RULES.md', '@.agents/_genie/shared.md', `@.agents/_genie/genie-${harness}.md`, ...(has.operator ? ['@.agents/_genie/operator.md'] : []), ''].join('\n');
 }
 

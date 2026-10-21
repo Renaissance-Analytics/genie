@@ -2,7 +2,9 @@ import { basename, join } from 'node:path';
 import type { AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSchema, SCHEMA_REVISION, type FolderKind, type GitAddPlan, type PlanStep } from '../core/workspace-model.js';
-import { newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
+import { ENVELOPE_DIRS, ENVELOPE_GITIGNORE, envelopeReadme, envelopeRules, firstCommitMessage, newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
+import { writeAgentGitignore } from './agent-gitignore.js';
+import { routerText } from './agent-routers.js';
 import { parseTynnProject, tynnAddPlan, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
 
 /**
@@ -23,7 +25,10 @@ export interface WorkspaceOpsPorts {
         readJson(path: string): Promise<unknown | null>;
         writeJson(path: string, value: unknown): Promise<void>;
         mkdir(path: string): Promise<void>;
+        writeText(path: string, text: string): Promise<void>;
         gitInit(path: string): Promise<void>;
+        /** `git init` on `main`, everything staged, one commit (git-ports.ts); rejects with git's own words. */
+        gitFirstCommit(path: string, message: string): Promise<void>;
         /** `git clone <url> <into>`; rejects with git's own words. */
         gitClone(url: string, into: string): Promise<void>;
     };
@@ -241,6 +246,11 @@ export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: str
  * createAgiEnvelope): a NAME and a FOLDER; Genie makes `<folder>/<slug>.agi`, the envelope, and its first git commit. Every
  * refusal comes before anything is written: no name, no folder, a folder that does not exist, a name already a
  * workspace, a target that is not empty ("use Open existing folder on it").
+ *
+ * The first commit is the card's promise ("Genie makes the folder and its first commit", AddWorkspaceModal.tsx); Genie 2
+ * kept it in words only — a bare `git init`, no commit, no branch, no README, no .gitignore — until Add workspace parity
+ * item 1. The scaffold is Genie 1's (core/add-workspace.ts). The workspace is registered only once the commit exists, so
+ * a git that refuses leaves nothing half-added in Genie.
  */
 export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
     const problem = newWorkspaceProblem(name, parent);
@@ -254,6 +264,29 @@ export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, pa
     const there = await ports.fs.exists(target);
     if (there && (await ports.fs.entries(target)).length > 0) return { ok: false, reason: `${target} is not empty. Choose another name or folder, or use Open existing folder on it.` };
     if (!there) await ports.fs.mkdir(target);
-    const added = await addWorkspace(ports, target, { name: name.trim() }, id);
-    return added.ok ? { ok: true, id: added.id, path: target } : added;
+    const title = name.trim();
+    for (const d of ENVELOPE_DIRS) {
+        await ports.fs.mkdir(join(target, d));
+        await ports.fs.writeText(join(target, d, '.gitkeep'), '');
+    }
+    await ports.fs.writeJson(join(target, 'project.json'), { ...freshManifest(target, 'empty'), name: title });
+    // Genie 1's ignores, then the lines Genie's agent-file sync adds (the files carrying its MCP token), so the token can
+    // never be committed and the first sync has nothing left to append.
+    let gitignore = ENVELOPE_GITIGNORE;
+    await writeAgentGitignore({ workspacePath: target, fs: { read: async () => gitignore, write: async (_p, text) => { gitignore = text; } } });
+    await ports.fs.writeText(join(target, '.gitignore'), gitignore);
+    await ports.fs.writeText(join(target, 'README.md'), envelopeReadme(title, folder));
+    await ports.fs.writeText(join(target, 'RULES.md'), envelopeRules(title));
+    // Real files, never a symlink: agent-routers.ts replaces a symlinked harness file (Genie 1 wrote the Claude router
+    // through its CLAUDE.md symlink into AGENTS.md), and a Windows checkout has no symlink to give.
+    const has = { readme: true, operator: false };
+    await ports.fs.writeText(join(target, 'AGENTS.md'), routerText('codex', has));
+    await ports.fs.writeText(join(target, 'CLAUDE.md'), routerText('claude', has));
+    try {
+        await ports.fs.gitFirstCommit(target, firstCommitMessage(folder));
+    } catch (error) {
+        return { ok: false, reason: `Genie made ${target}, but git could not make its first commit: ${error instanceof Error ? error.message : String(error)}` };
+    }
+    await ports.registry.addWorkspace({ id, path: target });
+    return { ok: true, id, path: target };
 }
