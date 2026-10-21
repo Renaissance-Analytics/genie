@@ -188,6 +188,8 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     // THE WORKSPACE DASHBOARD (q_09d1f4a0): what waits on you, the work in flight, the last finished — no file changes.
     const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, now: Date.now() });
     const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
+    // What the body shows: the Files tab while the files are open here (beta.35 #41), else the route's view.
+    const onScreen: WorkspaceView | 'files' = filesInline ? 'files' : view;
     const label = workspace.name ?? workspace.id;
     /*
      * The xterm pane, loaded CLIENT-SIDE ONLY. `@xterm/xterm` touches `self` at module
@@ -570,11 +572,12 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
             <WorkspaceTabs
                 designed={designed}
                 agents={agentTabs}
-                current={{ kind: 'view', view }}
+                current={{ kind: 'view', view: onScreen }}
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
                 github={issueWatch?.linked === true}
-                onView={(v) => onViewChange?.(v as WorkspaceView)}
+                // Files is the open files (`?files=`); any other tab is a view, and choosing it leaves the files (Shell).
+                onView={(v) => { if (v === 'files') { if (!filesInline) onTogglePanel?.(); } else onViewChange?.(v as WorkspaceView); }}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
                 onOpenAgent={(id) => onOpenAgent?.(id)}
             />
@@ -597,7 +600,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 </div>
             ) : null}
 
-            {view === 'settings' && ops?.settings ? (
+            {onScreen === 'settings' && ops?.settings ? (
                 <section data-workspace-settings data-ws-card="general" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
                         <h2 className="text-sm font-semibold">General</h2>
@@ -644,7 +647,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     )}
                 </section>
             ) : null}
-            {view === 'settings' && onOpenRuntime ? (
+            {onScreen === 'settings' && onOpenRuntime ? (
                 <section data-ws-card="hosting" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div>
                         <h2 className="text-sm font-semibold">Hosting</h2>
@@ -656,7 +659,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     </div>
                 </section>
             ) : null}
-            {view === 'settings' && ops?.repos ? (
+            {onScreen === 'settings' && ops?.repos ? (
                 <section data-repos data-ws-card="repos" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
                         <h2 className="text-sm font-semibold">Repos</h2>
@@ -689,7 +692,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     </form>
                 </section>
             ) : null}
-            {view === 'settings' && ops?.agentFiles ? (
+            {onScreen === 'settings' && ops?.agentFiles ? (
                 <section data-ws-agent-files="" data-ws-card="agent-files" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
                         <h2 className="text-sm font-semibold">Agent files</h2>
@@ -722,7 +725,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     ) : null}
                 </section>
             ) : null}
-            {view === 'settings' && ops?.governs ? (
+            {onScreen === 'settings' && ops?.governs ? (
                 <section data-governs data-ws-card="governs" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
                     <div className="flex items-center gap-3">
                         <h2 className="text-sm font-semibold">Governs</h2>
@@ -758,27 +761,24 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     <button type="button" data-action="bring-back-files" onClick={() => onBringBackFiles?.()} className="rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-0.5 text-[var(--primary-fg)] hover:bg-[var(--primary-hover)]">Bring back</button>
                 </div>
             ) : null}
-            {/* HOME — the workspace dashboard, with the one file panel (when open) beside it. */}
-            {view === 'home' ? (
+            {/* FILES — ITS OWN TAB (beta.35 #41; the owner: the panel docked beside the dashboard was "garbage"): the tree
+                and the editor take the whole tab, and nothing else is drawn beside them. */}
+            {filesInline && files ? (
+                <div data-workspace-body="files" className="flex min-h-0 min-w-0 flex-1">
+                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
+                </div>
+            ) : null}
+            {/* HOME — the workspace dashboard. */}
+            {onScreen === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
-                    {filesInline && files ? (
-                        <div className="min-h-0 min-w-0 flex-1">
-                            <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
-                        </div>
-                    ) : null}
                     <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />
                 </div>
             ) : null}
-            {view === 'terminals' && filesInline && files ? (
-                <div className="min-h-0 flex-1 border-b border-[var(--border-1)]">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} onOpenInPane={(path) => setState((s) => codeOpened(s, path))} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
-                </div>
-            ) : null}
-            {view === 'terminals' ? terminalsBody : null}
+            {onScreen === 'terminals' ? terminalsBody : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
-            {view === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} /></div> : null}
+            {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} /></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
-            {view.startsWith('tab:') ? (() => {
+            {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);
                 if (!tab) {
                     return (
