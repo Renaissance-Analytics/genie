@@ -35,8 +35,11 @@ export interface WorkspaceOpsPorts {
         gitCommit(path: string, message: string): Promise<void>;
         /** `git clone --recurse-submodules [--branch <branch>] <url> <into>`; rejects with git's own words. */
         gitClone(url: string, into: string, branch?: string | null): Promise<void>;
-        /** `git submodule add [-b <branch>] <url> <at>` in an envelope (git-ports.ts); resolves to the branch tracked. */
-        gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null): Promise<string | null>;
+        /**
+         * `git submodule add [-b <branch>] <url> <at>` in an envelope (git-ports.ts); resolves to the branch tracked. `local`:
+         * the source is a folder on disk (the envelope wizard's Local), which git clones only with protocol.file.allow.
+         */
+        gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null, local?: boolean): Promise<string | null>;
     };
     registry: {
         workspace(id: string): { id: string; path: string; asleep: boolean } | null;
@@ -108,6 +111,28 @@ function freshManifest(path: string, kind: FolderKind): Record<string, unknown> 
     };
 }
 
+/**
+ * An existing envelope's manifest, stamped with this Genie's schema ONLY when it declares an older one (a backup kept);
+ * a current one is not written at all, and a newer one is refused untouched.
+ */
+export async function stampExisting(ports: WorkspaceOpsPorts, path: string): Promise<{ ok: true; stamped: { from: string | null; backup: string } | null } | Refusal> {
+    const manifestPath = join(path, 'project.json');
+    const current = await ports.fs.readJson(manifestPath);
+    const manifest = typeof current === 'object' && current !== null ? (current as Record<string, unknown>) : {};
+    const stamp = stampSchema(manifest, SCHEMA_REVISION);
+    if (!stamp.ok) return stamp;
+    if (!stamp.backup) return { ok: true, stamped: null };
+    await ports.fs.writeJson(join(path, stamp.backup), manifest);
+    await ports.fs.writeJson(manifestPath, stamp.manifest);
+    return { ok: true, stamped: { from: stamp.from, backup: stamp.backup } };
+}
+
+/** An existing envelope's id, as New's and Tynn's are: its folder without `.agi`. */
+export const envelopeId = (path: string): string => basename(path.replace(/[\\/]+$/, '')).replace(/\.agi$/i, '');
+
+/** The refusal for a second workspace of one name (see `alreadyNamed`). */
+export const alreadyNamedReason = (id: string): string => alreadyNamed(id);
+
 export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overlay?: Record<string, unknown>, id: string = basename(path)): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | Refusal> {
     const preview = await previewAddWorkspace(ports, path, id);
     if (!preview.ok) return preview;
@@ -115,15 +140,9 @@ export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overl
     let stamped: { from: string | null; backup: string } | null = null;
 
     if (preview.kind === 'full-envelope') {
-        const current = await ports.fs.readJson(manifestPath);
-        const manifest = typeof current === 'object' && current !== null ? (current as Record<string, unknown>) : {};
-        const stamp = stampSchema(manifest, SCHEMA_REVISION);
+        const stamp = await stampExisting(ports, path);
         if (!stamp.ok) return stamp;
-        if (stamp.backup) {
-            await ports.fs.writeJson(join(path, stamp.backup), manifest);
-            await ports.fs.writeJson(manifestPath, stamp.manifest);
-            stamped = { from: stamp.from, backup: stamp.backup };
-        }
+        stamped = stamp.stamped;
     } else {
         if (preview.kind === 'empty') await ports.fs.mkdir(join(path, 'repos'));
         await ports.fs.mkdir(join(path, '.ai'));
@@ -350,6 +369,18 @@ export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: str
  * a git that refuses leaves nothing half-added in Genie.
  */
 export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
+    const made = await makeNewEnvelope(ports, name, parent);
+    if (!made.ok) return made;
+    await ports.registry.addWorkspace({ id: made.id, path: made.path, envFile: registeredEnvFile(ports) });
+    return made;
+}
+
+/**
+ * New's envelope — its refusals, then `<parent>/<slug>.agi` laid out with its real first commit (scaffoldEnvelope) —
+ * WITHOUT registering it. New registers it at once; the Open existing / Import from Git wizard (envelope-wizard-host.ts)
+ * first adds the person's repos and knowledge. One envelope writer for all three.
+ */
+export async function makeNewEnvelope(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
     const problem = newWorkspaceProblem(name, parent);
     if (problem) return { ok: false, reason: problem };
     const at = parent.trim();
@@ -363,7 +394,6 @@ export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, pa
     if (!there) await ports.fs.mkdir(target);
     const failed = await scaffoldEnvelope(ports, target, folder, { name: name.trim() });
     if (failed) return { ok: false, reason: failed };
-    await ports.registry.addWorkspace({ id, path: target, envFile: registeredEnvFile(ports) });
     return { ok: true, id, path: target };
 }
 

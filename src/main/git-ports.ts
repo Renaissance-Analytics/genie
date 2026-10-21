@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';
+import { isLocalPathLike } from '../core/envelope-plan.js';
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -64,9 +65,15 @@ function gitWithAuth(cwd: string | undefined, args: readonly string[], auth?: Gi
  * `git submodule add [-b <branch>] -- <url> <at>`, with the clone credential as gitClone carries it. With a branch, git
  * records it in .gitmodules itself; without one, the branch the remote checked out is recorded — what Genie 1 did, minus
  * its guessed `main` for a detached HEAD (then nothing is recorded). Resolves to the branch tracked, or `null`.
+ *
+ * `local`: the source is a folder on disk (Open existing folder's "Local", Add workspace parity item 7), which git refuses
+ * to clone a submodule from since 2.38 (CVE-2022-39253) without `protocol.file.allow=always` — Genie 1 set it through
+ * GIT_CONFIG_* for that one command (create-agi.ts:1063-1070), and so does this, beside the credential, never in a config
+ * file. A path-like URL gets it too, as Genie 1 sniffed it.
  */
-export async function gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null, auth?: GitAuth): Promise<string | null> {
-    await gitWithAuth(envelope, ['submodule', 'add', '--quiet', ...(branch ? ['-b', branch] : []), '--', url, at], auth);
+export async function gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null, auth?: GitAuth, local = false): Promise<string | null> {
+    const fileAllowed: GitAuth | undefined = local || isLocalPathLike(url) ? { config: [...(auth?.config ?? []), ['protocol.file.allow', 'always']], secrets: auth?.secrets ?? [] } : auth;
+    await gitWithAuth(envelope, ['submodule', 'add', '--quiet', ...(branch ? ['-b', branch] : []), '--', url, at], fileAllowed);
     if (branch) return branch;
     const head = await git(join(envelope, ...at.split('/')), ['symbolic-ref', '--quiet', '--short', 'HEAD']).then((v) => v.trim() || null, () => null);
     // The submodule's name is its path (git's default for `submodule add`).
