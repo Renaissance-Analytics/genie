@@ -43,6 +43,24 @@ export interface RepoChip {
     fix: 'Remove stale lock' | null;
 }
 
+/**
+ * HOW MANY REPO CHIPS SIT IN THE WORKSPACE HEADER'S ROW (beta.33 item 23). The owner: "why the fuck is any content at all
+ * behind the fucking chat panel?" — one chip per repo made the header wider than its column. The rest are behind
+ * "+N more", one click away.
+ */
+export const HEADER_REPOS_INLINE = 3;
+
+/**
+ * The header's repos: the row, and the rest behind "+N more". A LOCKED repo always comes first — a problem is never
+ * behind a click — then the manifest's order. Every repo is in exactly one of the two.
+ */
+export function headerRepos<R extends { slug: string; lock?: LockState | { heldSince: number; stale: boolean } | null }>(repos: readonly R[], inline = HEADER_REPOS_INLINE): { inline: R[]; more: R[] } {
+    const ordered = [...repos.filter((r) => r.lock), ...repos.filter((r) => !r.lock)];
+    // Locked repos are never hidden, even past the row's usual count.
+    const count = Math.max(inline, repos.filter((r) => r.lock).length);
+    return { inline: ordered.slice(0, count), more: ordered.slice(count) };
+}
+
 export function repoChip(status: RepoStatus): RepoChip {
     if (status.lock) return { label: `${status.slug} · index.lock held`, tone: 'bad', fix: status.lock.stale ? 'Remove stale lock' : null };
     return { label: status.branch ? `${status.slug} · ${status.branch}` : status.slug, tone: 'normal', fix: null };

@@ -204,6 +204,46 @@ for (const width of WIDTHS) {
     check(result.railWidth === 208, `${width}px — the rail keeps its 208px`, `${result.railWidth}px`);
 }
 
+/*
+ * A PAGE HEADER NEVER OVERFLOWS ITS COLUMN (beta.33 item 23). The owner (2026-10-20): "why the fuck is any content at all
+ * behind the fucking chat panel?" The workspace header drew a chip per repo in one row that could not wrap; `<main>` is
+ * `overflow-auto`, so it clipped the row at the chat's edge — content "behind the chat" — and the WINDOW never
+ * overflowed, which is why the checks above passed. Measured where it happens: the header and the page column, on the
+ * seeded workspace, which smoke-seed.mjs gives twelve repos (with one, there was nothing to overflow).
+ */
+say('landing on the workspace');
+await evaluate(`window.location.hash = '#genie://workspace/tynn'; true`);
+await new Promise((r) => setTimeout(r, 400));
+const onWorkspace = await evaluate(`Boolean(document.querySelector('[data-surface="workspace"] [data-view-header]'))`);
+say(`workspace rendered: ${onWorkspace}`);
+if (!onWorkspace) {
+    console.error('LAYOUT SWEEP could not reach the seeded workspace');
+    process.exit(1);
+}
+const HEADER_PROBE = `
+    (() => {
+        const header = document.querySelector('[data-surface="workspace"] [data-view-header]');
+        const column = header ? header.closest('main') : null;
+        // THE POSITIVE CONTROL: the repos the header accounts for — its chips plus "+N more". Twelve seeded; fewer means
+        // the seed did not land and "nothing overflows" would mean nothing.
+        const chips = header ? header.querySelectorAll('[data-repo-chip]').length : 0;
+        const more = Number((header?.querySelector('[data-action="more-repos"]')?.textContent ?? '').match(/[0-9]+/)?.[0] ?? 0);
+        return JSON.stringify({
+            repos: chips + more,
+            header: header ? header.scrollWidth - header.clientWidth : null,
+            column: column ? column.scrollWidth - column.clientWidth : null,
+        });
+    })()
+`;
+for (const width of WIDTHS) {
+    await send('Emulation.setDeviceMetricsOverride', { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
+    await new Promise((r) => setTimeout(r, 250));
+    const r = JSON.parse(await evaluate(HEADER_PROBE));
+    check(r.repos >= 12, `${width}px — the workspace header accounts for the seeded repos`, `${r.repos} of 12`);
+    check(r.header !== null && r.header <= 1, `${width}px — the workspace header fits its column`, r.header > 1 ? `${r.header}px wider than its column` : '');
+    check(r.column !== null && r.column <= 1, `${width}px — the page column does not scroll sideways`, r.column > 1 ? `${r.column}px wider` : '');
+}
+
 await send('Emulation.clearDeviceMetricsOverride');
 ws.close();
 

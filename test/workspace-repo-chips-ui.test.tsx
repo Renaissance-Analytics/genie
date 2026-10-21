@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { headerRepos, repoChip } from '../src/core/repo-status.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
 
@@ -26,12 +27,19 @@ const render = (o: WorkspaceOpsProps | null = ops, view: 'home' | 'terminals' | 
     renderToStaticMarkup(<Workspace view={view} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} terminals={NO_TERMINALS} ops={o ?? undefined} />);
 
 describe('repo chips', () => {
-    it('one per repo in the header, `slug · branch`; the slug alone when the branch could not be read', () => {
+    /*
+     * REWRITTEN for beta.33 item 23 (the owner: "why the fuck is any content at all behind the fucking chat panel?"): one
+     * chip per repo IN THE ROW overflowed the page column. The row holds HEADER_REPOS_INLINE chips — a locked repo first —
+     * and "+N more" opens the rest in a Popover (test/workspace-header-fits.test.tsx). Here: the locked `web`, then `tynn`
+     * and `api` in the row; `docs` behind "+1 more".
+     */
+    it('`slug · branch` chips in the header, a locked repo first; the rest behind "+N more"; the slug alone without a branch', () => {
         const html = render();
-        expect((html.match(/data-repo-chip="/g) ?? []).length).toBe(4);
+        expect((html.match(/data-repo-chip="/g) ?? []).length).toBe(3);
         expect(html).toMatch(/data-repo-chip="api"[^>]*>[^<]*(<[^>]*>[^<]*)*api · main/);
-        expect(html).toMatch(/data-repo-chip="docs"[^>]*data-tone="normal"/);
-        expect(html).not.toContain('docs · ');
+        expect(html).toMatch(/data-action="more-repos"[\s\S]*?\+1 more/);
+        const docs = headerRepos(ops.repos!.list!).more.find((r) => r.slug === 'docs');
+        expect(docs && repoChip({ slug: docs.slug, branch: docs.branch ?? null, lock: docs.lock ?? null })).toMatchObject({ tone: 'normal', label: 'docs' });
     });
 
     it('a locked repo is red and says so; "Remove stale lock" is offered only for a STALE lock', () => {
@@ -45,7 +53,7 @@ describe('repo chips', () => {
     });
 
     it('the chips are on every view; none when there is no repo list (not loaded, or no ops)', () => {
-        expect((render(ops, 'terminals').match(/data-repo-chip="/g) ?? []).length).toBe(4);
+        expect((render(ops, 'terminals').match(/data-repo-chip="/g) ?? []).length).toBe(3);
         expect(render({ ...ops, repos: { ...ops.repos!, list: null } })).not.toContain('data-repo-chip');
         expect(render(null)).not.toContain('data-repo-chip');
     });
