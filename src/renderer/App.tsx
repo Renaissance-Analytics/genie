@@ -247,7 +247,9 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 return net.open(workstationId).then((opened) => {
                     if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                     const transport = ipcRelayTransport(net, opened.channel);
-                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen');
+                    // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
+                    const localBrowser = window.genie?.browserWindow;
+                    const next = connectRemote(transport, { kind: 'relay', label: label || 'another screen' }, label || 'another screen', localBrowser ? { browse: (address, hosts) => localBrowser.open(address, hosts) } : {});
                     setClient(next);
                     setState(next.state());
                     return next.ready.then((r) => {
@@ -1135,7 +1137,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={previewAdd}
-            // The Genie browser window — this machine's only (a remote bridge has none, so the row stays the surface).
+            // The Genie browser window: this machine's sites, or — in a window driving a Tynn workstation — that workstation's.
             onOpenBrowser={resolvedBridge?.browserWindow ? () => { void resolvedBridge.browserWindow?.open(); } : undefined}
             addFromGit={addFromGit}
             onAddWorkspaceFromGit={startAddFromGit}

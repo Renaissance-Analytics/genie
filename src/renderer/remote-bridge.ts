@@ -40,7 +40,16 @@ export interface RemoteClient {
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
 
-export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string): RemoteClient {
+/**
+ * What this machine lends a remote window. `browse`: Genie's browser on THIS machine, which main points at the host's
+ * sites over the window's own relay connection (browser rebuild step 4) — given only where main can (a Tynn relay
+ * window); the host's site names ride along for the address bar.
+ */
+export interface RemoteOptions {
+    readonly browse?: (address: string | undefined, hosts: readonly string[]) => Promise<{ ok: true } | { ok: false; error: string }>;
+}
+
+export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
     let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null };
     const stateListeners = new Set<(s: RemoteState) => void>();
     const setState = (patch: Partial<RemoteState>) => {
@@ -225,6 +234,19 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         },
         // The REMOTE host's disk, for every picker in this window (Tynn #835).
         host: { listDir: (path: string) => answer('host.listDir', path) as never },
+        // The HOST's sites in Genie's browser: its site names read from the host, the window opened by main for this connection.
+        ...(options.browse ? {
+            browserWindow: {
+                open: async (address?: string) => {
+                    const browse = options.browse!;
+                    let hosts: string[] = [];
+                    try {
+                        hosts = ((await read<FeatureData>('features.snapshot')).browser?.routes ?? []).map((route) => route.host);
+                    } catch { /* the host would not say; the address bar just has no list */ }
+                    return browse(address, hosts);
+                },
+            },
+        } : {}),
         updates: {
             state: () => read<UpdateState>('updates.state'),
             subscribe: (onChange) => on('updates', (p) => onChange(p as UpdateState)),

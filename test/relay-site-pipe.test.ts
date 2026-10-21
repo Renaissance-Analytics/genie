@@ -93,6 +93,8 @@ const readExactly = (socket: Socket, n: number) => new Promise<Buffer>((resolve)
     socket.on('data', (c: Buffer) => { parts.push(c); got += c.length; if (got >= n) resolve(Buffer.concat(parts).subarray(0, n)); });
 });
 
+/** The CA this host's front door signs with, handed to the link; `null` = it has none. */
+let hostCa: string | null = 'HOST-CA-PEM';
 let relay: ReturnType<typeof fakeRelay>;
 let link: ReturnType<typeof relayHostLink>;
 let front: ReturnType<typeof fakeFrontDoor>;
@@ -112,7 +114,7 @@ beforeEach(async () => {
         validateGrant: async (token) => verifyMemberGrant(token, { keys: [tynnJwk], workstationId: WS_ID }),
         reconnect: { minMs: 0, maxMs: 0 },
         popTimeoutMs: 1_000,
-        site: { dial: (host: string) => dialFrontDoor(frontPort, host) },
+        site: { dial: (host: string) => dialFrontDoor(frontPort, host), ca: () => hostCa },
     } as Parameters<typeof relayHostLink>[0]);
     link.onConnection(() => {});
     link.connect();
@@ -281,14 +283,36 @@ describe('a stream never has more than one window of bytes in flight', () => {
 describe('the running host serves its sites over its relay link', () => {
     const src = (f: string) => readFileSync(join(import.meta.dirname, '..', f), 'utf8');
 
-    it('main hands startRelayHost a site dialer on the composed front door (counted: exactly one)', () => {
+    it('main hands startRelayHost a site dialer on the composed front door, and its CA (counted: exactly one)', () => {
         const main = src('src/main/main.ts');
-        expect(main.match(/site: \{ dial: \(host\) => dialFrontDoor\(composed\.frontDoorPort, host\) \}/g) ?? []).toHaveLength(1);
+        expect(main.match(/site: \{ dial: \(host\) => dialFrontDoor\(composed\.frontDoorPort, host\), ca: \(\) => composed\.browserTrust\(\)\.caPem \}/g) ?? []).toHaveLength(1);
     });
 
     it('startRelayHost passes it to the link (positive control: the reconnect option beside it is found the same way)', () => {
         const net = src('src/main/tynn-network.ts');
         expect(net).toMatch(/\.\.\.\(input\.reconnect \? \{ reconnect: input\.reconnect \} : \{\}\)/);
         expect(net).toMatch(/\.\.\.\(input\.site \? \{ site: input\.site \} : \{\}\)/);
+    });
+});
+
+describe('the host’s answer carries its CA (what the client’s browser trusts for that workstation)', () => {
+    afterEach(() => { hostCa = 'HOST-CA-PEM'; });
+
+    it('an open the host accepted names the host’s CA', async () => {
+        const { transport } = await memberDoor(OWNER);
+        const r = (await transport.openSite('app.gen')) as { ok: boolean; ca?: string };
+        expect(r.ok).toBe(true);
+        expect(r.ca).toBe('HOST-CA-PEM');
+    });
+
+    it('CONTROL: a host with no CA sends none, and a refusal carries none', async () => {
+        hostCa = null;
+        const { transport } = await memberDoor(OWNER);
+        const r = (await transport.openSite('app.gen')) as { ok: boolean; ca?: string };
+        expect(r.ok).toBe(true);
+        expect(r.ca).toBeUndefined();
+        const refused = (await transport.openSite('other.gen')) as { ok: boolean; ca?: string };
+        expect(refused.ok).toBe(false);
+        expect(refused.ca).toBeUndefined();
     });
 });

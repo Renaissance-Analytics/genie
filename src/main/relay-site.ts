@@ -184,7 +184,7 @@ export function dialFrontDoor(port: number, host: string, timeoutMs = 10_000): P
 }
 
 /** What opening a site stream over the relay came to: a stream to pipe a socket into, or the host's refusal. */
-export type SiteOpen = { ok: true; pipe(socket: Duplex): void } | { ok: false; reason: string };
+export type SiteOpen = { ok: true; pipe(socket: Duplex): void; /** The host's CA, PEM, when it has one. */ ca?: string } | { ok: false; reason: string };
 
 /**
  * The CLIENT's side: a loopback door the browser's PAC points at. It takes `CONNECT <name>:443` for the names it was

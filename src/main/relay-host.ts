@@ -35,9 +35,10 @@ export interface RelayHostLinkDeps {
     log?(message: string): void;
     /**
      * This host's own `.gen` sites, for the owner's windows on other workstations (`relay-site.ts`): CONNECT its front
-     * door for a name. Absent = every site stream is refused.
+     * door for a name; `ca` is the CA its front door signs with, sent with each accepted open so the client's browser
+     * trusts this host's certificates (and only those). Absent = every site stream is refused.
      */
-    site?: { dial(host: string): Promise<SiteDial> };
+    site?: { dial(host: string): Promise<SiteDial>; ca?(): string | null };
 }
 
 export interface RelayHostLink extends ServerTransport {
@@ -139,7 +140,8 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
                 say({ kind: 'error', reason: dialed.reason });
                 return;
             }
-            say({ kind: 'data', payload: { t: 'open' } });
+            const ca = deps.site?.ca?.() ?? null;
+            say({ kind: 'data', payload: { t: 'open', ...(ca !== null ? { ca } : {}) } });
             const pipe = pipeSiteStream(dialed.socket, say, () => { if (session.sites.get(reqId) === pipe) session.sites.delete(reqId); });
             session.sites.set(reqId, pipe);
             for (const f of early) pipe.receive(f);

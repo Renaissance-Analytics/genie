@@ -27,7 +27,7 @@ function fakeApi() {
             calls.push({ method, args });
             if (method === 'snapshot') return snapshot;
             if (method === 'agentDetail') return { agent: { id: args[0] }, rows: [] };
-            if (method === 'features.snapshot') return { knowledge: { hits: null } };
+            if (method === 'features.snapshot') return siteRoutes === null ? { knowledge: { hits: null } } : { knowledge: { hits: null }, browser: { url: null, routes: siteRoutes, canGoBack: false, canGoForward: false } };
             if (method === 'features.act') throw new Error('that is you');
             if (method === 'terminals.open') return { id: 'term_9', pid: 9, shell: 'sh', scrollback: '' };
             if (method === 'terminals.list') return [{ id: 'term_9', pid: 9, shell: 'sh' }];
@@ -41,6 +41,8 @@ function fakeApi() {
     return { api, calls, emit: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); } };
 }
 
+/** The host's `.gen` sites in its features snapshot, for the browser test; `null` = the snapshot has no browser section. */
+let siteRoutes: Array<{ host: string; target: string }> | null = null;
 let dir: string;
 let api: ReturnType<typeof fakeApi>;
 let host: RemoteHost;
@@ -68,10 +70,10 @@ afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
 });
 
-function dial(auth: Parameters<typeof connectRemote>[1], label = 'laptop') {
+function dial(auth: Parameters<typeof connectRemote>[1], label = 'laptop', options?: unknown) {
     const pair = inMemoryPair();
     accept(pair.server);
-    return connectRemote(pair.client, auth, label);
+    return (connectRemote as (...a: unknown[]) => ReturnType<typeof connectRemote>)(pair.client, auth, label, ...(options === undefined ? [] : [options]));
 }
 
 describe('connecting', () => {
@@ -166,5 +168,28 @@ describe('the bridge over the wire', () => {
         await tick();
         expect(remote.state().lastRefusal).toBe('this Genie is locked');
         expect(await remote.unlock()).toEqual({ ok: true });
+    });
+});
+
+describe('the host’s sites in Genie’s browser (browser rebuild step 4)', () => {
+    afterEach(() => { siteRoutes = null; });
+
+    it('given the local browser, the bridge opens it with the address and the HOST’s site names (read from the host)', async () => {
+        siteRoutes = [{ host: 'app.gen', target: 'http://127.0.0.1:8001' }, { host: 'shop.gen', target: 'http://127.0.0.1:8002' }];
+        host.issuePin();
+        const asked: Array<{ address: string | undefined; hosts: readonly string[] }> = [];
+        const remote = dial({ kind: 'pin', code: '482913' }, 'laptop', { browse: async (address: string | undefined, hosts: readonly string[]) => { asked.push({ address, hosts }); return { ok: true }; } });
+        await remote.ready;
+        const browserWindow = (remote.bridge as { browserWindow?: { open(address?: string): Promise<unknown> } }).browserWindow;
+        expect(browserWindow).toBeDefined();
+        expect(await browserWindow!.open('https://app.gen/login')).toEqual({ ok: true });
+        expect(asked).toEqual([{ address: 'https://app.gen/login', hosts: ['app.gen', 'shop.gen'] }]);
+    });
+
+    it('CONTROL: no local browser handed in (a direct window) → no browserWindow, so no Browser row', async () => {
+        host.issuePin();
+        const remote = dial({ kind: 'pin', code: '482913' });
+        await remote.ready;
+        expect((remote.bridge as { browserWindow?: unknown }).browserWindow).toBeUndefined();
     });
 });
