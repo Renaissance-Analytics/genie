@@ -221,6 +221,24 @@ export function phpCacheDir(versionDir: string): string {
 }
 
 /**
+ * OPCACHE FOR A PHP WHOSE INI GENIE DOES NOT OWN (genie#1043 part B): Genie's toolchain PHP keeps Genie 1's ini, opcache
+ * off. The same settings as {@link phpIniContents}, given to php-cgi as `-d` words: the extension by its full path in
+ * that PHP's own ext folder, and the file cache in `cacheDir` (which must exist — what lets php-cgi start on Windows).
+ */
+export function toolchainOpcacheFlags(phpDir: string, cacheDir: string): string[] {
+    return [
+        `zend_extension=${phpDir}\\ext\\php_opcache.dll`,
+        'opcache.enable=1',
+        `opcache.file_cache=${cacheDir}`,
+        'opcache.file_cache_fallback=1',
+        'opcache.validate_timestamps=1',
+        'opcache.revalidate_freq=0',
+        'opcache.memory_consumption=256',
+        'opcache.max_accelerated_files=50000',
+    ].flatMap((setting) => ['-d', setting]);
+}
+
+/**
  * What the new binary's `php -m` says is wrong, or `null`: a required extension not loaded, or a loader complaint (PHP's
  * CLI prints startup warnings to STDOUT — Genie 1 `parseModuleList`, measured on 8.4.24).
  */

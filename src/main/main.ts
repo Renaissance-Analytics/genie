@@ -86,7 +86,7 @@ import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
-import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { osPidAlive } from './process-supervisor.js';
@@ -681,6 +681,14 @@ const longRunner: CommandRunner = (binary, args) => execFileRunner(binary, args,
 const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
 const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'> => ({ platform: process.platform as PhpVersionsPorts['platform'], root: phpVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() });
+/**
+ * What a site start reads (genie#1043 part B): the managed versions, and Genie's toolchain PHP — PATH as the workers get
+ * it, Genie's toolchain roots (Genie 1's, under the shared userData; Genie 2's own), and the opcache file cache's home.
+ */
+const phpCgiBase = (): PhpCgiPorts => ({
+    ...phpVersionsBase(),
+    toolchainPhp: { path: process.env['PATH'] ?? '', genieRoots: [join(app.getPath('userData'), 'toolchain'), toolchainDataDir()], cacheDir: join(toolchainDataDir(), 'php-opcache') },
+});
 let featureState: FeatureState = { toolStatuses: null, knowledgeQuery: '' };
 /** The ForceTheQuestion window's controller (question-window.ts); set once the services are composed. */
 let questionWindow: QuestionWindow | null = null;
@@ -1512,10 +1520,11 @@ async function boot(): Promise<void> {
         phpWorkerEnv: () => phpWorkerEnv(processEnv),
         // The system roots for PHP's trust bundle, beside Genie's own CA (main/php-trust-host.ts).
         phpSystemRoots: () => systemRootsPem(process.platform, (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } }, toolchainPaths(toolchainDataDir()).bundle),
-        // A php site's pin (T4): unpinned runs PATH php-cgi as before; pinned runs that Genie-managed version or is refused.
-        resolvePhpCgi: (pin) => resolvePhpCgi(pin, phpVersionsBase()),
-        // Right before a pinned site's php-cgi starts: its version's ini brought current (opcache, genie#1043).
-        preparePhpCgi: (pin) => refreshManagedIni(pin, phpVersionsBase()),
+        // A php site's pin (T4): unpinned runs PATH php-cgi (Genie's toolchain PHP with opcache on, genie#1043); pinned
+        // runs that Genie-managed version or is refused.
+        resolvePhpCgi: (pin) => resolvePhpCgi(pin, phpCgiBase()),
+        // Right before a php site's php-cgi starts: a pinned version's ini brought current, the opcache cache's directory.
+        preparePhpCgi: (pin) => refreshManagedIni(pin, phpCgiBase()),
         // Genie 1's `.gen` CA, already in this machine's trust store: ADOPTED (copied) when Genie 2 has no CA of its own, so
         // an upgrade serves https://<name>.gen trusted with no prompt (main/gen-ca.ts). Genie 1's userData, and its mirror.
         v1CaDirs: [...new Set([join(app.getPath('userData'), 'host-gen'), join(app.getPath('appData'), 'Genie', 'host-gen')])],

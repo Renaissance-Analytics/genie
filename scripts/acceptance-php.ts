@@ -23,6 +23,7 @@ import { connect } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { phpIniContents } from '../src/core/php-versions.js';
+import { nodePhpVersionsFs, refreshManagedIni, resolvePhpCgi } from '../src/main/php-versions.js';
 
 const results: boolean[] = [];
 const check = (ok: boolean, label: string, detail = '') => { results.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`); };
@@ -95,18 +96,40 @@ function fcgi(port: number, script: string): Promise<{ ms: number; body: string 
 }
 
 // ---- run ----------------------------------------------------------------------------------------------------------
-const root = join(tmpdir(), 'genie-php-accept');
+// ACCEPT_PHP_MODE=toolchain (genie#1043 part B): the PHP is GENIE'S TOOLCHAIN PHP — under a Genie toolchain root, on
+// PATH, its ini Genie 1's (opcache off) — and the workers run the command the PRODUCT gives an unpinned site
+// (main/php-versions.ts resolvePhpCgi), its cache directory made as a site start makes it (refreshManagedIni).
+const toolchainMode = process.env['ACCEPT_PHP_MODE'] === 'toolchain';
+const base = join(tmpdir(), 'genie-php-accept');
+const root = toolchainMode ? join(base, 'genie', 'toolchain', 'php') : base;
 mkdirSync(root, { recursive: true });
 const phpDir = await installPhp(root);
 // ACCEPT_PHP_OPCACHE=off: Genie's ini with its opcache lines left out — to tell opcache from the worker count.
-const ini = process.env['ACCEPT_PHP_OPCACHE'] === 'off'
+const ini = process.env['ACCEPT_PHP_OPCACHE'] === 'off' || toolchainMode
     ? phpIniContents(phpDir).split('\r\n').filter((l) => !/^(zend_extension=opcache|opcache\.)/.test(l)).join('\r\n')
     : phpIniContents(phpDir);
 writeFileSync(join(phpDir, 'php.ini'), ini);
 // As Genie's install does: the opcache file cache's directory exists before php-cgi starts (when the ini names one).
 const cacheDir = /^opcache\.file_cache="([^"]+)"/m.exec(ini)?.[1];
 if (cacheDir) mkdirSync(cacheDir, { recursive: true });
-console.log(`\nPHP ACCEPTANCE — ${phpDir}; opcache in Genie's ini: ${/^zend_extension=opcache$/m.test(ini) ? 'on' : 'off'}\n`);
+/** The command's words, as the pty's parser reads them: whitespace-separated, a "…" word kept whole. */
+const words = (command: string): string[] => [...command.matchAll(/"([^"]*)"|(\S+)/g)].map((m) => m[1] ?? m[2]!);
+let cgi = [join(phpDir, 'php-cgi.exe'), '-c', join(phpDir, 'php.ini')];
+if (toolchainMode) {
+    const ports = {
+        platform: 'win32' as const,
+        root: join(base, 'php-versions'),
+        fs: nodePhpVersionsFs(),
+        toolchainPhp: { path: `${phpDir};${process.env['PATH'] ?? ''}`, genieRoots: [join(base, 'genie', 'toolchain')], cacheDir: join(base, 'php-opcache') },
+    };
+    const resolved = resolvePhpCgi(undefined, ports);
+    if (!resolved.ok) throw new Error(resolved.reason);
+    refreshManagedIni(undefined, ports);
+    // php-cgi finds the php.ini beside it (Genie 1's shape, opcache off), as on a Genie 1 machine.
+    cgi = words(resolved.command);
+    console.log(`  the product's command: ${resolved.command}`);
+}
+console.log(`\nPHP ACCEPTANCE — ${phpDir}; ${toolchainMode ? "Genie's toolchain PHP, opcache by the product's -d flags" : `opcache in Genie's ini: ${/^zend_extension=opcache$/m.test(ini) ? 'on' : 'off'}`}\n`);
 
 const app = join(root, 'app');
 mkdirSync(app, { recursive: true });
@@ -119,7 +142,7 @@ const n = Number(process.env['ACCEPT_PHP_WORKERS'] ?? '') || (await workerCount(
 const ports = Array.from({ length: n }, (_, i) => 39100 + i);
 const said: string[] = ports.map(() => '');
 const workers: ChildProcess[] = ports.map((p, i) => {
-    const w = spawn(join(phpDir, 'php-cgi.exe'), ['-c', join(phpDir, 'php.ini'), '-b', `127.0.0.1:${p}`], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PHP_FCGI_MAX_REQUESTS: '0' } });
+    const w = spawn(cgi[0]!, [...cgi.slice(1), '-b', `127.0.0.1:${p}`], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, PHP_FCGI_MAX_REQUESTS: '0' } });
     w.stdout?.on('data', (d: Buffer) => { said[i] += d.toString(); });
     w.stderr?.on('data', (d: Buffer) => { said[i] += d.toString(); });
     return w;
@@ -150,6 +173,9 @@ try {
     const again: number[] = [];
     for (let i = 0; i < 5; i++) again.push((await fcgi(ports[0]!, join(app, 'heavy.php'))).ms);
     const median = [...again].sort((a, b) => a - b)[2]!;
+    // opcache loaded once and quietly: no "already loaded" or other start-up warning (PHP prints them into the answer).
+    const noise = `${first.body}\n${said.join('\n')}`.match(/.*(Warning|already loaded).*/i)?.[0] ?? '';
+    check(noise === '', '2a. no start-up warning from any worker', noise.slice(0, 300));
     check(first.body.includes('heavy-') && median * 2 <= first.ms, '2. a compile-heavy script answered again is at least 2x faster than cold', `cold ${first.ms} ms, again median ${median} ms (${again.join(', ')})`);
 
     const t0 = Date.now();
