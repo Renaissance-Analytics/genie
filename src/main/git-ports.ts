@@ -46,12 +46,17 @@ export async function gitFirstCommit(path: string, message: string): Promise<voi
  * cloneAuthFor). The config rides git's GIT_CONFIG_COUNT/KEY_n/VALUE_n environment (git ≥ 2.31), not `-c` arguments:
  * a process's arguments are readable by every user on the machine, its environment only by the same user. Nothing is
  * written into the clone's .git/config. Every secret is scrubbed out of git's words before they go anywhere.
+ *
+ * `--recurse-submodules`, as Genie 1 cloned (clone.ts, create-agi.ts): an envelope's code lives in submodules under
+ * repos/, and a clone without them is an envelope of empty folders. git keeps GIT_CONFIG_COUNT/KEY/VALUE in the
+ * environment of the submodule clones it spawns, so the credential reaches a private envelope's private submodules too
+ * (measured by test/git-ports.test.ts with real git).
  */
 export function gitClone(url: string, into: string, auth?: { config: ReadonlyArray<readonly [string, string]>; secrets: readonly string[] }): Promise<void> {
     const env: NodeJS.ProcessEnv | undefined = auth && auth.config.length > 0 ? { ...process.env, ...gitConfigEnv(auth.config) } : undefined;
     const scrub = (text: string) => redactSecrets(text, auth?.secrets ?? []);
     return new Promise<void>((resolve, reject) => {
-        execFile('git', ['clone', '--', url, into], { windowsHide: true, ...(env ? { env } : {}) }, (error, _stdout, stderr) => (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve()));
+        execFile('git', ['clone', '--recurse-submodules', '--', url, into], { windowsHide: true, ...(env ? { env } : {}) }, (error, _stdout, stderr) => (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve()));
     });
 }
 

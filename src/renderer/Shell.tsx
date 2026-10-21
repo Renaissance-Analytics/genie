@@ -202,6 +202,8 @@ export interface ShellProps {
     workspaceOps?: WorkspaceOpsProps | undefined;
     /** A folder picked and classified, awaiting confirmation — shown over the Dashboard / onboarding. */
     addPreview?: AddPreviewView | null | undefined;
+    /** The confirmed add is running (parity row 25): the plan's confirm button is disabled and says so. */
+    addBusy?: boolean | undefined;
     /** Add from a git URL (§6.1): the form is up, and what its two steps call. */
     addFromGit?: boolean | undefined;
     onAddWorkspaceFromGit?: (() => void) | undefined;
@@ -305,6 +307,7 @@ export function Shell({
     agentOps,
     workspaceOps,
     addPreview,
+    addBusy,
     addFromGit,
     onAddWorkspaceFromGit,
     onPreviewFromGit,
@@ -478,7 +481,7 @@ export function Shell({
                             onNavigate={onNavigate}
                         />
                     ) : null}
-                    {addPreview ? <AddWorkspacePreview preview={addPreview} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
+                    {addPreview ? <AddWorkspacePreview preview={addPreview} busy={addBusy === true} onConfirm={(p) => onConfirmAdd?.(p)} onConfirmGit={(u, p) => onConfirmAddGit?.(u, p)} onConfirmTynn={(p, id) => onConfirmAddTynn?.(p, id)} onCancel={() => onCancelAdd?.()} /> : null}
                     {addFromGit && !addPreview ? <AddFromGitForm onPreview={(u) => onPreviewFromGit?.(u)} onCancel={() => onCancelAddGit?.()} /> : null}
                     {tynnPick !== undefined && !addPreview ? <TynnProjectPicker state={tynnPick} onPick={(id) => onPickTynnProject?.(id)} onCancel={() => onCancelTynnPick?.()} /> : null}
                     {/*

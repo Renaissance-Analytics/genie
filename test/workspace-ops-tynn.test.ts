@@ -70,7 +70,7 @@ describe('previewAddFromTynn', () => {
     it('the CHOSEN project’s plan — not the first one listed — and nothing written', async () => {
         const f = fakes();
         const plan = await previewAddFromTynn(f.ports, '/w', '42');
-        expect(plan).toMatchObject({ ok: true, source: 'tynn', path: '/w/tynn', parent: '/w', kind: 'empty', project: { id: '42', name: 'Tynn.ai', slug: 'tynn' } });
+        expect(plan).toMatchObject({ ok: true, source: 'tynn', path: '/w/tynn.agi', parent: '/w', kind: 'empty', project: { id: '42', name: 'Tynn.ai', slug: 'tynn' } });
         expect(f.calls).toEqual([]);
     });
 
@@ -79,9 +79,12 @@ describe('previewAddFromTynn', () => {
         expect(await previewAddFromTynn(refused.ports, '/w', '42')).toEqual({ ok: false, reason: 'Tynn answered 403: Invalid token' });
         const unknown = fakes();
         expect(await previewAddFromTynn(unknown.ports, '/w', '99')).toEqual({ ok: false, reason: 'Tynn lists no project 99 for you — it may have been deleted, or shared with someone else' });
-        const exists = fakes({ entries: { '/w/tynn': ['x'] } });
-        expect(await previewAddFromTynn(exists.ports, '/w', '42')).toMatchObject({ ok: false, reason: expect.stringContaining('already exists') });
-        expect(refused.calls.concat(unknown.calls, exists.calls)).toEqual([]);
+        // The folder checked is the one that would be made — `<slug>.agi`; a bare `<slug>` beside it is not in the way.
+        const exists = fakes({ entries: { '/w/tynn.agi': ['x'] } });
+        expect(await previewAddFromTynn(exists.ports, '/w', '42')).toMatchObject({ ok: false, reason: expect.stringContaining('/w/tynn.agi already exists') });
+        const beside = fakes({ entries: { '/w/tynn': ['x'] } });
+        expect(await previewAddFromTynn(beside.ports, '/w', '42')).toMatchObject({ ok: true, path: '/w/tynn.agi' });
+        expect(refused.calls.concat(unknown.calls, exists.calls, beside.calls)).toEqual([]);
     });
 });
 
@@ -90,13 +93,13 @@ describe('addWorkspaceFromTynn', () => {
         const f = fakes();
         const result = await addWorkspaceFromTynn(f.ports, '/w', '42');
         expect(result).toEqual({ ok: true, id: 'tynn', kind: 'empty', stamped: null });
-        expect(f.calls[0]).toBe('mkdir:/w/tynn');
-        expect(f.calls).toContain('mkdir:/w/tynn/repos');
-        expect(f.calls).toContain('mkdir:/w/tynn/.ai');
-        expect(f.calls).toContain('writeJson:/w/tynn/project.json');
-        expect(f.calls).toContain('gitInit:/w/tynn');
-        expect(f.calls[f.calls.length - 1]).toBe('register:tynn:/w/tynn');
-        expect(f.files['/w/tynn/project.json']).toMatchObject({
+        expect(f.calls[0]).toBe('mkdir:/w/tynn.agi');
+        expect(f.calls).toContain('mkdir:/w/tynn.agi/repos');
+        expect(f.calls).toContain('mkdir:/w/tynn.agi/.ai');
+        expect(f.calls).toContain('writeJson:/w/tynn.agi/project.json');
+        expect(f.calls).toContain('gitInit:/w/tynn.agi');
+        expect(f.calls[f.calls.length - 1]).toBe('register:tynn:/w/tynn.agi');
+        expect(f.files['/w/tynn.agi/project.json']).toMatchObject({
             $schema: SCHEMA,
             name: 'Tynn.ai',
             type: 'agi',

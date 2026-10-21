@@ -48,6 +48,7 @@ import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
+import { addConfirmer } from './add-confirm.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
 import { applyOutcome, type DeletePlan } from '../core/agent-ops.js';
 import type { Diagnosis } from '../core/workspace-model.js';
@@ -568,6 +569,12 @@ function DesktopApp({ bridge }: AppProps) {
      * wake / remove carry their own confirm and outcome, reset when the route changes workspace.
      */
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
+    // The confirmed add is running (parity row 25), and the ONE controller every non-New confirm goes through: one add at
+    // a time, busy for the whole run, and the workspace it added opened, as New opens its own (row 38; add-confirm.ts).
+    const [addBusy, setAddBusy] = useState(false);
+    const navigateRef = useRef(navigate);
+    navigateRef.current = navigate;
+    const confirmAddOnce = useMemo(() => addConfirmer(() => ({ setBusy: setAddBusy, setPreview: setAddPreview, open: (route) => navigateRef.current(route) })), []);
     // Add from a git URL (§6.1): the form, then the host picks the parent and the plan replaces the form.
     const [addFromGit, setAddFromGit] = useState(false);
     // From Tynn (§6.1): the person's projects while picking one; `undefined` when not picking.
@@ -1046,7 +1053,8 @@ function DesktopApp({ bridge }: AppProps) {
             agentOps={agentOps}
             workspaceOps={workspaceOps}
             addPreview={addPreview}
-            onConfirmAdd={(path) => { void resolvedBridge?.workspaces.confirmAdd(path).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
+            addBusy={addBusy}
+            onConfirmAdd={(path) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAdd(path))}
             onCancelAdd={() => setAddPreview(null)}
             agentDetail={detail}
             agentResolved={resolved}
@@ -1145,7 +1153,7 @@ function DesktopApp({ bridge }: AppProps) {
             onAddWorkspaceFromGit={startAddFromGit}
             onCancelAddGit={() => setAddFromGit(false)}
             onPreviewFromGit={(url) => { void pickFolder('Where should the clone land? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromGit(url, parent).then((p) => { setAddFromGit(false); setAddPreview(p); }); }); }}
-            onConfirmAddGit={(url, parent) => { void resolvedBridge?.workspaces.confirmAddFromGit(url, parent).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
+            onConfirmAddGit={(url, parent) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAddFromGit(url, parent))}
             // From Tynn (§6.1, Genie 1's): the person's projects first; the one picked goes to the host's folder picker and its plan.
             tynnPick={tynnPick}
             onAddWorkspaceFromTynn={startAddFromTynn}
@@ -1153,7 +1161,7 @@ function DesktopApp({ bridge }: AppProps) {
                 void pickFolder('Where should the Tynn envelope be created? Pick the parent folder', addStart).then((parent) => { if (parent) void resolvedBridge?.workspaces.previewAddFromTynn(projectId, parent).then((p) => { setTynnPick(undefined); setAddPreview(p); }); });
             }}
             onCancelTynnPick={() => setTynnPick(undefined)}
-            onConfirmAddTynn={(parent, projectId) => { void resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId).then((r) => { if (r.ok) setAddPreview(null); else setAddPreview({ ok: false, reason: r.reason }); }); }}
+            onConfirmAddTynn={(parent, projectId) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAddFromTynn(parent, projectId))}
             terminals={resolvedBridge?.terminals ?? NO_TERMINALS}
             files={resolvedBridge?.files}
             // Live site panels — this machine's only (a remote bridge has none).

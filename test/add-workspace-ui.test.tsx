@@ -23,6 +23,18 @@ describe('the folder a new workspace gets', () => {
         expect(workspaceFolderName('!!!')).toBe('');
         expect(workspaceFolderName('')).toBe('');
     });
+
+    // Parity row 3 (Genie 1 workspace-onboarding.ts:73-92): a dot is kept, and a name that already ends in .agi is not
+    // given a second one — "foo.agi" stays "foo.agi", not "foo-agi.agi".
+    it('keeps a dot, and never adds a second .agi', () => {
+        expect(workspaceFolderName('foo.agi')).toBe('foo.agi');
+        expect(workspaceFolderName('Foo.AGI')).toBe('foo.agi');
+        expect(workspaceFolderName('acme.io')).toBe('acme.io.agi');
+        expect(workspaceFolderName('Release v1.2 beta')).toBe('release-v1.2-beta.agi');
+        // Dots and dashes at either end are trimmed, as Genie 1 trimmed them: a folder never starts with a dot.
+        expect(workspaceFolderName('.hidden.')).toBe('hidden.agi');
+        expect(workspaceFolderName('...')).toBe('');
+    });
 });
 
 describe('where a folder picker opens', () => {

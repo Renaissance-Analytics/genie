@@ -38,7 +38,11 @@ export function AddFromGitForm({ onPreview, onCancel }: { onPreview: (url: strin
     );
 }
 
-export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
+/**
+ * `busy` (parity row 25): the confirmed add is running — the button is disabled and says what is happening, so a double
+ * click cannot start a second clone into the same folder (src/renderer/add-confirm.ts refuses it as well).
+ */
+export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel, onConfirmGit, onConfirmTynn }: { preview: AddPreviewView; busy?: boolean | undefined; onConfirm: (path: string) => void; onCancel: () => void; onConfirmGit?: ((url: string, parent: string) => void) | undefined; onConfirmTynn?: ((parent: string, projectId: string) => void) | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm';
     if (!preview.ok) {
         return (
@@ -68,7 +72,7 @@ export function AddWorkspacePreview({ preview, onConfirm, onCancel, onConfirmGit
                 ))}
             </ol>
             <div className="flex gap-2">
-                <button type="button" data-action="confirm-add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white" onClick={() => (preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? 'Create and add' : preview.source === 'git' ? 'Clone and add' : 'Add this workspace'}</button>
+                <button type="button" data-action="confirm-add" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => (busy ? undefined : preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? (busy ? 'Creating…' : 'Create and add') : preview.source === 'git' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Adding…' : 'Add this workspace'}</button>
                 <button type="button" className={button} onClick={onCancel}>Cancel</button>
             </div>
         </section>
