@@ -31,6 +31,7 @@ export class LiveReadings {
     added(rows: readonly TimedEvent[], index: number): void {
         const e = rows[index]!.event;
         if (e.kind === 'usage') this.#usage = { used: e.used, size: e.size };
+        else if (isSizedCompaction(e)) { if (this.#usage !== null) this.#usage = { used: e.after, size: this.#usage.size }; }
         else if (e.kind === 'plan') this.#plan = e;
         else if (e.kind === 'notice' && typeof e.model === 'string' && e.model.length > 0) this.#model = e.model;
         this.#delivery.add(rows, index);
@@ -81,13 +82,27 @@ export class LiveReadings {
     }
 }
 
-/** The last usage report's figures, or `null` — the provider's own, never a running total of ours. */
+/**
+ * The context figure: the newest of the last usage report and a later compaction's own post-compaction count — both the
+ * provider's, never a running total of ours. A compaction says no window size, so it reads against the last report's;
+ * before any report there is no window to read it against, and the figure stays `null`.
+ *
+ * WHY the compaction counts (the owner, 2026-10-21): the provider reports usage once, at the END of a turn, so a
+ * compaction in the middle of a long turn left the meter on 959k of 1M for as long as the turn ran (17 minutes, once).
+ */
 export function usageFrom(rows: readonly TimedEvent[]): { used: number; size: number } | null {
+    let after: number | null = null;
     for (let i = rows.length - 1; i >= 0; i -= 1) {
         const e = rows[i]!.event;
-        if (e.kind === 'usage') return { used: e.used, size: e.size };
+        if (e.kind === 'usage') return { used: after ?? e.used, size: e.size };
+        if (after === null && isSizedCompaction(e)) after = e.after;
     }
     return null;
+}
+
+/** A compaction that said how much context it left. */
+function isSizedCompaction(e: StreamEvent): e is Extract<StreamEvent, { kind: 'divider' }> & { after: number } {
+    return e.kind === 'divider' && e.variant === 'compaction' && e.after !== null;
 }
 
 /** The latest plan the agent reported, or `null`. Never a fabricated `0/0`. */
