@@ -121,6 +121,8 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     }
 
     const running = session.running && session.turnState === 'working';
+    // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): once its turn is over; a turn still running reads as running.
+    if (!running && session.designLogin) return { word: 'Claude Design login needed', elapsed: null, tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): what it started in the background still runs.
     if (!running && session.running && (session.background ?? 0) > 0) return { word: `Working · ${session.background} in the background`, elapsed: null, tone: 'ok' };
     if (!running) return { word: ctx.turns === 0 && session.running ? 'No turns yet' : 'Idle', elapsed: null, tone: 'muted' };
@@ -166,6 +168,8 @@ export interface HeaderActions {
     login: boolean;
     /** Its account was paused by the provider: `Try again` brings every agent on that login back once it is put right. */
     retryAccount: boolean;
+    /** A tool was refused for want of `/design-login` (#1081): `Log in to Claude Design` opens it in a window of its own. */
+    designLogin: boolean;
     /** A declared agent that is not running, and not broken (broken has its restart): start it. */
     start: boolean;
     takeOver: boolean;
@@ -180,7 +184,8 @@ export function headerActions(session: LiveSession | null, fidelity: Fidelity): 
     const held = managed && session.limit !== undefined && session.limit.state !== 'open';
     const login = managed && session.signedOut === true;
     const retryAccount = managed && session.accountPaused != null;
-    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, resumeLimit: held, login, retryAccount, start, takeOver: true, chat: true };
+    const designLogin = managed && session.designLogin === true;
+    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

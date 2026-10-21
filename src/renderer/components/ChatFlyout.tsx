@@ -209,6 +209,8 @@ export interface ChatFlyoutProps {
     onProviderLogin?: { name: string; run: () => void } | undefined;
     /** Its account paused by the provider: `Try again` on the context line, for every agent on that login. */
     onAccountRetry?: (() => void) | undefined;
+    /** A tool was refused for want of Claude Design's login (#1081): `Log in to Claude Design` on the context line. */
+    onDesignLogin?: (() => void) | undefined;
     /** Where the width is remembered; absent = the window's localStorage (tests pass their own). */
     widthStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     /** The width the dock gives the chat (the content row reserves the same; Tynn #798). Absent = the remembered width. */
@@ -238,7 +240,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 
 export function ChatFlyout({
     thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
-    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
@@ -365,7 +367,7 @@ export function ChatFlyout({
 
             {/* THE CONTEXT LINE: what the agent is doing, in the board's words. Absent until read — never "Idle" as a guess.
                 While a turn runs that can be stopped, `Stop this turn` sits at its end: with the turn, not under Send. */}
-            {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry ? (
+            {thread?.context || onStopTurn || onResumeLimit || onProviderLogin || onAccountRetry || onDesignLogin ? (
                 <div data-chat-context={thread?.context?.tone ?? 'ok'} className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-[12px] ${CONTEXT_TONE[thread?.context?.tone ?? 'ok']}`}>
                     {thread?.context?.text ?? 'Working'}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
@@ -389,6 +391,17 @@ export function ChatFlyout({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--danger)]/20"
                         >
                             Try again
+                        </button>
+                    ) : null}
+                    {onDesignLogin ? (
+                        <button
+                            type="button"
+                            data-action="design-login"
+                            title="Open Claude Code in a window of its own to run /design-login; this agent is told to retry once it has run"
+                            onClick={() => onDesignLogin()}
+                            className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
+                        >
+                            Log in to Claude Design
                         </button>
                     ) : null}
                     {onResumeLimit ? (

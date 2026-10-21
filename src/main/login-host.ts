@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { DESIGN_LOGIN } from '../core/design-login.js';
 import { providerLogin } from '../core/provider-login.js';
 import type { TerminalHost } from './terminal-host.js';
 
@@ -17,6 +18,11 @@ import type { TerminalHost } from './terminal-host.js';
  * When that terminal ends, the provider's status command is asked (exit 0 = signed in) in the same folder; signed in,
  * `onSignedIn` brings the provider's signed-out agents back. The scratch folder is removed either way — it is the one
  * path this host created, removed by that exact path.
+ *
+ * CLAUDE DESIGN (#1081): `start(DESIGN_LOGIN)` opens the interactive `claude` itself — no arguments; `/design-login` as an
+ * argument is undocumented, and Genie has no tested way to type into a terminal once it is ready — so the window's notice
+ * says to type it. It has no status command: when that terminal ends, `onDesignLoginEnded` tells the agents that waited
+ * to retry, and a retry refused again raises the prompt again.
  */
 export interface LoginHostOptions {
     terminals: Pick<TerminalHost, 'open' | 'onExit'>;
@@ -24,6 +30,8 @@ export interface LoginHostOptions {
     /** Run a status command in `cwd` through the shell; resolves with its exit code. */
     runStatus: (command: string, cwd: string) => Promise<number>;
     onSignedIn: (provider: string) => void;
+    /** The Claude Design login window ended (there is no status to ask): the agents that waited are told to retry. */
+    onDesignLoginEnded?: (() => void) | undefined;
     /** The provider CLI's resolved path, when it is not simply on PATH (`providerBinary`). */
     binaryFor?: ((provider: string) => string | null) | undefined;
     /** The workspace a login terminal belongs to: Genie's own, not a project's. */
@@ -59,10 +67,13 @@ export class LoginHost {
             this.#options.openWindow(this.#route(existing));
             return { ok: true, terminalId: existing.terminalId };
         }
-        const known = providerLogin(provider);
-        const binary = this.#options.binaryFor?.(provider) ?? null;
-        const program = binary === null ? provider : `"${binary}"`;
-        // The provider's documented login, its first word the resolved CLI; with none known, the CLI itself.
+        const design = provider === DESIGN_LOGIN;
+        const known = design ? null : providerLogin(provider);
+        // Claude Design's login runs in Claude Code's own CLI.
+        const cli = design ? 'claude' : provider;
+        const binary = this.#options.binaryFor?.(cli) ?? null;
+        const program = binary === null ? cli : `"${binary}"`;
+        // The provider's documented login, its first word the resolved CLI; with none known (or Claude Design), the CLI itself.
         const command = known ? `${program}${known.login.slice(known.login.indexOf(' '))}` : program;
         const scratch = mkdtempSync(join(tmpdir(), `genie-login-${provider}-`));
         let opened: { id: string };
@@ -84,6 +95,10 @@ export class LoginHost {
 
     async #finish(live: Live): Promise<void> {
         try {
+            if (live.provider === DESIGN_LOGIN) {
+                this.#options.onDesignLoginEnded?.();
+                return;
+            }
             const known = providerLogin(live.provider);
             if (known) {
                 const binary = this.#options.binaryFor?.(live.provider) ?? null;

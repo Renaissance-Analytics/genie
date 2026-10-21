@@ -10,6 +10,7 @@ import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProces
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { RATE_LIMIT_META } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
+import { designLoginRefused } from './design-login.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -299,6 +300,8 @@ export class AgentSession {
     #signedOut = false;
     /** The provider refused the ACCOUNT (billing, on hold, subscription access off — core/account-pause.ts): nothing here fixes it. */
     #accountPaused: AccountPause | null = null;
+    /** A tool was refused for want of Claude Design's `/design-login` (core/design-login.ts): the login window fixes it. */
+    #designLogin = false;
     /**
      * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
      * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
@@ -431,6 +434,15 @@ export class AgentSession {
     get signedOut(): boolean { return this.#signedOut; }
     /** Its account is paused by the provider: the person puts the account right, then `Try again`. `null` = not paused. */
     get accountPaused(): AccountPause | null { return this.#accountPaused; }
+    /** Waiting on the Claude Design login (#1081): the header's `Log in to Claude Design`, once per login. */
+    get designLogin(): boolean { return this.#designLogin; }
+
+    /** The Claude Design login window ended: no longer waiting. Refused again, the next refusal raises it again. */
+    designLoginRan(): void {
+        if (!this.#designLogin) return;
+        this.#designLogin = false;
+        this.#changed();
+    }
 
     /** Hold an agent whose LOGIN is at its limit (another agent hit it): its next prompts wait too. */
     hold(): void {
@@ -1349,7 +1361,14 @@ export class AgentSession {
          * happened, and the queue is what keeps the tool call from being written before the
          * words that preceded it.
          */
-        await this.#emitRow(event);
+        const written = this.#emitRow(event);
+        // REFUSED FOR WANT OF /design-login (#1081): said ONCE per login, after the refused call, however many calls fail.
+        if (!this.#designLogin && designLoginRefused(event)) {
+            this.#designLogin = true;
+            void this.#emitRow({ kind: 'notice', level: 'warning', message: 'Claude Design needs its login on this machine, which an agent session cannot run. Use "Log in to Claude Design" above; Genie tells this agent to retry once it has run.' });
+            this.#changed();
+        }
+        await written;
     }
 
     /**

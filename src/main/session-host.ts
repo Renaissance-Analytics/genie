@@ -545,6 +545,16 @@ export class SessionHost {
         return [...this.#running].filter(([, e]) => e.provider === provider && e.session.signedOut).map(([id]) => id);
     }
 
+    /** The running agents a tool refused for want of Claude Design's login (#1081) — told to retry once it has run. */
+    designLoginAgents(): AgentId[] {
+        return [...this.#running].filter(([, e]) => e.session.designLogin).map(([id]) => id);
+    }
+
+    /** The Claude Design login window ended: this agent no longer waits on it. */
+    clearDesignLogin(agentId: string): void {
+        this.#running.get(agentId as AgentId)?.session.designLoginRan();
+    }
+
     /** The person's "Resume now" for a provider's login: open at once, its held agents go on. */
     resumeLimit(provider: string): void {
         this.#gate.resumeNow(this.#loginOf(provider));
@@ -1100,6 +1110,7 @@ export class SessionHost {
             // Its turn may have ended while what it started runs on: the header, the Dashboard and the chat say so.
             background: entry.background.count(rows),
             accountPaused: entry.session.accountPaused,
+            designLogin: entry.session.designLogin,
             running: session.running,
             turnState: session.turnState,
             startedAt,

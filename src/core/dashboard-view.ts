@@ -56,6 +56,8 @@ export interface AgentRow {
     signedOut?: boolean | undefined;
     /** Its account is paused by the provider: said, with why. Absent/`null` = not paused. */
     accountPaused?: AccountPause | null | undefined;
+    /** Waiting on the Claude Design login (#1081): said while it is idle. Absent = not waiting. */
+    designLogin?: boolean | undefined;
     /** Background shells and tasks still running after its turn ended: it reads Working, not Idle. */
     background?: number | null | undefined;
     id: string;
@@ -145,6 +147,9 @@ export function statusOf(row: AgentRow): StatusCell {
     // ACCOUNT PAUSED by the provider (the owner, 2026-10-21): the account, not the agent; a waiting question still first.
     if (row.accountPaused && row.state !== 'waiting') return { word: 'Account paused', detail: row.accountPaused.words, tone: 'bad' };
     if (row.signedOut && row.state !== 'waiting') return { word: 'Signed out', detail: 'log in to continue', tone: 'warn' };
+    // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): only once its turn is over — a refused tool does not end the turn, and an
+    // agent still working reads Working. The Agent view, the chat and the tray offer `Log in to Claude Design`.
+    if (row.designLogin && row.state === 'idle') return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
     switch (row.state) {
         case 'waiting':
             return { word: 'Waiting on you', detail: row.ask, tone: 'warn' };

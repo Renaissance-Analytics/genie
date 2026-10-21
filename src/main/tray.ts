@@ -30,6 +30,8 @@ export interface TrayHandlers {
     readonly onProviderLogin?: (provider: string) => void;
     /** `Try <provider> again` for a login whose ACCOUNT the provider paused: every agent on it, once the account is put right. */
     readonly onAccountRetry?: (provider: string) => void;
+    /** `Log in to Claude Design` while an agent waits on it (#1081): the interactive `claude`, in a window of its own. */
+    readonly onDesignLogin?: () => void;
 }
 
 /** An update on offer, as the tray shows it. */
@@ -68,7 +70,7 @@ export function loginName(provider: string): string {
  * The menu, as labels and handlers — pure enough for a test to hold the verbs. A held login (Tynn #794) leads: its line,
  * then Resume now for it — the tray is where Genie is seen when its window is not.
  */
-export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null, signedOut: readonly string[] = [], paused: readonly string[] = []): TrayItem[] {
+export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogin[] = [], update: TrayUpdate | null = null, signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false): TrayItem[] {
     const limits: TrayItem[] = [
         ...held.flatMap((h) => [
             { label: `${loginName(h.provider)}: ${h.words}`, enabled: false },
@@ -84,6 +86,11 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
             { label: `${loginName(provider)}: account paused`, enabled: false },
             { label: `Try ${loginName(provider)} again`, click: () => handlers.onAccountRetry?.(provider) },
         ]) : []),
+        // CLAUDE DESIGN'S LOGIN (#1081): per machine, so named once however many agents wait on it.
+        ...(handlers.onDesignLogin && designLogin ? [
+            { label: 'Claude Design: login needed', enabled: false },
+            { label: 'Log in to Claude Design', click: () => handlers.onDesignLogin?.() },
+        ] : []),
     ];
     const offer: TrayItem[] = update && handlers.onUpdate ? [{ label: `⬆ Update to v${update.version}…`, click: handlers.onUpdate }, { type: 'separator' }] : [];
     return [
@@ -100,8 +107,8 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
 }
 
 /** The tray's tooltip: what is held, or just Genie. */
-export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = []): string {
-    const parts = [...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`)];
+export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false): string {
+    const parts = [...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : [])];
     return parts.length === 0 ? 'Genie' : `Genie — ${parts.join('; ')}`;
 }
 
