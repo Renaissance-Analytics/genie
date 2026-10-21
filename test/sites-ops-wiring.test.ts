@@ -11,11 +11,11 @@ import { describe, expect, it } from 'vitest';
 const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
 describe('main wires the site row', () => {
-    it('ONE opener: defined once, it shows Genie’s browser pane and brings the browser surface up on the URL', () => {
+    it('ONE opener: defined once, it brings the Genie browser WINDOW up on the URL (beta.35 item 36) — not the old pane', () => {
         expect(main.match(/const openInBrowser: OpenInBrowser = async \(url\) =>/g) ?? []).toHaveLength(1);
         const body = main.slice(main.indexOf('const openInBrowser: OpenInBrowser'), main.indexOf('const openInBrowser: OpenInBrowser') + 600);
-        expect(body).toMatch(/browserPane\.show\(url\)/);
-        expect(body).toMatch(/broadcast\('genie:navigate', browserRoute\.format\(\{ url \}\)\)/);
+        expect(body).toMatch(/genieBrowserWindow\.open\(url\)/);
+        expect(body).not.toMatch(/browserPane\.show|genie:navigate/);
     });
 
     it('the same opener reaches the agents’ tools and the Hosting row — once each', () => {

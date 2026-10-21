@@ -140,6 +140,8 @@ export interface ShellProps {
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
+    /** The rail's Browser row opens the Genie browser window (beta.35 item 36); absent = the browser surface, as before. */
+    onOpenBrowser?: (() => void) | undefined;
     /** The terminal half of the bridge, handed to the Workspace surface. Keyed by workspace, never agent. */
     terminals?: GenieBridge['terminals'];
     /** The file panel's half of the bridge (§4.3); the Workspace surface mounts it for `?panel=files`. */
@@ -255,6 +257,7 @@ export function Shell({
     onOpenAgent,
     onAddAgent,
     onAddWorkspace,
+    onOpenBrowser,
     terminals = NO_TERMINALS,
     files = NO_FILES,
     filesPopped = [],
@@ -427,6 +430,7 @@ export function Shell({
                     onNavigate={onNavigate}
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
                     onAddWorkspace={onAddWorkspace}
+                    onOpenBrowser={onOpenBrowser}
                 />
 
                 <main className="min-w-0 flex-1 overflow-auto">

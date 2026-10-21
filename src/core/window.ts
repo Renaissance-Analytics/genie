@@ -48,6 +48,13 @@ export function overlayColorsOk(color: unknown, symbolColor: unknown): boolean {
     return typeof color === 'string' && typeof symbolColor === 'string' && hex.test(color) && hex.test(symbolColor);
 }
 
+/** THE GENIE BROWSER WINDOW (beta.35 item 36): Genie 1's size and minimum, the main window's frame (its chrome owns the top). */
+export function browserWindowOptions(platform: NodeJS.Platform): MainWindowOptions {
+    const base = { width: 1200, height: 820, minWidth: 720, minHeight: 480, titleBarStyle: 'hidden' as const };
+    if (platform === 'darwin') return base;
+    return { ...base, titleBarOverlay: { height: TITLE_BAR_HEIGHT, color: '#0a0a0c', symbolColor: '#e4e4e7' } };
+}
+
 export function mainWindowOptions(platform: NodeJS.Platform): MainWindowOptions {
     const base = { width: 1440, height: 900, minWidth: 980, minHeight: 620, titleBarStyle: 'hidden' as const };
     if (platform === 'darwin') return base;
