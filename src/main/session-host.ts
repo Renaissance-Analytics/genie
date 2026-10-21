@@ -797,6 +797,20 @@ export class SessionHost {
         return true;
     }
 
+    /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
+    notice(agentId: AgentId, message: string): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry) return false;
+        entry.session.notice(message);
+        this.#emit(agentId);
+        return true;
+    }
+
+    /** How the agent's last turn ended (`AgentSession.lastTurnEnd`); `null` when it has no session or no turn ended. */
+    lastTurnEnd(agentId: AgentId): AgentSession['lastTurnEnd'] {
+        return this.#running.get(agentId)?.session.lastTurnEnd ?? null;
+    }
+
     /** `context`: what the prompt's ledger row carries beyond its text — a Genie notice's mail (the inbox push). */
     prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): boolean {
         const entry = this.#running.get(agentId);

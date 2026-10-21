@@ -59,6 +59,7 @@ import { raisesApprovals, SessionHost, providerBinary } from './session-host.js'
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
+import { PlanKeepalive } from '../core/plan-keepalive.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { composeServices, type ComposedServices } from './compose.js';
@@ -280,6 +281,8 @@ let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: SessionHost | null = null;
+/** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
+let keepaliveNow: PlanKeepalive | null = null;
 /**
  * Has Genie heard the roster and the session host ONCE? Until then a question's agent cannot be judged: "we have not
  * heard" is not "it is gone", so the Deck marks nothing stale (`askerLive` answers `undefined`). Set after the
@@ -701,12 +704,28 @@ async function boot(): Promise<void> {
     const theRegistry = new Registry(store);
     registry = theRegistry;
     theRegistry.setWorkspaceNamer(workspaceNameFor);
+    // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that
+    // ends with steps left is nudged once after a short grace — never while the person is the next move.
+    const keepalive = new PlanKeepalive({
+        graceMs: 5_000,
+        schedule: (ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        read: (id) => {
+            const record = registry?.find(id as AgentId);
+            const live = host?.probe(id as AgentId) ?? null;
+            if (!record || !live) return null;
+            const asked = services?.attention.pending().some((q) => q.agentId === id) ?? false;
+            return { mode: record.mode, lastTurnEnd: host?.lastTurnEnd(id as AgentId) ?? null, plan: live.plan ?? null, promptable: host?.promptable(id as AgentId) != null, waitingOnPerson: asked || live.pendingApproval !== null };
+        },
+        prompt: (id, text) => { host?.prompt(id as AgentId, text, 'genie'); },
+        stalled: (id, text) => { host?.notice(id as AgentId, text); },
+    });
+    keepaliveNow = keepalive;
     host = new SessionHost({
         userData: genieHome(),
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
         onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
-        onAction: (agentId, kind) => broadcast('genie:action', { agentId, kind }),
+        onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId) => services?.engines.envFor(workspaceId) ?? {},
         // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
@@ -2276,6 +2295,8 @@ app.on('before-quit', (event) => {
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.
     if (step === 'pass') return;
     host?.stopAll();
+    // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
+    keepaliveNow?.stop();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
     void remoteSocketNow?.stop();

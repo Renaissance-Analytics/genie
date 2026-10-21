@@ -974,6 +974,12 @@ export class AgentSession {
         this.#changed();
     }
 
+    /** A warning Genie says in this agent's chat (the plan keepalive's stop, core/plan-keepalive.ts). Not a prompt. */
+    notice(message: string): void {
+        void this.#emitRow({ kind: 'notice', level: 'warning', message });
+        this.#changed();
+    }
+
     cancel(by: string | null = 'you'): CancelOutcome {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive) return { ok: false, reason: 'not-running' };
