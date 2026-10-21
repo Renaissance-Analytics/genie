@@ -110,8 +110,7 @@ describe('kept per workspace', () => {
         expect(parseTabs(raw)).toEqual({ tabs: [{ id: 'a', name: 'Good', layout: 'columns-2', cells: [{ kind: 'terminal', ref: 't1' }, null] }] });
     });
 
-    it('stored as a per-workspace setting; agents may design only when the workspace allows it (off by default)', () => {
+    it('stored as a per-workspace setting (who may change it is per agent: test/agent-manage-tabs.test.tsx)', () => {
         expect(SETTINGS.find((s) => s.key === 'workspace_tabs')).toMatchObject({ scope: 'workspace', type: 'string', default: '{"tabs":[]}' });
-        expect(SETTINGS.find((s) => s.key === 'agents_design_tabs')).toMatchObject({ scope: 'workspace', type: 'boolean', default: false });
     });
 });

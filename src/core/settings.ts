@@ -65,7 +65,6 @@ export const SETTINGS: readonly SettingDef[] = [
     // WORKSPACE TABS YOU DESIGN (Tynn #282): the tabs between Agents and Settings, their grids and panels, as JSON
     // (core/workspace-tabs.ts reads it forgivingly). Hidden: it is edited on the Workspace view, not in Settings.
     { key: 'workspace_tabs', group: 'workstation', scope: 'workspace', label: 'Workspace tabs', description: 'The tabs you designed in this workspace: their grids and panels.', type: 'string', default: '{"tabs":[]}', hidden: true },
-    { key: 'agents_design_tabs', group: 'agents', scope: 'workspace', label: 'Agents may design tabs', description: 'Agents in this workspace may add and change its tabs and panels through Genie’s tools, each change with your approval.', type: 'boolean', default: false },
     { key: 'panel_layout', group: 'workstation', scope: 'workspace', label: 'Terminal layout', description: 'How this workspace’s terminals are laid out: one at a time, two columns, two rows, or a 2×2 grid. Remembered per workspace.', type: 'enum', options: ['single', 'columns', 'rows', 'grid'], default: 'single' },
     { key: 'track_cwd', group: 'workstation', scope: 'host', label: 'Track terminal directory', description: 'Let terminals report their working directory so a new one opens where the last was.', type: 'boolean', default: true },
     { key: 'detached_terminals', group: 'workstation', scope: 'host', label: 'Keep terminals through a quit', description: 'Terminals survive Genie closing and are rejoined on the next launch.', type: 'boolean', default: false },

@@ -132,6 +132,11 @@ const bridge: GenieBridge = {
         settings: (workspaceId) => ipcRenderer.invoke('genie:workspace-settings', workspaceId) as never,
         setSetting: (workspaceId, key, value) => ipcRenderer.invoke('genie:workspace-setting-set', workspaceId, key, value) as never,
         resetSetting: (workspaceId, key) => ipcRenderer.invoke('genie:workspace-setting-reset', workspaceId, key) as never,
+        onSettingsChanged: (listener) => {
+            const handler = (_e: unknown, workspaceId: string) => listener(workspaceId);
+            ipcRenderer.on('genie:workspace-settings-changed', handler);
+            return () => { ipcRenderer.removeListener('genie:workspace-settings-changed', handler); };
+        },
         setGoverns: (workspaceId, childIds) => ipcRenderer.invoke('genie:workspace-set-governs', workspaceId, [...childIds]) as never,
         setDefaultAgent: (workspaceId, agentId) => ipcRenderer.invoke('genie:workspace-set-default-agent', workspaceId, agentId) as never,
     },
@@ -145,6 +150,7 @@ const bridge: GenieBridge = {
         setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,
         setAccessScope: (agentId, scope) => ipcRenderer.invoke('genie:agent-set-access-scope', agentId, scope) as never,
         setAutoApprove: (agentId, on) => ipcRenderer.invoke('genie:agent-set-auto-approve', agentId, on) as never,
+        setManageTabs: (agentId, on) => ipcRenderer.invoke('genie:agent-set-manage-tabs', agentId, on) as never,
         setIssueWatch: (agentId, setting) => ipcRenderer.invoke('genie:agent-set-issue-watch', agentId, setting) as never,
         setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
         setModel: (agentId, model) => ipcRenderer.invoke('genie:agent-set-model', agentId, model) as never,

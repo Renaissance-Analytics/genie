@@ -29,6 +29,7 @@ export interface AgentOpsPorts {
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
         setAutoApprove(id: AgentRecord['id'], autoApprove: boolean): Promise<AgentRecord | null>;
+        setManageTabs(id: AgentRecord['id'], manageTabs: boolean): Promise<AgentRecord | null>;
         setIssueWatch(id: AgentRecord['id'], setting: IssueWatchSetting): Promise<AgentRecord | null>;
         setPermissions(id: AgentRecord['id'], permissions: AgentPermissions): Promise<AgentRecord | null>;
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
@@ -224,6 +225,14 @@ export async function setAutoApprove(ports: AgentOpsPorts, agentId: string, auto
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     const updated = await ports.registry.setAutoApprove(record.id, autoApprove);
+    return updated ? { ok: true, record: updated } : UNKNOWN;
+}
+
+/** May manage the workspace's tabs (beta.35 item 36): the tool is in or out of its next tools/list — nothing restarts. */
+export async function setManageTabs(ports: AgentOpsPorts, agentId: string, manageTabs: boolean): Promise<{ ok: true; record: AgentRecord } | Refusal> {
+    const record = ports.registry.find(agentId);
+    if (!record) return UNKNOWN;
+    const updated = await ports.registry.setManageTabs(record.id, manageTabs);
     return updated ? { ok: true, record: updated } : UNKNOWN;
 }
 

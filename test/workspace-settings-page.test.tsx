@@ -39,7 +39,10 @@ describe('one workspace’s settings page', () => {
 
     it('Fancy controls: a Switch per boolean and Selects for choices — no bare checkbox or select in General', () => {
         const general = render().match(/data-ws-card="general"[\s\S]*?(?=data-ws-card="hosting")/)?.[0] ?? '';
-        expect(general).toContain('data-react-fancy-switch');
+        // COUNTED against what the card draws (every workspace setting that is not hidden): a Switch per boolean — none
+        // since `agents_design_tabs` went (beta.35 item 36) — and a Fancy Select for the choices.
+        const shown = SETTINGS.filter((s) => s.scope === 'workspace' && !s.hidden);
+        expect((general.match(/data-react-fancy-switch/g) ?? []).length).toBe(shown.filter((s) => s.type === 'boolean').length);
         expect(general).toContain('data-react-fancy-select');
         expect(general).not.toMatch(/<input type="checkbox"/);
     });

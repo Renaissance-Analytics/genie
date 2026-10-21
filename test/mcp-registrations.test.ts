@@ -41,6 +41,14 @@ describe('allGenieTools', () => {
         expect(regs.filter((r) => r.visible !== undefined).map((r) => r.definition.name)).toEqual(['createAgent']);
     });
 
+    it('with the workspace-tabs part (beta.35 item 36): workspaceTabs after createAgent — the two tools not for every caller', () => {
+        const agents = { resolveCaller: () => null, defaultAgentOf: () => null, roster: () => [], approve: async () => 'denied' as const, register: (() => { throw new Error('x'); }) as never, addressOf: () => '' };
+        const workspaceTabs = { resolveCaller: () => null, defaultAgentOf: () => null, roster: () => [], readTabs: () => '{"tabs":[]}', writeTabs: () => {}, sites: () => [], approve: async () => 'denied' as const };
+        const regs = allGenieTools({ ...deps(), agents, workspaceTabs });
+        expect(regs.map((r) => r.definition.name).slice(-2)).toEqual(['createAgent', 'workspaceTabs']);
+        expect(regs.filter((r) => r.visible !== undefined).map((r) => r.definition.name)).toEqual(['createAgent', 'workspaceTabs']);
+    });
+
     it('adds every enabled plugin tool under its plugin’s namespace, after the Genie tools', () => {
         const manifest = { id: 'acme.lint', name: 'Acme Lint', version: '1.0.0', publisher: { name: 'Acme', keyId: 'k' }, mcpTools: [], capabilities: { network: { hosts: [] }, genieApi: [] }, panels: [] };
         const tool = { name: 'lint', description: 'Lint', inputSchema: { type: 'object' }, run: 'tools/lint.js', process: 'subprocess' as const, gated: false };
