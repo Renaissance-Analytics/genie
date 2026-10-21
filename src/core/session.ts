@@ -1,5 +1,5 @@
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
-import { lastTurnOf, openAgentThread, readHistory } from './thread-store.js';
+import { lastTurnOf, openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
@@ -212,6 +212,11 @@ export interface AgentSessionOptions {
      * once. Absent = counted from the recorded history, which is read asynchronously.
      */
     turnsBefore?: number | undefined;
+    /**
+     * This run's id, written on every row it records (thread-store `RUN_FIELD`), so a later read can tell this run's rows
+     * from the ones before it by what they say, never by when they landed. Absent: rows carry none (told apart by time).
+     */
+    runId?: string;
     /**
      * Something a SURFACE renders has changed — a parked approval, an answered one, a turn
      * ending, a provider failing.
@@ -893,7 +898,7 @@ export class AgentSession {
         // Known at start (the record's last turn): nothing to count. Otherwise counted from the record, asynchronously.
         if (this.#options.turnsBefore === undefined) {
             const startedAt = Date.now();
-            void readHistory(this.#options.store, this.agentId, { before: startedAt })
+            void readHistory(this.#options.store, this.agentId, { before: startedAt, ...(this.#options.runId !== undefined ? { run: this.#options.runId } : {}) })
                 .then((h) => { const recorded = lastTurnOf(h.rows); this.#turns += recorded; this.#marked += recorded; })
                 .catch(() => { /* no record yet: turns start at 1 */ });
         }
@@ -1193,7 +1198,7 @@ export class AgentSession {
         const write = async (): Promise<void> => {
             try {
                 const thread = openAgentThread(this.#options.store, this.agentId);
-                await thread.record([persistable(open.event)]);
+                await thread.record([persistable(open.event, this.#options.runId)]);
             } catch {
                 this.#unpersisted += 1;
             }
@@ -1364,7 +1369,7 @@ export class AgentSession {
         const write = async (): Promise<void> => {
             try {
                 const thread = openAgentThread(this.#options.store, this.agentId);
-                await thread.record([persistable(event)]);
+                await thread.record([persistable(event, this.#options.runId)]);
             } catch {
                 // A storage fault must not take the turn down with it — but it must also not
                 // vanish. Counted, so a surface can say "this conversation is not being saved"
@@ -1408,12 +1413,13 @@ function promptRow(text: string, by: string | null, sent: { attachments: readonl
  * shape of defect as an identity split: nothing throws, and the damage is only visible
  * much later.
  */
-function persistable(event: StreamEvent): JsonObject {
+function persistable(event: StreamEvent, runId: string | undefined): JsonObject {
+    const run = runId !== undefined ? { [RUN_FIELD]: runId } : {};
     try {
-        return JSON.parse(JSON.stringify(event)) as JsonObject;
+        return { ...(JSON.parse(JSON.stringify(event)) as JsonObject), ...run };
     } catch {
         // A cyclic `rawInput` is the realistic case. Keep the row and its kind — losing
         // payload is survivable, losing the fact that the event happened is not.
-        return { kind: event.kind, unserialisable: true } as JsonObject;
+        return { kind: event.kind, unserialisable: true, ...run } as JsonObject;
     }
 }

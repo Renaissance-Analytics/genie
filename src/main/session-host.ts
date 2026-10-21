@@ -84,6 +84,7 @@ import {
 } from '../core/session.js';
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import { randomUUID } from 'node:crypto';
 import { openDurableStore, readHistory } from '../core/thread-store.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -294,6 +295,8 @@ interface Running {
      *  event arrives — the wire carries none, and a time invented later would be a guess. */
     rows: TimedEvent[];
     startedAt: number;
+    /** This run's id, on every row it records: what tells its rows from the history's (thread-store `RUN_FIELD`). */
+    runId: string;
     nextRowId: number;
     /** The action keys already sounded (Tynn #766 C): cleared when a turn ends. */
     readonly sounded: Set<string>;
@@ -669,7 +672,8 @@ export class SessionHost {
 
         const rows: TimedEvent[] = [];
         const startedAt = this.#clock();
-        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
+        const runId = randomUUID();
+        const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
         let reportedTurns = record.lastTurn ?? 0;
         let numberedTurn = record.lastTurn ?? 0;
@@ -678,6 +682,7 @@ export class SessionHost {
             cwd,
             store: this.#store(),
             driverFactory,
+            runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
@@ -1003,7 +1008,7 @@ export class SessionHost {
         const cached = this.#histories.get(agentId);
         if (cached === undefined || (cached !== 'loading' && cached.before !== before)) {
             this.#histories.set(agentId, 'loading');
-            void readHistory(this.#store(), agentId, { ...(before !== null ? { before } : {}), limit: HISTORY_LIMIT })
+            void readHistory(this.#store(), agentId, { ...(before !== null ? { before } : {}), ...(entry ? { run: entry.runId } : {}), limit: HISTORY_LIMIT })
                 .then((h) => {
                     // NUMBERED as a person reads them (core/turn-numbers.ts): 1, 2, 3 … on from the turns the window cut off.
                     const rows = numberTurns([
