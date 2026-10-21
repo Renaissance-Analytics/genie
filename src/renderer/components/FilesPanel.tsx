@@ -7,6 +7,9 @@ import { fileCrumb, statusBarFor } from '../../core/files-panel.js';
 import { FancyDiff } from '@particle-academy/fancy-diff';
 import { conflictBody, conflictHunks, conflictWords, takeLabel } from '../../core/conflict-words.js';
 import type { Pause } from '../../core/files-popout.js';
+import type { PanelPrefs } from '../../core/files-panel-prefs.js';
+import { EditorWand } from './EditorWand.js';
+import { EditorCursor, WordWrapSync } from './EditorSync.js';
 
 /**
  * THE WORKSPACE FILE PANEL (§4.3). ONE per workspace. A 220px tree, tabs, the viewer; a footer naming
@@ -99,6 +102,20 @@ export interface FilesPanelProps {
      * hidden when another tab is in front — because its model, unsaved edits included, lives inside it.
      */
     readonly pluginTabs?: readonly PluginTabView[] | undefined;
+    /**
+     * WHAT THE PANEL REMEMBERS (beta.33 item 15; Genie 1's view meta): word wrap, the tree hidden / pinned, the folder it is
+     * locked to. With `onPrefs`, the header carries the toggles. Absent = none of them (a test, an older embedding).
+     */
+    readonly prefs?: PanelPrefs | undefined;
+    readonly onPrefs?: ((patch: Partial<PanelPrefs>) => void) | undefined;
+    /** The open file's text as last opened or saved: fancy-code marks every line changed since (Genie 1's diff gutter). */
+    readonly baseline?: string | undefined;
+    /** Genie's resolved theme — the editor follows the APP, not the OS (Genie 1 useResolvedTheme). Absent = `auto`. */
+    readonly theme?: 'light' | 'dark' | undefined;
+    /** Files with unsaved edits: marked in the tree, not only on their tab. */
+    readonly unsaved?: readonly string[] | undefined;
+    /** Git's state of each changed file (Genie 1's tree colours). */
+    readonly git?: Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>> | undefined;
 }
 
 /** A plugin tab as the panel draws it: the editor body the container built, and its save. */
@@ -120,16 +137,19 @@ type Tone = 'writing' | 'changed' | 'unreported';
 /** `14:08`, in the viewer's locale — the changed row's time column. */
 const hhmm = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
 
-function StatusBar({ path, text, activity, hunks = null }: { path: string; text: string; activity: readonly Activity[]; hunks?: number | null }) {
+function StatusBar({ path, text, activity, hunks = null, cursor = null }: { path: string; text: string; activity: readonly Activity[]; hunks?: number | null; cursor?: ReactNode }) {
     const bar = statusBarFor(path, text, activity);
     // In conflict, the board's last segment: `conflict · 1 hunk`, counted from your buffer against the disk.
     const conflict = hunks === null ? '' : ` · conflict · ${hunks} ${hunks === 1 ? 'hunk' : 'hunks'}`;
     return (
-        <div data-file-status={path} className="flex shrink-0 items-center border-t border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
-            {`${bar.language} · ${bar.eol} · ${bar.encoding} · ${bar.presence}${conflict}`}
+        <div data-file-status={path} className="flex shrink-0 items-center gap-3 border-t border-[var(--border-1)] px-4 py-1 font-mono text-[11px] text-[var(--fg-4)]">
+            {cursor}
+            <span className={cursor ? 'ml-auto' : ''}>{`${bar.language} · ${bar.eol} · ${bar.encoding} · ${bar.presence}${conflict}`}</span>
         </div>
     );
 }
+
+const GIT_TONE: Readonly<Record<string, string>> = { modified: 'text-[var(--warning)]', added: 'text-[var(--success)]', untracked: 'text-[var(--success)]', deleted: 'text-[var(--danger)] line-through' };
 
 function Marker({ path, count, tone, names = [] }: { path: string; count: number | null; tone: Tone; names?: readonly string[] | undefined }) {
     const colour = tone === 'writing' ? 'text-[var(--accent)]' : tone === 'changed' ? 'text-[var(--success)]' : 'text-[var(--fg-4)]';
@@ -143,16 +163,27 @@ function Marker({ path, count, tone, names = [] }: { path: string; count: number
     );
 }
 
-function decorate(nodes: readonly TreeNode[], marks: ReadonlyMap<string, { count: number | null; tone: Tone; names: readonly string[] }>): TreeNodeData[] {
+function decorate(nodes: readonly TreeNode[], marks: ReadonlyMap<string, { count: number | null; tone: Tone; names: readonly string[] }>, rows: { readonly unsaved: ReadonlySet<string>; readonly git: Readonly<Record<string, string>> } = { unsaved: new Set(), git: {} }): TreeNodeData[] {
     return nodes.map((n) => {
         const mark = n.type === 'file' ? marks.get(n.id) : undefined;
+        const git = n.type === 'file' ? rows.git[n.id] : undefined;
+        const unsaved = n.type === 'file' && rows.unsaved.has(n.id);
+        // TreeNav renders a node's label as children, so a coloured label is a ReactNode (Genie 1 FileTree did the same);
+        // the extension is passed on its own, so the row's file icon is unchanged.
+        const label = git || unsaved ? (
+            <span {...(git ? { 'data-git': git, title: `git: ${git}` } : {})} className={git ? GIT_TONE[git] : ''}>
+                {n.label}
+                {unsaved ? <span data-unsaved={n.id} title="Unsaved changes" className="ml-1 text-[var(--accent)]">●</span> : null}
+            </span>
+        ) as unknown as string : n.label;
         return {
             id: n.id,
-            label: n.label,
+            label,
             type: n.type,
-            ...(n.ext ? { ext: n.ext } : {}),
+            // TreeNav falls back to `label.split('.')` for the icon when there is no `ext` — a coloured label is not a string.
+            ...(n.ext ? { ext: n.ext } : label !== n.label ? { ext: '' } : {}),
             ...(mark ? { icon: <Marker path={n.id} count={mark.count} tone={mark.tone} names={mark.names} /> } : {}),
-            ...(n.children ? { children: decorate(n.children, marks) } : {}),
+            ...(n.children ? { children: decorate(n.children, marks, rows) } : {}),
         };
     });
 }
@@ -165,7 +196,10 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [] }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [], prefs, onPrefs, baseline, theme, unsaved = [], git = {} }: FilesPanelProps) {
+    const rows = { unsaved: new Set(unsaved), git };
+    const wordWrap = prefs?.wordWrap === true;
+    const treeHidden = prefs?.treeHidden === true;
     // The tab in front: the container's word when it gives one (a plugin tab has no `open`), else the open text file.
     const activePath = activeProp !== undefined ? activeProp : (open?.path ?? null);
     const activePlugin = pluginTabs.find((p) => p.path === activePath) ?? null;
@@ -199,7 +233,20 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                     </div>
                 )}
                 <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.name ?? workspace.id} · {workspace.path}</span>
+                {prefs?.lockedRoot ? (
+                    <span data-locked-root={prefs.lockedRoot} title={`The tree is locked to ${prefs.lockedRoot}`} className="inline-flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-2)]">
+                        <Icon name="lock" size="xs" />{prefs.lockedRoot}
+                        {onPrefs ? <button type="button" data-action="unlock-tree" title="Unlock: the whole workspace again" className="ml-1 text-[var(--fg-4)] hover:text-[var(--fg-1)]" onClick={() => onPrefs({ lockedRoot: null })}>Unlock</button> : null}
+                    </span>
+                ) : null}
                 <span className="ml-auto" />
+                {prefs && onPrefs ? (
+                    <>
+                        {single ? null : <button type="button" data-action="toggle-tree" aria-pressed={!treeHidden} className={button} title={treeHidden ? 'Show the file tree' : 'Hide the file tree'} onClick={() => onPrefs({ treeHidden: !treeHidden })}><Icon name="folder-tree" size="xs" /></button>}
+                        {single ? null : <button type="button" data-action="pin-tree" aria-pressed={prefs.treePinned} className={button} title={prefs.treePinned ? 'Tree pinned open — click to let it hide when a file opens' : 'Pin the tree open'} onClick={() => onPrefs({ treePinned: !prefs.treePinned, ...(prefs.treePinned ? {} : { treeHidden: false }) })}><Icon name="pin" size="xs" /></button>}
+                        <button type="button" data-action="word-wrap" aria-pressed={wordWrap} className={`${button} ${wordWrap ? 'bg-[var(--bg-3)]' : ''}`} title={wordWrap ? 'Word wrap: on' : 'Word wrap: off'} onClick={() => onPrefs({ wordWrap: !wordWrap })}><Icon name="wrap-text" size="xs" /></button>
+                    </>
+                ) : null}
                 {single ? null : <span className="text-[11px] text-[var(--fg-4)]">one per workspace</span>}
                 {popped ? (
                     <button type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</button>
@@ -216,8 +263,8 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                 )}
             </header>
             <div className="flex min-h-0 flex-1">
-                {single ? null : (
-                <aside className="w-[264px] shrink-0 overflow-auto border-r border-[var(--border-1)] py-1">
+                {single || treeHidden ? null : (
+                <aside data-files-tree="" className="w-[264px] shrink-0 overflow-auto border-r border-[var(--border-1)] py-1">
                     {filter === 'changed' ? (
                         // THE CHANGED FILTER (§4.3): the files grouped by who changed them — you included, `?` for a change
                         // nobody reported — in the tree's place. A group header names the count; its dot is the agent's.
@@ -264,13 +311,13 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                 <ContextMenu.Trigger className="h-full">
                                     {/* Capture runs before the row's own handler: empty space targets the root (New file / New folder, Tynn #844), a row sets its own. */}
                                     <div data-file-menu="tree" className="h-full" onContextMenuCapture={() => setMenuFor({ path: '', target: 'tree-root' })}>
-                                        <TreeNav nodes={decorate(tree, marks)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
+                                        <TreeNav nodes={decorate(tree, marks, rows)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} onNodeContextMenu={(_e, node) => setMenuFor({ path: node.id, target: node.type === 'folder' ? 'tree-folder' : 'tree-file' })} virtualize height="100%" rowHeight={26} />
                                     </div>
                                 </ContextMenu.Trigger>
                                 {menuFor && menuFor.target !== 'tab' && (menuItems(menuFor.path, menuFor.target)?.length ?? 0) > 0 ? <ContextMenu.Content>{menuItems(menuFor.path, menuFor.target)}</ContextMenu.Content> : null}
                             </ContextMenu>
                         ) : (
-                        <TreeNav nodes={decorate(tree, marks)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
+                        <TreeNav nodes={decorate(tree, marks, rows)} {...(activePath ? { selectedId: activePath } : {})} onSelect={(id, node) => { if (node.type !== 'folder') onSelect(id); }} expandedIds={[...(expanded ?? [])]} {...(onExpandedChange ? { onExpandedChange } : {})} virtualize height="100%" rowHeight={26} />
                         )
                     )}
                 </aside>
@@ -387,14 +434,20 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                             // SEAMLESS (the owner, 2026-10-21: "they shouldn't have that stupid border"): no device frame, no rounded box.
                                             <FileViewer filename={open.path} value={open.text} {...(open.src ? { src: open.src } : {})} mediaProps={SEAMLESS_MEDIA} theme="auto" className="min-h-0 flex-1" />
                                         ) : (
-                                            <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme="auto">
+                                            <div data-editor-theme={theme ?? 'auto'} className="flex h-full min-h-0 flex-col">
+                                            <CodeEditor className="flex h-full min-h-0 flex-col" value={open.text} language={kind.language} readOnly={!edit} wordWrap={wordWrap} {...(baseline !== undefined ? { diffBase: baseline } : {})} {...(edit ? { onChange: edit.onChange } : {})} {...(line ? { cursorLine: line, highlightLines: [line] } : {})} theme={theme ?? 'auto'}>
                                                 <CodeEditor.Panel className="min-h-0 flex-1" />
+                                                <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} hunks={edit?.conflict && edit.conflict.path === open.path ? conflictHunks(open.text, edit.conflict.onDisk) : null} cursor={<EditorCursor />} />
+                                                <WordWrapSync wrap={wordWrap} />
+                                                {edit ? <EditorWand /> : null}
                                             </CodeEditor>
+                                            </div>
                                         );
                                     })()}
                                 </div>
-                                {/* THE STATUS BAR (the board): language · line ending · encoding · who is in the file. No cursor position — the viewer reports none. */}
-                                <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} hunks={edit?.conflict && edit.conflict.path === open.path ? conflictHunks(open.text, edit.conflict.onDisk) : null} />
+                                {/* THE STATUS BAR (the board): the cursor (Ln, Col — inside the editor, item 15), language · line ending ·
+                                    encoding · who is in the file. A media file has no cursor; its bar is drawn here. */}
+                                {resolveFileKind({ filename: open.path }).kind === 'media' ? <StatusBar path={open.path} text={open.text} activity={state?.activity ?? []} /> : null}
                             </div>
                         ) : (
                             <div data-tab-error className="m-4 rounded-lg border border-[var(--danger)] p-3 text-sm">

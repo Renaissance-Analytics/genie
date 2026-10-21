@@ -97,10 +97,12 @@ export const ICON_NAMES: readonly string[] = [
     'monitor-cog',
     // ^ the rail's tools and its collapsed state (Tynn #799/#282)
     'info', 'circle-help', 'file-text', 'globe', 'check',
-    // The Genie Browser's address bar on a .gen site (its own https origin, Genie's certificate).
+    // The Genie Browser's address bar on a .gen site (its own https origin, Genie's certificate); the file panel's lock badge.
     'lock',
     // The Genie browser window: a tab whose page is loading.
     'loader',
+    // The file panel's word-wrap toggle (beta.33 item 15; Genie 1's IconWrap).
+    'wrap-text',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

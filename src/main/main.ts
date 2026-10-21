@@ -126,7 +126,7 @@ import { ensureFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
-import { gitClone, gitFileStatus, gitInit, gitShowHead } from './git-ports.js';
+import { gitClone, gitFileStatus, gitInit, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
@@ -877,6 +877,7 @@ async function boot(): Promise<void> {
         // Each opened file carries its git state (the persona's `· committed`).
         gitStatus: gitFileStatus,
         gitShowHead,
+        gitTree: gitTreeStatus,
         // Delete goes to the OS trash (Tynn #844), never an erase.
         trash: (absolutePath) => shell.trashItem(absolutePath),
         workspace: (id) => { const w = registry?.workspace(id); return w ? { id: w.id, path: w.path } : null; },
@@ -1322,6 +1323,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:repo', (_event, op: unknown, workspaceId: unknown, rel: unknown, a: unknown, b: unknown) => repoCall(panelsHost(), op, workspaceId, rel, a, b));
     ipcMain.handle('genie:artboard-read', (_event, workspaceId: unknown) => artboardRead(panelsHost(), workspaceId));
     ipcMain.handle('genie:artboard-review', (_event, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown) => artboardReview(panelsHost(), workspaceId, postId, verdict, comment));
+    ipcMain.handle('genie:files-git-status', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.gitStatus(workspaceId) ?? {} : {}));
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
