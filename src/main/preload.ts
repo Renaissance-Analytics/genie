@@ -114,7 +114,7 @@ const bridge: GenieBridge = {
     workspaces: {
         previewAdd: (path) => ipcRenderer.invoke('genie:workspace-preview-add', path) as never,
         confirmAdd: (path) => ipcRenderer.invoke('genie:workspace-confirm-add', path) as never,
-        create: (name, parent, tynnProjectId) => ipcRenderer.invoke('genie:workspace-create', name, parent, tynnProjectId ?? '') as never,
+        create: (name, parent) => ipcRenderer.invoke('genie:workspace-create', name, parent) as never,
         previewAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-preview-add-git', url, parent) as never,
         confirmAddFromGit: (url, parent) => ipcRenderer.invoke('genie:workspace-confirm-add-git', url, parent) as never,
         tynnProjects: () => ipcRenderer.invoke('genie:workspace-tynn-projects') as never,
@@ -281,6 +281,14 @@ const bridge: GenieBridge = {
                 return () => { ipcRenderer.removeListener('genie:files-windows-changed', handler); };
             },
         },
+    },
+    // The official panels (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace.
+    repo: {
+        call: (op, workspaceId, rel, a, b) => ipcRenderer.invoke('genie:repo', op, workspaceId, rel, a, b) as Promise<never>,
+    },
+    artboard: {
+        read: (workspaceId) => ipcRenderer.invoke('genie:artboard-read', workspaceId) as Promise<never>,
+        review: (workspaceId, postId, verdict, comment) => ipcRenderer.invoke('genie:artboard-review', workspaceId, postId, verdict, comment) as Promise<never>,
     },
     features: {
         snapshot: () => ipcRenderer.invoke(FEATURE_CHANNELS.snapshot) as Promise<FeatureData>,

@@ -118,7 +118,7 @@ import { FilesHost } from './files-host.js';
 import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
-import { agentCapFrom } from '../core/inbox.js';
+import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf, openFileRoute } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
@@ -133,6 +133,8 @@ import { genieToolDeps } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
+import { runOfficialTool } from './official-tools.js';
+import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
@@ -1310,6 +1312,16 @@ async function boot(): Promise<void> {
         const deps = editorBytesDeps();
         return deps ? editorWrite(deps, workspaceId, pluginId, path, base64, expectedSha) : { ok: false, reason: 'no files host' };
     });
+    // THE OFFICIAL PANELS (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace (official-panels-host.ts).
+    const panelsHost = (): PanelsHostDeps => ({
+        workspacePath: (id) => registry?.workspace(id)?.path ?? null,
+        // An ArtBoard verdict reaches the agent that posted, as an AgentInbox message from you.
+        send: async (agentId, text) => { if (services) await services.inbox.send({ from: HUMAN, to: agentId as AgentId, text }); },
+        now: () => new Date().toISOString(),
+    });
+    ipcMain.handle('genie:repo', (_event, op: unknown, workspaceId: unknown, rel: unknown, a: unknown, b: unknown) => repoCall(panelsHost(), op, workspaceId, rel, a, b));
+    ipcMain.handle('genie:artboard-read', (_event, workspaceId: unknown) => artboardRead(panelsHost(), workspaceId));
+    ipcMain.handle('genie:artboard-review', (_event, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown) => artboardReview(panelsHost(), workspaceId, postId, verdict, comment));
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
@@ -1485,9 +1497,8 @@ async function boot(): Promise<void> {
         (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
     ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
     // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    // Optionally linked to a Tynn project: its id, looked up in Tynn's own list on this side.
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawProject: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createWorkspaceOp(workspaceOps, rawName, rawParent, typeof rawProject === 'string' && rawProject !== '' ? rawProject : undefined) : { ok: false, reason: 'give the workspace a name and a folder' }));
+    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown) =>
+        (typeof rawName === 'string' && typeof rawParent === 'string' ? createWorkspaceOp(workspaceOps, rawName, rawParent) : { ok: false, reason: 'give the workspace a name and a folder' }));
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));
@@ -1674,7 +1685,7 @@ async function boot(): Promise<void> {
                 previewAddFromTynn: (projectId, parent) => previewAddFromTynn(workspaceOps, parent, projectId),
                 locateRepo: (id, slug, path) => relocateRepoIn(repoOps, id, slug, path),
                 confirmAdd: (path) => addWorkspaceOp(workspaceOps, path),
-                create: (name, parent, tynnProjectId) => createWorkspaceOp(workspaceOps, name, parent, tynnProjectId),
+                create: (name, parent) => createWorkspaceOp(workspaceOps, name, parent),
                 confirmAddFromGit: (url, parent) => addWorkspaceFromGit(workspaceOps, url, parent),
                 confirmAddFromTynn: (parent, projectId) => addWorkspaceFromTynn(workspaceOps, parent, projectId),
                 hibernate: (id) => hibernateWorkspace(workspaceOps, id, { handoffWaitMs: 20_000, pollMs: 500 }),
@@ -1936,7 +1947,8 @@ async function boot(): Promise<void> {
             plugins: {
                 tools: () => composed.plugins.tools(),
                 guard: (id) => composed.plugins.guard(id),
-                run: (input) => runPluginTool({
+                // An official plugin's tool is Genie's own code (main/official-tools.ts), run in-process under the same guard.
+                run: (input) => input.official ? runOfficialTool({ pluginId: input.manifest.id, tool: input.tool.name, args: input.args, caller: input.caller, manifest: input.manifest }) : runPluginTool({
                     pluginDir: input.dir,
                     tool: input.tool,
                     args: input.args,

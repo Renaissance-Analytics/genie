@@ -1,7 +1,6 @@
 import { Icon, Modal } from '@particle-academy/react-fancy';
 import { useEffect, useState } from 'react';
 import { newWorkspaceProblem, workspaceFolderName } from '../../core/add-workspace.js';
-import type { TynnProject } from '../../core/tynn.js';
 
 /**
  * ADD A WORKSPACE — GENIE 1'S MODAL (the owner, 2026-10-21: "WTf happened to my fucking new workspace UX … Look at Genie
@@ -66,17 +65,10 @@ export interface NewWorkspaceFormProps {
     readonly onBrowse: () => void;
     readonly onCreate: () => void;
     readonly onCancel: () => void;
-    /**
-     * The person's Tynn projects, for Genie 1's optional "Project" link: `null` while they load, a refusal in Tynn's
-     * words when they cannot be listed. Absent = this window has no Tynn to ask, and no picker is offered.
-     */
-    readonly tynn?: { readonly ok: true; readonly projects: readonly TynnProject[] } | { readonly ok: false; readonly reason: string } | null;
-    readonly projectId?: string | null;
-    readonly onProject?: (projectId: string | null) => void;
 }
 
-/** Genie 1's New workspace form: Workspace name, Folder (+ Browse), where it lands, an optional Tynn project, Create workspace. */
-export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBrowse, onCreate, onCancel, tynn, projectId = null, onProject }: NewWorkspaceFormProps) {
+/** Genie 1's New workspace form: Workspace name, Folder (+ Browse), where it lands, Create workspace. */
+export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBrowse, onCreate, onCancel }: NewWorkspaceFormProps) {
     const folder = workspaceFolderName(name);
     const ready = newWorkspaceProblem(name, parent) === null && !busy;
     const lands = parent.trim() !== '' && folder !== '' ? `${parent.trim().replace(/[\\/]+$/, '')}${sep}${folder}` : null;
@@ -98,25 +90,6 @@ export function NewWorkspaceForm({ name, parent, sep, busy, error, onName, onBro
                 </div>
                 <span data-lands-at="" className="text-xs text-[var(--fg-3)]">{lands ? `Lands at ${lands}` : 'Pick the folder your workspaces live in.'}</span>
             </div>
-            {/* WHERE IT IS KEPT, honestly (Genie 1 said "Backed up to GitHub as owner/x.agi" — Genie 2 creates no repository). */}
-            {name.trim() !== '' ? <p data-storage-note="" className="text-xs text-[var(--fg-3)]">Kept on this machine. Genie does not create a GitHub repository for a new workspace.</p> : null}
-            {/* GENIE 1'S OPTIONAL TYNN PROJECT: none by default; a workspace works the same without one. */}
-            {tynn !== undefined ? (
-                <label className="flex flex-col gap-1">
-                    <span className="text-xs font-semibold">Project (optional)</span>
-                    {tynn === null ? (
-                        <span className="text-xs text-[var(--fg-3)]">Loading Tynn projects…</span>
-                    ) : tynn.ok ? (
-                        <select data-field="tynn-project" value={projectId ?? ''} onChange={(e) => onProject?.(e.target.value === '' ? null : e.target.value)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-0)] px-2.5 py-1.5">
-                            <option value="">— No project (just a folder) —</option>
-                            {tynn.projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-                        </select>
-                    ) : (
-                        <span className="text-xs text-[var(--fg-3)]">No Tynn projects available — {tynn.reason}</span>
-                    )}
-                    <span className="text-xs text-[var(--fg-3)]">Optionally link this workspace to a Tynn project. Not required, and not required later either — the workspace works the same without one.</span>
-                </label>
-            ) : null}
             {error ? <p data-add-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             <div className="flex items-center justify-end gap-2">
                 <button type="button" data-action="cancel-add" onClick={onCancel} className={button}>Cancel</button>
@@ -133,36 +106,21 @@ export interface AddWorkspaceModalProps {
     readonly sep: string;
     /** Browse for the folder: the host's picker, opened where the folder field points (else the Primary workspace). */
     readonly browseParent: (current: string) => Promise<string | null>;
-    readonly create: (name: string, parent: string, tynnProjectId?: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
-    /** The person's Tynn projects, for the optional link. Absent = no Tynn to ask (no picker). */
-    readonly tynnProjects?: (() => Promise<{ ok: true; projects: TynnProject[] } | { ok: false; reason: string }>) | undefined;
+    readonly create: (name: string, parent: string) => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly onOpenExisting: () => void;
     readonly onGit: () => void;
     readonly onTynn: () => void;
     readonly onClose: () => void;
 }
 
-export function AddWorkspaceModal({ open, primaryWorkspace, sep, browseParent, create, tynnProjects, onOpenExisting, onGit, onTynn, onClose }: AddWorkspaceModalProps) {
+export function AddWorkspaceModal({ open, primaryWorkspace, sep, browseParent, create, onOpenExisting, onGit, onTynn, onClose }: AddWorkspaceModalProps) {
     const [stage, setStage] = useState<'source' | 'new'>('source');
-    const [tynn, setTynn] = useState<Exclude<NewWorkspaceFormProps['tynn'], undefined>>(null);
-    const [projectId, setProjectId] = useState<string | null>(null);
-    // The projects are read when the New workspace form opens; a failure is said in Tynn's words, never thrown.
-    useEffect(() => {
-        if (stage !== 'new' || !tynnProjects) return;
-        let live = true;
-        setTynn(null);
-        void tynnProjects().then(
-            (r) => { if (live) setTynn(r.ok ? { ok: true, projects: r.projects } : { ok: false, reason: r.reason }); },
-            (e: unknown) => { if (live) setTynn({ ok: false, reason: e instanceof Error ? e.message : String(e) }); },
-        );
-        return () => { live = false; };
-    }, [stage, tynnProjects]);
     const [name, setName] = useState('');
     const [parent, setParent] = useState(primaryWorkspace);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     // Every opening starts at the chooser, with the folder from the setting as it is now.
-    useEffect(() => { if (open) { setStage('source'); setName(''); setParent(primaryWorkspace); setError(null); setBusy(false); setProjectId(null); } }, [open, primaryWorkspace]);
+    useEffect(() => { if (open) { setStage('source'); setName(''); setParent(primaryWorkspace); setError(null); setBusy(false); } }, [open, primaryWorkspace]);
     return (
         <Modal open={open} onClose={onClose} size="lg">
             <Modal.Header><span className="flex items-center gap-2"><Icon name="folder-plus" size="sm" />Add workspace</span></Modal.Header>
@@ -176,13 +134,12 @@ export function AddWorkspaceModal({ open, primaryWorkspace, sep, browseParent, c
                         sep={sep}
                         busy={busy}
                         error={error}
-                        {...(tynnProjects ? { tynn, projectId, onProject: setProjectId } : {})}
                         onName={(n) => { setName(n); setError(null); }}
                         onBrowse={() => { void browseParent(parent).then((p) => { if (p) { setParent(p); setError(null); } }); }}
                         onCreate={() => {
                             setBusy(true);
                             setError(null);
-                            void create(name, parent, projectId ?? undefined)
+                            void create(name, parent)
                                 .then((r) => { if (r.ok) onClose(); else setError(r.reason); })
                                 .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                                 .finally(() => setBusy(false));

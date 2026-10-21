@@ -34,6 +34,7 @@ import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './comp
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
+import { PanelHostContext } from './components/PluginPane.js';
 import type { ClaimingEditor } from '../core/plugin-editors.js';
 
 const NO_PLUGIN_EDITORS: readonly ClaimingEditor[] = [];
@@ -513,6 +514,8 @@ function DesktopApp({ bridge }: AppProps) {
     const [features, setFeatures] = useFeatures(resolvedBridge);
     // The editors of the plugins enabled on the host (beta.33 item 14): the file panel routes claimed files to them.
     const pluginEditors = features.plugins?.editors ?? NO_PLUGIN_EDITORS;
+    // The official panels' host calls (beta.33 item 14): the Repository panel's git, the ArtBoard, the files watcher.
+    const panelHost = useMemo(() => ({ repo: resolvedBridge?.repo, artboard: resolvedBridge?.artboard, files: resolvedBridge?.files }), [resolvedBridge]);
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
@@ -1017,6 +1020,7 @@ function DesktopApp({ bridge }: AppProps) {
     return (
         <HostPathPickerContext.Provider value={pickHostPath}>
         <PluginEditorsContext.Provider value={pluginEditors}>
+        <PanelHostContext.Provider value={panelHost}>
         <Shell
             route={route}
             address={shownAddress}
@@ -1209,15 +1213,13 @@ function DesktopApp({ bridge }: AppProps) {
             primaryWorkspace={primaryWorkspace}
             sep={hostSep}
             browseParent={(current) => pickFolder('Choose where the workspace should live', pickerStart({ workspacePath: current, primaryWorkspace, home: hostHome }))}
-            create={async (name, parent, tynnProjectId) => {
+            create={async (name, parent) => {
                 const create = resolvedBridge?.workspaces.create;
                 if (!create) return { ok: false, reason: 'This Genie cannot create a workspace.' };
-                const r = await create(name, parent, tynnProjectId);
+                const r = await create(name, parent);
                 if (r.ok) navigate(`genie://workspace/${r.id}`);
                 return r.ok ? { ok: true } : r;
             }}
-            // Genie 1's optional Tynn project link on the New workspace form (the host's own list).
-            tynnProjects={resolvedBridge?.workspaces.tynnProjects}
             onOpenExisting={openExisting}
             onGit={startAddFromGit}
             onTynn={startAddFromTynn}
@@ -1260,6 +1262,7 @@ function DesktopApp({ bridge }: AppProps) {
                 }}
             />
         ) : null}
+        </PanelHostContext.Provider>
         </PluginEditorsContext.Provider>
         </HostPathPickerContext.Provider>
     );

@@ -160,7 +160,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         workspaces: {
             previewAdd: (path) => answer('workspaces.previewAdd', path),
             confirmAdd: (path) => answer('workspaces.confirmAdd', path),
-            create: (name, parent, tynnProjectId) => answer('workspaces.create', name, parent, tynnProjectId ?? ''),
+            create: (name, parent) => answer('workspaces.create', name, parent),
             previewAddFromGit: (url, parent) => answer('workspaces.previewAddFromGit', url, parent),
             confirmAddFromGit: (url, parent) => answer('workspaces.confirmAddFromGit', url, parent),
             tynnProjects: () => answer('workspaces.tynnProjects'),

@@ -41,6 +41,9 @@ describe('manifest panels', () => {
     });
 
     it('the vetted list is short, explicit and holds only props-mounted components Genie bundles (a compound component like Table needs composition a manifest cannot express)', () => {
-        expect([...VETTED_FANCY_EXPORTS].sort()).toEqual(['Callout', 'ContentRenderer', 'JsonEditor'].sort());
+        // REWRITTEN for beta.33 item 14 (the owner: "I STILL DO NOT SEE OUR PLUGINS SUPPORTED"): Genie's two first-party
+        // panels for the official Repository and ArtBoard plugins join the list (Genie 1's compile-time adapter registry).
+        // Still explicit, still Genie's own components, still no plugin UI code.
+        expect([...VETTED_FANCY_EXPORTS].sort()).toEqual(['ArtBoardPanel', 'Callout', 'ContentRenderer', 'JsonEditor', 'RepoChangesPanel'].sort());
     });
 });

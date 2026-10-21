@@ -3,7 +3,7 @@ import type { AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSchema, SCHEMA_REVISION, type FolderKind, type GitAddPlan, type PlanStep } from '../core/workspace-model.js';
 import { newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
-import { parseTynnProject, tynnAddPlan, tynnLink, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
+import { parseTynnProject, tynnAddPlan, type TynnAddPlan, type TynnProject } from '../core/tynn.js';
 
 /**
  * WORKSPACE OPERATIONS IN THE APP (§6.1) — the main-process half over core/workspace-model.
@@ -241,22 +241,10 @@ export async function removeWorkspace(ports: WorkspaceOpsPorts, workspaceId: str
  * createAgiEnvelope): a NAME and a FOLDER; Genie makes `<folder>/<slug>.agi`, the envelope, and its first git commit. Every
  * refusal comes before anything is written: no name, no folder, a folder that does not exist, a name already a
  * workspace, a target that is not empty ("use Open existing folder on it").
- *
- * Optionally LINKED to a Tynn project (Genie 1's "Project (optional)"): `tynnProjectId` is looked up in Tynn's own list
- * of the person's projects — never taken from the window — and written as project.json's `tynn`, as Import from Tynn
- * writes it. A project Tynn does not list, or no Tynn to ask, is refused before anything is written.
  */
-export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string, tynnProjectId?: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
+export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, parent: string): Promise<{ ok: true; id: string; path: string } | Refusal> {
     const problem = newWorkspaceProblem(name, parent);
     if (problem) return { ok: false, reason: problem };
-    let tynn: ReturnType<typeof tynnLink> | null = null;
-    if (tynnProjectId !== undefined && tynnProjectId !== '') {
-        const listed = await listTynnProjects(ports);
-        if (!listed.ok) return listed;
-        const project = listed.projects.find((p) => p.id === tynnProjectId);
-        if (!project) return { ok: false, reason: `Tynn lists no project ${tynnProjectId} for you — it may have been deleted, or shared with someone else` };
-        tynn = tynnLink(project, listed.host);
-    }
     const at = parent.trim();
     if (!(await ports.fs.exists(at))) return { ok: false, reason: `${at} does not exist; pick a folder that does` };
     const folder = workspaceFolderName(name);
@@ -266,6 +254,6 @@ export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, pa
     const there = await ports.fs.exists(target);
     if (there && (await ports.fs.entries(target)).length > 0) return { ok: false, reason: `${target} is not empty. Choose another name or folder, or use Open existing folder on it.` };
     if (!there) await ports.fs.mkdir(target);
-    const added = await addWorkspace(ports, target, { name: name.trim(), ...(tynn ? { tynn } : {}) }, id);
+    const added = await addWorkspace(ports, target, { name: name.trim() }, id);
     return added.ok ? { ok: true, id: added.id, path: target } : added;
 }

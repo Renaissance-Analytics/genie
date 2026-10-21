@@ -223,8 +223,7 @@ export interface GenieBridge {
         previewAdd(path: string): Promise<{ ok: true; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAdd(path: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
         /** A NEW workspace (Genie 1's): Genie makes <parent>/<slug>.agi, the envelope and its first commit. Refusals come before any write. */
-        /** A new workspace; optionally linked to one of the person's Tynn projects (by id, looked up on the host). */
-        create?(name: string, parent: string, tynnProjectId?: string): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
+        create?(name: string, parent: string): Promise<{ ok: true; id: string; path: string } | { ok: false; reason: string }>;
         /** Add from a git URL (§6.1): the host picks the parent folder; the plan comes back BEFORE any clone. */
         previewAddFromGit(url: string, parent: string): Promise<{ ok: true; source: 'git'; url: string; parent: string; path: string; kind: FolderKind; steps: PlanStep[] } | { ok: false; reason: string }>;
         confirmAddFromGit(url: string, parent: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;
@@ -382,6 +381,18 @@ export interface GenieBridge {
         download(): Promise<boolean>;
         install(): Promise<{ report: string } | null>;
     };
+
+    /**
+     * THE OFFICIAL PANELS' HOST CALLS (beta.33 item 14), by workspace: the Repository panel's git (each the person's own
+     * click) and the ArtBoard. Absent on a bridge with no host (a window driving another machine): the panels say so.
+     */
+    repo?: {
+        call(op: 'list' | 'status' | 'diff' | 'stage' | 'unstage' | 'commit' | 'branch' | 'push' | 'pull', workspaceId: string, rel: string, a?: unknown, b?: unknown): Promise<{ ok: true; value: unknown } | { ok: false; error: string }>;
+    } | undefined;
+    artboard?: {
+        read(workspaceId: string): Promise<import('../core/artboard.js').ResolvedBoard>;
+        review(workspaceId: string, postId: string, verdict: 'approved' | 'rejected', comment: string): Promise<{ ok: true; delivered: boolean } | { ok: false; error: string }>;
+    } | undefined;
 
     /** A phone's upload (§6.8): only the remote bridge has it — the desktop picks files natively. */
     uploads?: {

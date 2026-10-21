@@ -24,6 +24,8 @@
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",
     "@particle-academy/fancy-flow": "^0.81.0",
+    "@particle-academy/fancy-git": "0.3.1",
+    "@particle-academy/fancy-git-ui": "0.5.0",
     "@particle-academy/fancy-sheets": "0.12.0",
     "@particle-academy/fancy-slides": "0.22.0",
     "@particle-academy/fancy-term": "^0.8.0",
