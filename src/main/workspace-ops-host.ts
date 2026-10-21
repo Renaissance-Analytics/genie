@@ -5,6 +5,7 @@ import { classifyFolder, gitAddPlan, hibernate, planAdd, repoFolderName, stampSc
 import { ENVELOPE_DIRS, ENVELOPE_GITIGNORE, envelopeReadme, envelopeRules, firstCommitMessage, newWorkspaceProblem, workspaceFolderName } from '../core/add-workspace.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
 import { routerText } from './agent-routers.js';
+import { DEFAULT_ENV_FILE, envFileName } from '../core/dotenv.js';
 import { parseTynnProject, tynnAddPlan, tynnEnvelopePath, type TynnAddPlan, type TynnLink, type TynnProject } from '../core/tynn.js';
 import { addRepo } from '../core/repo-registry.js';
 
@@ -41,7 +42,7 @@ export interface WorkspaceOpsPorts {
         workspace(id: string): { id: string; path: string; asleep: boolean } | null;
         /** Every registered workspace (the Tynn import's "already added" reads their project.json `tynn.projectId`). */
         list(): readonly { id: string; path: string }[];
-        addWorkspace(record: { id: string; path: string }): Promise<void>;
+        addWorkspace(record: { id: string; path: string; envFile?: string }): Promise<void>;
         agentsOf(workspaceId: string): readonly AgentRecord[];
         setAsleep(workspaceId: string, asleep: boolean): Promise<boolean>;
         forgetWorkspace(workspaceId: string): Promise<{ agentsForgotten: number } | null>;
@@ -58,6 +59,16 @@ export interface WorkspaceOpsPorts {
     sleep(ms: number): Promise<void>;
     /** Tynn (§6.1 add from Tynn): the host, and the signed-in person's projects (main/tynn-account.ts); absent on a host without it. */
     tynn?: { readonly host: string; projects(): Promise<unknown[]> } | undefined;
+    /** Settings → General "Env file name" (`default_env_file`), read at each add; absent = `.env`. */
+    defaultEnvFile?: (() => string) | undefined;
+}
+
+/**
+ * The env file a workspace is registered with (Add workspace parity 2b; Genie 1's add-workspace.ts:185 stamped
+ * `default_env_file` as `env_file`): the setting as it is NOW, or `.env` when it is blank or not a file name.
+ */
+export function registeredEnvFile(ports: Pick<WorkspaceOpsPorts, 'defaultEnvFile'>): string {
+    return envFileName(ports.defaultEnvFile?.()) ?? DEFAULT_ENV_FILE;
 }
 
 type Refusal = { ok: false; reason: string };
@@ -125,7 +136,7 @@ export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overl
 
     // The id the preview checked is free (see `alreadyNamed`).
 
-    await ports.registry.addWorkspace({ id, path });
+    await ports.registry.addWorkspace({ id, path, envFile: registeredEnvFile(ports) });
     return { ok: true, id, kind: preview.kind, stamped };
 }
 
@@ -271,7 +282,7 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
         const current = await ports.fs.readJson(manifestPath);
         if (!isRecord(current)) await ports.fs.writeJson(manifestPath, { ...freshManifest(path, 'empty'), ...plan.manifest });
         else if (!sameLink(current.tynn, plan.manifest.tynn)) await ports.fs.writeJson(manifestPath, { ...current, tynn: plan.manifest.tynn });
-        await ports.registry.addWorkspace({ id, path });
+        await ports.registry.addWorkspace({ id, path, envFile: registeredEnvFile(ports) });
         return { ok: true, id, kind: plan.kind, stamped: null };
     }
 
@@ -306,7 +317,7 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
         }
     }
 
-    await ports.registry.addWorkspace({ id, path });
+    await ports.registry.addWorkspace({ id, path, envFile: registeredEnvFile(ports) });
     return { ok: true, id, kind: 'empty', stamped: null };
 }
 
@@ -352,7 +363,7 @@ export async function createWorkspace(ports: WorkspaceOpsPorts, name: string, pa
     if (!there) await ports.fs.mkdir(target);
     const failed = await scaffoldEnvelope(ports, target, folder, { name: name.trim() });
     if (failed) return { ok: false, reason: failed };
-    await ports.registry.addWorkspace({ id, path: target });
+    await ports.registry.addWorkspace({ id, path: target, envFile: registeredEnvFile(ports) });
     return { ok: true, id, path: target };
 }
 

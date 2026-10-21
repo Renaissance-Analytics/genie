@@ -7,7 +7,7 @@ import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePro
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
 import { groupTools, toneLabel } from '../../core/toolchain.js';
-import { NAV_GROUPS, sectionOf, type SectionId } from '../../core/settings-nav.js';
+import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
 import { playAlertSound } from '../alert-sound.js';
@@ -945,9 +945,11 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
     // The settings a page draws as rows: its keys, in the registry's order. Internal (`hidden`) keys and the alert sounds
     // have their own blocks.
     const rows = (s: SectionId) => {
-        const defs = SETTINGS.filter((def) => sectionOf(def.key) === s && !def.hidden && !isAlertSoundKey(def.key));
+        const defs = SETTINGS.filter((def) => sectionOf(def.key) === s && !def.hidden && !isAlertSoundKey(def.key) && !NEW_PROJECT_DEFAULTS.includes(def.key));
         return defs.length === 0 ? null : <ul className="divide-y divide-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>{defs.map(row)}</ul>;
     };
+    // General's "Defaults for new projects": Primary workspace's own row, then the env file name (Genie 1's pair).
+    const newProjectRows = SETTINGS.filter((def) => NEW_PROJECT_DEFAULTS.includes(def.key));
     const label = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === active)?.label ?? 'General';
     return (
         <div data-surface="settings" className="flex h-full min-h-0 flex-col">
@@ -999,7 +1001,10 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {active === 'general' ? (
                                 <>
                                     {update ? <UpdatesBlock {...update} /> : null}
-                                    <SetSection title="Defaults for new projects" desc="Where Genie puts what it makes."><PrimaryWorkspaceRow value={values === null ? null : typeof values['primary_workspace'] === 'string' ? (values['primary_workspace'] as string) : ''} onAction={onAction} /></SetSection>
+                                    <SetSection title="Defaults for new projects" desc="Where Genie puts what it makes.">
+                                        <PrimaryWorkspaceRow value={values === null ? null : typeof values['primary_workspace'] === 'string' ? (values['primary_workspace'] as string) : ''} onAction={onAction} />
+                                        <ul className="divide-y divide-[var(--border-1)] border-t border-[var(--border-1)]" data-skeleton={values === null ? '' : undefined}>{newProjectRows.map(row)}</ul>
+                                    </SetSection>
                                     <SetSection title="Startup and focus" desc="What Genie does when it starts, and Do not disturb.">{rows('general')}</SetSection>
                                 </>
                             ) : null}

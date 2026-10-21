@@ -78,6 +78,9 @@ export const NOT_DRAWN: readonly string[] = [
     'remote_access',
 ];
 
+/** General's settings drawn in its "Defaults for new projects" block (beside Primary workspace), not among its other rows. */
+export const NEW_PROJECT_DEFAULTS: readonly string[] = ['default_env_file'];
+
 const PLACE: Readonly<Record<string, SectionId>> = {
     update_channel: 'general', launch_at_login: 'general', start_minimized: 'general',
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
@@ -85,6 +88,8 @@ const PLACE: Readonly<Record<string, SectionId>> = {
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard',
     // Drawn as its own row (a folder + Browse) on General, not a generic one.
     primary_workspace: 'general',
+    // Drawn beside Primary workspace in "Defaults for new projects" (NEW_PROJECT_DEFAULTS), still found by search.
+    default_env_file: 'general',
     theme: 'appearance', sidebar_width: 'appearance',
 
     default_agent: 'workspace-defaults', approval_gates: 'workspace-defaults', agent_cap: 'workspace-defaults',

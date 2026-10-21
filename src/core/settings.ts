@@ -58,6 +58,10 @@ export const SETTINGS: readonly SettingDef[] = [
     // PRIMARY WORKSPACE (Genie 1's `primary_workspace`, Settings → General): where a new workspace lands, and where a folder
     // picker opened from the workstation starts (core/add-workspace.ts). Drawn as a folder with Browse, not a text box.
     { key: 'primary_workspace', group: 'general', scope: 'host', label: 'Primary workspace', description: 'Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint.', type: 'string', default: '', hidden: true },
+    // ENV FILE NAME (Genie 1's `default_env_file`, Settings → General; Add workspace parity 2b): stamped on each new workspace
+    // at register (main/workspace-ops-host.ts), and the file its sites' service connection is written to (main/dotenv-sync.ts).
+    // Drawn beside Primary workspace in "Defaults for new projects", not under Startup and focus.
+    { key: 'default_env_file', group: 'general', scope: 'host', label: 'Env file name', description: 'Default environment file name for new workspaces — the file in each site’s folder Genie keeps the service connection in.', type: 'string', default: '.env' },
     // THIS MACHINE AS A HOST (Tynn #820; the owner: remote access "Off by default", as Genie 1 had it). Drawn in Settings →
     // Remote access as its switch, not as a row.
     { key: 'remote_access', group: 'workstation', scope: 'host', label: 'Remote access', description: 'Let paired devices on your tailnet reach this Genie.', type: 'boolean', default: false, hidden: true },
@@ -120,6 +124,8 @@ const V1_MAP: Readonly<Record<string, string>> = {
     ftq_nudge_hotkey: 'ftq_nudge_hotkey',
     // Genie 1's default destination for new projects (the owner, 2026-10-21: "like it was for genie 1").
     primary_workspace: 'primary_workspace',
+    // Genie 1's default env file for new workspaces (main/db.ts:3700, default `.env`).
+    default_env_file: 'default_env_file',
 };
 
 const V1_DROP_REASONS: Readonly<Record<string, string>> = {

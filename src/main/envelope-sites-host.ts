@@ -81,6 +81,8 @@ export interface WorkspaceRef {
     readonly id: string;
     readonly path: string;
     readonly asleep?: boolean;
+    /** The env file its sites' service connection is written to (WorkspaceRecord.envFile); absent = `.env`. */
+    readonly envFile?: string;
 }
 
 interface Tracked {

@@ -18,6 +18,23 @@
  *     otherwise (main/dotenv-sync.ts). Genie does not edit the person's `.gitignore` to make it so.
  */
 
+/** The file Genie writes when the workspace names none — Genie 1's `default_env_file` default, and what this always wrote. */
+export const DEFAULT_ENV_FILE = '.env';
+
+/**
+ * WHICH FILE (Add workspace parity 2b; Genie 1's Settings → General "Env file name", stamped on each workspace at register as
+ * its `env_file`). Unset or blank is {@link DEFAULT_ENV_FILE}. A name is a file IN the site's folder: anything that could
+ * point elsewhere — a separator, `.`/`..`, a drive or stream colon, a control character — is `null`, never "fixed", so a
+ * caller refuses it rather than writing credentials into a file nobody named.
+ */
+export function envFileName(raw: string | null | undefined): string | null {
+    // workspaces.json is read as written: a hand-edited non-string is "nothing recorded", not a crash in the writer.
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (name === '') return DEFAULT_ENV_FILE;
+    if (name === '.' || name === '..' || /[\\/:\u0000-\u001f]/.test(name)) return null;
+    return name;
+}
+
 /** The marker above the keys Genie added. Says who wrote them and that they are kept current, so nobody hand-edits a port back. */
 export const MANAGED_ENV_HEADER = '# --- Genie: this workspace’s service connection, kept current by Genie ---';
 

@@ -57,7 +57,7 @@ import { readRememberedPasswordStore, rememberPasswordStore } from './password-s
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
-import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { mkdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -1513,6 +1513,11 @@ async function boot(): Promise<void> {
                 return tynnAccount.projects();
             },
         },
+        // Settings → General "Env file name", read at each add (Add workspace parity 2b); before the services exist, `.env`.
+        defaultEnvFile: () => {
+            const v = services?.settings.get('default_env_file');
+            return typeof v === 'string' ? v : '';
+        },
     };
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
     const repoOps: RepoOpsPorts = {
@@ -1596,7 +1601,7 @@ async function boot(): Promise<void> {
         const path = picked.filePaths[0];
         if (picked.canceled || !path) return { ok: false };
 
-        await registry.addWorkspace({ id: basename(path), path });
+        await registry.addWorkspace({ id: basename(path), path, envFile: registeredEnvFile(workspaceOps) });
         return { ok: true };
     });
 
