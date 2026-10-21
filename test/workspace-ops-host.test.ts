@@ -16,7 +16,7 @@ import { addWorkspace, createWorkspace, hibernateWorkspace, previewAddWorkspace,
 const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/project.schema.json';
 const rec = (id: string, workspaceId: string, name: string): AgentRecord => ({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: 't', lastUsedAt: null, mode: 'manual', accessScope: 'self' }) as unknown as AgentRecord;
 
-function fakes(over: { entries?: Record<string, string[]>; files?: Record<string, unknown>; running?: string[]; handoffAfterMs?: number } = {}) {
+function fakes(over: { entries?: Record<string, string[]>; files?: Record<string, unknown>; running?: string[]; handoffAfterMs?: number; commitFails?: string } = {}) {
     const entries = over.entries ?? {};
     const files: Record<string, unknown> = { ...(over.files ?? {}) };
     const calls: string[] = [];
@@ -34,7 +34,9 @@ function fakes(over: { entries?: Record<string, string[]>; files?: Record<string
             writeJson: async (p, v) => { calls.push(`writeJson:${key(p)}`); files[key(p)] = v; },
             // A folder made exists afterwards, empty (createWorkspace makes the target, then adds it).
             mkdir: async (p) => { calls.push(`mkdir:${key(p)}`); if (!(key(p) in entries)) entries[key(p)] = []; },
+            writeText: async (p, text) => { calls.push(`writeText:${key(p)}`); files[key(p)] = text; },
             gitInit: async (p) => { calls.push(`gitInit:${key(p)}`); },
+            gitFirstCommit: async (p, message) => { calls.push(`gitFirstCommit:${key(p)}:${message}`); if (over.commitFails) throw new Error(over.commitFails); },
             gitClone: async (url, into) => { calls.push(`gitClone:${url}:${key(into)}`); },
         },
         registry: {
@@ -114,14 +116,31 @@ describe('adding a workspace', () => {
  * folder that already existed and was empty, and its picker could not make one. Refusals come BEFORE any write.
  */
 describe('creating a new workspace', () => {
-    it('makes <parent>/<slug>.agi, writes the envelope named as typed, git-inits it and registers it', async () => {
+    // Changed for Add workspace parity item 1: the card promises the first COMMIT, not a bare `git init` (the real git is
+    // measured in create-workspace-first-commit.test.ts). Here: the order — everything written, then the commit, then
+    // the registration — and a commit that fails registers nothing.
+    it('makes <parent>/<slug>.agi, writes the envelope named as typed, makes its first commit, then registers it', async () => {
         const f = fakes({ entries: { '/w': ['tynn'] } });
         const r = await createWorkspace(f.ports, 'Acme Storefront', '/w');
         expect(r).toMatchObject({ ok: true, id: 'acme-storefront', path: expect.stringMatching(/[\\/]w[\\/]acme-storefront\.agi$/) });
         expect(f.calls[0]).toBe('mkdir:/w/acme-storefront.agi');
-        expect(f.calls).toContain('gitInit:/w/acme-storefront.agi');
+        expect(f.calls.some((c) => c.startsWith('gitInit:'))).toBe(false);
+        expect(f.calls.at(-2)).toBe('gitFirstCommit:/w/acme-storefront.agi:Initial commit — acme-storefront.agi envelope scaffolded by Genie');
         expect(f.calls.at(-1)).toMatch(/^addWorkspace:acme-storefront:.*acme-storefront\.agi$/);
+        for (const file of ['project.json', '.gitignore', 'README.md', 'RULES.md', 'AGENTS.md', 'CLAUDE.md', 'sandbox/.gitkeep', '.trash/.gitkeep']) {
+            expect(f.files).toHaveProperty([`/w/acme-storefront.agi/${file}`]);
+        }
         expect(f.files['/w/acme-storefront.agi/project.json']).toMatchObject({ name: 'Acme Storefront', $schema: SCHEMA });
+    });
+
+    it('a first commit git refuses registers nothing and says so in git’s words', async () => {
+        const f = fakes({ entries: { '/w': [] }, commitFails: 'fatal: unable to auto-detect email address' });
+        expect(await createWorkspace(f.ports, 'acme', '/w')).toMatchObject({ ok: false, reason: expect.stringMatching(/acme\.agi, but git could not make its first commit: fatal: unable to auto-detect email address$/) });
+        expect(f.calls.some((c) => c.startsWith('addWorkspace:'))).toBe(false);
+        // Positive control: the same fakes without the failure do register.
+        const ok = fakes({ entries: { '/w': [] } });
+        await createWorkspace(ok.ports, 'acme', '/w');
+        expect(ok.calls.some((c) => c.startsWith('addWorkspace:acme:'))).toBe(true);
     });
 
     it('an EMPTY folder of that name already there is used, not refused', async () => {

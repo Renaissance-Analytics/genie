@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
+import { commitIdentityConfig } from '../core/add-workspace.js';
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -12,6 +13,32 @@ export function gitInit(path: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
         execFile('git', ['init'], { cwd: path, windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
     });
+}
+
+/** One git command in a folder; rejects with git's own words. */
+function git(cwd: string, args: readonly string[]): Promise<string> {
+    return new Promise<string>((resolve, reject) => {
+        execFile('git', [...args], { cwd, windowsHide: true }, (error, stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve(String(stdout))));
+    });
+}
+
+/** A config value as git resolves it in that folder (repository, global, system); `null` when it has none. */
+function gitConfigValue(cwd: string, key: string): Promise<string | null> {
+    return git(cwd, ['config', '--get', key]).then((v) => v.trim(), () => null);
+}
+
+/**
+ * A NEW WORKSPACE'S FIRST COMMIT — the Add workspace card's promise, "Genie makes the folder and its first commit"
+ * (Genie 1's createAgiEnvelope): `git init` on `main` whatever the machine's init.defaultBranch, everything in the folder
+ * staged (it holds only what Genie just wrote, and its .gitignore keeps sandbox/ and .trash/ out), one commit. A machine
+ * with no identity commits as Genie's bot (core/add-workspace.ts commitIdentityConfig) through `-c` for THIS command:
+ * Genie 1 wrote the fallback into the repository's config, which then signed the person's own later commits as the bot.
+ */
+export async function gitFirstCommit(path: string, message: string): Promise<void> {
+    await git(path, ['init', '--quiet', '--initial-branch=main']);
+    const identity = commitIdentityConfig({ name: await gitConfigValue(path, 'user.name'), email: await gitConfigValue(path, 'user.email') });
+    await git(path, ['add', '--all', '--', '.']);
+    await git(path, [...identity.flatMap(([k, v]) => ['-c', `${k}=${v}`]), 'commit', '--quiet', '-m', message]);
 }
 
 /**

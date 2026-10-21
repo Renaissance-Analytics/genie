@@ -57,7 +57,8 @@ import type { TynnWorkstationState } from '../renderer/features.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
-import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { nodeWorkspaceFs } from './workspace-fs.js';
+import { mkdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
@@ -131,7 +132,7 @@ import { ensureFirewallRule } from './remote-firewall.js';
 import { getTailscaleStatus, installTailscale, tailscaleUp, type TailscaleStatus } from './tailscale-cli.js';
 import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
-import { gitClone, gitFileStatus, gitInit, gitShowHead, gitTreeStatus } from './git-ports.js';
+import { gitClone, gitFileStatus, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
@@ -1464,12 +1465,8 @@ async function boot(): Promise<void> {
      */
     const workspaceOps: WorkspaceOpsPorts = {
         fs: {
-            exists: async (p) => { try { return (await statPath(p)).isDirectory(); } catch { return false; } },
-            entries: (p) => readdir(p),
-            readJson: async (p) => { try { return JSON.parse(await readFileText(p, 'utf8')) as unknown; } catch { return null; } },
-            writeJson: (p, value) => writeFileText(p, `${JSON.stringify(value, null, 2)}\n`, 'utf8'),
-            mkdir: (p) => mkdir(p, { recursive: true }).then(() => {}),
-            gitInit,
+            // The same functions the first-commit test drives against a real folder and git (workspace-fs.ts).
+            ...nodeWorkspaceFs(),
             // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
             // Signed in to GitHub, a repository of an account the app is installed on (with Contents) clones with that sign-in
             // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
