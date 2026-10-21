@@ -86,7 +86,7 @@ function Drive($file, $argList, $label) {
     }
 }
 
-$env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.cmd"
+$env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.mjs"
 
 if (-not $SkipSource) {
     Step 'npm ci'

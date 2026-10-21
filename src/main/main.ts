@@ -60,6 +60,7 @@ import { openLifecycleLog } from './lifecycle-log.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
+import { prepareProcessTree } from '@particle-academy/prism-acp';
 import { raisesApprovals, SessionHost, providerBinary } from './session-host.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
@@ -748,6 +749,15 @@ async function boot(): Promise<void> {
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
+    // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
+    // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
+    // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained.
+    await prepareProcessTree({ directory: join(runtimeDir(genieHome()), 'prism-supervisor') }).catch((error: unknown) => {
+        const why = error instanceof Error ? error.message : String(error);
+        lifecycleLog(`containment unready reason=${why}`);
+        console.error(`[genie] agents cannot start contained: ${why}`);
+        mainErrors.record('containment-unready', error);
+    });
     host = new SessionHost({
         userData: genieHome(),
         lifecycle: {

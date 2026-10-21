@@ -126,6 +126,34 @@ export function serviceEnvDriverOptions(serviceEnv: Readonly<Record<string, stri
     return { parentEnv: { ...process.env, ...serviceEnv }, allowEnv: names };
 }
 
+/** A provider configured as a script — run by an interpreter, never as a binary of its own. */
+const SCRIPT = /\.(mjs|cjs|js)$/i;
+
+/**
+ * HOW A PROVIDER IS LAUNCHED: its binary, and the variables it is given beside its own. prism-acp 0.21 spawns a provider
+ * directly, never through a shell, so a configured SCRIPT (a stub provider, CI's `stub-codex.mjs`) is run the way prism
+ * says to: the interpreter, with the script first — `{ binary: execPath, binaryArgs: [script] }`. Inside Electron the
+ * interpreter is Electron itself, run as Node: `ELECTRON_RUN_AS_NODE=1`, allowed through to that provider alone. A real
+ * binary is passed as it always was; nothing configured is the provider's default. The workspace's service variables
+ * ride along in every case (`serviceEnvDriverOptions`).
+ */
+export function providerLaunchOptions(
+    configured: string | undefined,
+    serviceEnv: Readonly<Record<string, string>>,
+    runtime: { readonly execPath: string; readonly electron: boolean },
+): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
+    const service = serviceEnvDriverOptions(serviceEnv);
+    if (!configured) return service;
+    if (!SCRIPT.test(configured)) return { binary: configured, ...service };
+    if (!runtime.electron) return { binary: runtime.execPath, binaryArgs: [configured], ...service };
+    return {
+        binary: runtime.execPath,
+        binaryArgs: [configured],
+        parentEnv: { ...(service.parentEnv ?? process.env), ELECTRON_RUN_AS_NODE: '1' },
+        allowEnv: [...(service.allowEnv ?? []), 'ELECTRON_RUN_AS_NODE'],
+    };
+}
+
 /**
  * The real factory: one driver per provider, and `null` for anything else.
  *
@@ -243,16 +271,15 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
-    const env = serviceEnvDriverOptions(extras?.serviceEnv ?? {});
-    const configured = providerBinary(record.provider);
-    const binary = configured ? { binary: configured } : {};
+    // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
+    const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...binary, ...mcp, ...env }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...mcp }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...binary, ...env }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch }, driverEvents(options.events));
 
         default:
             return null;

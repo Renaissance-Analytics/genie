@@ -135,7 +135,7 @@ try {
     Write-Output "app-update.yml now:"; Get-Content $cfg
 
     Step "launch the installed $current and drive the update"
-    $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.cmd"
+    $env:GENIE2_CODEX_BINARY = "$root\scripts\stub-codex.mjs"
     Run 'node scripts\smoke-seed.mjs'
     Remove-Item -Force -ErrorAction SilentlyContinue installed-out.log, installed-err.log
     $app = Start-Process -FilePath $exe -ArgumentList '--remote-debugging-port=9222' -PassThru `
