@@ -5,6 +5,7 @@ import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js'
 import type { Attachment } from '../core/prompt-content.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
 import type { TynnContent, TynnOwner, TynnProject } from '../core/tynn.js';
+import type { ImportedAgent } from '../core/agent-adoption.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
@@ -254,6 +255,10 @@ export interface GenieBridge {
         tynnOwnerOptions?(): Promise<{ ok: true; owners: TynnOwner[] } | { ok: false; reason: string }>;
         /** A Tynn project created from the optional picker (Genie 1's "New project"), in the project list's shape. */
         createTynnProject?(input: { name: string; slug: string; owner: { kind: TynnOwner['kind']; id: string } | null }): Promise<{ ok: true; project: TynnProject } | { ok: false; reason: string }>;
+        /** "It came with agents" (Add workspace parity item 6): the `.agents/*` this workspace has not registered. Optional: an older host has none. */
+        importedAgents?(workspaceId: string): Promise<{ ok: true; agents: ImportedAgent[] } | { ok: false; reason: string }>;
+        /** Adopt one: registered from its AGENT.md, which is read and never rewritten. */
+        adoptAgent?(workspaceId: string, name: string): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
         /** The CHOSEN project: the parent picked on the host, then the plan before anything is written. */
         previewAddFromTynn(projectId: string, parent: string): Promise<{ ok: true; source: 'tynn'; project: TynnProject; host: string; parent: string; path: string; kind: FolderKind; content?: TynnContent; steps: PlanStep[] } | { ok: false; reason: string; workspaceId?: string }>;
         confirmAddFromTynn(parent: string, projectId: string): Promise<{ ok: true; id: string; kind: FolderKind; stamped: { from: string | null; backup: string } | null } | { ok: false; reason: string }>;

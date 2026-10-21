@@ -67,6 +67,9 @@ export interface HostApiDeps {
         /** Creating a Tynn project from the optional link (Add workspace parity item 5); optional, refused where absent. */
         tynnOwnerOptions?(): Promise<unknown>;
         createTynnProject?(input: unknown): Promise<unknown>;
+        /** "It came with agents" (Add workspace parity item 6); optional, refused where absent. */
+        importedAgents?(workspaceId: string): Promise<unknown>;
+        adoptAgent?(workspaceId: string, name: string): Promise<unknown>;
         previewAddFromTynn?(projectId: string, parent: string): Promise<unknown>;
         locateRepo?(workspaceId: string, slug: string, path: string): Promise<unknown>;
         confirmAdd(path: string): Promise<unknown>;
@@ -249,6 +252,12 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.createTynnProject':
                 if (!deps.workspaceOps.createTynnProject) throw new Error('this host cannot create Tynn projects');
                 return deps.workspaceOps.createTynnProject(args[0]);
+            case 'workspaces.importedAgents':
+                if (!deps.workspaceOps.importedAgents) throw new Error('this host cannot read a workspace’s agent files');
+                return deps.workspaceOps.importedAgents(str(args[0]));
+            case 'workspaces.adoptAgent':
+                if (!deps.workspaceOps.adoptAgent) throw new Error('this host cannot adopt agents');
+                return deps.workspaceOps.adoptAgent(str(args[0]), str(args[1]));
             case 'workspaces.tynnProjects':
                 if (!deps.workspaceOps.tynnProjects) throw new Error('this host cannot list Tynn projects');
                 return deps.workspaceOps.tynnProjects();

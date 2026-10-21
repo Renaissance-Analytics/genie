@@ -15,6 +15,8 @@ export interface AddConfirmDeps {
     setBusy(busy: boolean): void;
     setPreview(preview: { ok: false; reason: string } | null): void;
     open(route: string): void;
+    /** After it opened: what the workspace brought (Add workspace parity item 6, "It came with agents"). */
+    added?(id: string): void;
 }
 
 /** `deps` is read at the moment it is needed, so a caller re-created every render (App's navigate) is always current. */
@@ -32,6 +34,7 @@ export function addConfirmer(deps: () => AddConfirmDeps): (run: () => Promise<Ad
                     if (r.ok) {
                         deps().setPreview(null);
                         deps().open(`genie://workspace/${r.id}`);
+                        deps().added?.(r.id);
                     } else {
                         deps().setPreview({ ok: false, reason: r.reason });
                     }
