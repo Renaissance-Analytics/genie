@@ -137,6 +137,8 @@ const REPAIR_LABEL = (r: Repair): string =>
     : `restart fresh — ${r.reason}`;
 
 export interface AgentViewProps {
+    /** The Active Plan column shown (beta.33 item 11: hidden from the workspace tab row's toggle); absent = shown. */
+    planOpen?: boolean | undefined;
     /** Where the index column's collapsed state is remembered; `undefined` = the browser's localStorage, `null` = nowhere (tests). */
     indexStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
@@ -253,7 +255,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -1297,7 +1299,7 @@ export function AgentView({
                  * always there for an agent that reports plans. Before any plan it says so; an agent seen only through its
                  * terminal reports none, so it has no column.
                  */}
-                {agent.fidelity !== 'observed' ? (
+                {agent.fidelity !== 'observed' && planOpen ? (
                     <aside data-plan-column="" className="flex min-h-0 w-[260px] shrink-0 flex-col gap-1.5 overflow-y-auto border-l border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-xs">
                         <h2 className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Active plan</h2>
                         {plan ? (

@@ -89,6 +89,8 @@ export const ICON_NAMES: readonly string[] = [
     'chevron-left',
     // The right column's strip below 1100 px: the door to the column.
     'panel-right',
+    // The Active Plan column's toggle at the workspace tab row's right end (beta.33 item 11).
+    'panel-right-close', 'panel-right-open',
     'panel-left',
     'panel-left-open',
     'eye',
