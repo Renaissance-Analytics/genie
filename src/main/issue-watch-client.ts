@@ -209,7 +209,11 @@ export class IssueWatchClient {
             await this.#reconcile(tynn);
             return;
         }
-        if (frame.event === 'issuewatch.delta') this.#apply(frame.data);
+        if (frame.event === 'issuewatch.delta') {
+            // A list too big for one event comes as a notice (tynn.ai#308: counts, `truncated`, no items): pull it whole.
+            if ((frame.data as { truncated?: unknown } | null)?.truncated === true) await this.#reconcile(tynn);
+            else this.#apply(frame.data);
+        }
         // What HAPPENED (Tynn's GitHub webhooks): news, told as it arrives — no feed, no baseline.
         if (frame.event === 'issuewatch.activity') {
             const activity = parseIssueWatchActivity(frame.data);
