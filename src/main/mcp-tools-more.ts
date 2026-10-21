@@ -22,6 +22,8 @@ import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext,
 export type ApprovalGate = (caller: Caller, action: 'create' | 'write', detail: string) => Promise<'allowed' | 'denied'>;
 
 export interface TerminalsPort {
+    /** Why one more terminal would be refused in this workspace (its limit and what is running), or `null`. Absent = no limit. */
+    refusal?(workspaceId: string): string | null;
     list(): ReadonlyArray<{ id: string; workspaceId: string; cwd?: string; pid: number; shell: string }>;
     open(options: { workspaceId: string; cwd: string; command?: string; shell?: boolean; env?: Readonly<Record<string, string>> }): { id: string; pid: number; shell: string; scrollback: string };
     /** A terminal that ENDED (its output stays readable): whose it was and its exit code. Absent = nothing kept. */
@@ -164,6 +166,9 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     return ok({ ok: true, terminals: mine() });
                 case 'create': {
                     const command = str(args.command);
+                    // THE WORKSPACE'S TERMINAL LIMIT (beta.33): refused before the person is asked to approve anything.
+                    const refused = deps.terminals.refusal?.(caller.workspaceId) ?? null;
+                    if (refused) return err(refused);
                     const verdict = await deps.approve(caller, 'create', command ?? '(a shell)');
                     if (verdict !== 'allowed') return err(`creating a terminal was denied by the user`);
                     // The workspace's service env and Genie's endpoint, as the person's own shells get them: a shell an agent
