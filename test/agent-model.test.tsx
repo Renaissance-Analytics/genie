@@ -155,26 +155,42 @@ describe('the control', () => {
         <AgentView agent={{ id: 'agent_a', name: 'atlas', provider, fidelity: 'declared', cwd: '/w/tynn' }} session={s} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 1} ops={o} />,
     );
 
-    it('a Claude agent: the reported model, a select with the chosen one selected, and when a change applies', () => {
+    /*
+     * THE PROVIDER'S MODELS, NEVER A LIST GENIE KEEPS (the owner, 2026-10-21: "make sure that the model selection for
+     * agents is using actual available options from the providers. For example, I do not even see fable as an option").
+     * The Claude select offered a hardcoded sonnet / opus / haiku, so a model the account HAS (Fable) could not be chosen.
+     * Until the provider reports its list (prism-acp asked, 2026-10-21), every provider gets the field Codex has: any name
+     * the provider accepts, suggesting only what the provider itself reported.
+     */
+    it('a Claude agent: a text field holding the chosen model, the reported model suggested, and when a change applies', () => {
         const html = render('claude', ops({ model: 'opus' }), session('claude-opus-5-5'));
-        expect(html).toContain('data-model-select="opus"');
-        expect(html).toMatch(/<option value=""[^>]*>default<\/option>/);
-        expect(html).toMatch(/<option value="opus" selected=""[^>]*>opus<\/option>/);
-        expect(html).toMatch(/<option value="sonnet"[^>]*>sonnet<\/option>/);
+        expect(html).toContain('data-model-input="opus"');
+        expect(html).toContain('value="opus"');
+        expect(html).toMatch(/<datalist id="[^"]+"><option value="claude-opus-5-5"><\/option><\/datalist>/);
         expect(html).toMatch(/Model <span class="font-mono[^"]*">claude-opus-5-5<\/span>/);
         // Live, not 'next start' (the owner, 2026-10-14): idle = now, mid-turn = when the turn ends, same conversation.
         expect(html).toMatch(/A change applies at once while atlas is idle, or when its turn ends — it restarts on the same conversation\./);
         expect(html).not.toMatch(/applies when atlas next starts/);
     });
 
-    it('a chosen full id that is not an alias is kept as its own option', () => {
-        expect(render('claude', ops({ model: 'claude-sonnet-5-5' }))).toMatch(/<option value="claude-sonnet-5-5" selected=""[^>]*>claude-sonnet-5-5<\/option>/);
+    it('nothing invented: no model is offered that the provider did not report (CONTROL: the reported one is)', () => {
+        const html = render('claude', ops(), session('claude-opus-5-5'));
+        for (const invented of ['sonnet', 'haiku', 'opus']) expect(html).not.toContain(`<option value="${invented}"`);
+        expect(html).toContain('<option value="claude-opus-5-5">');
+        expect(html).not.toContain('data-model-select');
+    });
+
+    it('a model the account has but no list named — claude-fable-5-1 — is a model that can be chosen', () => {
+        const html = render('claude', ops({ model: 'claude-fable-5-1' }));
+        expect(html).toContain('data-model-input="claude-fable-5-1"');
+        expect(html).toContain('value="claude-fable-5-1"');
     });
 
     it('nothing reported: the provider default when none is chosen, "not reported yet" when one is — never the chosen name as a reading', () => {
         const none = render('claude', ops(), session(null));
         expect(none).toMatch(/the provider(&#x27;|')s default/);
-        expect(none).toMatch(/<option value="" selected=""[^>]*>default<\/option>/);
+        expect(none).toContain('placeholder="provider default"');
+        expect(none).not.toContain('<datalist');
         const chosen = render('claude', ops({ model: 'haiku' }), session(null));
         expect(chosen).toContain('not reported yet');
         expect(chosen).not.toMatch(/font-mono[^"]*">haiku</);
@@ -190,6 +206,6 @@ describe('the control', () => {
 
     it('no ops (a window that cannot set it): no control (positive control: the same agent with ops draws one)', () => {
         expect(render('claude', undefined, session('claude-opus-5-5'))).not.toContain('data-model-');
-        expect(render('claude', ops(), session('claude-opus-5-5'))).toContain('data-model-select');
+        expect(render('claude', ops(), session('claude-opus-5-5'))).toContain('data-model-input');
     });
 });

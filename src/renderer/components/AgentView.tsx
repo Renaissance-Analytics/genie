@@ -130,9 +130,6 @@ export interface AgentOpsProps {
     readonly onSetBudget: (dailyLimitUsd: number | null) => void;
 }
 
-/** Claude Code's model aliases, offered by name; a full id the agent already has is kept as its own option. */
-const CLAUDE_MODELS: readonly string[] = ['sonnet', 'opus', 'haiku'];
-
 const REPAIR_LABEL = (r: Repair): string =>
     r.action === 'install-provider' ? 'install the provider'
     : r.action === 'sign-in' ? 'sign in to the provider'
@@ -996,25 +993,25 @@ export function AgentView({
                                                 </p>
                                                 <label className="mt-1 block">
                                                     Start {agent.name} with
-                                                    {agent.provider === 'claude' ? (
-                                                        <select data-model-select={ops.model ?? ''} value={ops.model ?? ''} onChange={(e) => ops.onSetModel?.(e.target.value === '' ? null : e.target.value)} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                                            <option value="">default</option>
-                                                            {CLAUDE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
-                                                            {ops.model && !CLAUDE_MODELS.includes(ops.model) ? <option value={ops.model}>{ops.model}</option> : null}
-                                                        </select>
-                                                    ) : (
-                                                        <input
-                                                            key={ops.model ?? ''}
-                                                            data-model-input={ops.model ?? ''}
-                                                            type="text"
-                                                            defaultValue={ops.model ?? ''}
-                                                            placeholder="provider default"
-                                                            spellCheck={false}
-                                                            onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
-                                                            onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                            className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
-                                                        />
-                                                    )}
+                                                    {/* Any name the provider accepts, suggesting only models the PROVIDER reported (the owner,
+                                                        2026-10-21: "using actual available options from the providers … I do not even see
+                                                        fable"). A list kept here went stale the day a model shipped; the provider's own list
+                                                        comes from prism-acp (asked 2026-10-21). */}
+                                                    <input
+                                                        key={ops.model ?? ''}
+                                                        data-model-input={ops.model ?? ''}
+                                                        type="text"
+                                                        list={session?.model ? `models-${agent.id}` : undefined}
+                                                        defaultValue={ops.model ?? ''}
+                                                        placeholder="provider default"
+                                                        spellCheck={false}
+                                                        onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
+                                                        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                        className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
+                                                    />
+                                                    {session?.model ? (
+                                                        <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
+                                                    ) : null}
                                                 </label>
                                                 <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
                                             </div>
