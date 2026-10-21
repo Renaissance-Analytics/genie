@@ -35,6 +35,7 @@ import { openFileRoute } from '../core/files-panel.js';
 import { bindingsFrom } from '../core/hotkeys.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
 import type { RepoCommit } from '../core/commits.js';
+import { useActivityFeeds } from './use-activity-feeds.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
 import type { Attachment } from '../core/prompt-content.js';
@@ -151,6 +152,8 @@ export interface ShellProps {
     onDismissDockNotice?: (() => void) | undefined;
     /** The docked file panel reports its dirty buffers, so the refusal is real. */
     onFilesDirtyChange?: ((dirty: boolean) => void) | undefined;
+    /** Every agent's activity feed (beta.33 item 10), for the open workspace's lanes. Absent = no host to ask. */
+    activity?: GenieBridge['activity'];
     /** The updates half of the bridge (§7); the Deck's signal strip shows it and acts on it. */
     updates?: GenieBridge['updates'];
     /** The native window buttons over the title bar (their space and colours); absent in a browser or on a phone. */
@@ -253,6 +256,7 @@ export function Shell({
     onDismissDockNotice,
     onFilesDirtyChange,
     updates = NO_UPDATES,
+    activity,
     windowChrome,
     onTakeOver,
     onRestartAgent,
@@ -291,6 +295,8 @@ export function Shell({
 }: ShellProps) {
     const parsed = parseRoute(route);
     const updateState = useUpdateState(updates);
+    // The open workspace's agents' activity feeds, kept live by the host's pushes — its Dashboard's lanes.
+    const activityFeeds = useActivityFeeds(activity, parsed.surface === 'workspace' ? parsed.workspaceId : null);
     // The update window (what is in the update): open from the header's update button until closed.
     const [updateOpen, setUpdateOpen] = useState(false);
     // A workspace row's process / site indicator opened that workspace's config (Genie 1's modals).
@@ -588,7 +594,9 @@ export function Shell({
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             rows={snapshot.agents}
-                            // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Deck.
+                            feeds={activityFeeds}
+                            onStartAgent={onStartAgent}
+                            // A lane's waiting-on-you opens its item on the Deck.
                             deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}
                             onOpenDeckItem={(id) => onNavigate(`genie://deck?item=${encodeURIComponent(id)}`)}
                             onOpenAgent={onOpenAgent}

@@ -61,7 +61,10 @@ describe('the capability table', () => {
         // like the preview it leads to — the folder picker after it is the host's.
         // 60 since `workspaces.setDefaultAgent` (Genie 1's default agent, 2026-10-19): a write, workspace-scoped like setGoverns.
         // 61 since `host.listDir` (Tynn #835: every file and folder picker reads the HOST's disk): a read; a guest only inside its workspace(s).
-        expect(REMOTE_METHODS.length).toBe(61);
+        // 62 since `activity` (beta.33: the Dashboard's lanes read every agent's activity feed): a read, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(62);
+        expect(capabilityOf('activity')).toBe('read');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('activity');
         expect(capabilityOf('workspaces.setDefaultAgent')).toBe('write');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.setDefaultAgent');
         // Tynn #835: the parent folder is picked IN THE WINDOW over the host's disk, so these are reads now (owner-only:

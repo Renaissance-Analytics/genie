@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { FEATURE_CHANNELS, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
+import type { ActivityFeed } from '../core/activity-feed.js';
 
 /**
  * THE PRELOAD — the entire surface the renderer is given.
@@ -43,6 +44,16 @@ const bridge: GenieBridge = {
         const listener = (_event: unknown, action: { agentId: string | null; kind: string }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
         return () => ipcRenderer.removeListener('genie:action', listener);
+    },
+
+    activity: {
+        feeds: (workspaceId) => ipcRenderer.invoke('genie:activity', workspaceId) as Promise<Record<string, ActivityFeed>>,
+        subscribe: (onFeed) => {
+            // A feed is small (its newest items, 30 minutes of beats), so one channel carries every agent's.
+            const listener = (_event: unknown, feed: ActivityFeed): void => onFeed(feed);
+            ipcRenderer.on('genie:activity-changed', listener);
+            return () => ipcRenderer.removeListener('genie:activity-changed', listener);
+        },
     },
 
     subscribeAgent: (agentId, onChange) => {

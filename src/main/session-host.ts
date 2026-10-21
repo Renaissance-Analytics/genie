@@ -1,4 +1,5 @@
 import type { McpServer } from '@particle-academy/prism-acp';
+import { planFrom } from '../core/activity-feed.js';
 import { deliveryFrom } from '../core/delivery.js';
 import { turnNow } from '../core/turn-now.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
@@ -926,7 +927,7 @@ export class SessionHost {
             // The Dashboard's Latest delivery (core/delivery.ts): its own commit, file, handoff or answer, newest first.
             lastDelivery: deliveryFrom(rows, this.#clock()),
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
-            plan: planFrom(rows),
+            plan: planOf(rows),
             // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
             ...(({ prompt, tool }) => ({ asked: prompt, tool }))(turnNow(rows)),
             model: modelFrom(rows),
@@ -961,26 +962,10 @@ export class SessionHost {
     }
 }
 
-/** The latest plan the agent reported, or `null`. Never a fabricated `0/0`. */
-function planFrom(rows: readonly TimedEvent[]): LiveSession['plan'] {
-    for (let i = rows.length - 1; i >= 0; i -= 1) {
-        const event = rows[i]?.event;
-        if (event?.kind !== 'plan') continue;
-
-        const steps = event.entries.flatMap((e) => {
-            if (typeof e !== 'object' || e === null) return [];
-            const r = e as Record<string, unknown>;
-            return typeof r['content'] === 'string' && typeof r['status'] === 'string'
-                ? [{ content: r['content'], status: r['status'] }]
-                : [];
-        });
-        if (steps.length === 0) return null;
-
-        const done = steps.filter((s) => s.status === 'completed').length;
-        const doing = steps.find((s) => s.status === 'in_progress');
-        return { step: done, of: steps.length, doing: doing?.content ?? '' };
-    }
-    return null;
+/** The latest plan the agent reported, or `null` — the one parser the lanes read too (core/activity-feed.ts). */
+function planOf(rows: readonly TimedEvent[]): LiveSession['plan'] {
+    const plan = planFrom(rows);
+    return plan === null ? null : { step: plan.step, of: plan.of, doing: plan.doing ?? '' };
 }
 
 /**

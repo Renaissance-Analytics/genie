@@ -27,7 +27,7 @@ import type { Device, DeviceStore } from './remote-devices.js';
 export interface HostApi {
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
-    /** Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`. */
+    /** Everything the host pushes: `snapshot`, `agent:<id>`, `activity`, `features`, `updates`, `terminal-data`, `terminal-exit`. */
     onEvent(listener: (channel: string, payload: unknown) => void): () => void;
     workspaceOfAgent(agentId: string): string | null;
     /** Each workspace's folder on this host — how far a guest may browse (Tynn #835). Absent = a guest browses nothing. */
@@ -319,6 +319,8 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
+            // An agent's activity feed reaches a guest only for an agent of the workspace its link shares.
+            if (channel === 'activity' && c.auth.workspaceId !== null && this.#api.workspaceOfAgent(String((payload as { agentId?: unknown } | null)?.agentId ?? '')) !== c.auth.workspaceId) continue;
             const scoped = channel === 'snapshot' && c.auth.workspaceId !== null ? filterSnapshotForWorkspace(payload as Parameters<typeof filterSnapshotForWorkspace>[0], c.auth.workspaceId) : payload;
             this.#send(c, { kind: 'event', channel, payload: scoped });
         }

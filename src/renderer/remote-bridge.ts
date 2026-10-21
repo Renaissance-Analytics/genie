@@ -1,6 +1,7 @@
 import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
+import type { ActivityFeed } from '../core/activity-feed.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -132,6 +133,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         subscribe: (onChange) => on('snapshot', (p) => onChange(p as GenieSnapshot)),
         agentDetail: (agentId) => read<AgentDetail | null>('agentDetail', agentId),
         subscribeAgent: (agentId, onChange) => on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null)),
+        activity: {
+            feeds: (workspaceId) => read<Record<string, ActivityFeed>>('activity', workspaceId),
+            subscribe: (onFeed) => on('activity', (p) => onFeed(p as ActivityFeed)),
+        },
         openAgent: (agentId) => fire('openAgent', agentId),
         stopAgent: (agentId) => fire('stopAgent', agentId),
         cancelTurn: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId),

@@ -1,5 +1,6 @@
 import { listHostDir } from './host-fs.js';
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { ActivityFeed } from '../core/activity-feed.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
@@ -26,6 +27,11 @@ export interface HostApiDeps {
     subscribeAgentRecords(listener: (agentId: string) => void): () => void;
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
+    /** Every agent's activity feed (the Dashboard's lanes, beta.33): one workspace's, and each as it changes. */
+    activity?: {
+        feeds(workspaceId: string): Readonly<Record<string, ActivityFeed>>;
+        subscribe(listener: (feed: ActivityFeed) => void): () => void;
+    };
     cwdFor(record: AgentRecord): string;
     host: RestartPorts & {
         answerApproval(agentId: AgentRecord['id'], optionId: string): boolean;
@@ -120,6 +126,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.snapshot();
             case 'agentDetail':
                 return deps.detailFor(str(args[0]));
+            case 'activity':
+                return deps.activity?.feeds(str(args[0])) ?? {};
             case 'openAgent': {
                 const r = agent(args[0]);
                 return r ? deps.host.start(r, deps.cwdFor(r)) : { ok: false, reason: 'unknown agent' };
@@ -293,6 +301,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.subscribeSnapshot((s) => listener('snapshot', s)),
                 deps.host.subscribe((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
                 deps.subscribeAgentRecords((agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId))),
+                deps.activity?.subscribe((feed) => listener('activity', feed)) ?? (() => {}),
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 deps.features.onChange((data) => listener('features', data)),

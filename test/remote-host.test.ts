@@ -224,4 +224,23 @@ describe('a guest’s scope', () => {
         expect(await o.next()).toMatchObject({ kind: 'event', channel: 'snapshot', payload: { agents: snapshot.agents } });
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'snapshot', payload: { agents: [snapshot.agents[0]] } });
     });
+
+    it("an agent's ACTIVITY FEED (the Dashboard's lanes, beta.33) reaches a guest only for its workspace's agents; it asks for its own workspace's feeds only", async () => {
+        const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
+        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
+        const g = connect();
+        await g.hello({ kind: 'share', id: link.id, secret }, 'wren');
+        expect(await g.call('activity', 'fancy')).toMatchObject({ ok: false, reason: 'fancy is not the workspace this link shares' });
+        expect(await g.call('activity', 'tynn')).toMatchObject({ ok: true });
+
+        host.issuePin();
+        const o = connect();
+        await o.hello({ kind: 'pin', code: '482913', label: 'laptop' });
+        // bolt (fancy) first, then atlas (tynn): the owner gets both, the guest only atlas's — COUNTED by what arrives next.
+        api.emit('activity', { agentId: 'agent_b', items: [] });
+        api.emit('activity', { agentId: 'agent_a', items: [] });
+        expect(await o.next()).toMatchObject({ kind: 'event', channel: 'activity', payload: { agentId: 'agent_b' } });
+        expect(await o.next()).toMatchObject({ kind: 'event', channel: 'activity', payload: { agentId: 'agent_a' } });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'activity', payload: { agentId: 'agent_a' } });
+    });
 });

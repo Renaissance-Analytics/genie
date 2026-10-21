@@ -670,6 +670,9 @@ export class AgentSession {
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
+                    // A TURN THAT FINISHED WITH A REPLY SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as
+                    // it happens — never the agent's last handoff, which a session answering in chat never files.
+                    if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
                     // The next queued prompt's turn starts now: its marker, and `working` again. After a crashed turn
                     // nothing is assumed to run: the queue is dropped and the failure stands.
                     if (crashed) this.#queued = [];

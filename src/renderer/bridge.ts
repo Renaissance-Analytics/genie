@@ -2,6 +2,7 @@ import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../c
 import type { AgentPermissions } from '../core/identity.js';
 import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js';
 import type { Attachment } from '../core/prompt-content.js';
+import type { ActivityFeed } from '../core/activity-feed.js';
 import type { AgentRow, Fidelity } from '../core/dashboard-view.js';
 import type { TynnProject } from '../core/tynn.js';
 import type { Diagnosis, FolderKind, PlanStep } from '../core/workspace-model.js';
@@ -107,6 +108,11 @@ export const FEATURE_CHANNELS = {
     soundData: 'genie:features-sound-data',
 } as const;
 
+export interface ActivityBridge {
+    feeds(workspaceId: string): Promise<Readonly<Record<string, ActivityFeed>>>;
+    subscribe(onFeed: (feed: ActivityFeed) => void): () => void;
+}
+
 export interface GenieBridge {
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string): Promise<void> };
@@ -138,6 +144,12 @@ export interface GenieBridge {
     agentDetail(agentId: string): Promise<AgentDetail | null>;
     /** Changes to one agent. Separate from `subscribe` so a ledger is not broadcast. */
     subscribeAgent(agentId: string, onChange: (detail: AgentDetail | null) => void): () => void;
+    /**
+     * EVERY AGENT'S ACTIVITY FEED (beta.33 item 10) — what the workspace Dashboard's lanes draw. `feeds` reads a
+     * workspace's agents' feeds once; `subscribe` hears each agent's feed when its session changes (pushed by the host,
+     * never polled). Absent = no host to ask: the lanes draw what the snapshot says and claim nothing more.
+     */
+    activity?: ActivityBridge;
 
     /** The host asking the window to go somewhere (the tray's Settings…). Absent on a remote bridge: a remote window is not this host's tray. */
     onNavigate?(onRoute: (route: string) => void): () => void;

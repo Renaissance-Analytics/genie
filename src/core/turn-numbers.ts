@@ -26,7 +26,7 @@ export function numberTurns<T extends { readonly event: StreamEvent }>(rows: rea
             n += 1;
             return e.n === n ? row : { ...row, event: { ...e, n } };
         }
-        if (e.kind === 'stopped') return e.n === n || n === 0 ? row : { ...row, event: { ...e, n } };
+        if (e.kind === 'stopped' || e.kind === 'finished') return e.n === n || n === 0 ? row : { ...row, event: { ...e, n } };
         return row;
     });
 }

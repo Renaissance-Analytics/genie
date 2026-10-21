@@ -1128,6 +1128,7 @@ function DesktopApp({ bridge }: AppProps) {
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
             pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files' }).then((p) => (Array.isArray(p) ? p : typeof p === 'string' ? [p] : [])) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
+            activity={resolvedBridge?.activity}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
             onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}

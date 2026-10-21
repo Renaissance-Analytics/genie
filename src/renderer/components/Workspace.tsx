@@ -31,6 +31,8 @@ import { PluginPane, type PluginPanelView } from './PluginPane.js';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
 import { workspaceDashboard } from '../../core/workspace-dashboard.js';
+import type { ActivityFeed } from '../../core/activity-feed.js';
+import { useMinuteTick } from '../use-activity-feeds.js';
 import type { DeckItem } from '../../core/deck.js';
 import { FidelityDot } from './Dashboard.js';
 import { repoChip } from '../../core/repo-status.js';
@@ -157,7 +159,11 @@ export interface WorkspaceProps {
     view?: WorkspaceView | undefined;
     /** Every agent Genie knows of; the dashboard keeps this workspace's. Absent = none known. */
     rows?: readonly AgentRow[] | undefined;
-    /** The Deck's items; the dashboard shows what waits on you in this workspace. Absent = none known. */
+    /** Each agent's activity feed, pushed by the host (beta.33 item 10): the lanes' heartbeat, plan and feed. Absent = none yet. */
+    feeds?: Readonly<Record<string, ActivityFeed>> | undefined;
+    /** Start a stopped agent from its lane. Absent = no Start is offered. */
+    onStartAgent?: ((agentId: string) => void) | undefined;
+    /** The Deck's items; each lane shows its agent's questions and approvals. Absent = none known. */
     deckItems?: readonly DeckItem[] | undefined;
     /** Open a Deck item (a question or approval waiting on you). */
     onOpenDeckItem?: ((itemId: string) => void) | undefined;
@@ -177,7 +183,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, view = 'home', rows = [], deckItems = [], feeds, onStartAgent, onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -185,8 +191,10 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     const canDesign = Boolean(ops?.settings && ops.settings.values !== null);
     const saveTabs = (next: TabsState): void => { ops?.settings?.onSet('workspace_tabs', serializeTabs(next)); };
     const [designNotice, setDesignNotice] = useState<string | null>(null);
-    // THE WORKSPACE DASHBOARD (q_09d1f4a0): what waits on you, the work in flight, the last finished — no file changes.
-    const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, now: Date.now() });
+    // THE WORKSPACE DASHBOARD (beta.33 item 10): a lane per agent — heartbeat, plan, now, its own waiting-on-you, its
+    // live feed. The minute tick slides the heartbeat while nothing is pushed.
+    useMinuteTick();
+    const dashboard = workspaceDashboard({ rows, workspaceId: workspace.id, deckItems, feeds, now: Date.now() });
     const filesInline = panel === 'files' && files !== undefined && !filesPinned && !filesPopped;
     const label = workspace.name ?? workspace.id;
     /*
@@ -766,7 +774,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
                         </div>
                     ) : null}
-                    <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />
+                    <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />
                 </div>
             ) : null}
             {view === 'terminals' && filesInline && files ? (
@@ -800,7 +808,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         renderPanel={(p) => {
                             if (p.kind === 'terminal') return terminalsBody;
                             if (p.kind === 'files') return files ? <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => {}} onPause={onPauseAgent} onResume={onResumeAgent} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">This window has no file host.</p>;
-                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} />;
+                            if (p.kind === 'widget') return <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />;
                             if (p.kind === 'artboard') {
                                 const board = pluginPanels.find((pp) => pp.pluginId.includes('artboard'));
                                 return board ? <PluginPane panel={board} /> : <p className="p-4 text-[12px] text-[var(--fg-3)]">The ArtBoard plugin is not enabled in this workspace.</p>;
