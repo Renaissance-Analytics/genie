@@ -38,8 +38,8 @@ export const ICON_NAMES: readonly string[] = [
     'server', 'mail', 'moon',
     // The workspace row's background-process indicator (Genie 1's runtime pill, 2026-10-19).
     'cpu',
-    // A workspace's GitHub (IssueWatch) panel heading (Tynn #806).
-    'git-pull-request',
+    // A workspace's GitHub (IssueWatch) panel heading (Tynn #806), its rows' kinds and its Refresh.
+    'git-pull-request', 'circle-dot', 'shield-alert', 'refresh-cw',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.
     'folder-tree',
     // The Add workspace modal's header (Genie 1's): `folder-plus` · Add workspace.

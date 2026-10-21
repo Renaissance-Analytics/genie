@@ -270,6 +270,8 @@ export const EMPTY_FEATURES: FeatureData = {
 
 /** The actions a feature surface can ask the main process for. Each is a request, never a mutation of renderer state. */
 export type FeatureAction =
+    /** The GitHub panel's Refresh: Tynn reads this workspace's repos now. */
+    | { kind: 'issueWatch.refresh'; workspaceId: string }
     | { kind: 'whatsNew.show' }
     | { kind: 'whatsNew.close'; version: string }
     | { kind: 'knowledge.search'; query: string }

@@ -24,6 +24,10 @@ export interface IwItem {
     readonly url: string;
     readonly updatedAt: string | null;
     readonly severity: string | null;
+    /** Who opened it — a GitHub login, cleaned; `null` when Tynn sent none (always set by the parser). */
+    readonly author?: string | null;
+    /** When it was opened (ISO), for "5h ago"; `null` when Tynn sent none (always set by the parser). */
+    readonly createdAt?: string | null;
 }
 
 export interface IwEntry {
@@ -51,6 +55,8 @@ function readItem(raw: unknown, feedback: boolean): IwItem | null {
         url: typeof r.url === 'string' ? r.url : '',
         updatedAt: str(r.updatedAt),
         severity: str(r.severity),
+        author: login(r.author),
+        createdAt: str(r.createdAt),
     };
 }
 
@@ -261,6 +267,8 @@ export interface IssueWatchSummary {
     readonly linked: boolean;
     /** The latest entry Tynn sent for it; absent until one arrives. */
     readonly entry?: IwEntry | undefined;
+    /** When that entry arrived (epoch ms): how old the list on screen is. */
+    readonly deliveredAt?: number | undefined;
 }
 
 export interface IssueWatchCounts {
@@ -338,25 +346,56 @@ export function parseIssueWatchActivity(raw: unknown): { projectId: string; even
     return { projectId, events };
 }
 
+/** One open item as the panel shows it: `#N`, the title, who opened it and how long ago — never its repo again. */
+export interface IssueWatchRow {
+    readonly kind: 'security' | 'pr' | 'issue' | 'feedback';
+    readonly number: number | null;
+    readonly title: string;
+    readonly url: string;
+    readonly severity: string | null;
+    readonly author: string | null;
+    /** `20m`, `5h`, `3d` — `null` when Tynn sent no time. */
+    readonly age: string | null;
+}
+
+/** One watched repo: its name once, its counts, its rows — and its Dependabot alerts as ONE line. */
+export interface IssueWatchRepo {
+    readonly repo: string;
+    readonly counts: { readonly security: number; readonly prs: number; readonly issues: number };
+    readonly rows: readonly IssueWatchRow[];
+    readonly dependabot: { readonly count: number; readonly worst: string | null; readonly url: string } | null;
+}
+
 /** What the person's GitHub panel shows for one workspace (Tynn #806; Genie 1's IssueWatch flyout). */
 export interface IssueWatchPanelView {
     readonly linked: boolean;
     readonly line: { readonly tone: 'ok' | 'warn' | 'muted'; readonly text: string };
     readonly counts: IssueWatchCounts | null;
-    /** Open items by family, security first; only the families with something open. */
-    readonly groups: ReadonlyArray<{ readonly family: 'security' | 'pr' | 'issue' | 'feedback'; readonly label: string; readonly items: ReadonlyArray<{ ref: string; title: string; url: string; severity: string | null }> }>;
+    /** Open items by repo — repos with security alerts first (the owner's rule: security is fixed at once). */
+    readonly repos: readonly IssueWatchRepo[];
+    /** Tynn's own feedback items, which belong to no repo. */
+    readonly feedback: readonly IssueWatchRow[];
     /** Said plainly when live and nothing is open; null otherwise. */
     readonly empty: string | null;
     /** What happened lately, newest first, in an agent's notice's words. */
     readonly recent: ReadonlyArray<{ text: string; url: string | null }>;
 }
 
-const FAMILIES = [
-    { family: 'security', label: 'Security alerts' },
-    { family: 'pr', label: 'Pull requests' },
-    { family: 'issue', label: 'Issues' },
-    { family: 'feedback', label: 'Tynn feedback' },
-] as const;
+/** A list Tynn sent longer ago than this is not called live: Tynn re-reads every repo within 20 minutes when healthy. */
+export const ISSUE_WATCH_STALE_MS = 20 * 60_000;
+
+/** `now`, `20m`, `5h`, `3d`. */
+export function shortAge(fromMs: number, now: number): string {
+    const minutes = Math.max(0, Math.floor((now - fromMs) / 60_000));
+    if (minutes < 1) return 'now';
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 48) return `${hours}h`;
+    return `${Math.floor(hours / 24)}d`;
+}
+
+const SEVERITY_ORDER = ['critical', 'high', 'medium', 'moderate', 'low'];
+const KIND_ORDER: Record<IssueWatchRow['kind'], number> = { security: 0, pr: 1, issue: 2, feedback: 3 };
 
 /** How much of what happened the panel keeps. */
 export const PANEL_RECENT = 20;
@@ -366,30 +405,45 @@ export const PANEL_RECENT = 20;
  * counts, the open items by family — SECURITY FIRST, the owner's standing rule that security is fixed at once — and what
  * happened lately (`recent` arrives newest first), capped.
  */
-export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly IwEvent[]): IssueWatchPanelView {
+export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly IwEvent[], now: number = Date.now()): IssueWatchPanelView {
     const why = issueWatchWhyNot(summary);
+    const delivered = summary.deliveredAt;
+    // HONEST ABOUT ITS AGE (the owner, 2026-10-21: merged PRs still listed hours later): "Live" only while the list is
+    // fresh; older, it says how old, in warning words — the socket being up says nothing about the list.
     const line: IssueWatchPanelView['line'] = !summary.linked ? { tone: 'muted', text: issueWatchWhyNot(summary)! }
         : why !== null ? { tone: 'warn', text: why }
-        : summary.state === 'live' ? { tone: 'ok', text: 'Live from Tynn' }
-        : { tone: 'warn', text: 'Reconnecting to Tynn — showing what it last sent' };
+        : summary.state !== 'live' ? { tone: 'warn', text: 'Reconnecting to Tynn — showing what it last sent' }
+        : delivered === undefined ? { tone: 'ok', text: 'Live from Tynn' }
+        : now - delivered > ISSUE_WATCH_STALE_MS ? { tone: 'warn', text: `Tynn last sent this list ${shortAge(delivered, now)} ago — it may be out of date. Refresh asks for it now.` }
+        : { tone: 'ok', text: `Live from Tynn · updated ${shortAge(delivered, now)} ago` };
     const entry = summary.entry;
-    const all = entry ? [...entry.items, ...entry.feedback] : [];
-    const groups = FAMILIES.map(({ family: key, label }) => ({
-        family: key,
-        label,
-        items: all.filter((i) => family(i) === key).map((i) => ({
-            ref: i.repo ? `${i.repo}#${i.number ?? '?'}` : `Tynn #${i.number ?? '?'}`,
-            title: i.title,
-            url: i.url,
-            severity: i.severity,
-        })),
-    })).filter((g) => g.items.length > 0);
+    const row = (i: IwItem): IssueWatchRow => {
+        const at = Date.parse(i.createdAt ?? i.updatedAt ?? '');
+        return { kind: family(i), number: i.number, title: i.title, url: i.url, severity: i.severity, author: i.author ?? null, age: Number.isFinite(at) ? shortAge(at, now) : null };
+    };
+    const byRepo = new Map<string, IwItem[]>();
+    for (const i of entry?.items ?? []) if (i.repo) byRepo.set(i.repo, [...(byRepo.get(i.repo) ?? []), i]);
+    const repos: IssueWatchRepo[] = [...byRepo].map(([repo, items]) => {
+        const bots = items.filter((i) => i.kind === 'dependabot');
+        const worst = SEVERITY_ORDER.find((s) => bots.some((b) => b.severity?.toLowerCase() === s)) ?? null;
+        const rows = items.filter((i) => i.kind !== 'dependabot').map(row).sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+        return {
+            repo,
+            counts: { security: items.filter((i) => SECURITY.has(i.kind)).length, prs: items.filter((i) => i.kind === 'pr').length, issues: items.filter((i) => i.kind === 'issue').length },
+            rows,
+            dependabot: bots.length > 0 ? { count: bots.length, worst, url: `https://github.com/${repo}/security/dependabot` } : null,
+        };
+    }).sort((a, b) => (b.counts.security > 0 ? 1 : 0) - (a.counts.security > 0 ? 1 : 0)
+        || (b.counts.security + b.counts.prs + b.counts.issues) - (a.counts.security + a.counts.prs + a.counts.issues)
+        || (a.repo < b.repo ? -1 : 1));
+    const feedback = (entry?.feedback ?? []).map(row);
     return {
         linked: summary.linked,
         line,
         counts: entry ? issueWatchCounts(entry) : null,
-        groups,
-        empty: entry && groups.length === 0 ? 'Nothing open on the watched repos.' : null,
+        repos,
+        feedback,
+        empty: entry && repos.length === 0 && feedback.length === 0 ? 'Nothing open on the watched repos.' : null,
         recent: recent.slice(0, PANEL_RECENT).map((e) => ({ text: eventText(e), url: e.item?.url || null })),
     };
 }

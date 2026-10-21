@@ -633,6 +633,7 @@ export function Shell({
                             panel={parsed.panel}
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
+                            onRefreshIssueWatch={() => onFeature({ kind: 'issueWatch.refresh', workspaceId: parsed.workspaceId })}
                             rows={snapshot.agents}
                             // The workspace dashboard's "waiting on you" (q_09d1f4a0): a row opens its item on the Deck.
                             deckItems={snapshot.deckItems ?? NO_DECK_ITEMS}

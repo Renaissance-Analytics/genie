@@ -71,6 +71,8 @@ export interface FeaturePorts {
     readonly processes?: ProcessBook;
     /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
     readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
+    /** Have Tynn read a workspace's repos now — the GitHub panel's Refresh. Absent = none (doctor mode). */
+    readonly issueWatchRefresh?: (workspaceId: string) => Promise<unknown>;
     readonly toolchain?: {
         probe(): Promise<ToolStatus[]>;
         update(tool: string): Promise<RepairOutcome | { kind: 'refused'; reason: string }>;
@@ -851,6 +853,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.inbox.receive({ participant: HUMAN, limit: before + 1 });
             break;
         }
+        case 'issueWatch.refresh':
+            // The GitHub panel's Refresh: Tynn reads the workspace's repos now and pushes what it finds.
+            await ports.issueWatchRefresh?.(action.workspaceId);
+            break;
         case 'settings.set':
             await services.settings.set(action.key, action.value);
             // Developer mode decides whether unsigned local plugins are admitted: re-read the folder under the new rule.

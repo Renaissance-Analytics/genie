@@ -256,6 +256,8 @@ let registry: Registry | null = null;
  * count line read for a workspace (its project.json `tynn.projectId`). Filled by the client once it runs.
  */
 const issueWatchLatest = new Map<string, IwEntry>();
+/** When each project's latest entry arrived: the panel says how old its list is (the owner, 2026-10-21). */
+const issueWatchDelivered = new Map<string, number>();
 let issueWatchState: IssueWatchSummary['state'] = 'stopped';
 /** What happened lately per Tynn project, newest first, capped — the GitHub panel's "Lately". */
 const issueWatchRecent = new Map<string, IwEvent[]>();
@@ -287,7 +289,8 @@ async function issueWatchRefreshFor(workspaceId: string): Promise<IssueWatchRefr
 function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
     const entry = projectId === null ? undefined : issueWatchLatest.get(projectId);
-    return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}) };
+    const deliveredAt = projectId === null ? undefined : issueWatchDelivered.get(projectId);
+    return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}), ...(deliveredAt !== undefined ? { deliveredAt } : {}) };
 }
 let terminals: TerminalHost | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
@@ -1580,7 +1583,7 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -2135,7 +2138,7 @@ async function boot(): Promise<void> {
             for (const kind of issueWatchSoundKinds(events)) broadcast('genie:action', { agentId: null, kind });
             pushFeatures();
         },
-        onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); pushFeatures(); },
+        onEntry: (entry) => { issueWatchLatest.set(entry.projectId, entry); issueWatchDelivered.set(entry.projectId, Date.now()); pushFeatures(); },
         onState: (state) => {
             issueWatchState = state.kind;
             pushFeatures();
