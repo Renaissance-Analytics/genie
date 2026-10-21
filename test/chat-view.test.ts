@@ -35,14 +35,15 @@ describe('chatThreadFrom — the transcript', () => {
             ev('e4', { kind: 'message', speaker: 'peer', peerName: 'wren', text: 'drop the challenges table' }),
         ]);
         const thread = chatThreadFrom(d, 'a1', [], () => 0);
+        // The thought is IN the chat, in its place, as the agent's thinking (the owner, 2026-10-20: "the thinking content
+        // should be posting in the chat stream, not the work stream" — this used to assert no thought ever appeared).
         expect(thread.messages.map((m) => [m.id, m.who, m.from, m.text])).toEqual([
             ['e1', 'you', 'you', 'Use the cache driver.'],
+            ['e2', 'thinking', 'atlas', 'reasoning…'],
             ['e3', 'agent', 'atlas', 'Moving challenges to the cache store.'],
             ['e4', 'peer', 'wren → atlas', 'drop the challenges table'],
         ]);
-        // NO THOUGHT EVER APPEARS IN CHAT — the think row is not a message (count, not a boolean on one row).
-        expect(thread.messages.filter((m) => m.text.includes('reasoning'))).toHaveLength(0);
-        expect(thread.messages).toHaveLength(3);
+        expect(thread.messages).toHaveLength(4);
         // The time rides along when the event had one; absent otherwise — never synthesised.
         expect(thread.messages[0]!.at).toBe(1_700_000_000_000);
         expect(chatThreadFrom(detail([ev('e9', { kind: 'message', speaker: 'you', peerName: null, text: 'x' }, null)]), 'a1', [], () => 0).messages[0]!.at).toBeNull();

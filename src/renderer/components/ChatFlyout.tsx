@@ -467,6 +467,21 @@ export function ChatFlyout({
                             </div>
                         );
                     }
+                    // THE AGENT'S THINKING (the owner, 2026-10-20): in its place among the replies, closed until you open it.
+                    if (who === 'thinking') {
+                        return (
+                            <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
+                                <summary className="flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                                    <Icon name="sparkles" size="xs" />
+                                    <span>{m.from}’s thinking</span>
+                                    {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
+                                </summary>
+                                <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
+                                    <ChatReply text={m.text} linkFiles={Boolean(onOpenFile)} />
+                                </div>
+                            </details>
+                        );
+                    }
                     if (who === 'mail') return <ChatMailRow key={m.id} m={m} onOpenMail={onOpenMail} />;
                     if (who === 'delivery') return <ChatDeliveryRow key={m.id} m={m} onOpenMail={onOpenMail} />;
                     if (who === 'system') {
