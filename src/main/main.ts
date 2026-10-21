@@ -93,6 +93,7 @@ import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
+import { genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { UpdateHost } from './updater.js';
@@ -120,7 +121,6 @@ import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-se
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
-import { browserRoute } from '../core/browser-policy.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
 import { launchSubprocess, runPluginTool } from './plugin-runner.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -665,6 +665,8 @@ function sessionCaller(key: string): Caller | null {
 }
 const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
+/** The Genie browser window (beta.35 item 36): this workstation's Genie sites in a window of their own. */
+let genieBrowserWindow: GenieBrowserWindows | null = null;
 
 /**
  * Where "latest" comes from, per tool (toolchain-prober.ts `latestIndex`): every command it runs goes through the same
@@ -1246,6 +1248,8 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
     ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
+    // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
+    ipcMain.handle('genie:browser-window-open', (_event, address: unknown) => genieBrowserWindow?.open(typeof address === 'string' ? address : undefined) ?? { ok: false, error: 'Genie’s browser is not ready yet' });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     ipcMain.handle('genie:remote-open-window', (_event, url: unknown) => { if (typeof url === 'string') openRemoteWindow(url); });
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
@@ -1778,15 +1782,12 @@ async function boot(): Promise<void> {
     composed.engines.onStarted(() => { broadcast('genie:action', { agentId: null, kind: 'serviceup' }); });
     composed.flows.onRun((_id, run) => { const kind = flowRunSound(run); if (kind) broadcast('genie:action', { agentId: null, kind }); });
     // GENIE'S BROWSER FOR A SITE'S OPEN — the Hosting row's and an agent's `sites open` alike (hosting-actions.ts
-    // `openSite` checks the site is served first): the pane loads it, the window comes up on the browser surface, and
-    // the snapshot's address bar says it. The person sees what the agent opened; nothing opens outside Genie.
+    // `openSite` checks the site is served first): the Genie browser WINDOW comes up with the site in a new tab (beta.35
+    // item 36 — Genie 1's own window). The person sees what the agent opened; nothing opens outside Genie.
     const openInBrowser: OpenInBrowser = async (url) => {
-        if (!browserPane) return { ok: false, reason: 'Genie’s window is not open yet' };
-        featureState = { ...featureState, browserUrl: url };
-        broadcast('genie:navigate', browserRoute.format({ url }));
-        const shown = await browserPane.show(url);
-        pushFeatures();
-        return shown.ok ? { ok: true } : { ok: false, reason: shown.reason };
+        if (!genieBrowserWindow) return { ok: false, reason: 'Genie’s browser is not ready yet' };
+        const opened = genieBrowserWindow.open(url);
+        return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
     // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
@@ -2235,6 +2236,8 @@ async function boot(): Promise<void> {
     const browserTrust = composed.browserTrust();
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
     browserPane = new BrowserPane(electronBrowserView(window, { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem }), () => composed.routes());
+    // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
+    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host) });
     // What the page did (a link, a redirect, back/forward) is the address bar and the history buttons — pushed, not polled.
     // A hidden pane reports no url; the surface keeps the last page it showed.
     browserPane.onChange((state) => {

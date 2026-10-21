@@ -194,6 +194,8 @@ const bridge: GenieBridge = {
 
     // A known remote host in its own window (Tynn #819).
     remoteWindows: { open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void> },
+    // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
+    browserWindow: { open: (address) => ipcRenderer.invoke('genie:browser-window-open', address) as Promise<never> },
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
     host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.

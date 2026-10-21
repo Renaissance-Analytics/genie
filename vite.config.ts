@@ -27,7 +27,7 @@ export default defineConfig({
         // to a third party, so there is nothing to withhold.
         sourcemap: true,
         // Two pages: Genie, and the doctor window (`genie --doctor`), which loads only the doctor renderer.
-        rollupOptions: { input: { index: 'index.html', doctor: 'doctor.html', question: 'question.html' } },
+        rollupOptions: { input: { index: 'index.html', doctor: 'doctor.html', question: 'question.html', browser: 'browser.html' } },
     },
     test: {
         /*

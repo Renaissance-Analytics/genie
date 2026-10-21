@@ -1123,6 +1123,8 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
             onAddWorkspace={previewAdd}
+            // The Genie browser window — this machine's only (a remote bridge has none, so the row stays the surface).
+            onOpenBrowser={resolvedBridge?.browserWindow ? () => { void resolvedBridge.browserWindow?.open(); } : undefined}
             addFromGit={addFromGit}
             onAddWorkspaceFromGit={startAddFromGit}
             onCancelAddGit={() => setAddFromGit(false)}

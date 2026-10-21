@@ -72,3 +72,20 @@ describe('collapsed', () => {
         expect(html).not.toContain('data-rail="collapsed"');
     });
 });
+
+describe('the Browser row (beta.35 item 36: the Genie browser is its own window)', () => {
+    const withBrowser = (over: Record<string, unknown> = {}) => renderToStaticMarkup(
+        <Sidebar route="genie://dashboard" deckCount={0} workspaces={[]} available={[...ALL, 'browser']} onNavigate={() => {}} railStorage={memory(false)} {...(over as object)} />,
+    );
+    it('on this machine it opens the window — a door, not a route to a surface', () => {
+        const html = withBrowser({ onOpenBrowser: () => {} });
+        expect(html.match(/data-open-browser-window=""/g)).toHaveLength(1);
+        expect(html).not.toContain('data-nav="genie://browser"');
+        expect(html).toMatch(/data-open-browser-window=""[^>]*>[\s\S]*?Browser/);
+    });
+    it('CONTROL: with no window to open (driving another machine), the row is the browser surface as before', () => {
+        const html = withBrowser();
+        expect(html).toContain('data-nav="genie://browser"');
+        expect(html).not.toContain('data-open-browser-window');
+    });
+});
