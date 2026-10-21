@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { shellLaunch } from '../core/shell-launch.js';
+import { fanOut } from '../core/fan-out.js';
 import { join } from 'node:path';
 import {
     configureInProcessBackend,
@@ -74,13 +75,15 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
      */
     const dataListeners = new Set<(id: string, data: string) => void>();
     const exitListeners = new Set<(id: string, exitCode: number) => void>();
+    // Each listener on its own (core/fan-out.ts): one that throws never reaches the engine, whose final flush during a
+    // pty's exit is where a throw costs the exit.
     backend.on('data', (id, data) => {
-        for (const l of dataListeners) l(id, data);
+        fanOut(dataListeners, [id, data], 'terminal data');
     });
     backend.on('exit', (id, payload) => {
         // The engine reports `{ exitCode, signal? }`; the host wants the code. Flattening here
         // keeps `TerminalHost` ignorant of the engine's payload shape.
-        for (const l of exitListeners) l(id, payload.exitCode);
+        fanOut(exitListeners, [id, payload.exitCode], 'terminal exit');
     });
 
     return {
