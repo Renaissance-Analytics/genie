@@ -23,6 +23,7 @@ import { TitleBar } from './components/TitleBar.js';
 import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
 import { WorkspaceTabs } from './components/WorkspaceTabs.js';
+import { readPlanOpen, writePlanOpen } from '../core/plan-column.js';
 import { addTab, agentTabsOf, parseTabs, serializeTabs, workspaceViewRoute } from '../core/workspace-tabs.js';
 import { FilesPanelContainer } from './components/FilesPanelContainer.js';
 import { AddFromGitForm, AddWorkspacePreview, type AddPreviewView } from './components/AddWorkspacePreview.js';
@@ -343,6 +344,12 @@ export function Shell({
      * measured, so the agent's own header ran on under the chat. A column cannot cover anything, however a page nests.
      * Always there: its width is the person's (Tynn #798), remembered and dragged live.
      */
+    // THE ACTIVE PLAN COLUMN, open or hidden (beta.33 item 11): toggled from the workspace tab row, remembered on this device.
+    const [planOpen, setPlanOpen] = useState(() => readPlanOpen(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })()));
+    const setPlanColumn = (open: boolean): void => {
+        setPlanOpen(open);
+        writePlanOpen(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })(), open);
+    };
     const [chatDockWidth, setChatDockWidth] = useState(() => readChatDockWidth(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })()));
 
     /**
@@ -551,10 +558,13 @@ export function Shell({
                                         onNavigate(workspaceViewRoute(agentWorkspace.id, `tab:${made.id}`));
                                     }}
                                     onOpenAgent={onOpenAgent}
+                                    // The Active Plan column's toggle, at the strip's right end — only where the column exists.
+                                    {...(agentDetail.agent.fidelity !== 'observed' ? { planToggle: { open: planOpen, onToggle: () => setPlanColumn(!planOpen) } } : {})}
                                 />
                             ) : null}
                             <div className="min-h-0 flex-1">
                             <AgentView
+                                planOpen={planOpen}
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
                                 rows={agentDetail.rows}

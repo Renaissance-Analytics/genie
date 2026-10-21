@@ -21,6 +21,11 @@ export interface WorkspaceTabsProps {
     readonly onView: (view: string) => void;
     readonly onAdd: () => void;
     readonly onOpenAgent: (agentId: string) => void;
+    /**
+     * The Active Plan column's toggle (beta.33 item 11; the owner: "a button in the top right of the workspace tab row that
+     * opens and hides it") — given only on an agent's page that HAS the column; absent = no button.
+     */
+    readonly planToggle?: { readonly open: boolean; readonly onToggle: () => void } | undefined;
 }
 
 const STATE_DOT: Record<string, string> = {
@@ -29,7 +34,7 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent, planToggle }: WorkspaceTabsProps) {
     const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
     return (
         <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
@@ -59,6 +64,20 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                     </button>
                 );
             })}
+            {planToggle ? (
+                <button
+                    type="button"
+                    data-action="toggle-plan-column"
+                    aria-pressed={planToggle.open ? 'true' : 'false'}
+                    aria-label={planToggle.open ? 'Hide the active plan' : 'Show the active plan'}
+                    title={planToggle.open ? 'Hide the active plan' : 'Show the active plan'}
+                    onClick={planToggle.onToggle}
+                    className={`ml-auto flex shrink-0 items-center gap-1.5 px-2 text-[12px] ${planToggle.open ? 'text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`}
+                >
+                    <Icon name={planToggle.open ? 'panel-right-close' : 'panel-right-open'} size="xs" />
+                    Plan
+                </button>
+            ) : null}
         </nav>
     );
 }
