@@ -541,7 +541,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
               * the path gives way first, and the repo chips beyond HEADER_REPOS_INLINE are behind "+N more".
               */}
             <header data-view-header="" className="flex min-h-14 shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 border-b border-[var(--border-1)] px-5 py-2">
-                <h1 className="shrink-0 text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
+                <h1 title={workspace.name ?? workspace.id} className="min-w-0 truncate text-[18px] font-semibold text-[var(--fg-1)]">{workspace.name ?? workspace.id}</h1>
                 <span title={workspace.path} className="min-w-0 max-w-full truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.path}</span>
                 {/* REPO CHIPS (the board): `api · main` per repo; a locked repo in red, with "Remove stale lock" once the lock is stale. */}
                 {ops?.repos?.list ? (() => {
@@ -563,7 +563,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             {inline.map(chipOf)}
                             {more.length > 0 ? (
                                 <Popover placement="bottom-start">
-                                    <Popover.Trigger data-action="more-repos" aria-label={`${more.length} more repos`} className="flex h-6 shrink-0 cursor-pointer items-center rounded-md border border-[var(--border-1)] px-2 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
+                                    <Popover.Trigger data-action="more-repos" aria-label={`${more.length} more repos`} className="flex h-6 min-w-0 cursor-pointer items-center overflow-hidden whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
                                         {`+${more.length} more`}
                                     </Popover.Trigger>
                                     <Popover.Content data-repo-more="" className="flex max-h-80 max-w-[min(28rem,90vw)] flex-col gap-1.5 overflow-y-auto p-2">
@@ -586,7 +586,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     </div>
                 ) : null}
                 {files ? (
-                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto flex min-w-0 items-center gap-1.5 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="truncate">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
+                    <button type="button" data-action="toggle-files" data-panel-open={panel === 'files' ? 'true' : 'false'} onClick={onTogglePanel} title="The workspace's files: one panel, who is touching what (⌘B)" className={`ml-auto flex items-center gap-1.5 min-w-0 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${panel === 'files' ? 'bg-[var(--bg-3)]' : ''}`}><Icon name="folder-tree" size="xs" className="shrink-0" /><span className="truncate">Files</span><kbd className="font-mono text-[10px] text-[var(--fg-4)]">⌘B</kbd></button>
                 ) : null}
                 {ops ? (
                     <div className={`${files ? '' : 'ml-auto '}flex min-w-0 max-w-full flex-wrap items-center gap-1`}>
