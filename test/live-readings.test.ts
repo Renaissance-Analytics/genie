@@ -78,6 +78,12 @@ function ledger(seed: number, length: number, check: (rows: readonly TimedEvent[
 }
 
 describe('the readings a live session keeps as its rows arrive', () => {
+    /*
+     * ITS OWN BUDGET, MEASURED (the beta.34 release gate, 2026-10-21): 16,000 checks, each re-reading up to 400 rows, take
+     * 2.6–3.2 s ALONE on the Linux test VM — over vitest's default 5 s once a full suite has every core busy, which failed
+     * the gate twice. Its checks are unchanged; the budget is what a deliberately exhaustive comparison costs.
+     */
+    const EXHAUSTIVE_MS = 30_000;
     it('equal the readings read from every row, after every row of 40 random ledgers', () => {
         let checked = 0;
         for (let seed = 1; seed <= 40; seed += 1) {
@@ -91,7 +97,7 @@ describe('the readings a live session keeps as its rows arrive', () => {
             });
         }
         expect(checked).toBe(16_000);
-    });
+    }, EXHAUSTIVE_MS);
 
     it('a ledger read again from the start (`rebuild`) reads the same', () => {
         ledger(99, 600, (rows, readings) => {
