@@ -38,6 +38,13 @@ export interface SessionDriver {
      */
     endInput?(): void;
     /**
+     * END THE RUN'S WHOLE TREE — prism-acp 0.21's `stop({ graceMs })`: closes stdin, waits the grace, terminates the
+     * supervised tree (a Job Object on Windows, a process group elsewhere) and resolves with what it found. Optional: a
+     * fake driver, or an older prism, has none, and the session closes stdin and kills as before. Genie verifies the
+     * result with its own reading either way (`AgentSession.stop`).
+     */
+    stop?(options?: { graceMs?: number }): Promise<unknown>;
+    /**
      * END THE CURRENT TURN AND KEEP THE SESSION — prism-acp's `AgentDriver.cancel?()` (0.14.0, prism-acp-ts#16/#17).
      * The provider is asked to interrupt; the turn then ends through `onTurnEnd` with `stopReason: 'cancelled'`, and the
      * process, its session and its conversation stay. With no turn running the driver does nothing. A rejection is the
@@ -939,6 +946,7 @@ export class AgentSession {
      * 1. **It stops listening at once** (`#ended`, plan 1.4): the run is over for Genie the moment Stop is asked.
      * 2. **Stdin first, with a grace** (`graceMs`, only for a driver that can close it): Claude ends on its own and
      *    flushes the conversation a graceful restart resumes. The previous build never called prism-acp's `endInput()`.
+     *    A driver with prism-acp 0.21's `stop()` does this itself and ends its supervised tree; it is called once.
      * 3. **Then the kill and the reap.** On Windows the driver's kill reaches only the `cmd.exe` prism-acp spawns
      *    through; `claude.exe` and everything under it would live on with a dead parent. So the run's tree is read
      *    BEFORE the kill — the kill is what orphans — from this run's own roots, and every process of it is ended.
@@ -967,7 +975,15 @@ export class AgentSession {
         const tree = this.#options.processTree ?? systemProcessTree;
         const driver = this.#driver;
         const graceMs = options.graceMs ?? 0;
-        if (graceMs > 0 && driver?.endInput && this.#alive && !this.#exited) {
+        if (graceMs > 0 && driver?.stop && this.#alive && !this.#exited) {
+            // PRISM-ACP 0.21.1 OWNS THE TREE: its stop closes stdin, waits the grace, ends the supervised tree (a Job Object
+            // on Windows) and reports. Genie's reading then verifies it as before — and reaps anything it still finds.
+            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
+            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
+            let ended: Promise<unknown>;
+            try { ended = Promise.resolve(driver.stop({ graceMs })); } catch (error) { ended = Promise.reject(error); }
+            this.#stopping = ended.catch(() => undefined).then(() => this.#endTree(tree, signal));
+        } else if (graceMs > 0 && driver?.endInput && this.#alive && !this.#exited) {
             // The tree BEFORE stdin closes: a provider that then ends on its own (on Windows) orphans its children, and
             // a reading after its exit could no longer reach them from the roots.
             const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
