@@ -90,3 +90,50 @@ export class AgentDetailReceiver<D extends object, R> {
         this.#held = null;
     }
 }
+
+/** The preload's half: main's payloads for one agent, passed on AS THEY ARRIVED (a patch), never rebuilt. */
+export type AgentWireSubscribe<D, R> = (agentId: string, onPayload: (payload: AgentPushPayload<D, R>) => void) => () => void;
+
+/**
+ * THE PAGE'S HALF: one receiver per agent, IN THE PAGE'S OWN WORLD, however many views watch it.
+ *
+ * WHY HERE AND NOT IN THE PRELOAD (the owner, 2026-10-22: "Nearly every time you do anything the whole UI freezes for a few
+ * seconds"). The preload used to apply the patch and hand each view the whole detail. A value handed across
+ * `contextBridge` is COPIED into the page's world, object by object, on the renderer's one thread — so every push of a
+ * watched agent copied its entire ledger (thousands of rows, megabytes), once per view watching it, and main's patch saved
+ * the wire nothing it did not then spend in the window. Across the bridge now goes the patch; the ledger is rebuilt on
+ * this side, where the rows the page already holds are reused by reference.
+ */
+export class AgentDetailViews<D extends object, R> {
+    readonly #wire: AgentWireSubscribe<D, R>;
+    readonly #watching = new Map<string, { views: Set<{ onChange: (detail: (D & { rows: readonly R[] }) | null) => void }>; off: () => void }>();
+
+    constructor(wire: AgentWireSubscribe<D, R>) {
+        this.#wire = wire;
+    }
+
+    subscribe(agentId: string, onChange: (detail: (D & { rows: readonly R[] }) | null) => void): () => void {
+        let watch = this.#watching.get(agentId);
+        if (watch === undefined) {
+            const receiver = new AgentDetailReceiver<D, R>();
+            const views = new Set<{ onChange: (detail: (D & { rows: readonly R[] }) | null) => void }>();
+            const off = this.#wire(agentId, (payload) => {
+                const detail = receiver.apply(payload);
+                // A patch for rows this page does not hold: the whole ledger main sends a new watcher is on its way.
+                if (detail === undefined) return;
+                for (const view of views) view.onChange(detail);
+            });
+            watch = { views, off };
+            this.#watching.set(agentId, watch);
+        }
+        const view = { onChange };
+        const w = watch;
+        w.views.add(view);
+        return () => {
+            w.views.delete(view);
+            if (w.views.size > 0 || this.#watching.get(agentId) !== w) return;
+            this.#watching.delete(agentId);
+            w.off();
+        };
+    }
+}
