@@ -140,6 +140,7 @@ export class DoctorRun {
                 thumbsUp: () => {},
                 openFile: async () => ({ ok: false, reason: NOT_HERE('opening a file for the person') }),
                 reportPlan: (agentId, steps) => sessions?.reportPlan(agentId as never, steps) ?? false,
+                readPlan: (agentId) => registry.find(agentId as never)?.plan ?? null,
                 terminals: {
                     list: () => [],
                     open: unavailable('terminals') as never,
@@ -158,6 +159,8 @@ export class DoctorRun {
                 ...(this.#o.processTree ? { processTree: this.#o.processTree } : {}),
                 mcpServersFor: (record) => genieMcpServers(endpoint, book.keyFor(record.id)),
                 onThreadId: (agentId, threadId) => { void registry.recordThread(agentId, threadId); },
+                // The agent's real plan too: kept on its record, as in Genie.
+                onPlan: (agentId, steps) => { void registry.setPlan(agentId, steps); },
             });
             sessions = host;
             return { beside, registry, host, server, knowledge };

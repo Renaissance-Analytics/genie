@@ -2,7 +2,7 @@ import { listModels, type ListModelsOptions, type McpServer, type SessionModelSt
 import { homedir } from 'node:os';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
-import { LiveReadings } from '../core/live-readings.js';
+import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
@@ -364,6 +364,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
+    readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
@@ -441,6 +442,12 @@ export class SessionHost {
          */
         onTurnNumbered?: (agentId: AgentId, n: number) => void;
         /**
+         * A PLAN ARRIVED — Genie's `plan` tool or the provider's own — with its readable steps. Main keeps it on the record
+         * (`plan`), and the next run is seeded with it: the owner, 2026-10-21, "The plan loaded in genie should survive a
+         * restart, how else will agents know what to pick up on."
+         */
+        onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
+        /**
          * WHAT AN AGENT DID (Tynn #766 row C): each action once — started, a reply ended, a tool call by its provider's
          * category, its plan (once a turn), being stopped — and for a whole login, its rate limit and the resume. Main
          * pushes it to the window, which plays the sound the person chose for it.
@@ -476,6 +483,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#onTurnNumbered = options.onTurnNumbered;
+        this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
@@ -718,6 +726,9 @@ export class SessionHost {
         const runId = randomUUID();
         const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
+        // The plan kept from before this run: shown at once, until the run reports its own (identity.ts `plan`).
+        if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
+
         let reportedTurns = record.lastTurn ?? 0;
         let numberedTurn = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
@@ -773,6 +784,8 @@ export class SessionHost {
                     numberedTurn = event.n;
                     this.#onTurnNumbered?.(record.id, event.n);
                 }
+                // A PLAN ARRIVED: kept on the record now, so the next run — after a relaunch, a restart, a new conversation — shows it.
+                if (event.kind === 'plan') this.#onPlan?.(record.id, planStepsOf(event));
                 /*
                  * `replacesLast` means the SAME message with another chunk of text on the end.
                  *
@@ -1192,6 +1205,7 @@ export class SessionHost {
             lastDelivery: readings.delivery(rows, this.#clock()),
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: readings.plan,
+            planSteps: readings.planSteps,
             // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
             ...(({ prompt, tool }) => ({ asked: prompt, tool }))(readings.turnNow()),
             model: readings.model,

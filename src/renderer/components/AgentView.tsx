@@ -337,7 +337,11 @@ export function AgentView({
     const plan = planFor(session);
     // The plan's steps (the board): from the latest plan update in the rows; null keeps the step/of line alone.
     // Read from the rows when THEY change, not on every render of the window (the owner, 2026-10-20: "severe UI lag").
-    const steps = useMemo(() => planSteps(rows), [rows]);
+    const rowSteps = useMemo(() => planSteps(rows), [rows]);
+    // After a restart the plan is the KEPT one (the session's `planSteps`) until this run reports its own — the rows may
+    // hold no plan row at all (the owner, 2026-10-21: "The plan loaded in genie should survive a restart").
+    const keptSteps = session?.planSteps ?? null;
+    const steps = useMemo(() => (keptSteps && keptSteps.length > 0 ? keptSteps.map((s) => ({ content: s.content, status: s.status, current: s.status === 'in_progress' })) : rowSteps), [keptSteps, rowSteps]);
     const budget = budgetFor(session, cost, turns);
     // The provider's headroom (the board's rail row): the latest rate-limit reading in the ledger; none, no row.
     const headroom = useMemo(() => headroomOf(rows), [rows]);
