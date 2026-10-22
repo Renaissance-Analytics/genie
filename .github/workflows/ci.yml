@@ -90,6 +90,25 @@ jobs:
           grep -q "280px" "$css"
           grep -q "30px" "$css"
 
+  # THE UNIT SUITE ON WINDOWS, because the release runs it there. release.yml's Windows publish job
+  # runs `npm test` before it builds, and until this job existed nothing on main ever had: beta.35's
+  # Windows release failed on a CRLF checkout and beta.37's on a 5 s budget real git needed more of
+  # (genie#1101). Each was found by the release, after the tag. This puts it on the PR instead.
+  test-windows:
+    name: unit (windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+      - run: npm test
+
   smoke:
     name: a real window
     runs-on: ubuntu-latest
