@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import type { SettingsSection } from '../src/core/agent-settings-view.js';
 import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentView.js';
 
 /**
@@ -15,8 +16,9 @@ const ops = (over: Partial<AgentOpsProps> = {}): AgentOpsProps => ({
     onSetMode: () => {}, onSetAccessScope: () => {},
     ...over,
 });
-const render = (o?: AgentOpsProps) =>
-    renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
+// Mode is on the Settings tab’s General sub-tab, who may message it on Permissions (agent-management parity item 3).
+const render = (o?: AgentOpsProps, section: SettingsSection = 'general') =>
+    renderToStaticMarkup(<AgentView agent={agent} session={null} rows={[]} tab="settings" settingsSection={section} lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
 
 describe('mode and access scope', () => {
     it('shows the current mode, offers the other, and says mode is wording only', () => {
@@ -30,7 +32,7 @@ describe('mode and access scope', () => {
     });
 
     it('access scope is a select with the three values and the current one selected', () => {
-        const html = render(ops({ accessScope: 'all' }));
+        const html = render(ops({ accessScope: 'all' }), 'permissions');
         expect(html).toContain('data-access-scope="all"');
         expect(html).toMatch(/<option value="none"/);
         expect(html).toMatch(/<option value="self"/);
@@ -39,6 +41,7 @@ describe('mode and access scope', () => {
 
     it('nothing of it without ops', () => {
         const none = render();
+        expect(render(undefined, 'permissions')).not.toContain('data-access-scope=');
         expect(none).not.toContain('data-mode=');
         expect(none).not.toContain('data-access-scope=');
     });

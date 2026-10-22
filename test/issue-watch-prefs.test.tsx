@@ -92,7 +92,7 @@ describe('the Settings tab shows it', () => {
     const session = { running: true, turnState: 'idle', startedAt: 0, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, plan: null } as unknown as LiveSession;
     const AGENT = { id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared' as const, cwd: '/w' };
     const opsFor = (issueWatch: unknown) => ({ mode: 'automated', accessScope: 'self', onMode: () => {}, onRestart: () => {}, onDelete: () => {}, issueWatch, onSetIssueWatch: () => {} }) as never;
-    const render = (ops: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={ops as never} />);
+    const render = (ops: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" settingsSection="issuewatch" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={ops as never} />);
 
     it('how it hears, and a box per kind, the ones it hears ticked — COUNTED; says when it is the default', () => {
         const html = render(opsFor({ delivery: 'push', kinds: DEFAULT_KINDS, chosen: false }));
