@@ -1,0 +1,37 @@
+name: release published
+
+# CLOSE ON SHIP, when it SHIPS. release.yml only ever makes a DRAFT (test/release-draft.test.ts); a release is in
+# anybody's hands when the owner publishes it (`gh release edit <tag> -R Renaissance-Analytics/genie --draft=false`),
+# which GitHub reports as `release: published`. Only then is every issue a commit since the previous release says it
+# fixes or closes told "Shipped in <tag>" and closed (scripts/close-shipped.ts; src/core/shipped-issues.ts).
+#
+# The publish must be done with a person's token (gh as the owner): an event a workflow's own GITHUB_TOKEN causes
+# starts no workflow — and nothing in this repository publishes with it.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  close-shipped:
+    name: close what this release ships
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # every tag and commit: the issues shipped are those named since the previous release
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      # Never fails: the release is already public; anything that goes wrong is a warning in the log.
+      - name: close what this release ships
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx --yes tsx@4.23.15 scripts/close-shipped.ts "${{ github.event.release.tag_name }}"

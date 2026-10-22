@@ -1026,6 +1026,8 @@ async function boot(): Promise<void> {
     autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
     ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
     ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
+    // The update window opening reads the notes again if they were missing (beta.38, 2026-10-22).
+    ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);
     ipcMain.handle('genie:updates-install', () => {
         const result = updates?.install() ?? null;
         if (result) console.log(`[updater] ${result.report}`);

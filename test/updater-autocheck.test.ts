@@ -95,6 +95,33 @@ describe('UpdateHost.startAutoCheck', () => {
         expect(fake.checks).toBe(0);
     });
 
+    it('a DOWNLOADED update is not re-checked, but its missing notes are read again on the interval — counted', async () => {
+        // beta.38 (2026-10-22): the notes were empty at the check; once downloaded, the update sat with "No release notes"
+        // forever because the interval skips a downloaded update. The feed is still not asked (that would drop the
+        // download); only the notes are.
+        const fake = fakePort();
+        const s = scheduler();
+        let reads = 0;
+        const h = new UpdateHost({
+            port: fake.port, installDir: '/opt/genie', ownPid: 1, processes: () => [], kill: () => true,
+            runningVersion: '2.0.0-beta.6',
+            releases: async () => { reads += 1; return [{ tag_name: 'v2.0.0-beta.7', body: reads === 1 ? '' : "# x\n\n## What's new\n\n- it\n" }]; },
+        });
+        h.startAutoCheck(s.schedule);
+        await s.fire(s.pending()[0]!);
+        await h.download();
+        expect(h.state().phase).toBe('downloaded');
+        expect(reads).toBe(1);
+        await s.fire(s.pending()[0]!);
+        await new Promise((r) => setTimeout(r, 0));
+        expect(fake.checks).toBe(1);
+        expect(reads).toBe(2);
+        expect(h.state().phase).toBe('downloaded');
+        const c = h.state().changelog;
+        expect(c && c !== 'unavailable' ? c.groups.map((g) => g.version) : c).toEqual(['2.0.0-beta.7']);
+        expect(s.pending()).toHaveLength(1);
+    });
+
     it('the boot delay is seconds, the interval exactly half an hour — a check soon after launch, then every 30 minutes', () => {
         expect(AUTO_CHECK.initialMs).toBeGreaterThanOrEqual(5_000);
         expect(AUTO_CHECK.initialMs).toBeLessThanOrEqual(30_000);
