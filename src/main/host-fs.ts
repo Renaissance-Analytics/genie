@@ -1,5 +1,6 @@
-import { lstat, readdir, stat } from 'node:fs/promises';
+import { lstat, mkdir, readdir, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
+import { folderNameProblem, hostFolder } from '../core/host-path.js';
 
 /**
  * ONE FOLDER OF THE HOST, ON DEMAND (Tynn #835; Genie 1's #199 `listSystemTree`). The listing every file and folder
@@ -18,7 +19,6 @@ export interface HostEntry {
 
 export type HostListing = { readonly ok: true; readonly path: string; readonly entries: readonly HostEntry[] } | { readonly ok: false; readonly reason: string };
 
-const fwd = (p: string) => p.replace(/\\/g, '/');
 const byName = (a: HostEntry, b: HostEntry) => (a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }) : a.kind === 'dir' ? -1 : 1);
 
 /**
@@ -37,7 +37,7 @@ async function windowsDrives(): Promise<string[]> {
 
 export async function listHostDir(path: string, opts: { platform?: NodeJS.Platform; drives?: () => Promise<string[]> } = {}): Promise<HostListing> {
     const platform = opts.platform ?? process.platform;
-    const target = fwd(path.trim());
+    const target = hostFolder(path);
     if (platform === 'win32' && (target === '' || target === '/')) {
         const drives = await (opts.drives ?? windowsDrives)();
         return { ok: true, path: '/', entries: drives.map((d) => ({ path: d, name: d.replace(/\/$/, ''), kind: 'dir' as const })) };
@@ -62,4 +62,30 @@ export async function listHostDir(path: string, opts: { platform?: NodeJS.Platfo
         }
     }
     return { ok: true, path: dir, entries: entries.sort(byName) };
+}
+
+export type HostMade = { readonly ok: true; readonly path: string } | { readonly ok: false; readonly reason: string };
+
+/**
+ * NEW FOLDER, ON THE HOST (the owner, 2026-10-22: the folder picker could not make one). `name` is made directly inside
+ * `parent` — never deeper, never outside: the name is checked here, on the host, whatever the window checked — and the
+ * folder's absolute, forward-slashed path is the answer. An existing name is refused, not reused; nothing is made in the
+ * drive list. Reasons are the picker's own words (core/host-path.ts).
+ */
+export async function makeHostDir(parent: string, name: string, opts: { platform?: NodeJS.Platform } = {}): Promise<HostMade> {
+    const platform = opts.platform ?? process.platform;
+    const problem = folderNameProblem(name);
+    if (problem) return { ok: false, reason: problem };
+    const dir = hostFolder(parent);
+    if (platform === 'win32' && dir === '/') return { ok: false, reason: 'Open a drive to make a folder in it.' };
+    if (!(dir.startsWith('/') || /^[A-Za-z]:\//.test(dir)) || !isAbsolute(dir)) return { ok: false, reason: `${parent} is not an absolute path on this machine` };
+    const trimmed = name.trim();
+    const full = `${dir.endsWith('/') ? dir.slice(0, -1) : dir}/${trimmed}`;
+    try {
+        await mkdir(full);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') return { ok: false, reason: `“${trimmed}” already exists here.` };
+        return { ok: false, reason: `${full} could not be made (${error instanceof Error ? error.message : String(error)})` };
+    }
+    return { ok: true, path: full };
 }
