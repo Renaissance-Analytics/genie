@@ -87,6 +87,21 @@ describe('General', () => {
     });
 });
 
+describe('Remove from workspace and the provider row (agent-management parity item 1)', () => {
+    it('Remove’s buttons open the SAME confirm card as the menu, and that card asks for a handoff from a running agent', () => {
+        const html = render('general', { ops: { deletePreview: { outcome: 'unmount', removes: [], keeps: [], external: [] } } });
+        expect(html).toContain('data-settings-remove');
+        expect(html).toContain('data-delete-confirm="unmount"');
+        expect(html).toMatch(/<input type="checkbox" name="handoff" checked=""/);
+    });
+
+    it('the provider row says a switch starts a NEW conversation — one line, the whole of it on hover', () => {
+        const provider = panel(render('general')).match(/data-rail="provider"[\s\S]*?<\/section>/)?.[0] ?? '';
+        expect(provider).toMatch(/title="Its name, inbox and history stay; it starts a new conversation on the new provider\."/);
+        expect(provider).not.toMatch(/next turn runs on the new provider/);
+    });
+});
+
 describe('Permissions — compact rows', () => {
     it('each control is one row with ONE short help line, not two-line paragraphs', () => {
         const html = panel(render('permissions'));

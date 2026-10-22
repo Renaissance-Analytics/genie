@@ -42,7 +42,7 @@ describe('the registry names the agent whose record changed', () => {
         await registry.setMode(a.id, 'automated');
         await registry.setAccessScope(a.id, 'all');
         await registry.setBudget(a.id, 5);
-        await registry.setProvider(a.id, 'codex');
+        await registry.setProvider(a.id, 'codex', { keepModel: false });
         await registry.clearThread(a.id);
         // COUNTED: seven saves, seven announcements, each naming this agent.
         expect(heard).toEqual(Array(7).fill(a.id));

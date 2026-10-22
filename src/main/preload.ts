@@ -155,7 +155,7 @@ const bridge: PreloadBridge = {
     agents: {
         restart: (agentId, kind) => ipcRenderer.invoke('genie:agent-restart', agentId, kind) as never,
         previewDelete: (agentId, outcome, alsoRemoveFrom) => ipcRenderer.invoke('genie:agent-preview-delete', agentId, outcome, [...alsoRemoveFrom]) as never,
-        delete: (agentId, outcome, alsoRemoveFrom) => ipcRenderer.invoke('genie:agent-delete', agentId, outcome, [...alsoRemoveFrom]) as never,
+        delete: (agentId, outcome, alsoRemoveFrom, handoff) => ipcRenderer.invoke('genie:agent-delete', agentId, outcome, [...alsoRemoveFrom], handoff === true) as never,
         switchDriver: (agentId, to) => ipcRenderer.invoke('genie:agent-switch-driver', agentId, to) as never,
         setBudget: (agentId, dailyLimitUsd) => ipcRenderer.invoke('genie:agent-set-budget', agentId, dailyLimitUsd) as never,
         setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,

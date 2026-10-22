@@ -462,12 +462,19 @@ export class Registry {
         return cleared;
     }
 
-    /** Switch driver: identity, inbox, history and prompt stay; only the provider changes. */
-    async setProvider(agentId: AgentId, provider: string): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+    /**
+     * Switch driver: identity, inbox, history and prompt stay. What belonged to the OLD provider does not: its
+     * conversation (`threadId` → `null`, "never ran on this provider" — a Claude session id handed to Codex would be a
+     * resume of nothing) and, unless the caller found it in the new provider's own list (`keepModel`), its model. The
+     * owner, 2026-10-21: "I need to be able to change provider as well as model". The same provider changes nothing.
+     */
+    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
-        const record: AgentRecord = { ...existing, provider };
+        if (existing.provider === provider) return { ok: true, record: existing };
+        const { model: _oldModel, ...withoutModel } = existing;
+        const record: AgentRecord = { ...(options.keepModel ? existing : withoutModel), provider, threadId: null };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(record.id);
