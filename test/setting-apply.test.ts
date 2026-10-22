@@ -33,6 +33,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; shells?
         host: {
             start: (r: AgentRecord) => { calls.push(`start:${r.threadId}`); return { ok: true }; },
             stop: () => { calls.push('stop'); return true; },
+            ended: async () => null,
             probe: () => probe,
         },
         cwdFor: () => '/w/tynn',
@@ -120,7 +121,7 @@ describe('a model change reaches a running agent', () => {
         const f = fakes({ record: record({ threadId: null }) });
         await setModel(f.ports, 'agent_a', 'opus');
         await settle();
-        expect(f.calls).toEqual(['stop', 'clearThread', 'start:null']);
+        expect(f.calls).toEqual(['stop', 'start:null', 'clearThread']);
     });
 });
 

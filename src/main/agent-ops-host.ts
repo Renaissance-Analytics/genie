@@ -40,8 +40,11 @@ export interface AgentOpsPorts {
     host: {
         start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
         stop(id: AgentRecord['id']): boolean;
-        /** How the last stop ended, once it has (`SessionHost.ended`): a restart starts only after it. */
-        ended?(id: AgentRecord['id']): Promise<StopVerdict | null>;
+        /**
+         * How the last stop ended, once it has (`SessionHost.ended`): a restart starts only after it. REQUIRED: it was
+         * optional, main.ts never passed it, and every restart inside Claude's stop grace was refused "still stopping".
+         */
+        ended(id: AgentRecord['id']): Promise<StopVerdict | null>;
         probe(id: AgentRecord['id']): LiveSession | null;
         /** The running agent's own models (`SessionHost.modelState`): `null` = not running, or its driver cannot say. */
         modelState?(id: AgentRecord['id']): Promise<SessionModelState> | null;
@@ -81,7 +84,7 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
      * BEFORE a fresh restart discards the thread.
      */
     ports.host.stop(record.id);
-    const verdict = (await ports.host.ended?.(record.id)) ?? null;
+    const verdict = await ports.host.ended(record.id);
     if (verdict && !verdict.verified && verdict.survivors.length > 0) {
         return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
     }
@@ -89,10 +92,17 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
         const started = ports.host.start(record, ports.cwdFor(record));
         return started.ok ? { ok: true, kind: 'graceful' } : started;
     }
-    const cleared = await ports.registry.clearThread(record.id);
-    if (!cleared) return UNKNOWN;
-    const started = ports.host.start(cleared, ports.cwdFor(cleared));
-    return started.ok ? { ok: true, kind: 'fresh', discarded: plan.discards } : started;
+    /*
+     * FRESH: THE CONVERSATION IS DROPPED ONLY BY A START THAT WENT AHEAD. The new run starts on the record with no thread;
+     * the stored thread is cleared only once that start was taken. A refused start (a missing folder, a hold, leftovers)
+     * leaves the conversation exactly as it was — it used to be cleared first, so a refused start lost it and started
+     * nothing. Nothing can record the new run's thread before the clear: `onThreadId` fires from a provider update, never
+     * inside `start()`, and `clearThread` changes the in-memory record before its first await — no await comes between.
+     */
+    const started = ports.host.start({ ...record, threadId: null }, ports.cwdFor(record));
+    if (!started.ok) return started;
+    const cleared = ports.registry.clearThread(record.id);
+    return (await cleared) ? { ok: true, kind: 'fresh', discarded: plan.discards } : UNKNOWN;
 }
 
 function planFor(ports: AgentOpsPorts, record: AgentRecord, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): { ok: true; plan: DeletePlan } | Refusal {
@@ -133,6 +143,8 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const decision = switchDriverDecision(manifest, record.provider, to, 'user');
     if (!decision.ok || decision.noop) return decision;
     ports.host.stop(record.id);
+    // Answered once the old provider has ended, so "Start it when ready" is true when it is said (not refused "still stopping").
+    await ports.host.ended(record.id);
     const switched = await ports.registry.setProvider(record.id, to);
     return switched.ok ? decision : switched;
 }
