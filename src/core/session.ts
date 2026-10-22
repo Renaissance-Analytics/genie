@@ -748,6 +748,10 @@ export class AgentSession {
                     // Two turns are two replies even with nothing between them. Without this a
                     // whole conversation would accumulate into one unbounded row.
                     this.#closeMessage();
+                    // An echo that never came is not still expected: a `you` row after this turn is a message, never
+                    // the prompt's echo (see `#handle`).
+                    this.#echo = null;
+                    this.#echoSeen = '';
 
                     // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
                     // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
@@ -1321,11 +1325,14 @@ export class AgentSession {
          * chopped up, each piece with its own time. Consecutive thought chunks grow one row; anything else closes it.
          * While it is open and the turn is running, the surface shows it as the live `Thinking…` row.
          */
-        // The provider's echo of the prompt just sent — identical, before anything else arrives — is already in the
-        // thread (`prompt`). Anything else ends the watch; a user message that is not that echo (history replayed on
-        // resume) is kept.
-        if (this.#echo !== null) {
-            if (event.kind === 'message' && event.speaker === 'you' && this.#echo.startsWith(this.#echoSeen + event.text)) {
+        // The provider's echo of the prompt just sent — identical — is already in the thread (`prompt`). Only a MESSAGE
+        // ends the watch: the agent's or a peer's reply, or a user message that is not that echo (history replayed on
+        // resume), which is kept. Everything else passes through with the watch still open — Codex sends debug notices
+        // (`thread/status/changed has no other ACP mapping`) BEFORE its echo, which arrives seconds later; when the first
+        // notice ended the watch, the echo was recorded as a second `you` row and the owner saw every message twice
+        // (2026-10-22). Claude never echoes, which is why only Codex showed it. The turn ending ends it too (`onTurnEnd`).
+        if (this.#echo !== null && event.kind === 'message') {
+            if (event.speaker === 'you' && this.#echo.startsWith(this.#echoSeen + event.text)) {
                 this.#echoSeen += event.text;
                 if (this.#echoSeen === this.#echo) { this.#echo = null; this.#echoSeen = ''; }
                 return;
