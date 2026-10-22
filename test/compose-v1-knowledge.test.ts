@@ -56,6 +56,15 @@ const boot = async (v1Knowledge: () => typeof v1 | null): Promise<ComposedServic
 };
 const all = (s: ComposedServices) => s.knowledge.list({ scopes: 'all', limit: 200 }).nodes;
 
+/**
+ * A REAL DURABLE SYNC HAS ITS OWN BUDGET (genie#1101's class; test/knowledge-store-commits.test.ts says why: a SQLite
+ * commit's disk sync waits behind everything else the machine is writing, so it stalls only under the full suite's
+ * parallel load). Measured on windows-latest, 2026-10-22: this file took 536 ms whole on main's green run (39849388427)
+ * and 7.9–10.4 s PER TEST on a loaded one (39862153281, "Test timed out in 5000ms" ×3, then EBUSY on the db a timed-out
+ * test still held open). Every test here composes Genie and boots a fresh knowledge.db — real syncs, not a hidden wait.
+ */
+const REAL_SYNC_MS = 60_000;
+
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-compose-v1-knowledge-'));
     services = null;
@@ -100,7 +109,7 @@ describe("Genie 1's knowledge at boot", () => {
 
         // And search finds them — the Knowledge Graph surface asks the store through search.
         expect(s.knowledge.search({ query: 'websocket', scopes: 'all' }).hits.map((h) => h.id)).toEqual([B]);
-    });
+    }, REAL_SYNC_MS);
 
     it('runs ONCE: a second boot imports nothing twice, keeps an edit made in Genie 2, and does not bring back a node deleted in Genie 2', async () => {
         const first = await boot(() => v1);
@@ -112,7 +121,7 @@ describe("Genie 1's knowledge at boot", () => {
         const second = await boot(() => v1);
         expect(all(second).map((n) => n.id).sort()).toEqual([A, B].sort());
         expect(second.knowledge.get(A)!.body).toBe('Edited in Genie 2.');
-    });
+    }, REAL_SYNC_MS);
 
     it('a boot that cannot see Genie 1 imports nothing — and a later boot that can see it still imports (the import is not spent on a blind boot)', async () => {
         const blind = await boot(() => null);
@@ -121,7 +130,7 @@ describe("Genie 1's knowledge at boot", () => {
 
         const seeing = await boot(() => v1);
         expect(all(seeing)).toHaveLength(3);
-    });
+    }, REAL_SYNC_MS);
 
     it('an install that already imported v1 workspaces before this existed still gets its knowledge: nothing in the knowledge store says it ran, so it runs', async () => {
         // The owner's case: ~/.genie/v1-import.json exists (workspaces imported on an earlier boot) and knowledge.db is empty.
@@ -133,5 +142,5 @@ describe("Genie 1's knowledge at boot", () => {
         const after = await boot(() => v1);
         const titles = all(after).map((n) => n.title).sort();
         expect(titles).toEqual(['Caddy over h2', 'Front door ports', 'Replies stay short', 'Written in Genie 2 first']);
-    });
+    }, REAL_SYNC_MS);
 });
