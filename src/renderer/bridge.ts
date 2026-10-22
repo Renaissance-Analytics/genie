@@ -422,6 +422,8 @@ export interface GenieBridge {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string } | null>;
+        /** Read the release notes again when what is held is empty, unavailable or partial (UpdateHost.refreshNotes). */
+        notes?(): Promise<UpdateState | null>;
     };
 
     /**

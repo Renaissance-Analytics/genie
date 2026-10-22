@@ -1,5 +1,5 @@
 /**
- * After a release is published (.github/workflows/release.yml `notes`): every issue a commit since the previous release
+ * After a release is published (.github/workflows/release-published.yml, on the owner publishing the draft): every issue a commit since the previous release
  * says it fixes or closes (src/core/shipped-issues.ts) is told "Shipped in <tag>" — once, by marker — and closed if
  * still open. A pull request's number is skipped.
  *

@@ -334,6 +334,7 @@ const bridge: GenieBridge = {
         check: () => ipcRenderer.invoke('genie:updates-check') as Promise<UpdateState>,
         download: () => ipcRenderer.invoke('genie:updates-download') as Promise<boolean>,
         install: () => ipcRenderer.invoke('genie:updates-install') as Promise<{ report: string } | null>,
+        notes: () => ipcRenderer.invoke('genie:updates-notes') as Promise<UpdateState | null>,
     },
 };
 

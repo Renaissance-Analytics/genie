@@ -85,17 +85,20 @@ afterPack: ./scripts/after-pack.cjs
 # src/core/update-channel.ts), each a pair of a publish type and an updater flag:
 #
 #   - DEV channel    ↔ prereleases:   `allowPrerelease: true`  sees a tag like v2.0.0-beta.20,
-#                                     published with `releaseType: prerelease` — the default HERE.
+#                                     whose draft release.yml's guard creates with `--prerelease`.
 #   - STABLE channel ↔ full releases: `allowPrerelease: false` sees a plain tag like v2.0.0,
-#                                     which .github/workflows/release.yml publishes by overriding
-#                                     this default with `--config.publish.releaseType=release`.
+#                                     whose draft guard creates without it.
+#
+# EVERY RELEASE IS A DRAFT until the owner publishes it (2026-10-22, after beta.38 was public
+# for ~7 minutes with no notes, and beta.35/37 stayed public with none): `releaseType: draft`
+# here, EP_DRAFT in the workflow, and the workflow never un-drafts (test/release-draft.test.ts).
 #
 # test/update-channels.test.ts asserts every link (and test/upgrade.test.ts the default pair), so:
 #
-#   - changing this default to `release` fails the test rather than publishing every beta to
-#     the stable channel;
-#   - dropping the workflow's override fails the test rather than leaving a stable channel
-#     (`allowPrerelease` false) that is never offered anything;
+#   - changing this default to `prerelease` or `release` fails the test rather than letting a
+#     build go public with no notes;
+#   - dropping the guard's `--prerelease` case fails the test rather than putting every beta on
+#     the stable channel, or none on dev;
 #   - dropping the flag fails the test rather than leaving a dev updater that cannot see what
 #     it publishes.
 #
@@ -108,7 +111,7 @@ publish:
   # owner/repo in its app-update.yml, and that is where it looks. Publishing anywhere else means
   # no installed copy ever sees Genie 2 (owner decision 2026-10-10). The code stays in genie2.
   repo: genie
-  releaseType: prerelease
+  releaseType: draft
 
 # genie:// — Tynn's sign-in hands its code back through it (main.ts openGenieUrl). Declared here so the installed app
 # owns the scheme: the AppImage's .desktop MimeType and the macOS Info.plist (Windows registers it at first launch).

@@ -166,22 +166,26 @@ describe('the publish half', () => {
     const workflow = () => readFileSync('.github/workflows/release.yml', 'utf8').replace(/\r\n/g, '\n');
     const builder = () => readFileSync('electron-builder.yml', 'utf8').replace(/\r\n/g, '\n');
 
-    it('the workflow decides the release type from the tag and passes it to electron-builder', () => {
+    // Since 2026-10-22 every release is a DRAFT until the owner publishes it (test/release-draft.test.ts). The channel's
+    // half moved with it: the draft `guard` creates carries the prerelease flag the tag decides, and `verify` refuses a
+    // draft whose flag disagrees with releaseTypeForTag (src/core/release-check.ts).
+    it('the workflow decides the prerelease flag from the tag when it creates the draft', () => {
         expect(workflow()).toContain('tag="${GITHUB_REF_NAME#v}"');
-        expect(workflow()).toContain('case "$tag" in *-*) type=prerelease ;; *) type=release ;; esac');
-        expect(workflow()).toContain('npx electron-builder --publish always --config.publish.releaseType=$type');
+        expect(workflow()).toContain('case "$tag" in *-*) prerelease=--prerelease ;; *) prerelease= ;; esac');
+        expect(workflow()).toMatch(/gh release create "\$GITHUB_REF_NAME"[^\n]*--draft[^\n]*\$prerelease/);
     });
 
-    it('electron-builder.yml still DEFAULTS to prerelease — what dev sees — and names this test as its pair', () => {
-        expect(builder()).toMatch(/releaseType:\s*prerelease/);
+    it('electron-builder.yml DEFAULTS to a draft — never public by itself — and names this test as its pair', () => {
+        expect(builder()).toMatch(/releaseType:\s*draft/);
         expect(builder()).toContain('test/update-channels.test.ts');
     });
 
-    it('CONTROL: the override is what lets stable see anything — a plain tag maps to release while the yml default is prerelease', () => {
-        // If the override were dropped, a plain tag would publish as the yml default (prerelease),
-        // and the stable channel (allowPrerelease false) would never be offered it.
+    it('CONTROL: the flag is what lets stable see anything — a plain tag maps to release, a suffixed one to prerelease', () => {
+        // If the flag were set on every tag, a plain tag would be a prerelease and the stable channel
+        // (allowPrerelease false) would never be offered it; if never, dev would be offered nothing new over stable.
         expect(releaseTypeForTag('v2.0.0')).toBe('release');
-        expect(builder()).not.toMatch(/releaseType:\s*release\b/);
+        expect(releaseTypeForTag('v2.0.0-beta.39')).toBe('prerelease');
+        expect(builder()).not.toMatch(/releaseType:\s*(release|prerelease)\b/);
         expect(updaterConfigFor('stable').allowPrerelease).toBe(false);
         expect(updaterConfigFor('dev').allowPrerelease).toBe(true);
     });
