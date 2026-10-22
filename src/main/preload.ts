@@ -123,6 +123,7 @@ const bridge: GenieBridge = {
         registerExisting: (path) => ipcRenderer.invoke('genie:workspace-register-existing', path) as never,
         buildEnvelope: (plan, remote) => ipcRenderer.invoke('genie:workspace-build-envelope', plan, remote) as never,
         discardStaged: (path) => ipcRenderer.invoke('genie:workspace-discard-staged', path) as never,
+        githubRepos: () => ipcRenderer.invoke('genie:workspace-github-repos') as never,
         tynnProjects: () => ipcRenderer.invoke('genie:workspace-tynn-projects') as never,
         tynnOwnerOptions: () => ipcRenderer.invoke('genie:workspace-tynn-owner-options') as never,
         createTynnProject: (input) => ipcRenderer.invoke('genie:workspace-create-tynn-project', input) as never,

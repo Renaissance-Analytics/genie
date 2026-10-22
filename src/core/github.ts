@@ -234,14 +234,47 @@ function githubHttpsOwner(url: string): string | null {
 }
 
 /**
- * The clone credential (Genie 1's `githubCloneAuth`), only where it helps: an https github.com repository of an account
- * whose installation grants Contents. Anywhere else a header would SHADOW the person's own credential helper, which may
- * reach a repository this App cannot — so the clone goes exactly as it did without a sign-in. The token rides as git
- * config for that one command (`http.<github>.extraheader`, the GitHub Actions checkout pattern), never in the URL and
- * never written into the clone; `secrets` are what any error must be scrubbed of.
+ * A github.com SSH URL as its HTTPS twin (Genie 1's `githubSshToHttps`, `v1:main/workspace/git-auth.ts`): the scp form
+ * `git@github.com:owner/repo(.git)` and `ssh://git@github.com/owner/repo`. Anything else — another host, https already, a
+ * path — is handed back trimmed and otherwise unchanged.
  */
-export function cloneAuthFor(url: string, token: string | null, installations: readonly GithubInstallation[] | null): { config: Array<[string, string]>; secrets: string[] } | null {
-    return githubHeaderAuth(url, token, installations, 'read');
+export function githubSshToHttps(url: string): string {
+    const trimmed = url.trim();
+    const scp = /^git@github\.com:(.+)$/i.exec(trimmed);
+    if (scp) return `https://github.com/${scp[1]}`;
+    const ssh = /^ssh:\/\/git@github\.com\/(.+)$/i.exec(trimmed);
+    if (ssh) return `https://github.com/${ssh[1]}`;
+    return trimmed;
+}
+
+/** GitHub's rule for a repository name: letters, digits, `.`, `_`, `-`; never `.` or `..`. */
+export const GITHUB_REPO_NAME = /^(?!\.\.?$)[A-Za-z0-9._-]{1,100}$/;
+/** GitHub's rule for a user or org name: letters, digits and single dashes, not starting with a dash; at most 39. */
+export const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/;
+
+/** The GitHub repository a URL names (https or either SSH form; `.git` and a trailing slash dropped), or `null`. */
+export function githubRepoOf(url: string | null | undefined): { owner: string; repo: string } | null {
+    if (!url) return null;
+    const m = /^https:\/\/github\.com\/([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i.exec(githubSshToHttps(url));
+    if (!m || !GITHUB_LOGIN.test(m[1]!) || !GITHUB_REPO_NAME.test(m[2]!)) return null;
+    return { owner: m[1]!, repo: m[2]! };
+}
+
+/**
+ * The clone credential (Genie 1's `githubCloneAuth`), only where it helps: a github.com repository of an account whose
+ * installation grants Contents. Anywhere else a header would SHADOW the person's own credential helper, which may reach a
+ * repository this App cannot — so the clone goes exactly as it did without a sign-in. The token rides as git config for
+ * that one command (`http.<github>.extraheader`, the GitHub Actions checkout pattern), never in the URL and never written
+ * into the clone; `secrets` are what any error must be scrubbed of.
+ *
+ * `url` is what git should fetch (Add workspace parity item 8, Genie 1's clone.ts:42-63): an SSH URL of such an account is
+ * cloned over HTTPS, where the sign-in applies — a private repository then needs no SSH key. An SSH URL the App does not
+ * cover is not rewritten (null): on HTTPS nothing would authenticate it, while the person's ssh agent may.
+ */
+export function cloneAuthFor(url: string, token: string | null, installations: readonly GithubInstallation[] | null): { url: string; config: Array<[string, string]>; secrets: string[] } | null {
+    const https = githubSshToHttps(url);
+    const auth = githubHeaderAuth(https, token, installations, 'read');
+    return auth ? { url: https, ...auth } : null;
 }
 
 /**
@@ -380,4 +413,53 @@ export function createdRepoFrom(json: unknown, created: boolean): CreatedRepo | 
     const htmlUrl = str(o?.html_url);
     if (!o || !fullName || !cloneUrl || !htmlUrl) return null;
     return { fullName, cloneUrl, htmlUrl, defaultBranch: str(o.default_branch) ?? 'main', private: o.private === true, created };
+}
+
+/*
+ * BROWSING WHAT THE SIGN-IN REACHES (Add workspace parity item 8; Genie 1's `listAccessibleRepositories`,
+ * `v1:main/github/api.ts:409-452`): Import from Git lists the repositories to pick from, beside the URL box.
+ */
+
+/** One repository the sign-in can reach, as GitHub lists it. */
+export interface AccessibleRepo {
+    readonly fullName: string;
+    readonly owner: string;
+    readonly name: string;
+    readonly private: boolean;
+    /** GitHub's https clone URL — the one the sign-in authenticates. */
+    readonly cloneUrl: string;
+    readonly defaultBranch: string | null;
+}
+
+/**
+ * What the browser shows: the list (`truncated` when it was too long to read whole), or why there is none — signed out,
+ * the App installed nowhere (the screen offers the install), or GitHub's own words.
+ */
+export type RepoListing =
+    | { readonly status: 'listed'; readonly repos: readonly AccessibleRepo[]; readonly truncated: boolean }
+    | { readonly status: 'signed-out' }
+    | { readonly status: 'not-installed' }
+    | { readonly status: 'failed'; readonly message: string };
+
+/** One row of `GET /user/installations/{id}/repositories`, or `null` without a full name and a clone URL. */
+export function accessibleRepoFrom(raw: unknown): AccessibleRepo | null {
+    const o = obj(raw);
+    const fullName = str(o?.full_name);
+    const cloneUrl = str(o?.clone_url);
+    if (!o || !fullName || !cloneUrl) return null;
+    const [ownerPart, namePart] = fullName.split('/');
+    return {
+        fullName,
+        owner: str(obj(o.owner)?.login) ?? ownerPart ?? '',
+        name: str(o.name) ?? namePart ?? fullName,
+        private: o.private === true,
+        cloneUrl,
+        defaultBranch: str(o.default_branch),
+    };
+}
+
+/** The browser's search: every word appears in the full name, case-insensitively. An empty search is everything. */
+export function filterRepos(repos: readonly AccessibleRepo[], query: string): AccessibleRepo[] {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    return repos.filter((r) => { const name = r.fullName.toLowerCase(); return words.every((w) => name.includes(w)); });
 }

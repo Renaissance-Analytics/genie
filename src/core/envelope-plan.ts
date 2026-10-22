@@ -1,4 +1,5 @@
 import { newWorkspaceProblem, workspaceFolderName } from './add-workspace.js';
+import { GITHUB_LOGIN, GITHUB_REPO_NAME, githubRepoOf } from './github.js';
 import { slugOf } from './repo-registry.js';
 
 /**
@@ -198,11 +199,11 @@ export function parseGitModulesText(text: string): Array<{ name: string; path: s
 /* ===== The wizard's draft ================================================================================================ */
 
 /**
- * Where a repo's submodule comes FROM (Genie 1's RepoSourceMode): its existing remote, or the folder on disk. Genie 1 also
- * had 'fork' (fork on GitHub into the chosen owner, then submodule the fork); that is Add workspace parity item 12 and
- * needs the GitHub write client. It plugs in at `repoSourceUrl`, the one place a row becomes a URL.
+ * Where a repo's submodule comes FROM (Genie 1's RepoSourceMode): its existing remote, the folder on disk, or a FORK of its
+ * GitHub repository made into the chosen owner (Add workspace parity item 12; Genie 1's InteractiveUpgradeWizard
+ * :605-632) — the fork, once GitHub has made it, is the submodule. `repoSourceUrl` is the one place a row becomes a URL.
  */
-export type RepoSource = 'origin' | 'local';
+export type RepoSource = 'origin' | 'local' | 'fork';
 
 export interface RepoRow {
     /** Stable identity for the table: the source's relative path. */
@@ -242,6 +243,8 @@ export interface WizardDraft {
     readonly name: string;
     readonly nameTouched: boolean;
     readonly parent: string;
+    /** The GitHub account or organisation Fork rows are forked into ('' or absent = not chosen yet). */
+    readonly forkInto?: string;
 }
 
 export function startDraft(analysis: SourceAnalysis, at: { parent: string; staged?: boolean }): WizardDraft {
@@ -325,11 +328,16 @@ export function usesDisposition(kind: SourceKind): boolean {
 }
 
 /**
- * The sources a row may be added from: Origin when it has a remote, Local when there is a checkout on disk Genie keeps.
- * An Import from Git clone is removed after the build, so a submodule pointing at it would point at nothing.
+ * The sources a row may be added from: Origin when it has a remote, Local when there is a checkout on disk Genie keeps,
+ * Fork when its remote is a GitHub repository and `canFork` (signed in to GitHub). An Import from Git clone is removed
+ * after the build, so a submodule pointing at it would point at nothing.
  */
-export function sourceOptions(row: RepoRow, staged: boolean): RepoSource[] {
-    return [...(row.originUrl ? (['origin'] as const) : []), ...(!staged && row.localPath ? (['local'] as const) : [])];
+export function sourceOptions(row: RepoRow, staged: boolean, canFork = false): RepoSource[] {
+    return [
+        ...(row.originUrl ? (['origin'] as const) : []),
+        ...(!staged && row.localPath ? (['local'] as const) : []),
+        ...(canFork && githubRepoOf(row.originUrl) ? (['fork'] as const) : []),
+    ];
 }
 
 const NAME_RE = /^[A-Za-z0-9._-]+$/;
@@ -348,9 +356,11 @@ export function repoNamesProblem(rows: readonly RepoRow[]): string | null {
 
 export interface PlanRepo {
     readonly name: string;
-    /** What `git submodule add` clones: the remote URL, or the local path. */
+    /** What `git submodule add` clones: the remote URL, or the local path. For a Fork, the upstream until the fork exists. */
     readonly url: string;
     readonly local: boolean;
+    /** Fork this GitHub repository into the plan's `forkInto` first; the fork's clone URL becomes `url` (item 12). */
+    readonly fork?: { readonly owner: string; readonly repo: string };
 }
 
 export interface PlanKnowledge {
@@ -377,6 +387,8 @@ export interface EnvelopePlan {
      * Only the id: the host looks it up in Tynn's own list before anything is written. Absent = no link.
      */
     readonly tynnProjectId?: string;
+    /** Where Fork rows are forked to; `null` when no row is a Fork (an older window sends none). */
+    readonly forkInto?: string | null;
 }
 
 /** The ONE place a row becomes a submodule URL (the seam item 12's fork plugs into). */
@@ -384,6 +396,9 @@ export function repoSourceUrl(row: RepoRow): PlanRepo {
     const name = row.name.trim();
     // Origin: the repo's remote (Genie 1 :672-678). Local: the folder on disk, which git needs protocol.file.allow for (:679-683).
     if (row.source === 'origin' && row.originUrl) return { name, url: row.originUrl, local: false };
+    // Fork: GitHub's repository named by the remote; the URL is replaced with the fork's when it is made (main).
+    const upstream = row.source === 'fork' ? githubRepoOf(row.originUrl) : null;
+    if (upstream && row.originUrl) return { name, url: row.originUrl, local: false, fork: upstream };
     return { name, url: row.localPath ?? row.originUrl ?? '', local: true };
 }
 
@@ -393,15 +408,17 @@ export function buildPlan(draft: WizardDraft): EnvelopePlan {
         // Codebase travels with the repo and Ignore is left out: neither is copied.
         ? draft.dispositions.filter((r) => r.disposition === 'knowledge' || r.disposition === 'root').map((r) => ({ from: r.absPath, kind: r.kind, to: r.disposition === 'root' ? 'root' : 'ai', subdir: r.disposition === 'knowledge' ? r.targetSubdir : '' }))
         : draft.knowledge.filter((r) => r.included).map((r) => ({ from: r.absPath, kind: r.kind, to: 'ai', subdir: r.targetSubdir }));
+    const repos = draft.repos.filter((r) => r.included).map(repoSourceUrl);
     return {
         name: draft.name,
         parent: draft.parent,
         source: draft.analysis.root,
         staged: draft.staged,
-        repos: draft.repos.filter((r) => r.included).map(repoSourceUrl),
+        repos,
         knowledge,
         // Only an exploded monorepo names a host; a lone repo is its own (envelopeRepos).
         primary: exploded(draft) && draft.primary ? draft.primary : null,
+        forkInto: repos.some((r) => r.fork) ? draft.forkInto?.trim() ?? '' : null,
     };
 }
 
@@ -412,11 +429,16 @@ export function parseEnvelopePlan(raw: unknown): EnvelopePlan | null {
     const str = (v: unknown): v is string => typeof v === 'string';
     if (!str(p.name) || !str(p.parent) || !str(p.source) || typeof p.staged !== 'boolean' || !Array.isArray(p.repos) || !Array.isArray(p.knowledge)) return null;
     if (p.primary !== null && !str(p.primary)) return null;
+    if (p.forkInto !== undefined && p.forkInto !== null && !str(p.forkInto)) return null;
     const repos: PlanRepo[] = [];
     for (const r of p.repos as unknown[]) {
         const o = (typeof r === 'object' && r !== null ? r : {}) as Record<string, unknown>;
         if (!str(o.name) || !str(o.url) || typeof o.local !== 'boolean') return null;
-        repos.push({ name: o.name, url: o.url, local: o.local });
+        if (o.fork === undefined) { repos.push({ name: o.name, url: o.url, local: o.local }); continue; }
+        // A fork names a GitHub repository by GitHub's own rules — never a path or an option in disguise.
+        const f = (typeof o.fork === 'object' && o.fork !== null ? o.fork : {}) as Record<string, unknown>;
+        if (!str(f.owner) || !str(f.repo) || !GITHUB_LOGIN.test(f.owner) || !GITHUB_REPO_NAME.test(f.repo)) return null;
+        repos.push({ name: o.name, url: o.url, local: o.local, fork: { owner: f.owner, repo: f.repo } });
     }
     const knowledge: PlanKnowledge[] = [];
     for (const k of p.knowledge as unknown[]) {
@@ -428,7 +450,7 @@ export function parseEnvelopePlan(raw: unknown): EnvelopePlan | null {
     }
     if (p.tynnProjectId !== undefined && p.tynnProjectId !== null && !str(p.tynnProjectId)) return null;
     const tynnProjectId = str(p.tynnProjectId) && p.tynnProjectId !== '' ? p.tynnProjectId : null;
-    return { name: p.name, parent: p.parent, source: p.source, staged: p.staged, repos, knowledge, primary: (p.primary as string | null), ...(tynnProjectId ? { tynnProjectId } : {}) };
+    return { name: p.name, parent: p.parent, source: p.source, staged: p.staged, repos, knowledge, primary: (p.primary as string | null), forkInto: typeof p.forkInto === 'string' ? p.forkInto : null, ...(tynnProjectId ? { tynnProjectId } : {}) };
 }
 
 /** What makes a folder an envelope; a Root item may not replace it. */
@@ -458,6 +480,7 @@ export function planProblem(plan: EnvelopePlan): string | null {
         seen.add(r.name);
         if (r.url.trim() === '') return `${r.name} has nowhere to be added from.`;
         if (plan.staged && r.local) return `${r.name} has no remote to add it from. Genie removes the clone it made for this import once the workspace is built, so a repository in it can only come from its remote.`;
+        if (r.fork && !(plan.forkInto && GITHUB_LOGIN.test(plan.forkInto))) return `Choose the GitHub account or organisation to fork ${r.fork.owner}/${r.fork.repo} into.`;
     }
     const target = `${normAbs(plan.parent)}/${workspaceFolderName(plan.name)}`;
     const source = normAbs(plan.source);

@@ -34,7 +34,7 @@ import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './comp
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
 import { AddWorkspaceWizard, type SourceReadView } from './components/AddWorkspaceWizard.js';
 import type { GithubAsk } from './components/AgiRemoteChoice.js';
-import { GITHUB_ROUTE } from '../core/github.js';
+import { GITHUB_ROUTE, type RepoListing } from '../core/github.js';
 import type { TynnLinkApi } from './components/TynnProjectLink.js';
 import { ImportedAgentsModal } from './components/ImportedAgents.js';
 import { importedAgentsOffer, type ImportedAgent } from '../core/agent-adoption.js';
@@ -721,7 +721,16 @@ function DesktopApp({ bridge }: AppProps) {
             .then((r) => { setAddFromGit(false); if (r.ok) setWizardRead(r.existing ? r : { ...r, url }); else setAddPreview(r); }, (e: unknown) => { setAddFromGit(false); setAddPreview({ ok: false, reason: e instanceof Error ? e.message : String(e) }); })
             .finally(() => setAddBusy(false));
     };
-    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnPick(undefined); setAddFromGit(true); };
+    // Import from Git's browser (Add workspace parity item 8): the HOST's GitHub sign-in lists what it reaches, read each
+    // time the form opens and on Refresh / Check again. A host without the call keeps the URL box alone.
+    const [gitRepos, setGitRepos] = useState<RepoListing | null | undefined>(undefined);
+    const loadGitRepos = () => {
+        const list = resolvedBridge?.workspaces.githubRepos;
+        if (!list) { setGitRepos(undefined); return; }
+        setGitRepos(null);
+        void list().then(setGitRepos, (e: unknown) => setGitRepos({ status: 'failed', message: e instanceof Error ? e.message : String(e) }));
+    };
+    const startAddFromGit = () => { setAddOpen(false); setAddPreview(null); setTynnPick(undefined); setAddFromGit(true); loadGitRepos(); };
     const startAddFromTynn = () => {
         setAddOpen(false);
         setAddFromGit(false);
@@ -1245,6 +1254,9 @@ function DesktopApp({ bridge }: AppProps) {
             onAddWorkspaceFromGit={startAddFromGit}
             onCancelAddGit={() => setAddFromGit(false)}
             onPreviewFromGit={importFromGit}
+            gitRepos={gitRepos}
+            onReloadGitRepos={loadGitRepos}
+            onGitGithub={githubAsk}
             onConfirmAddGit={(url, parent) => confirmAddOnce(() => resolvedBridge?.workspaces.confirmAddFromGit(url, parent))}
             // From Tynn (§6.1, Genie 1's): the person's projects first; the one picked goes to the host's folder picker and its plan.
             tynnPick={tynnPick}
