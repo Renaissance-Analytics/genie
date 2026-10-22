@@ -1387,6 +1387,7 @@ function DesktopApp({ bridge }: AppProps) {
                 initialPath={pickerAsk.opts.initialPath}
                 extensions={pickerAsk.opts.extensions}
                 listDir={(path) => resolvedBridge.host!.listDir(path)}
+                mkdir={resolvedBridge.host.mkdir ? (parent, name) => resolvedBridge.host!.mkdir!(parent, name) : undefined}
                 onPick={(p) => { pickerAsk.resolve(p); setPickerAsk(null); }}
                 onCancel={() => { pickerAsk.resolve(null); setPickerAsk(null); }}
             />

@@ -247,7 +247,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             soundData: async () => null,
         },
         // The REMOTE host's disk, for every picker in this window (Tynn #835).
-        host: { listDir: (path: string) => answer('host.listDir', path) as never },
+        host: { listDir: (path: string) => answer('host.listDir', path) as never, mkdir: (parent: string, name: string) => answer('host.mkdir', parent, name) as never },
         // The HOST's sites in Genie's browser: its site names read from the host, the window opened by main for this connection.
         ...(options.browse ? {
             browserWindow: {

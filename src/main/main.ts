@@ -52,7 +52,7 @@ import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
 import type { RepoListing } from '../core/github.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
-import { listHostDir } from './host-fs.js';
+import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
@@ -1617,6 +1617,9 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
         (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
+    // The folder picker's New folder: made on this machine, inside the folder the picker is in (host-fs.ts makeHostDir).
+    ipcMain.handle('genie:host-mkdir', (_event, parent: unknown, name: unknown) =>
+        (typeof parent === 'string' && typeof name === 'string' ? makeHostDir(parent, name) : { ok: false, reason: 'name a folder and where to make it' }));
     // Where a folder picker starts when nothing better is known (core/add-workspace.ts `pickerStart`): the host's home.
     ipcMain.handle('genie:host-home', () => homedir());
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.

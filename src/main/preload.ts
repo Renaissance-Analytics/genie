@@ -234,7 +234,7 @@ const bridge: PreloadBridge = {
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
-    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
+    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, mkdir: (parent, name) => ipcRenderer.invoke('genie:host-mkdir', parent, name) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
     tynnNetwork: {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,

@@ -81,6 +81,7 @@ export const REMOTE_METHODS = [
     'features.setBrowserBounds',
     'updates.state',
     'host.listDir',
+    'host.mkdir',
     'updates.check',
     'updates.download',
     'updates.install',
@@ -135,6 +136,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'workspaces.previewAdd': 'read',
     // One folder of the host, for every file and folder picker (main/host-fs.ts); a guest only inside its workspace(s).
     'host.listDir': 'read',
+    // The folder picker's New folder (2026-10-22): a folder made on the host's disk — a write, and owner-only on a host.
+    'host.mkdir': 'write',
     'workspaces.confirmAdd': 'write',
     'workspaces.create': 'write',
     'workspaces.previewAddFromGit': 'read',

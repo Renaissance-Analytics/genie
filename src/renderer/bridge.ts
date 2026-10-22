@@ -140,7 +140,7 @@ export interface GenieBridge {
     /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */
     browserWindow?: { open(address?: string, hosts?: readonly string[]): Promise<{ ok: true } | { ok: false; error: string }> };
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
-    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
+    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
     tynnNetwork?: TynnNetworkBridge;
     /**
