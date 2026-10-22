@@ -38,6 +38,8 @@ import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
 import { bindingsFrom } from '../core/hotkeys.js';
 import type { WorkspaceFault } from '../core/dashboard-view.js';
+import { answeringFor, refusalFor, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
+import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
@@ -118,14 +120,20 @@ export interface ShellProps {
     pinned: PinnedPanel | null;
     onNavigate: (route: string) => void;
     onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void;
-    /** `null` unless an answer is in flight, so the buttons can refuse a second press. */
-    answeringApproval: string | null;
+    /**
+     * The answer in flight — which agent's, for which approval (core/approval-answering.ts). Each card derives its OWN
+     * `answering` from this, so only the approval being answered refuses a second press; a window-wide string disabled
+     * every approval after the first for the life of the window (the owner, 2026-10-22).
+     */
+    answeringApproval: ApprovalAnswering | null;
+    /** The host's last refusal, said on the card of the approval it refused. */
+    approvalRefusal?: ApprovalRefusal | null | undefined;
     /**
      * Answer a parked approval of THIS agent — the Agent view's or the chat's, which can be different agents (the chat
      * follows the view; it used to be answered with the route's agent, so on a workspace page a chat approval went nowhere).
      * `note`: the person's words with the answer (beta.33 item 16).
      */
-    onAnswerApproval: (agentId: string, optionId: string, note?: string) => void;
+    onAnswerApproval: (agentId: string, optionId: string, note?: string, approval?: Approval | null) => void;
     /** Answering from the DECK names its agent, because the route is not on that agent. */
     /** An inline answer on a Deck item. The ITEM travels, because which channel it takes is decided by its id. */
     onAnswerDeckItem: (item: DeckItem, optionId: string, note?: string) => void;
@@ -303,6 +311,7 @@ export function Shell({
     onRestartAndSend,
     onDiscardDraft,
     answeringApproval,
+    approvalRefusal = null,
     onAnswerApproval,
     onAnswerDeckItem,
     onAnswerDeckForm,
@@ -609,8 +618,9 @@ export function Shell({
                                 range={parsed.range}
                                 onRange={(next) => onNavigate(formatRoute({ ...parsed, range: next }))}
                                 onTakeOver={onTakeOver}
-                                answeringApproval={answeringApproval}
-                                onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note)}
+                                answeringApproval={answeringFor(answeringApproval, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
+                                approvalRefusal={refusalFor(approvalRefusal, agentDetail.agent.id, agentDetail.session?.pendingApproval ?? null)}
+                                onAnswerApproval={(optionId, note) => onAnswerApproval(agentDetail.agent.id, optionId, note, agentDetail.session?.pendingApproval ?? null)}
                                 ops={agentDetail.agent.fidelity === 'declared' ? agentOps : undefined}
                                 files={files}
                                 workspace={workspaceFor(snapshot.agents.find((a) => a.id === agentDetail.agent.id)?.workspaceId ?? '') ?? undefined}
@@ -762,8 +772,9 @@ export function Shell({
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
                         approval={chatApproval}
                         commands={chatSession?.extensions?.commands ?? null}
-                        answeringApproval={answeringApproval}
-                        onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note); }}
+                        answeringApproval={chatThread ? answeringFor(answeringApproval, chatThread.agentId, chatApproval) : null}
+                        approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}
+                        onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
                         scope={scope}
                         onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).

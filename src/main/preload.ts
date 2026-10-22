@@ -106,9 +106,8 @@ const bridge: PreloadBridge = {
         void ipcRenderer.invoke('genie:add-agent', workspaceId);
     },
 
-    answerApproval: (agentId, optionId, note) => {
-        void ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '');
-    },
+    // The host's reply comes back: `ok` ends the answer's flight, a refusal is said on the card (core/approval-answering.ts).
+    answerApproval: (agentId, optionId, note) => ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '') as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     restartWithHandoff: (agentId, finishedId) =>
         ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,

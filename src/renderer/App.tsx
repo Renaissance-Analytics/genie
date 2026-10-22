@@ -5,7 +5,7 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
@@ -23,6 +23,8 @@ import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
+import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
+import type { Approval } from '../core/approval.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
@@ -379,7 +381,8 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const connected = remote.state?.connected === true;
     const bridge = connected ? remote.client!.bridge : undefined;
     const snapshot = useSnapshot(bridge);
-    const [answering, setAnswering] = useState<string | null>(null);
+    // The option id in flight (the phone shows one agent's one question at a time); ended by the host's reply, always.
+    const [inFlight, setInFlight] = useState<string | null>(null);
     const [note, setNote] = useState<string | null>(null);
     const dialed = useRef(false);
     const canDial = entry.pin !== null || remote.remembered.includes(entry.socketUrl);
@@ -436,7 +439,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             locked={remote.state.locked}
             refusal={note ?? remote.state.lastRefusal}
             items={snapshot.deckItems}
-            answering={answering}
+            answering={inFlight}
             onAnswer={(item, optionId, answerNote) => {
                 setNote(null);
                 const route = deckAnswerRoute(item, optionId, answerNote ?? '');
@@ -451,12 +454,13 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                         void bridge!.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
                         return;
                     case 'provider':
-                        setAnswering(optionId);
-                        bridge!.answerApproval(route.agentId, optionId, route.note);
+                        // The host's reply ends the flight; its refusal is said in the shell (it used to be set and never cleared here too).
+                        setInFlight(optionId);
+                        void bridge!.answerApproval(route.agentId, optionId, route.note).then((r) => { if (!r.ok) setNote(refusalWords(r)); }, (error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
                         return;
                     case 'feature':
-                        setAnswering(optionId);
-                        void bridge!.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setAnswering(null));
+                        setInFlight(optionId);
+                        void bridge!.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
                         return;
                 }
             }}
@@ -936,6 +940,35 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
+
+    /**
+     * THE ANSWER IN FLIGHT — which agent's, for which approval — and the host's last refusal (`core/approval-answering.ts`).
+     * Every surface (the Agent view's card, the chat's card, the Deck's rows, the A/D keys) answers through
+     * `answerApproval`, and each card derives its OWN `answering` from this pair, so only the approval being answered
+     * refuses a second press. The flight ENDS on the host's reply: `ok` clears it; a refusal clears it AND is said on
+     * that approval's card in words.
+     *
+     * It used to be one window-wide `answering: string | null`, set on every path and cleared by nothing — the comment
+     * promised "cleared when the agent's detail changes", and no code did it — so the first approval answered in a window
+     * disabled every one after it, for the life of the window (the owner, 2026-10-22: "I have agents trying to do work
+     * and ask for approval from me but I can't approve anything because the UI is disabled"). And the host's `ok: false`
+     * went nowhere, so a refused press looked exactly like that dead button.
+     */
+    const [answering, setAnswering] = useState<ApprovalAnswering | null>(null);
+    const [approvalRefusal, setApprovalRefusal] = useState<ApprovalRefusal | null>(null);
+    const answerApproval = useCallback((agentId: string, optionId: string, note: string, approval: Approval | null) => {
+        const key = approvalKey(approval);
+        const flight: ApprovalAnswering = { agentId, key, optionId };
+        setAnswering(flight);
+        setApprovalRefusal(null);
+        const sent = resolvedBridge ? resolvedBridge.answerApproval(agentId, optionId, note) : Promise.resolve<{ ok: false; reason: string }>({ ok: false, reason: 'Genie is not connected' });
+        void sent.then(
+            (r) => { if (!r.ok) setApprovalRefusal({ agentId, key, reason: refusalWords(r) }); },
+            // Electron wraps a handler's throw as "Error invoking remote method '<channel>': Error: <reason>".
+            (error: unknown) => setApprovalRefusal({ agentId, key, reason: refusalWords({ ok: false, reason: (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '') }) }),
+        ).finally(() => setAnswering((current) => (current === flight ? null : current)));
+    }, [resolvedBridge]);
+
     // The chat's keys (§4.4, `core/keys.ts`): A / D answer the approval parked in the chat — the letters follow the
     // composer. Never while typing. Esc does not close the docked chat.
     // The chat is always open (on its subject), so its keys work on every page — not only one whose route names `chat=`.
@@ -948,20 +981,12 @@ function DesktopApp({ bridge }: AppProps) {
             const optionId = approvalChoice(chatApprovalHere, action);
             if (!optionId || !chatDetail) return;
             e.preventDefault();
-            setAnswering(optionId);
-            resolvedBridge?.answerApproval(chatDetail.agent.id, optionId);
+            answerApproval(chatDetail.agent.id, optionId, '', chatApprovalHere);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [chatDetail, chatApprovalHere, resolvedBridge]);
+    }, [chatDetail, chatApprovalHere, answerApproval]);
 
-    /**
-     * The option id currently in flight, so the buttons refuse a second press.
-     *
-     * Cleared when the agent's detail changes — which is when the main process has pushed the
-     * answered state back. Clearing it on a timer would guess at when the provider replied.
-     */
-    const [answering, setAnswering] = useState<string | null>(null);
     /**
      * The last REFUSED form answer in Pending Questions, said beside that item's Answer button (the owner, 2026-10-14: "I
      * click the answer button but nothing happens" — a refusal that only reached the console was nothing happening).
@@ -1189,10 +1214,8 @@ function DesktopApp({ bridge }: AppProps) {
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
             answeringApproval={answering}
-            onAnswerApproval={(id, optionId, note) => {
-                setAnswering(optionId);
-                resolvedBridge?.answerApproval(id, optionId, note ?? '');
-            }}
+            approvalRefusal={approvalRefusal}
+            onAnswerApproval={(id, optionId, note, approval) => answerApproval(id, optionId, note ?? '', approval ?? null)}
             onAnswerDeckForm={(item, selections, notes) => {
                 // The filled form goes to main as one feature action — labels and one note per question; the form shows
                 // no overall note. A refusal (a question with neither an option nor a note, a label that is not an
@@ -1229,8 +1252,8 @@ function DesktopApp({ bridge }: AppProps) {
                         });
                         return;
                     case 'provider':
-                        setAnswering(optionId);
-                        resolvedBridge?.answerApproval(route.agentId, optionId, route.note);
+                        // A Deck row holds no approval to compare: the flight is keyed on the agent (one parked at a time).
+                        answerApproval(route.agentId, optionId, route.note, null);
                         return;
                 }
             }}

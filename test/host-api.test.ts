@@ -32,7 +32,7 @@ function fakes() {
             cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
             resumeLimit: (provider) => { calls.push(`resume-limit:${provider}`); },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
-            answerApproval: (id, opt, note) => { calls.push(`approve:${id}:${opt}${note ? `:${note}` : ''}`); return true; },
+            answerApproval: (id, opt, note) => { calls.push(`approve:${id}:${opt}${note ? `:${note}` : ''}`); return { ok: true as const }; },
             subscribe: (cb) => { listeners.agent.add(cb); return () => listeners.agent.delete(cb); },
         },
         registerAgent: async (workspaceId) => { calls.push(`register:${workspaceId}`); return { id: 'agent_new' }; },

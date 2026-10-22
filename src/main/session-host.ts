@@ -273,6 +273,9 @@ export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionI
 /** How long the picker waits for a provider's model list. Claude answered in about a second (prism-acp's measurement). */
 const MODEL_LIST_TIMEOUT_MS = 20_000;
 
+/** `answerApproval`'s refusal when the session holds no request: a second press, a turn that ended, a request Codex withdrew. */
+const NOTHING_PARKED = 'nothing is waiting for an answer — it was already answered, or the turn ended';
+
 /**
  * HOW GENIE ASKS A PROVIDER FOR ITS MODELS (prism-acp 0.22 `listModels`): the SAME binary — and, for a configured
  * script, the same interpreter and `ELECTRON_RUN_AS_NODE` — an agent of that provider launches with
@@ -869,17 +872,21 @@ export class SessionHost {
     /**
      * Answer a parked approval, with the provider's own option id.
      *
-     * Returns false when there was nothing parked or the id was not offered — the session
-     * checks, because the renderer is not trusted to send back a valid one.
+     * Refuses, WITH THE REASON, when the agent is not running, nothing is parked, or the id was not offered — the
+     * session checks the id, because the renderer is not trusted to send back a valid one. The reason is for the card:
+     * a bare `false` reached the console only, and a refused press looked like a dead button (the owner, 2026-10-22).
      */
-    answerApproval(agentId: AgentId, optionId: string, note = ''): boolean {
+    answerApproval(agentId: AgentId, optionId: string, note = ''): { ok: true } | { ok: false; reason: string } {
         const entry = this.#running.get(agentId);
-        if (!entry) return false;
+        if (!entry) return { ok: false, reason: 'this agent is not running' };
+        const parked = entry.session.pendingApproval;
+        if (!parked) return { ok: false, reason: NOTHING_PARKED };
+        if (!parked.options.some((o) => o.id === optionId)) return { ok: false, reason: `“${optionId}” is not one of the options this request offered` };
 
         // The person's note, when there is one, reaches the agent after the answer (AgentSession.answerApproval, item 16).
-        const answered = entry.session.answerApproval(optionId, note);
-        if (answered) this.#emit(agentId);
-        return answered;
+        if (!entry.session.answerApproval(optionId, note)) return { ok: false, reason: NOTHING_PARKED };
+        this.#emit(agentId);
+        return { ok: true };
     }
 
     /** A message that must reach the agent, now or when its turn ends (AgentSession.deliver); false = no session. */

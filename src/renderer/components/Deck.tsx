@@ -1,6 +1,7 @@
 import { Badge, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import { QuestionForm } from './QuestionForm.js';
+import { answeringFor, type ApprovalAnswering } from '../../core/approval-answering.js';
 import {
     ageLabel,
     DAY_MS,
@@ -73,8 +74,8 @@ import { ApprovalCard } from './ApprovalCard.js';
 export interface DeckProps {
     items: readonly DeckItem[];
     signals: SignalState;
-    /** `null` unless an answer is in flight. */
-    answering: string | null;
+    /** The answer in flight, if any — which agent's (core/approval-answering.ts): only THAT agent's row refuses a second press. */
+    answering: ApprovalAnswering | null;
     /** `note`: the person's words with an approval's answer (beta.33 item 16); absent = none. */
     onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
     onOpenItem: (item: DeckItem) => void;
@@ -235,7 +236,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
                                     <span className="min-w-0 flex-1 text-[var(--fg-2)]">{item.title}</span>
                                 </div>
                                 {item.answer.kind === 'inline' ? (
-                                    <InlineOptions options={item.answer.options} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />
+                                    <InlineOptions options={item.answer.options} answering={answeringFor(answering, item.agentId ?? '', null)} onAnswer={(optionId) => onAnswer(item, optionId)} />
                                 ) : null}
                             </div>
                         ))}
@@ -247,7 +248,7 @@ export function Deck({ items, signals, answering, onAnswer, onOpenItem, onNaviga
 }
 
 interface RowProps {
-    answering: string | null;
+    answering: ApprovalAnswering | null;
     /** `note`: the person's words with an approval's answer (beta.33 item 16); absent = none. */
     onAnswer: (item: DeckItem, optionId: string, note?: string) => void;
     onOpenItem: (item: DeckItem) => void;
@@ -284,6 +285,9 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
     const dismissable = onDismiss !== undefined && isDismissable(item);
     const focused = item.id === focusId;
     const showForm = item.answer.kind === 'form' && questions !== null && (stale === undefined || opened);
+    // This row's own flight: an agent parks one approval at a time, so the agent is the identity (core/approval-answering.ts).
+    // Any other row stays live — one answer used to grey every row in the window for good.
+    const answeringHere = answeringFor(answering, item.agentId ?? '', null);
     return (
         <div
             ref={focused ? focusRef : undefined}
@@ -357,10 +361,10 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
              * never its text again in a monospace box.
              */}
             {item.answer.kind === 'inline' && item.source === 'agent-question' ? (
-                <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answering} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
+                <ApprovalCard approval={{ question: item.title, options: item.answer.options }} answering={answeringHere} onAnswer={(optionId, note) => onAnswer(item, optionId, note)} />
             ) : null}
             {item.answer.kind === 'inline' && item.source !== 'agent-question' ? (
-                <InlineOptions options={item.answer.options} answering={answering} onAnswer={(optionId) => onAnswer(item, optionId)} />
+                <InlineOptions options={item.answer.options} answering={answeringHere} onAnswer={(optionId) => onAnswer(item, optionId)} />
             ) : null}
 
             {/*
@@ -380,7 +384,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                     <QuestionForm
                         key={`${item.id}:${item.revision ?? 0}`}
                         item={item}
-                        answering={answering}
+                        answering={answeringHere}
                         refusal={formRefusal?.itemId === item.id ? formRefusal.reason : null}
                         onSubmit={(selections, notes) => onAnswerForm?.(item, selections, notes)}
                         onDismiss={dismissable ? (notes) => onDismiss?.(item, notes) : undefined}

@@ -34,7 +34,7 @@ export interface HostApiDeps {
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
     host: RestartPorts & {
-        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): boolean;
+        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id']): CancelOutcome;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
@@ -179,7 +179,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'answerApproval': {
                 const r = agent(args[0]);
-                return { ok: r !== null && deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') };
+                // The host's refusal, with its reason, goes back to the card that pressed (core/approval-answering.ts).
+                return r ? deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') : { ok: false, reason: 'unknown agent' };
             }
             case 'addAgent': {
                 const created = await deps.registerAgent(str(args[0]));
