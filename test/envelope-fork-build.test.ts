@@ -23,6 +23,14 @@ import type { WorkspaceOpsPorts } from '../src/main/workspace-ops-host.js';
  */
 
 const run = promisify(execFile);
+/**
+ * REAL GIT HAS ITS OWN BUDGET (beta.37's Windows release job, 2026-10-22: "each repo forked…" ran past vitest's 5 s
+ * default at 5019 ms — about twenty real git processes, and a process start costs far more on Windows). The other
+ * real-git suites carry the same kind of budget (create-workspace-first-commit, envelope-build). The fork wait itself
+ * never sleeps here (`sleep` is injected as a no-op), so this is git's time, not a hidden wait.
+ */
+const REAL_GIT_MS = 120_000;
+
 const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim();
 
 let dir: string;
@@ -134,7 +142,7 @@ describe('Fork: the forks are made and READY before the envelope is built, and t
         const manifest = JSON.parse(await readFile(join(b.path, 'project.json'), 'utf8')) as { repos: Array<{ name: string; url: string }> };
         expect(manifest.repos.map((r) => [r.name, r.url])).toEqual([['app', appFork], ['lib', libFork]]);
         expect(registered.size).toBe(1);
-    });
+    }, REAL_GIT_MS);
 
     it('a fork GitHub refuses: NOTHING is built — no folder, nothing registered — said in GitHub’s words, naming the fork already made', async () => {
         await bareRepo('app', 'app.txt');
@@ -150,14 +158,14 @@ describe('Fork: the forks are made and READY before the envelope is built, and t
         expect(reason).toMatch(/Example-Org\/app/);
         expect(await readdir(parent)).toEqual([]);
         expect(registered.size).toBe(0);
-    });
+    }, REAL_GIT_MS);
 
     it('not signed in to GitHub: refused before anything is written or forked', async () => {
         const b = await buildEnvelope(ops(), envWith(() => null), plan());
         expect(b.ok).toBe(false);
         expect(b.ok ? '' : b.reason).toMatch(/sign in to GitHub/i);
         expect(await readdir(parent)).toEqual([]);
-    });
+    }, REAL_GIT_MS);
 
     it('positive control: a plan with NO fork row never asks GitHub, signed in or not', async () => {
         const bare = await bareRepo('app', 'app.txt');
@@ -167,7 +175,7 @@ describe('Fork: the forks are made and READY before the envelope is built, and t
         expect(gh.events).toEqual([]);
         const unsigned = await buildEnvelope(ops(), envWith(() => null), plan({ name: 'second', repos: [{ name: 'app', url: bare, local: false }], forkInto: null }));
         expect(unsigned).toMatchObject({ ok: true });
-    });
+    }, REAL_GIT_MS);
 });
 
 describe('SSH → HTTPS for a clone (item 8): the credential’s URL is what git fetches', () => {
@@ -179,12 +187,12 @@ describe('SSH → HTTPS for a clone (item 8): the credential’s URL is what git
         await gitClone('git@github.com:ada/private.git', into, { url: bare, config: [], secrets: [] });
         expect((await readFile(join(into, 'secret.txt'), 'utf8')).trim()).toBe('private');
         expect(await git(into, 'remote', 'get-url', 'origin')).toBe(bare);
-    });
+    }, REAL_GIT_MS);
 
     it('positive control: with no URL in the auth, the given URL is the one cloned', async () => {
         const bare = await bareRepo('plain', 'plain.txt');
         const into = join(dir, 'clone2');
         await gitClone(bare, into, { config: [], secrets: [] });
         expect(await git(into, 'remote', 'get-url', 'origin')).toBe(bare);
-    });
+    }, REAL_GIT_MS);
 });
