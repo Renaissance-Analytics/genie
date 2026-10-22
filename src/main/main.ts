@@ -1101,10 +1101,14 @@ async function boot(): Promise<void> {
 
     ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
         const record = agentFromRenderer(raw);
-        if (!record || !host || typeof optionId !== 'string') return { ok: false };
+        // Every refusal names its reason: the card says it (core/approval-answering.ts). A bare `{ ok: false }` was a
+        // button that did nothing.
+        if (!record) return { ok: false, reason: 'Genie does not know this agent' };
+        if (!host) return { ok: false, reason: 'Genie’s agents are not running yet' };
+        if (typeof optionId !== 'string') return { ok: false, reason: 'no option was chosen' };
         // The session checks the id against the parked request. A refusal leaves the approval
         // parked, which is recoverable; answering with something meaningless is not.
-        return { ok: host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '') };
+        return host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '');
     });
 
     ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown) => {

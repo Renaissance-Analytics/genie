@@ -164,8 +164,10 @@ export interface AgentViewProps {
     cost: number | null;
     /** The agent the chat flyout is open on, from the route. Decides where an approval acts. */
     chatSubject?: string | null | undefined;
-    /** `null` unless an answer is in flight. */
+    /** The option id in flight for THIS agent's parked approval (core/approval-answering.ts); `null` = none. */
     answeringApproval?: string | null | undefined;
+    /** The host's refusal of the last answer to THIS approval, in words, for the card. */
+    approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onNavigate: (route: string) => void;
@@ -267,7 +269,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
+    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
@@ -892,6 +894,7 @@ export function AgentView({
                                 <ApprovalCard
                                     approval={approval}
                                     answering={answeringApproval ?? null}
+                                    refusal={approvalRefusal ?? null}
                                     onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                                     agentName={agent.name}
                                 />

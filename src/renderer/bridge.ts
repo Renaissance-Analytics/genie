@@ -202,8 +202,12 @@ export interface GenieBridge {
      * The id goes back over the wire verbatim and the main process checks it against the
      * request before sending it on — the renderer is not trusted to produce a valid one, and
      * a provider receiving an option it never offered is a protocol error at best.
+     *
+     * The host's reply ENDS the answer's flight (core/approval-answering.ts): `ok` = the session resolved the request;
+     * a refusal names its reason (nothing parked, an option not offered, the agent not running) and the card says it.
+     * Fire-and-forget left the card locked on a refusal nobody saw (the owner, 2026-10-22).
      */
-    answerApproval(agentId: string, optionId: string, note?: string): void;
+    answerApproval(agentId: string, optionId: string, note?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * "Restart with this" on a finish (§4.5): stop, start, and send the agent its own handoff note
      * as the first prompt; the finish is marked seen only when the prompt was taken. A refusal

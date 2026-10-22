@@ -183,7 +183,10 @@ export interface ChatFlyoutProps {
     onOpenMail?: ((messageId: string) => void) | undefined;
     /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
     commands?: readonly ProviderCommand[] | null | undefined;
+    /** The option id in flight for THIS chat's parked approval (core/approval-answering.ts); `null` = none. */
     answeringApproval?: string | null | undefined;
+    /** The host's refusal of the last answer to THIS approval, in words, for the card. */
+    approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
@@ -239,7 +242,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 }
 
 export function ChatFlyout({
-    thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
+    thread, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
     onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
@@ -569,6 +572,7 @@ export function ChatFlyout({
                     <ApprovalCard
                         approval={approval}
                         answering={answeringApproval ?? null}
+                        refusal={approvalRefusal ?? null}
                         onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                         agentName={thread?.name}
                     />

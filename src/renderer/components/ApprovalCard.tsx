@@ -30,8 +30,10 @@ const TONE: Record<OptionTone, string> = {
 
 export interface ApprovalCardProps {
     approval: Approval;
-    /** `null` while an answer is in flight, so the buttons can stop accepting a second press. */
+    /** The option id in flight for THIS approval (core/approval-answering.ts), so its buttons refuse a second press; `null` = none. */
     answering: string | null;
+    /** The host's refusal of the last answer to THIS approval, in words; said on the card, since a refusal only in the console is nothing happening. */
+    refusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16) — Genie delivers them to the agent; '' = none. */
     onAnswer: (optionId: string, note: string) => void;
     /** The asking agent, for the board's heading `atlas asks to run Bash`; without it the heading names the tool alone. */
@@ -51,7 +53,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
     return <ApprovalCardView {...props} note={note} onNote={setNote} />;
 }
 
-export function ApprovalCardView({ approval, answering, onAnswer, agentName, note, onNote }: ApprovalCardProps & { note: string; onNote: (note: string) => void }) {
+export function ApprovalCardView({ approval, answering, refusal = null, onAnswer, agentName, note, onNote }: ApprovalCardProps & { note: string; onNote: (note: string) => void }) {
     // The board's heading and meta, each only when the request reported the piece; the question itself always.
     const heading = approval.tool ? `${agentName ? `${agentName} asks` : 'asks'} to run ${approval.tool}` : null;
     const meta = approval.toolCallId ? `tool_call ${approval.toolCallId.replace(/^toolu_/, '').slice(0, 4)} · 1 of 1 pending` : null;
@@ -107,6 +109,8 @@ export function ApprovalCardView({ approval, answering, onAnswer, agentName, not
                     </button>
                 ))}
             </div>
+            {/* The host would not take the last answer: say why, here, where the press was. The buttons above are live again. */}
+            {refusal ? <div data-approval-refusal="" role="alert" className="mt-2 text-xs text-[var(--danger)]">{refusal}</div> : null}
         </div>
     );
 }
