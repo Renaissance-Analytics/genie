@@ -15,6 +15,7 @@ import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
+import { tynnMcpServersOnDisk } from './tynn-agent-token.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
@@ -869,7 +870,13 @@ async function boot(): Promise<void> {
          */
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
-        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        // A CODEX session also gets the Tynn server Genie wrote into its workspace (#1098), so the session can approve it
+        // (codexOptionsFor approves every server in this list; prism only lets it approve a server it was given). Claude
+        // reads `.mcp.json` itself and runs Genie's tools unasked, so it is given nothing it does not already have.
+        mcpServersFor: (record) => [
+            ...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+            ...(record.provider === 'codex' ? tynnMcpServersOnDisk(cwdFor(record), (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }) : []),
+        ],
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
         onThreadId: (agentId, threadId) => {

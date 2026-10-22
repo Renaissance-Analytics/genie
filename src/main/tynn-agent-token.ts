@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import type { McpServer } from '@particle-academy/prism-acp';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import type { SyncFlags, SyncFs } from './config-sync-targets.js';
 
@@ -88,6 +89,19 @@ function fromToml(text: string | null): TynnMcp | null {
     const url = /^url = "([^"]+)"$/m.exec(block)?.[1];
     const token = literalBearer(/Authorization = "([^"]+)"/.exec(block)?.[1]);
     return url && token ? { url, token } : null;
+}
+
+/**
+ * THE TYNN SERVER A SESSION STARTS WITH (2026-10-22): the one config sync wrote into the workspace (`.codex/config.toml`
+ * — or the Claude / Cursor config, same token), read back, as a session `mcpServers` entry beside Genie's own. Codex loads
+ * `[mcp_servers.tynn]` from the file on its own, but asks before its tools run, and a session can only approve a server it
+ * was GIVEN (prism-acp: `mcpToolApproval names "tynn", which is not one of the MCP servers given`) — so it is given, the
+ * way `genie` is. Nothing is minted here; `read` is synchronous because a session starts synchronously. None = [].
+ */
+export function tynnMcpServersOnDisk(workspacePath: string, read: (path: string) => string | null): McpServer[] {
+    const at = (...parts: string[]) => join(workspacePath, ...parts).replace(/\\/g, '/');
+    const mcp = fromJson(read(at('.mcp.json'))) ?? fromJson(read(at('.cursor', 'mcp.json'))) ?? fromToml(read(at('.codex', 'config.toml')));
+    return mcp ? [{ type: 'http', name: TYNN_SERVER_KEY, url: mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${mcp.token}` }] }] : [];
 }
 
 /** The Tynn token a sync already wrote into any of the three configs, or null. */
