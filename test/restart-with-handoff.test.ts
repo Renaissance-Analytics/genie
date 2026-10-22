@@ -20,6 +20,7 @@ function ports(over: Partial<RestartPorts> = {}) {
     const seen: string[] = [];
     const p: RestartPorts = {
         stop: (id) => { calls.push(`stop:${id}`); return true; },
+        ended: async (id) => { calls.push(`ended:${id}`); return null; },
         start: (r) => { calls.push(`start:${r.id}`); return { ok: true }; },
         prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
         ...over,
@@ -35,31 +36,31 @@ describe('the handoff prompt', () => {
 });
 
 describe('restartWithHandoff', () => {
-    it('stops, starts, prompts with the handoff, then marks the finish seen — in that order', () => {
+    it('stops, starts, prompts with the handoff, then marks the finish seen — in that order', async () => {
         const f = ports();
-        expect(restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: true });
-        expect(f.calls).toEqual(['stop:agent_a', 'start:agent_a', `prompt:agent_a:${handoffPrompt(fin.handoff!)}`]);
+        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: true });
+        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a', `prompt:agent_a:${handoffPrompt(fin.handoff!)}`]);
         expect(f.seen).toEqual(['fin_1']);
     });
 
-    it('a finish that is not this agent’s, or has no handoff, is refused before anything is touched', () => {
+    it('a finish that is not this agent’s, or has no handoff, is refused before anything is touched', async () => {
         const f = ports();
-        expect(restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_other')).toEqual({ ok: false, reason: 'no handoff fin_other for atlas' });
-        expect(restartWithHandoff(f.p, { finished: () => [{ ...fin, handoff: null }], markSeen: f.attention.markSeen }, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
+        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_other')).toEqual({ ok: false, reason: 'no handoff fin_other for atlas' });
+        expect(await restartWithHandoff(f.p, { finished: () => [{ ...fin, handoff: null }], markSeen: f.attention.markSeen }, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
         expect(f.calls).toEqual([]);
         expect(f.seen).toEqual([]);
     });
 
-    it('a start the host refuses is reported with the host’s reason and the finish stays on the Deck', () => {
+    it('a start the host refuses is reported with the host’s reason and the finish stays on the Deck', async () => {
         const f = ports({ start: () => ({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' }) });
-        expect(restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' });
-        expect(f.calls).toEqual(['stop:agent_a']);
+        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' });
+        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a']);
         expect(f.seen).toEqual([]);
     });
 
-    it('a prompt the session does not take is reported and the finish stays on the Deck', () => {
+    it('a prompt the session does not take is reported and the finish stays on the Deck', async () => {
         const f = ports({ prompt: () => false });
-        expect(restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'atlas started but did not take the handoff prompt' });
+        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'atlas started but did not take the handoff prompt' });
         expect(f.seen).toEqual([]);
     });
 });
