@@ -34,22 +34,33 @@ async function threadStartConfig(servers: readonly McpServer[]): Promise<Record<
     return (params as unknown as { config?: Record<string, unknown> }).config;
 }
 
-describe('Codex runs Genie’s tools without asking — Genie’s server only', () => {
+describe('Codex runs Genie’s tools without asking — every server Genie passes it', () => {
     it('Genie’s server is approved: Codex gets default_tools_approval_mode "approve" for genie', async () => {
         const config = await threadStartConfig(genie);
         expect((config as { mcp_servers: Record<string, Record<string, unknown>> }).mcp_servers.genie!.default_tools_approval_mode).toBe('approve');
     });
 
-    it('any other server keeps Codex’s own default (CONTROL: same session, genie approved, other untouched)', async () => {
-        const servers = (await threadStartConfig([...genie, other]) as { mcp_servers: Record<string, Record<string, unknown>> }).mcp_servers;
+    /*
+     * EVERY SERVER GENIE PASSES IS GENIE'S OWN, AND IS APPROVED (2026-10-22). The list reaches here from `mcpServersFor`
+     * alone — Genie's `genie` server and the `tynn` server Genie itself wrote into the workspace (#1098) — so approving
+     * "genie only" declined the other one Genie had just handed the agent. prism-slave's ledger, 2026-10-22 20:56:36Z:
+     * `Codex asked "tynn" for an answer this driver cannot give (form): Allow the tynn MCP server to run tool "project"?.
+     * Declined. Set mcpToolApproval for "tynn" to let its tools run without asking.` A server a person wrote by hand lives
+     * in Codex's own config.toml, is never in this list, and keeps Codex's default (prism-acp refuses an approval naming a
+     * server it was not given, so a name outside the list cannot even be said here).
+     */
+    it('the tynn server Genie wrote for the agent is approved too — every server in the list is (the ledger case)', async () => {
+        const tynn: McpServer = { type: 'http', name: 'tynn', url: 'https://tynn.ai/mcp', headers: [{ name: 'Authorization', value: 'Bearer t' }] };
+        expect(codexOptionsFor(record(), '/w', null, [...genie, tynn]).mcpToolApproval).toEqual({ genie: 'approve', tynn: 'approve' });
+        const servers = (await threadStartConfig([...genie, tynn]) as { mcp_servers: Record<string, Record<string, unknown>> }).mcp_servers;
         expect(servers.genie!.default_tools_approval_mode).toBe('approve');
-        expect(servers.other).toBeDefined();
-        expect(servers.other!).not.toHaveProperty('default_tools_approval_mode');
+        expect(servers.tynn!.default_tools_approval_mode).toBe('approve');
+        // The list is the contract: whatever Genie passes under any name is Genie's to approve.
+        expect(codexOptionsFor(record(), '/w', null, [other]).mcpToolApproval).toEqual({ other: 'approve' });
     });
 
-    it('no Genie server (no MCP endpoint): no approval at all — prism refuses one naming a server it was not given', () => {
+    it('no server (no MCP endpoint): no approval at all — prism refuses one naming a server it was not given', () => {
         expect(codexOptionsFor(record(), '/w', null, [])).not.toHaveProperty('mcpToolApproval');
-        expect(codexOptionsFor(record(), '/w', null, [other])).not.toHaveProperty('mcpToolApproval');
         expect(() => new CodexDriver(codexOptionsFor(record(), '/w', null, []))).not.toThrow();
     });
 

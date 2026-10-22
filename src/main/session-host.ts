@@ -255,18 +255,24 @@ export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSession
 
 /**
  * A Codex agent's driver options (Tynn #797). Codex asks before an MCP server's tools run, and a session has nobody to
- * answer, so Genie's tools were declined on every call. Genie's OWN server is approved (`default_tools_approval_mode`
- * through prism-acp's `mcpToolApproval`), as a Claude agent already runs them unasked: each Genie tool that acts for the
- * person gates itself. No other server is touched, and with no Genie server there is nothing to approve (prism refuses
- * an approval naming a server it was not given). The chosen model goes on thread/start and thread/resume; none = Codex's own.
+ * answer, so Genie's tools were declined on every call. EVERY server in `mcpServers` is approved
+ * (`default_tools_approval_mode` through prism-acp's `mcpToolApproval`), as a Claude agent already runs them unasked.
+ *
+ * WHY every server and not `genie` alone (2026-10-22): the list comes from `mcpServersFor` only — Genie's own `genie`
+ * server and the `tynn` server Genie itself wrote into the workspace for the agent (#1098) — so each one is Genie's to
+ * approve, and each Genie/Tynn tool that acts for the person gates itself. Approving `genie` alone declined the other
+ * one Genie had just handed the agent; prism-slave's ledger, 2026-10-22 20:56:36Z: `Codex asked "tynn" for an answer this
+ * driver cannot give (form): Allow the tynn MCP server to run tool "project"?. Declined. Set mcpToolApproval for "tynn"
+ * to let its tools run without asking.` A server a person wrote by hand lives in Codex's own config.toml, is never in
+ * this list, and keeps Codex's default — prism refuses an approval naming a server it was not given, so with no servers
+ * there is nothing to approve. The chosen model goes on thread/start and thread/resume; none = Codex's own.
  */
-export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: { genie: 'approve' } } {
+export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: Record<string, 'approve'> } {
     return {
         cwd,
         ...(resumeSessionId ? { resumeSessionId } : {}),
         ...(record.model ? { model: record.model } : {}),
-        ...(mcpServers.length > 0 ? { mcpServers } : {}),
-        ...(mcpServers.some((s) => s.name === 'genie') ? { mcpToolApproval: { genie: 'approve' as const } } : {}),
+        ...(mcpServers.length > 0 ? { mcpServers, mcpToolApproval: Object.fromEntries(mcpServers.map((s) => [s.name, 'approve' as const])) } : {}),
     };
 }
 
