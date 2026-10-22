@@ -1,5 +1,5 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
-import { listHostDir } from './host-fs.js';
+import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
 import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
@@ -344,6 +344,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.features.act(args[0] as FeatureAction);
             case 'host.listDir':
                 return listHostDir(str(args[0]));
+            case 'host.mkdir':
+                return makeHostDir(str(args[0]), str(args[1]));
             case 'updates.state':
                 return deps.updates?.state() ?? null;
             case 'updates.check':

@@ -1,22 +1,49 @@
 name: release
 
-# THE ONE DOOR OUT OF THIS REPOSITORY.
+# THE ONE DOOR OUT OF THIS REPOSITORY — and it only ever opens onto a DRAFT.
 #
 # Runs for a `v*` tag and nothing else. A push to `main` builds in ci.yml and publishes
 # nothing; a tag is the owner's deliberate, approved act, and this workflow is what that act
-# triggers. `test/release-workflow.test.ts` holds every rule below.
+# triggers. `test/release-workflow.test.ts` and `test/release-draft.test.ts` hold every rule below.
+#
+# DRAFT FIRST (the owner, 2026-10-22: "why the fuck was beta 38 published with no release notes and how was this able
+# to get past our CI?"). Until then each platform job published straight into a PUBLIC prerelease and the notes came
+# after: beta.38 was public with an empty body for ~7 minutes, and beta.35 and beta.37 — whose Windows job failed, so
+# the notes job never ran — are public with empty bodies and Linux-only assets. Now:
+#
+#   1. guard    the tag names package.json's version and docs/releases/<tag>.md exists; then it creates the ONE draft
+#               for the tag (prerelease flag by the tag, body = that file), or reuses a draft a previous run made, and
+#               REFUSES if the tag's release is already public.
+#   2. publish  each platform (matrix) builds and uploads into that draft. electron-publish's GitHubPublisher
+#               (getOrCreateRelease) returns an existing DRAFT for the tag whatever the publish type, and EP_DRAFT —
+#               read first, before EP_PRE_RELEASE and the config's releaseType — makes any release it would CREATE a
+#               draft too. electron-builder.yml says `releaseType: draft` as well.
+#   3. verify   runs only when EVERY platform job succeeded (`needs: publish` covers every matrix leg). It writes the
+#               notes from docs/releases/<tag>.md again and reads the draft back: still a draft, notes non-empty with
+#               "## What's new", every updater file present (Windows setup.exe + .blockmap + latest.yml; Linux
+#               AppImage + latest-linux.yml), prerelease flag as the tag says (src/core/release-check.ts).
+#
+# If any platform fails, nothing is public: the draft is invisible to every installed Genie (electron-updater reads the
+# public releases.atom feed and /releases/latest, and a draft's assets are not downloadable without a token).
+#
+# PUBLISHING IS THE OWNER'S STEP, NEVER THIS WORKFLOW'S. After `verify` is green and the owner has approved this exact
+# version, he publishes it with his own gh:
+#
+#     gh release edit <tag> -R Renaissance-Analytics/genie --draft=false
+#
+# That `release: published` event runs release-published.yml, which closes the issues the release ships.
 #
 # WHERE IT PUBLISHES: THIS repository, `Renaissance-Analytics/genie` — the owner/repo inside every
 # installed Genie's `app-update.yml` (0.7.0-beta.342 and 2.0.0-beta.4 alike), where an installed
 # copy looks and nowhere else. Genie 2's code moved here from genie2 (the owner, 2026-10-16), so
 # the publish uses this repository's own `GITHUB_TOKEN`, with `contents: write` on the jobs that
-# publish. There is no cross-repo token.
+# write the release. There is no cross-repo token.
 #
 # The publish target itself (owner, repo) is electron-builder.yml's `publish` block — one place,
-# held by test/upgrade.test.ts. The RELEASE TYPE follows the tag (the owner, 2026-10-12: "stable
-# and dev update channels"): `v2.0.0-beta.20` publishes as a prerelease, which only the dev
-# channel sees; a plain `v2.0.0` publishes as a full release, which stable (and dev) see.
-# test/update-channels.test.ts holds the `case` below to `releaseTypeForTag`.
+# held by test/upgrade.test.ts. The PRERELEASE FLAG follows the tag (the owner, 2026-10-12: "stable
+# and dev update channels"): `v2.0.0-beta.20` is a prerelease, which only the dev channel sees; a
+# plain `v2.0.0` is a full release, which stable (and dev) see. test/update-channels.test.ts holds
+# the `case` in guard to `releaseTypeForTag`.
 
 on:
   push:
@@ -28,8 +55,10 @@ permissions:
 
 jobs:
   guard:
-    name: the tag names the version in package.json
+    name: the tag names the version in package.json, and its draft exists
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - name: compare
@@ -47,9 +76,29 @@ jobs:
             echo "::error::docs/releases/v$tag.md is missing or empty — write the release notes (what is in, known limitations, how it was verified) before tagging"
             exit 1
           fi
+      # The ONE draft every platform uploads into. Created here, once, before any build: two platform jobs that each
+      # created their own would make two drafts for the same tag (drafts do not collide on a tag name).
+      - name: create the draft
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          case "$tag" in *-*) prerelease=--prerelease ;; *) prerelease= ;; esac
+          # gh finds a draft by its pending tag name too (cli/cli pkg/cmd/release/shared/fetch.go, fetchDraftRelease).
+          existing="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [ "$existing" = "false" ]; then
+            echo "::error::$GITHUB_REF_NAME already has a release and it is already public — this workflow only builds drafts; nothing was changed"
+            exit 1
+          elif [ "$existing" = "true" ]; then
+            echo "reusing the draft for $GITHUB_REF_NAME (a previous run made it)"
+            gh release edit "$GITHUB_REF_NAME" --notes-file "docs/releases/$GITHUB_REF_NAME.md"
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag $prerelease --title "$tag" --notes-file "docs/releases/$GITHUB_REF_NAME.md"
+          fi
 
   publish:
-    name: build and publish (${{ matrix.os }})
+    name: build and upload into the draft (${{ matrix.os }})
     needs: guard
     permissions:
       contents: write
@@ -68,10 +117,9 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
-      # electron-builder creates (or reuses) the GitHub release for this tag on the repository
-      # named in electron-builder.yml, uploads the installer, its blockmap and latest*.yml, and
-      # marks it a prerelease or a full release by the tag (the publish step). There is no macOS job: macOS support is
-      # dropped for now (owner, 2026-10-11); the `mac` block in electron-builder.yml stays for when it returns.
+      # electron-builder finds the draft guard made for this tag on the repository named in
+      # electron-builder.yml and uploads the installer, its blockmap and latest*.yml into it. There is no macOS job:
+      # macOS support is dropped for now (owner, 2026-10-11); the `mac` block in electron-builder.yml stays for when it returns.
       - name: fetch the pinned Caddy runtime
         run: npx tsx scripts/fetch-caddy.ts
 
@@ -81,42 +129,35 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # electron-builder.yml defaults to `releaseType: prerelease`; a plain tag overrides it to
-        # `release` so the stable channel (allowPrerelease false) is offered it.
+          # electron-publish reads EP_DRAFT before anything else: whatever it creates is a draft. It never un-drafts
+          # the draft it finds. test/release-draft.test.ts refuses EP_PRE_RELEASE and any public releaseType here.
+          EP_DRAFT: 'true'
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          case "$tag" in *-*) type=prerelease ;; *) type=release ;; esac
-          echo "publishing v$tag as a $type"
-          npx electron-builder --publish always --config.publish.releaseType=$type
+          echo "uploading v$tag into its draft"
+          npx electron-builder --publish always
 
-  notes:
-    name: write the release notes into the GitHub release
+  verify:
+    name: write the notes and verify the draft (it stays a draft)
+    # Every platform leg of `publish` must succeed; a failed or cancelled leg skips this job, and the draft stays a draft.
     needs: publish
     permissions:
       contents: write
-      # close on ship: tell each issue this release fixes, and close it (scripts/close-shipped.ts)
-      issues: write
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          # every tag and commit: the issues shipped are those named since the previous release
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      # electron-builder created the release on this repository (electron-builder.yml publish block);
-      # the body comes from docs/releases/v<version>.md, with the same token. The
-      # release keeps the type the publish step gave it (prerelease or full release, by the tag);
-      # whether it is a draft is the owner's call after this runs.
-      - name: set the body
+      # The body comes from docs/releases/v<version>.md (written by guard already; again here so the file at this
+      # commit is what the draft says), then the draft is read back and checked (src/core/release-check.ts).
+      - name: write the notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --notes-file "docs/releases/${{ github.ref_name }}.md"
-      # CLOSE ON SHIP (the owner's choice, 2026-10-21): a merge is not a release, so an issue a merged fix names is
-      # only shipped now. Every issue a commit since the previous release says it fixes or closes is told
-      # "Shipped in <tag>" and closed if still open (src/core/shipped-issues.ts). Never fails the release.
-      - name: close what this release ships
+      - name: verify notes, assets and flags
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx --yes tsx@4.23.15 scripts/close-shipped.ts "${{ github.ref_name }}"
+        run: |
+          gh release view "${{ github.ref_name }}" --repo "${{ github.repository }}" --json tagName,isDraft,isPrerelease,body,assets > release.json
+          npx --yes tsx@4.23.15 scripts/verify-release-draft.ts "${{ github.ref_name }}" release.json

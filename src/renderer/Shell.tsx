@@ -409,7 +409,7 @@ export function Shell({
                 paletteKey={bindingsFrom(features.settings.values).commandWindow ?? undefined}
                 update={updateChip(updateState)}
                 version={features.version ?? null}
-                onOpenUpdate={() => setUpdateOpen(true)}
+                onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
             />

@@ -74,7 +74,9 @@ describe('the capability table', () => {
         // `workspaces.adoptAgent` (a write) — owner-only on a host.
         // 76 since `workspaces.githubRepos` (Import from Git's browser, Add workspace parity item 8): a read of what the
         // HOST's GitHub sign-in reaches — owner-only, like the import it feeds.
-        expect(REMOTE_METHODS.length).toBe(76);
+        // 77 since `host.mkdir` (the folder picker's New folder, 2026-10-22): a write on the host's disk — owner-only.
+        expect(REMOTE_METHODS.length).toBe(77);
+        expect(capabilityOf('host.mkdir')).toBe('write');
         expect(capabilityOf('workspaces.githubRepos')).toBe('read');
         expect(capabilityOf('workspaces.tynnOwnerOptions')).toBe('read');
         expect(capabilityOf('workspaces.createTynnProject')).toBe('write');

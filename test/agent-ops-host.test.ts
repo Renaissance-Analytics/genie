@@ -37,6 +37,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${r.threadId}:${cwd}`); return { ok: true }; },
             stop: (id) => { calls.push(`stop:${id}`); return true; },
+            ended: async (id) => { calls.push(`ended:${id}`); return null; },
             probe: () => over.probe ?? null,
         },
         cwdFor: () => '/w/tynn',
@@ -55,7 +56,7 @@ describe('restart', () => {
     it('graceful: stops and starts with the SAME thread; refused when there is no thread or the agent is wedged — never a silent new chat', async () => {
         const f = fakes();
         expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
-        expect(f.calls).toEqual(['stop:agent_a', 'start:agent_a:sess-1:/w/tynn']);
+        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:sess-1:/w/tynn']);
 
         const none = fakes({ record: record({ threadId: null }) });
         expect(await restartAgent(none.ports, 'agent_a', 'graceful')).toMatchObject({ ok: false, reason: expect.stringMatching(/no conversation to resume/) });
@@ -65,10 +66,10 @@ describe('restart', () => {
         expect(await restartAgent(wedged.ports, 'agent_a', 'graceful')).toMatchObject({ ok: false, reason: expect.stringMatching(/only a fresh restart/) });
     });
 
-    it('fresh: clears the thread FIRST, then starts with none; works on a wedged agent; an unknown agent is refused', async () => {
+    it('fresh: starts with no thread, then clears the stored one — only once the start went ahead; works on a wedged agent; an unknown agent is refused', async () => {
         const f = fakes({ probe: { running: true, turnState: 'failed', startedAt: 1, pendingApproval: null, failure: { reason: 'x', fixes: [] } } as unknown as LiveSession });
         expect(await restartAgent(f.ports, 'agent_a', 'fresh')).toEqual({ ok: true, kind: 'fresh', discarded: 'sess-1' });
-        expect(f.calls).toEqual(['stop:agent_a', 'clearThread:agent_a', 'start:agent_a:null:/w/tynn']);
+        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:null:/w/tynn', 'clearThread:agent_a']);
         expect(await restartAgent(fakes().ports, 'agent_zz', 'fresh')).toEqual({ ok: false, reason: 'unknown agent' });
     });
 });
@@ -103,7 +104,7 @@ describe('switch driver', () => {
 
         const open = fakes({ manifest: '---\nname: atlas\n---\n' });
         expect(await switchDriver(open.ports, 'agent_a', 'codex')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex' });
-        expect(open.calls).toEqual(['stop:agent_a', 'setProvider:agent_a:codex']);
+        expect(open.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex']);
         expect(open.current()?.provider).toBe('codex');
 
         expect(await switchDriver(fakes().ports, 'agent_a', 'claude')).toMatchObject({ ok: true, noop: true });

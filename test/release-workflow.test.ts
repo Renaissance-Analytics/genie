@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
  *   publish) to THIS repository: Genie 2's code moved into `Renaissance-Analytics/genie`, the
  *   repository every installed Genie's feed points at (the owner, 2026-10-16; test/upgrade.test.ts
  *   holds the feed half). No cross-repo token exists any more, and none may come back.
- * - It publishes as a prerelease, which is what `allowPrerelease` on the updater side expects.
+ * - It publishes a DRAFT (test/release-draft.test.ts); the owner publishes it. Its prerelease flag follows the tag.
  *
  * Read as text on purpose: a workflow is configuration with no runtime short of GitHub, and the
  * failure modes here are a string somebody changes without reading the comment next to it.

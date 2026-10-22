@@ -172,7 +172,7 @@ export class UpdateHost {
     /**
      * Arm the automatic checks: one after `initialMs`, then one every `intervalMs`, each only
      * when a check makes sense (idle, none, error or available — never while a download or an
-     * install is in progress). Returns the stop; after it, a timer that still fires does nothing.
+     * install is in progress; while downloading or downloaded, the timer re-reads missing notes instead). Returns the stop; after it, a timer that still fires does nothing.
      * The scheduler is injected so a test can count the timers and fire them by hand.
      */
     startAutoCheck(schedule: (fn: () => void, ms: number) => () => void, timing: { initialMs: number; intervalMs: number } = AUTO_CHECK): () => void {
@@ -184,7 +184,13 @@ export class UpdateHost {
                 if (stopped) return;
                 const phase = this.current.phase;
                 const canCheck = phase === 'idle' || phase === 'none' || phase === 'error' || phase === 'available';
-                if (!canCheck) { arm(timing.intervalMs); return; }
+                if (!canCheck) {
+                    // A downloading or downloaded update is not re-checked (that would drop the download), but notes
+                    // that were missing are read again (beta.38, 2026-10-22). `available` re-reads them through check().
+                    if (phase === 'downloading' || phase === 'downloaded') void this.refreshNotes();
+                    arm(timing.intervalMs);
+                    return;
+                }
                 void this.check().catch(() => undefined).finally(() => { if (!stopped) arm(timing.intervalMs); });
             }, ms);
         };
@@ -198,16 +204,41 @@ export class UpdateHost {
     }
 
     /** The release notes between the running version and `offered`; set on the state while `offered` is still on offer. */
-    #fetchChangelog(offered: string): void {
+    #fetchChangelog(offered: string): Promise<void> {
         const releases = this.options.releases;
         const running = this.options.runningVersion;
-        if (!releases || !running) return;
-        void releases().then(
+        if (!releases || !running) return Promise.resolve();
+        return releases().then(
             (list) => changelogBetween(list, running, offered),
             () => 'unavailable' as const,
         ).then((changelog) => {
-            if (this.current.version === offered) this.set({ ...this.current, changelog });
+            if (this.current.version !== offered) return;
+            // A failed re-read never wipes notes already shown; it only says "unavailable" when there was nothing.
+            const held = this.current.changelog;
+            if (changelog === 'unavailable' && held && held !== 'unavailable') return;
+            this.set({ ...this.current, changelog });
         });
+    }
+
+    #notesInFlight: Promise<UpdateState> | null = null;
+
+    /**
+     * READ THE NOTES AGAIN (the owner, 2026-10-22, on beta.38: "No release notes were published for this update"). The
+     * notes are fetched once when a check finds an update; a release that was public before its body was written, or a
+     * machine that was offline at that moment, kept the empty answer for as long as the update was on offer. This fetches
+     * again — the update window calls it when it opens, the auto-check while an update is downloading or downloaded —
+     * whenever what is held is not the whole story: none, unavailable or partial. A complete changelog is not fetched
+     * again, and nothing is fetched when no update is on offer. Concurrent calls share one fetch.
+     */
+    refreshNotes(): Promise<UpdateState> {
+        const { phase, version, changelog } = this.current;
+        const onOffer = phase === 'available' || phase === 'downloading' || phase === 'downloaded';
+        if (!onOffer || !version || !this.options.releases || !this.options.runningVersion) return Promise.resolve(this.current);
+        const complete = changelog && changelog !== 'unavailable' && changelog.groups.length > 0 && !changelog.partial;
+        if (complete) return Promise.resolve(this.current);
+        if (this.#notesInFlight) return this.#notesInFlight;
+        this.#notesInFlight = this.#fetchChangelog(version).then(() => this.current).finally(() => { this.#notesInFlight = null; });
+        return this.#notesInFlight;
     }
 
     /** Ask the feed. Rejoins a check already in flight. Resolves to the resulting state. */
@@ -220,7 +251,7 @@ export class UpdateHost {
                 if (found) {
                     const fetching = this.options.releases && this.options.runningVersion ? { changelog: null } : {};
                     this.set({ phase: 'available', version: found.version, percent: null, error: null, checkedAt, ...fetching });
-                    if ('changelog' in fetching) this.#fetchChangelog(found.version);
+                    if ('changelog' in fetching) void this.#fetchChangelog(found.version);
                 }
                 else this.set({ phase: 'none', version: null, percent: null, error: null, checkedAt });
                 return this.current;

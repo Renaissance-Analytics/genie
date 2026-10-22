@@ -33,6 +33,17 @@ export interface PluginToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
 }
 
+/**
+ * A plugin tool's TITLE: "<plugin name>: <tool name in words>" ("Spreadsheet: Create workbook"), in the sentence case Genie's
+ * own tools use ("Manage terminals"). A manifest declares no tool title, and a tool without one goes out as `title: null`
+ * on the modern protocol — Claude then rejects Genie's WHOLE tool list (2026-10-22: every Claude agent had no Genie tools).
+ */
+export function pluginToolTitle(pluginName: string, toolName: string): string {
+    const words = toolName.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/[_\-.]+/g, ' ').trim().toLowerCase();
+    const tool = words.length > 0 ? words.charAt(0).toUpperCase() + words.slice(1) : toolName;
+    return `${pluginName}: ${tool}`;
+}
+
 const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload), isError: false });
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 
@@ -45,6 +56,7 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
             name,
             `${ref.tool.description} (plugin ${ref.manifest.name} ${ref.manifest.version}${ref.tool.gated ? '; approval-gated' : ''})`,
             { ...schema, type: 'object', properties } as JsonObject,
+            pluginToolTitle(ref.manifest.name, ref.tool.name),
         );
         const handler = async (args: JsonObject, context: { headers: Record<string, string> }): Promise<McpToolResult> => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);

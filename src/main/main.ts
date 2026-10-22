@@ -38,6 +38,7 @@ import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, rm } from 'node:fs/promises';
+import { sessionHostPort } from './agent-ops-host-port.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
@@ -52,7 +53,7 @@ import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
 import type { RepoListing } from '../core/github.js';
 import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
-import { listHostDir } from './host-fs.js';
+import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
@@ -1026,6 +1027,8 @@ async function boot(): Promise<void> {
     autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
     ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
     ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
+    // The update window opening reads the notes again if they were missing (beta.38, 2026-10-22).
+    ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);
     ipcMain.handle('genie:updates-install', () => {
         const result = updates?.install() ?? null;
         if (result) console.log(`[updater] ${result.report}`);
@@ -1144,14 +1147,8 @@ async function boot(): Promise<void> {
             setPermissions: (id, permissions) => registry!.setPermissions(id, permissions),
             setModel: (id, model) => registry!.setModel(id, model),
         },
-        host: {
-            start: (record, cwd) => host!.start(record, cwd),
-            stop: (id) => host!.stop(id),
-            probe: (id) => host!.probe(id),
-            // A running agent's own models, and a switch with no restart (prism-acp 0.22).
-            modelState: (id) => host?.modelState(id) ?? null,
-            switchModel: (id, model) => host?.switchModel(id, model) ?? null,
-        },
+        // The real session host (agent-ops-host-port.ts — the same wiring the restart tests drive).
+        host: sessionHostPort(() => host),
         // Each provider's models, asked of the CLI an agent of it launches with — once, kept until Refresh.
         models: providerModels,
         cwdFor,
@@ -1271,12 +1268,12 @@ async function boot(): Promise<void> {
     });
     ipcMain.handle('genie:agent-diagnose', (_event, raw: unknown) => (typeof raw === 'string' ? diagnose(agentOps, raw) : { ok: false, reason: 'diagnose names an agent' }));
 
-    ipcMain.handle('genie:restart-with-handoff', (_event, raw: unknown, finishedId: unknown) => {
+    ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
         // Stop → start → the handoff as the first prompt → seen. The order and the refusals live in
         // restart-with-handoff.ts; this is the thin call.
-        const r = restartWithHandoff(host, services.attention, record, cwdFor(record), finishedId);
+        const r = await restartWithHandoff(host, services.attention, record, cwdFor(record), finishedId);
         registry?.touch();
         return r;
     });
@@ -1615,6 +1612,9 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
         (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
+    // The folder picker's New folder: made on this machine, inside the folder the picker is in (host-fs.ts makeHostDir).
+    ipcMain.handle('genie:host-mkdir', (_event, parent: unknown, name: unknown) =>
+        (typeof parent === 'string' && typeof name === 'string' ? makeHostDir(parent, name) : { ok: false, reason: 'name a folder and where to make it' }));
     // Where a folder picker starts when nothing better is known (core/add-workspace.ts `pickerStart`): the host's home.
     ipcMain.handle('genie:host-home', () => homedir());
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
@@ -1823,6 +1823,8 @@ async function boot(): Promise<void> {
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
+                // "Restart with this" over a remote host waits for the old run to end, as the local one does.
+                ended: (id) => host!.ended(id),
                 cancel: (id) => host!.cancel(id),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
                 prompt: (id, text) => host!.prompt(id, text),

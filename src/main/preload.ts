@@ -1,15 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { FEATURE_CHANNELS, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from '../renderer/bridge.js';
+import { FEATURE_CHANNELS, type AgentDetail, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
-import { AgentDetailReceiver, type AgentPushPayload } from '../core/agent-push-wire.js';
+import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 
+type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
+
 /**
- * The agents this window shows: one channel listener and one receiver each, however many views subscribe. Main pushes an
- * agent only while it is watched here, and only the rows that changed (main/agent-push.ts); the receiver rebuilds the
- * whole detail, so every view gets exactly what it always got.
+ * The agents this window shows: one channel listener each, however many subscribe. Main pushes an agent only while it is
+ * watched here, and only the rows that changed (main/agent-push.ts). The payload goes to the page AS IT ARRIVED — the
+ * patch — and the page rebuilds the detail on its side (core/agent-push-wire.ts `AgentDetailViews`): whatever is handed
+ * across `contextBridge` is copied into the page on the renderer's one thread, and a rebuilt detail is the whole ledger.
  */
-const watching = new Map<string, { receiver: AgentDetailReceiver<Omit<AgentDetail, 'rows'>, TimedEvent>; views: Set<{ onChange: (detail: AgentDetail | null) => void }>; off: () => void }>();
+const watching = new Map<string, { subscribers: Set<(payload: AgentPayload) => void>; off: () => void }>();
 
 /**
  * THE PRELOAD — the entire surface the renderer is given.
@@ -28,7 +31,7 @@ const watching = new Map<string, { receiver: AgentDetailReceiver<Omit<AgentDetai
  * it was none" for every row at once, with nothing downstream able to tell.
  */
 
-const bridge: GenieBridge = {
+const bridge: PreloadBridge = {
     snapshot: () => ipcRenderer.invoke('genie:snapshot') as Promise<GenieSnapshot>,
 
     subscribe: (onChange) => {
@@ -54,31 +57,29 @@ const bridge: GenieBridge = {
         return () => ipcRenderer.removeListener('genie:action', listener);
     },
 
-    subscribeAgent: (agentId, onChange) => {
+    subscribeAgentWire: (agentId, onPayload) => {
         // Filtered in MAIN: the window says which agents it shows, and only those are pushed. A ledger is thousands of
-        // rows; the wire carries the one being looked at, and of it only what changed.
+        // rows; the wire carries the one being looked at, and of it only what changed — and so does the bridge.
         let watch = watching.get(agentId);
         if (watch === undefined) {
             const channel = `genie:agent-changed:${agentId}`;
-            const receiver = new AgentDetailReceiver<Omit<AgentDetail, 'rows'>, TimedEvent>();
-            const views = new Set<{ onChange: (detail: AgentDetail | null) => void }>();
-            const listener = (_event: unknown, payload: AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>): void => {
-                const detail = receiver.apply(payload);
-                // A patch for rows this window does not hold: the whole ledger main sends a new watcher is on its way.
-                if (detail === undefined) return;
-                for (const view of views) view.onChange(detail);
+            const subscribers = new Set<(payload: AgentPayload) => void>();
+            const listener = (_event: unknown, payload: AgentPayload): void => {
+                for (const subscriber of subscribers) subscriber(payload);
             };
             ipcRenderer.on(channel, listener);
-            watch = { receiver, views, off: () => ipcRenderer.removeListener(channel, listener) };
+            watch = { subscribers, off: () => ipcRenderer.removeListener(channel, listener) };
             watching.set(agentId, watch);
-            ipcRenderer.send('genie:agent-watch', agentId, true);
         }
-        const view = { onChange };
         const w = watch;
-        w.views.add(view);
+        const subscriber = (payload: AgentPayload): void => onPayload(payload);
+        w.subscribers.add(subscriber);
+        // Watching (again) starts with the whole ledger, to every subscriber: one joining late holds no rows a patch could
+        // apply to, and a full ledger is what any receiver takes.
+        ipcRenderer.send('genie:agent-watch', agentId, true);
         return () => {
-            w.views.delete(view);
-            if (w.views.size > 0 || watching.get(agentId) !== w) return;
+            w.subscribers.delete(subscriber);
+            if (w.subscribers.size > 0 || watching.get(agentId) !== w) return;
             watching.delete(agentId);
             w.off();
             ipcRenderer.send('genie:agent-watch', agentId, false);
@@ -233,7 +234,7 @@ const bridge: GenieBridge = {
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
-    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
+    host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, mkdir: (parent, name) => ipcRenderer.invoke('genie:host-mkdir', parent, name) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
     tynnNetwork: {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
@@ -334,6 +335,7 @@ const bridge: GenieBridge = {
         check: () => ipcRenderer.invoke('genie:updates-check') as Promise<UpdateState>,
         download: () => ipcRenderer.invoke('genie:updates-download') as Promise<boolean>,
         install: () => ipcRenderer.invoke('genie:updates-install') as Promise<{ report: string } | null>,
+        notes: () => ipcRenderer.invoke('genie:updates-notes') as Promise<UpdateState | null>,
     },
 };
 

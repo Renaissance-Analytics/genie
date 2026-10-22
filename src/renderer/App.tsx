@@ -20,7 +20,7 @@ import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel 
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatSendFor, chatThreadFrom, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import type { Attachment } from '../core/prompt-content.js';
-import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
@@ -490,7 +490,8 @@ function DesktopApp({ bridge }: AppProps) {
     // works in internal routes. Derived on every render, so an address resolves as soon as the snapshot can name it.
     const [address, writeAddress] = useRoute();
     const remote = useRemote();
-    const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' ? undefined : window.genie));
+    // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
+    const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
     const snapshot = useSnapshot(resolvedBridge);
     // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
     const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
@@ -1386,6 +1387,7 @@ function DesktopApp({ bridge }: AppProps) {
                 initialPath={pickerAsk.opts.initialPath}
                 extensions={pickerAsk.opts.extensions}
                 listDir={(path) => resolvedBridge.host!.listDir(path)}
+                mkdir={resolvedBridge.host.mkdir ? (parent, name) => resolvedBridge.host!.mkdir!(parent, name) : undefined}
                 onPick={(p) => { pickerAsk.resolve(p); setPickerAsk(null); }}
                 onCancel={() => { pickerAsk.resolve(null); setPickerAsk(null); }}
             />
