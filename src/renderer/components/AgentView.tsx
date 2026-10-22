@@ -1,7 +1,7 @@
 import { activityRows } from '../../core/stream-view.js';
 import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomOf } from '../../core/headroom.js';
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
@@ -11,12 +11,13 @@ import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon, Select, Switch } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
-import { IW_DELIVERIES, IW_EVENT_KINDS, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
+import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
 import { agentShells } from '../../core/agent-shells.js';
 import { ShellsPanel } from './ShellsPanel.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
+import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
 import { TurnStop } from './TurnStop.js';
 import type { DeletePlan } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
@@ -229,6 +230,8 @@ export interface AgentViewProps {
     onDesignLogin?: ((agentId: string) => void) | undefined;
     /** `Start` for a declared agent that is not running: start it (it reattaches rather than starting a second). */
     onStart?: ((agentId: string) => void) | undefined;
+    /** The Settings tab's sub-tab — controlled, for tests that render server-side; otherwise the view keeps its own (General first). */
+    settingsSection?: SettingsSection | undefined;
 }
 
 /**
@@ -265,7 +268,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
     chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
@@ -323,6 +326,11 @@ export function AgentView({
         else if (id === 'delete-unmount') ops.onPreviewDelete('unmount');
         else if (id === 'delete-delete') ops.onPreviewDelete('delete');
     };
+    // THE SETTINGS SUB-TAB the person picked (General until then), and the control last touched there — so a result that
+    // arrives after the touch is shown beside that control (`controlOutcome`), not only in the line under the header.
+    const [ownSettingsSection, setOwnSettingsSection] = useState<SettingsSection | null>(null);
+    const [touched, setTouched] = useState<{ control: SettingsControl; before: string | null } | null>(null);
+    useEffect(() => { setOwnSettingsSection(null); setTouched(null); }, [agent.id]);
     const budgetLimit = ops?.budgetUsd ?? null;
     const plan = planFor(session);
     // The plan's steps (the board): from the latest plan update in the rows; null keeps the step/of line alone.
@@ -934,285 +942,351 @@ export function AgentView({
                     ) : null}
 
                     {/* TERMINAL (observed, §4.2): the TUI's own terminal, attached here as a SECOND view of the same pty (§6.5). */}
-                    {/* AGENT SETTINGS (Tynn #800, the owner 2026-10-17: "the whole agent settings panel should be a settings tab
-                        on the agent screen, not this little panel that is always in the way"): persona, mode, budget, skills —
-                        full width, two columns on a wide window. The rail keeps only what is live: the plan, an ended process. */}
-                    {active === 'settings' ? (
-                        <div data-agent-settings="" className="min-h-0 flex-1 overflow-y-auto">
-                            <div className="mx-auto grid max-w-[1100px] grid-cols-1 items-start gap-6 p-6 text-xs xl:grid-cols-2">
-                                {persona ? (
-                                    <section data-rail="persona">
-                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Persona</h2>
-                                        <p className="font-mono text-[11px] text-[var(--fg-2)]">
-                                            {persona}
-                                            {/* The board's `· committed`: git's own word on the file the session runs on; nothing when git said nothing. */}
-                                            {personaGitShown ? <> · <span data-persona-git={personaGitShown} className={personaGitShown === 'committed' ? 'text-[var(--fg-3)]' : 'text-[var(--warning)]'}>{personaGitShown === 'committed' ? 'committed' : personaGitShown === 'modified' ? 'uncommitted changes' : 'not committed'}</span></> : null}
-                                        </p>
-                                        {personaShown ? (
-                                            <pre data-persona-text="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-1)] px-2.5 py-2 font-mono text-[11.5px] leading-[19px] text-[var(--fg-2)]">{personaShown.lines.join('\n')}</pre>
-                                        ) : null}
-                                        {personaShown?.truncated ? <p data-persona-clipped="" className="mt-1 text-[11px] text-[var(--fg-4)]">… more in the file</p> : null}
-                                        {personaError ? <p data-persona-error="" className="mt-1 text-[11px] text-[var(--warning)]">could not read it: {personaError}</p> : null}
-                                    </section>
-                                ) : null}
-                                {ops ? (
-                                    // PROVIDER (the owner, 2026-10-19: Agent settings are "provider, model, mode, autonomy, IssueWatch,
-                                    // permissions"): the CLI it runs on; changing it is Switch driver — identity, inbox and history stay.
-                                    <section data-rail="provider" data-agent-provider={agent.provider}>
-                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h2>
-                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: p }))} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) ops.onSwitchDriver(to); }} aria-label={`${agent.name}'s provider`} />
-                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Its name, inbox and history stay; its next turn runs on the new provider.</p>
-                                    </section>
-                                ) : null}
-                                {ops ? (
-                                    <section data-rail="mode" data-mode={ops.mode}>
-                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Mode</h2>
-                                        <div className="flex items-center gap-1 text-[11px]">
-                                            <span className="rounded-md bg-[var(--bg-3)] px-2 py-0.5 font-medium">{ops.mode}</span>
-                                            <button type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual')} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
-                                                switch to {ops.mode === 'manual' ? 'automated' : 'manual'}
-                                            </button>
-                                        </div>
-                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Mode is wording for the agent, not a permission boundary.</p>
-                                        {/* What a Claude agent may do is chosen here — all tools, ask before shell commands, or edits only; Codex asks in the chat. */}
-                                        {agent.provider === 'claude' && ops.onSetPermissions ? (
-                                            <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
-                                                Tools {agent.name} may use
-                                                <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : e.target.value === 'ask' ? 'ask' : 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                                    <option value="all">all tools</option>
-                                                    <option value="ask">ask me before shell commands</option>
-                                                    <option value="edits">edits only — shell refused</option>
-                                                </select>
-                                                <span className="mt-0.5 block text-[var(--fg-4)]">A change applies at once while {agent.name} is idle, or when its turn ends — it restarts on the same conversation.</span>
-                                            </label>
-                                        ) : null}
-                                        {/* The model: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
-                                        {agent.fidelity === 'declared' && ops.onSetModel ? (() => {
-                                            const choices = ops.models;
-                                            const listed = choices !== undefined && choices !== 'loading' && choices.ok ? choices : null;
-                                            // IN USE: the running session's own answer (modelState) — a provider list asked before any session
-                                            // knows only the provider's default, which is not a reading of this agent.
-                                            const inUseId = listed?.source === 'session' ? listed.current : null;
-                                            const inUse = inUseId === null ? null : listed?.models.find((m) => m.modelId === inUseId) ?? null;
-                                            const reading = inUse ? modelLabel(inUse) : inUseId ?? session?.model ?? null;
-                                            const defaultEntry = listed?.models.find((m) => m.isDefault === true) ?? null;
-                                            const selected = ops.model ?? defaultEntry?.modelId ?? '';
-                                            const selectedEntry = listed?.models.find((m) => m.modelId === selected) ?? null;
-                                            const unlisted = listed && ops.model && !listed.models.some((m) => m.modelId === ops.model) ? ops.model : null;
-                                            const refresh = ops.onRefreshModels ? (
-                                                <button type="button" data-action="models-refresh" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
-                                                    Refresh list
-                                                </button>
-                                            ) : null;
-                                            return (
-                                                <div data-rail-model={session?.model ?? ''} className="mt-2 text-[11px] text-[var(--fg-3)]">
-                                                    <p data-model-reported={reading ? 'yes' : 'no'}>
-                                                        Model{' '}
-                                                        {reading ? (
-                                                            <span className="font-mono text-[var(--fg-2)]">{reading}</span>
-                                                        ) : ops.model ? (
-                                                            <span className="text-[var(--fg-4)]">not reported yet</span>
-                                                        ) : (
-                                                            <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
-                                                        )}
-                                                    </p>
-                                                    {/* The owner, 2026-10-21: "make sure that the model selection for agents is using actual available
-                                                        options from the providers. For example, I do not even see fable as an option". The list is
-                                                        the provider's own answer; free text only when it could not be had. */}
-                                                    {choices === 'loading' ? (
-                                                        <p data-model-list="loading" className="mt-1 text-[var(--fg-4)]">Asking {agent.provider} for its models…</p>
-                                                    ) : listed ? (
-                                                        <label data-model-list={listed.source} className="mt-1 block">
-                                                            Start {agent.name} with
-                                                            <select
-                                                                data-model-select={selected}
-                                                                value={selected}
-                                                                onChange={(e) => { const next = chosenModel(e.target.value, listed); if (next !== (ops.model ?? null)) ops.onSetModel?.(next); }}
-                                                                className="ml-2 max-w-full rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5"
-                                                            >
-                                                                {defaultEntry ? null : <option value="">{"the provider's default"}</option>}
-                                                                {unlisted ? <option value={unlisted}>{`${unlisted} — not in ${agent.provider}’s list`}</option> : null}
-                                                                {listed.models.map((m) => (
-                                                                    <option key={m.modelId} value={m.modelId} title={m.description}>
-                                                                        {`${modelLabel(m)}${m.isDefault ? ' · default' : ''}${m.modelId === inUseId ? ' · in use' : ''}`}
-                                                                    </option>
-                                                                ))}
-                                                            </select>
-                                                            {refresh}
-                                                            {selectedEntry?.description ? (
-                                                                <span data-model-description={selectedEntry.modelId} className="mt-0.5 block text-[var(--fg-4)]">{selectedEntry.description}</span>
-                                                            ) : null}
-                                                        </label>
-                                                    ) : (
-                                                        <>
-                                                            {choices !== undefined && !choices.ok ? (
-                                                                <p data-model-list="failed" className="mt-1 text-[var(--fg-4)]">
-                                                                    Couldn’t get {agent.provider}’s list of models: {choices.reason}
-                                                                    {refresh}
-                                                                </p>
-                                                            ) : null}
-                                                            <label className="mt-1 block">
-                                                                Start {agent.name} with
-                                                                {/* The other path, only when the provider's list could not be had: any name the provider
-                                                                    accepts, suggesting only the model the provider reported. */}
-                                                                <input
-                                                                    key={ops.model ?? ''}
-                                                                    data-model-input={ops.model ?? ''}
-                                                                    type="text"
-                                                                    list={session?.model ? `models-${agent.id}` : undefined}
-                                                                    defaultValue={ops.model ?? ''}
-                                                                    placeholder="provider default"
-                                                                    spellCheck={false}
-                                                                    onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) ops.onSetModel?.(v === '' ? null : v); }}
-                                                                    onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                                                                    className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
-                                                                />
-                                                                {session?.model ? (
-                                                                    <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
-                                                                ) : null}
-                                                            </label>
-                                                        </>
-                                                    )}
-                                                    {/* A running agent switches without a restart (prism-acp 0.22 setModel): Claude's CLI at once, Codex
-                                                        with its next turn. A driver that cannot switch falls back to the restart on the same conversation. */}
-                                                    <span className="mt-0.5 block text-[var(--fg-4)]">
-                                                        {agent.provider === 'codex'
-                                                            ? `A change applies from ${agent.name}’s next turn — a turn already running finishes on the model it began with.`
-                                                            : `A change applies at once — ${agent.name}’s running session switches models on the same conversation.`}
-                                                    </span>
-                                                </div>
-                                            );
-                                        })() : null}
-                                        <label className="mt-2 block text-[11px] text-[var(--fg-3)]">
-                                            Who may message {agent.name}
-                                            <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all')} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
-                                                <option value="none">nobody</option>
-                                                <option value="self">this workspace</option>
-                                                <option value="all">any workspace here</option>
-                                            </select>
-                                        </label>
-                                        {ops.onSetAutoApprove ? (
-                                            <label className="mt-2 flex items-start gap-2 text-[11px] text-[var(--fg-3)]">
-                                                <span data-auto-approve={ops.autoApprove ? 'on' : 'off'} className="mt-0.5"><Switch checked={ops.autoApprove === true} onCheckedChange={(checked) => ops.onSetAutoApprove?.(checked)} aria-label={`${agent.name} is autonomous`} /></span>
-                                                <span>
-                                                    Autonomous — {agent.name} sets up services, processes, sites and terminals without asking you.
-                                                    <span className="mt-0.5 block text-[var(--fg-4)]">Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Creating an agent always asks you. Applies to its next action.</span>
-                                                </span>
-                                            </label>
-                                        ) : null}
-                                        {ops.onSetManageTabs ? (
-                                            <label className="mt-2 flex items-start gap-2 text-[11px] text-[var(--fg-3)]">
-                                                <span data-manage-tabs={ops.manageTabs ? 'on' : 'off'} className="mt-0.5"><Switch checked={ops.manageTabs === true} onCheckedChange={(checked) => ops.onSetManageTabs?.(checked)} aria-label={`${agent.name} may manage workspace tabs`} /></span>
-                                                <span>
-                                                    May manage workspace tabs — {agent.name} can add, arrange and remove this workspace’s tabs and their panels.
-                                                    <span className="mt-0.5 block text-[var(--fg-4)]">The workspace’s default agent always can. Each change asks you unless {agent.name} is autonomous.</span>
-                                                </span>
-                                            </label>
-                                        ) : null}
-                                        {ops.onSetDrivePages ? (
-                                            <label className="mt-2 flex items-start gap-2 text-[11px] text-[var(--fg-3)]">
-                                                <span data-drive-pages={ops.drivePages ? 'on' : 'off'} className="mt-0.5"><Switch checked={ops.drivePages === true} onCheckedChange={(checked) => ops.onSetDrivePages?.(checked)} aria-label={`${agent.name} may drive pages`} /></span>
-                                                <span>
-                                                    May drive pages — {agent.name} can read this workspace’s Genie site pages, fill their fields and click through them.
-                                                    <span className="mt-0.5 block text-[var(--fg-4)]">The workspace’s default agent always can. A submit, or a click that changes or deletes something, always asks you first — even when {agent.name} is autonomous.</span>
-                                                </span>
-                                            </label>
-                                        ) : null}
-                                        {ops.onSetIssueWatch && ops.issueWatch ? (
-                                            <IssueWatchSettings name={agent.name} prefs={ops.issueWatch} onSet={ops.onSetIssueWatch} />
-                                        ) : null}
-                                    </section>
-                                ) : null}
-                                {budget || budgetLimit !== null || headroom || policy || session?.mcpServers ? (
-                                    <section data-rail="budget">
-                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                                            Budget
-                                        </h2>
-                                        {budgetLimit !== null ? (
-                                            <p data-budget-limit={budgetLimit} className="mb-1.5 text-[11px] text-[var(--warning)]">
-                                                limit ${budgetLimit}/day — unenforceable: this provider reports no cost, so nothing will park
-                                            </p>
-                                        ) : null}
+                    {/* AGENT SETTINGS (Tynn #800; in sub-tabs since agent-management parity item 3 — the owner, 2026-10-21: "the
+                        whole agent settings UX is very clunky with a lot of scrolling and wasted space"). Genie 1's shape: short
+                        tabs of labelled fields — General, Permissions, IssueWatch, Persona, Skills — one at a time, the budget as
+                        a strip above them. Which tab holds which control is `core/agent-settings-view.ts`. */}
+                    {active === 'settings' ? (() => {
+                        const sections = settingsSections({
+                            fidelity: agent.fidelity, provider: agent.provider, ops: ops !== undefined,
+                            model: ops?.onSetModel !== undefined, tools: ops?.onSetPermissions !== undefined, autonomous: ops?.onSetAutoApprove !== undefined,
+                            manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
+                            issueWatch: ops?.onSetIssueWatch !== undefined && ops.issueWatch !== undefined,
+                            persona: persona !== null, skills: session?.extensions != null,
+                        });
+                        const shown = settingsSectionShown(sections, settingsSectionProp ?? ownSettingsSection);
+                        const has = new Set(sections.find((s) => s.id === shown)?.controls ?? []);
+                        const beside = controlOutcome(touched, ops?.lastOutcome ?? null);
+                        const outcomeFor = (c: SettingsControl) => (beside?.control === c ? <span data-control-outcome={c} className="ml-2 text-[var(--fg-2)]">{beside.text}</span> : null);
+                        const touch = (c: SettingsControl) => setTouched({ control: c, before: ops?.lastOutcome ?? null });
+                        const rowClass = 'flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-[var(--border-1)] py-2 last:border-b-0';
+                        const labelClass = 'w-44 shrink-0 text-[var(--fg-2)]';
+                        // ONE short line of help; the whole of it on hover when the row is too narrow to show it.
+                        const help = (text: string) => <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--fg-4)]" title={text}>{text}</span>;
+                        const selectClass = 'rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5';
+                        const showStrip = budget || budgetLimit !== null || headroom || policy || session?.mcpServers || note;
+                        return (
+                            <div data-agent-settings="" className="flex min-h-0 flex-1 flex-col text-xs">
+                                {/* BUDGET, a strip (the owner: no half-empty column): context, cost and turns, the limit, the MCP, headroom. */}
+                                {showStrip ? (
+                                    <section data-rail="budget" data-settings-strip="" className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-1)] px-5 py-2 text-[11px] text-[var(--fg-3)]">
                                         {budget ? (
-                                        <p className="font-mono text-[11px] text-[var(--fg-3)]">
-                                            ctx {Math.round(budget.used / 1000)}k/{Math.round(budget.size / 1000)}k
-                                        </p>
+                                            <span className="flex items-center gap-2 font-mono">
+                                                ctx {Math.round(budget.used / 1000)}k/{Math.round(budget.size / 1000)}k
+                                                <span className="block h-1 w-24 overflow-hidden rounded-sm bg-[var(--bg-3)]">
+                                                    <span
+                                                        data-budget-bar={budget.pct}
+                                                        className={`block h-full ${budget.pct >= 90 ? 'bg-[var(--danger)]' : budget.pct >= 80 ? 'bg-[var(--warning)]' : 'bg-[var(--sky-400)]'}`}
+                                                        style={{ width: `${budget.pct}%` }}
+                                                    />
+                                                </span>
+                                            </span>
                                         ) : null}
-                                        {budget ? (
-                                        <span className="mt-1 block h-1 w-full overflow-hidden rounded-sm bg-[var(--bg-3)]">
-                                            <span
-                                                data-budget-bar={budget.pct}
-                                                className={`block h-full ${budget.pct >= 90 ? 'bg-[var(--danger)]' : budget.pct >= 80 ? 'bg-[var(--warning)]' : 'bg-[var(--sky-400)]'}`}
-                                                style={{ width: `${budget.pct}%` }}
-                                            />
-                                        </span>
-                                        ) : null}
-                                        {/* The note under the bar (the board): compaction expected / compacted at / last reported. Absent when there is nothing to say. */}
-                                        {note ? (
-                                            <p data-context-note={note.tone} className={`mt-1.5 text-[11px] ${note.tone === 'bad' ? 'text-[var(--danger)]' : note.tone === 'warn' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{note.text}</p>
-                                        ) : null}
-                                        {/*
-                                         * No Cost row at all when the provider reports none — codex reports
-                                         * none. Not a `$0.00`, which claims the work was free, and not a
-                                         * dash, which reads as zero.
-                                         */}
+                                        {/* No Cost at all when the provider reports none (codex): not `$0.00`, which claims the work was free. */}
                                         {budget && budget.cost !== null ? (
-                                            <p data-rail-cost className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">
-                                                {`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}
-                                            </p>
+                                            <span data-rail-cost className="font-mono">{`$${budget.cost.toFixed(2)} this session · ${budget.turns} turns`}</span>
                                         ) : budget ? (
-                                            <p className="mt-1.5 font-mono text-[11px] text-[var(--fg-3)]">{budget.turns} turns</p>
+                                            <span className="font-mono">{budget.turns} turns</span>
+                                        ) : null}
+                                        {budgetLimit !== null ? (
+                                            <span data-budget-limit={budgetLimit} className="text-[var(--warning)]">
+                                                limit ${budgetLimit}/day — unenforceable: this provider reports no cost, so nothing will park
+                                            </span>
+                                        ) : null}
+                                        {headroom ? (
+                                            <span data-rail-headroom className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom)}</span>
                                         ) : null}
                                         {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
                                         {session?.mcpServers ? (
                                             session.mcpServers.includes('genie') ? (
-                                                <p data-rail-mcp="given" className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px] text-[var(--fg-3)]">Genie’s MCP — given to this session <button type="button" data-door="mcp-tools" onClick={() => onNavigate('genie://settings/mcp')} className="rounded-md border border-[var(--border-1)] px-1.5 text-[11px] hover:bg-[var(--bg-2)]">its tools →</button></p>
+                                                <span data-rail-mcp="given" className="flex items-center gap-2">Genie’s MCP — given to this session <button type="button" data-door="mcp-tools" onClick={() => onNavigate('genie://settings/mcp')} className="rounded-md border border-[var(--border-1)] px-1.5 text-[11px] hover:bg-[var(--bg-2)]">its tools →</button></span>
                                             ) : (
-                                                <p data-rail-mcp="missing" className="mt-1.5 text-[11px] text-[var(--warning)]">This session was not given Genie’s MCP — it started before the server was listening. Restart it to connect.</p>
+                                                <span data-rail-mcp="missing" className="text-[var(--warning)]">This session was not given Genie’s MCP — it started before the server was listening. Restart it to connect.</span>
                                             )
                                         ) : null}
-                                        {policy ? <p data-approval-policy className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">{policy}</p> : null}
-                                        {headroom ? (
-                                            <p data-rail-headroom className={`mt-1 font-mono text-[11px] ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{headroomLine(headroom)}</p>
+                                        {/* The note under the bar (the board): compaction expected / compacted at / last reported. */}
+                                        {note ? (
+                                            <span data-context-note={note.tone} className={`basis-full ${note.tone === 'bad' ? 'text-[var(--danger)]' : note.tone === 'warn' ? 'text-[var(--warning)]' : ''}`}>{note.text}</span>
                                         ) : null}
+                                        {policy ? <span data-approval-policy className="basis-full">{policy}</span> : null}
                                     </section>
                                 ) : null}
-                                {/*
-                                 * What the agent's OWN CLI can run (the owner, 2026-10-14: surfaced in the chat and here, read-only).
-                                 * Run one from the chat's `/` menu. Absent until the provider reports; an agent that reports none says so.
-                                 */}
-                                {session?.extensions ? (
-                                    <section data-rail="extensions">
-                                        <h2 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
-                                            Skills and commands
-                                        </h2>
-                                        {session.extensions.commands.length === 0 ? (
-                                            <p className="text-[11px] text-[var(--fg-3)]">Its CLI offers none.</p>
-                                        ) : (
-                                            <ul data-rail-commands={session.extensions.commands.length} className="max-h-48 overflow-y-auto font-mono text-[11px] text-[var(--fg-2)]">
-                                                {session.extensions.commands.map((c) => (
-                                                    <li key={c.name} data-command={c.name} className="flex justify-between gap-2 py-px">
-                                                        <span className="truncate">/{c.name}</span>
-                                                        <span className="shrink-0 font-sans text-[var(--fg-4)]">{c.source ?? c.description}</span>
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        )}
-                                        {session.extensions.plugins && session.extensions.plugins.length > 0 ? (
-                                            <p data-rail-plugins={session.extensions.plugins.length} className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">
-                                                Plugins: {session.extensions.plugins.map((p) => (p.version ? `${p.name} ${p.version}` : p.name)).join(', ')}
-                                            </p>
-                                        ) : null}
-                                        {session.extensions.subagents && session.extensions.subagents.length > 0 ? (
-                                            <p data-rail-subagents={session.extensions.subagents.length} className="mt-1 text-[11px] leading-normal text-[var(--fg-3)]">
-                                                Subagents: {session.extensions.subagents.join(', ')}
-                                            </p>
-                                        ) : null}
-                                    </section>
+
+                                {sections.length > 0 ? (
+                                    <div role="tablist" data-settings-tabs="" className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
+                                        {sections.map((s) => (
+                                            <button
+                                                key={s.id}
+                                                type="button"
+                                                role="tab"
+                                                data-settings-tab={s.id}
+                                                aria-selected={s.id === shown}
+                                                onClick={() => setOwnSettingsSection(s.id)}
+                                                className={`rounded-md px-2 py-0.5 text-[12px] ${s.id === shown ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}
+                                            >
+                                                {s.label}
+                                            </button>
+                                        ))}
+                                    </div>
+                                ) : null}
+
+                                {shown ? (
+                                    <div className="min-h-0 flex-1 overflow-y-auto">
+                                        <div data-settings-section={shown} className="mx-auto max-w-[820px] px-5 py-3">
+                                            {/* ── GENERAL: provider and model first (the owner's first ask), mode, run controls; Remove at the foot. */}
+                                            {ops && has.has('provider') ? (
+                                                <div data-settings-row="provider-model" className="grid grid-cols-1 gap-3 border-b border-[var(--border-1)] pb-3 md:grid-cols-2">
+                                                    {/* PROVIDER: the CLI it runs on; changing it is Switch driver — identity, inbox and history stay. */}
+                                                    <section data-rail="provider" data-agent-provider={agent.provider}>
+                                                        <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
+                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: p }))} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
+                                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Its name, inbox and history stay; its next turn runs on the new provider.{outcomeFor('provider')}</p>
+                                                    </section>
+                                                    {/* MODEL: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
+                                                    {has.has('model') ? (() => {
+                                                        const choices = ops.models;
+                                                        const listed = choices !== undefined && choices !== 'loading' && choices.ok ? choices : null;
+                                                        // IN USE: the running session's own answer (modelState) — a provider list asked before any session
+                                                        // knows only the provider's default, which is not a reading of this agent.
+                                                        const inUseId = listed?.source === 'session' ? listed.current : null;
+                                                        const inUse = inUseId === null ? null : listed?.models.find((m) => m.modelId === inUseId) ?? null;
+                                                        const reading = inUse ? modelLabel(inUse) : inUseId ?? session?.model ?? null;
+                                                        const defaultEntry = listed?.models.find((m) => m.isDefault === true) ?? null;
+                                                        const selected = ops.model ?? defaultEntry?.modelId ?? '';
+                                                        const selectedEntry = listed?.models.find((m) => m.modelId === selected) ?? null;
+                                                        const unlisted = listed && ops.model && !listed.models.some((m) => m.modelId === ops.model) ? ops.model : null;
+                                                        const refresh = ops.onRefreshModels ? (
+                                                            <button type="button" data-action="models-refresh" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
+                                                                Refresh list
+                                                            </button>
+                                                        ) : null;
+                                                        // A running agent switches without a restart (prism-acp 0.22 setModel): Claude's CLI at once, Codex
+                                                        // with its next turn. Said as the select's tooltip — one line of help, not a paragraph.
+                                                        const applies = agent.provider === 'codex'
+                                                            ? `A change applies from ${agent.name}’s next turn — a turn already running finishes on the model it began with.`
+                                                            : `A change applies at once — ${agent.name}’s running session switches models on the same conversation.`;
+                                                        return (
+                                                            <section data-rail-model={session?.model ?? ''} className="text-[11px] text-[var(--fg-3)]">
+                                                                {/* The reading: what the provider says it runs — in the heading's place, so the select sits level with the provider's. */}
+                                                                <p data-model-reported={reading ? 'yes' : 'no'} className="mb-1 truncate text-[11px]">
+                                                                    Model{' '}
+                                                                    {reading ? (
+                                                                        <span className="font-mono text-[var(--fg-2)]">{reading}</span>
+                                                                    ) : ops.model ? (
+                                                                        <span className="text-[var(--fg-4)]">not reported yet</span>
+                                                                    ) : (
+                                                                        <span className="text-[var(--fg-4)]">{"the provider's default"}</span>
+                                                                    )}
+                                                                </p>
+                                                                {/* The owner, 2026-10-21: "make sure that the model selection for agents is using actual available
+                                                                    options from the providers". The list is the provider's own answer; free text only when it could not be had. */}
+                                                                {choices === 'loading' ? (
+                                                                    <p data-model-list="loading" className="text-[var(--fg-4)]">Asking {agent.provider} for its models…</p>
+                                                                ) : listed ? (
+                                                                    <label data-model-list={listed.source} className="flex items-center" title={applies}>
+                                                                        <select
+                                                                            data-model-select={selected}
+                                                                            value={selected}
+                                                                            aria-label={`Start ${agent.name} with`}
+                                                                            onChange={(e) => { const next = chosenModel(e.target.value, listed); if (next !== (ops.model ?? null)) { touch('model'); ops.onSetModel?.(next); } }}
+                                                                            className={`min-w-0 flex-1 ${selectClass}`}
+                                                                        >
+                                                                            {defaultEntry ? null : <option value="">{"the provider's default"}</option>}
+                                                                            {unlisted ? <option value={unlisted}>{`${unlisted} — not in ${agent.provider}’s list`}</option> : null}
+                                                                            {listed.models.map((m) => (
+                                                                                <option key={m.modelId} value={m.modelId} title={m.description}>
+                                                                                    {`${modelLabel(m)}${m.isDefault ? ' · default' : ''}${m.modelId === inUseId ? ' · in use' : ''}`}
+                                                                                </option>
+                                                                            ))}
+                                                                        </select>
+                                                                        {refresh}
+                                                                    </label>
+                                                                ) : (
+                                                                    <>
+                                                                        {choices !== undefined && !choices.ok ? (
+                                                                            <p data-model-list="failed" className="mb-1 text-[var(--fg-4)]">
+                                                                                Couldn’t get {agent.provider}’s list of models: {choices.reason}
+                                                                                {refresh}
+                                                                            </p>
+                                                                        ) : null}
+                                                                        <label className="block" title={applies}>
+                                                                            Start {agent.name} with
+                                                                            {/* The other path, only when the provider's list could not be had: any name the provider
+                                                                                accepts, suggesting only the model the provider reported. */}
+                                                                            <input
+                                                                                key={ops.model ?? ''}
+                                                                                data-model-input={ops.model ?? ''}
+                                                                                type="text"
+                                                                                list={session?.model ? `models-${agent.id}` : undefined}
+                                                                                defaultValue={ops.model ?? ''}
+                                                                                placeholder="provider default"
+                                                                                spellCheck={false}
+                                                                                onBlur={(e) => { const v = e.currentTarget.value.trim(); if (v !== (ops.model ?? '')) { touch('model'); ops.onSetModel?.(v === '' ? null : v); } }}
+                                                                                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                                                                className="ml-2 w-40 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5 font-mono"
+                                                                            />
+                                                                            {session?.model ? (
+                                                                                <datalist id={`models-${agent.id}`}><option value={session.model} /></datalist>
+                                                                            ) : null}
+                                                                        </label>
+                                                                    </>
+                                                                )}
+                                                                {selectedEntry?.description || beside?.control === 'model' ? (
+                                                                    <p className="mt-1 truncate text-[var(--fg-4)]">
+                                                                        {selectedEntry?.description ? <span data-model-description={selectedEntry.modelId}>{selectedEntry.description}</span> : null}
+                                                                        {outcomeFor('model')}
+                                                                    </p>
+                                                                ) : null}
+                                                            </section>
+                                                        );
+                                                    })() : null}
+                                                </div>
+                                            ) : null}
+                                            {ops && has.has('mode') ? (
+                                                <div data-rail="mode" data-mode={ops.mode} className={rowClass}>
+                                                    <span className={labelClass}>Mode</span>
+                                                    <span className="rounded-md bg-[var(--bg-3)] px-2 py-0.5 font-medium">{ops.mode}</span>
+                                                    <button type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => { touch('mode'); ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual'); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                                        switch to {ops.mode === 'manual' ? 'automated' : 'manual'}
+                                                    </button>
+                                                    {help('Mode is wording for the agent, not a permission boundary.')}
+                                                    {outcomeFor('mode')}
+                                                </div>
+                                            ) : null}
+                                            {ops && has.has('run') ? (
+                                                <div data-settings-row="run" className={rowClass}>
+                                                    <span className={labelClass}>Run</span>
+                                                    {runControls(agent, session?.running === true && onStop !== undefined).map((item) => (
+                                                        <button key={item.id} type="button" data-run-action={item.id} title={item.hint} onClick={() => { touch('run'); act(item.id); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                                            {item.label}
+                                                        </button>
+                                                    ))}
+                                                    {outcomeFor('run')}
+                                                </div>
+                                            ) : null}
+                                            {/* REMOVE FROM WORKSPACE (the owner: "purge an agent ... or detach it"): the operations menu's own two items,
+                                                set apart at the foot; each opens the same preview-and-confirm as the menu. */}
+                                            {ops && has.has('remove') ? (
+                                                <div data-settings-remove="" className="mt-6 rounded-lg border border-[var(--border-1)] px-3 py-2">
+                                                    <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Remove from workspace</h3>
+                                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                                                        {removeControls(agent).map((item) => (
+                                                            <span key={item.id} className="flex items-center gap-2">
+                                                                <button type="button" data-remove-action={item.id} onClick={() => { touch('remove'); act(item.id); }} className={`rounded-md border px-2 py-0.5 ${item.danger ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--bg-2)]' : 'border-[var(--border-1)] hover:bg-[var(--bg-2)]'}`}>
+                                                                    {item.label}
+                                                                </button>
+                                                                <span className="text-[11px] text-[var(--fg-4)]">{item.hint}</span>
+                                                            </span>
+                                                        ))}
+                                                        {outcomeFor('remove')}
+                                                    </div>
+                                                </div>
+                                            ) : null}
+
+                                            {/* ── PERMISSIONS: one row each — label, control, ONE short line; the longer word is the row's tooltip. */}
+                                            {ops && has.has('tools') ? (
+                                                <label data-settings-row="tools" className={rowClass}>
+                                                    <span className={labelClass}>Tools {agent.name} may use</span>
+                                                    <select data-permissions={ops.permissions ?? 'all'} value={ops.permissions ?? 'all'} onChange={(e) => { touch('tools'); ops.onSetPermissions?.(e.target.value === 'edits' ? 'edits' : e.target.value === 'ask' ? 'ask' : 'all'); }} className={selectClass}>
+                                                        <option value="all">all tools</option>
+                                                        <option value="ask">ask me before shell commands</option>
+                                                        <option value="edits">edits only — shell refused</option>
+                                                    </select>
+                                                    {help(`A change applies at once while ${agent.name} is idle, or when its turn ends — it restarts on the same conversation.`)}
+                                                    {outcomeFor('tools')}
+                                                </label>
+                                            ) : null}
+                                            {ops && has.has('access') ? (
+                                                <label data-settings-row="access" className={rowClass}>
+                                                    <span className={labelClass}>Who may message {agent.name}</span>
+                                                    <select data-access-scope={ops.accessScope} value={ops.accessScope === 'specific' ? 'self' : ops.accessScope} onChange={(e) => { touch('access'); ops.onSetAccessScope(e.target.value as 'none' | 'self' | 'all'); }} className={selectClass}>
+                                                        <option value="none">nobody</option>
+                                                        <option value="self">this workspace</option>
+                                                        <option value="all">any workspace here</option>
+                                                    </select>
+                                                    {outcomeFor('access')}
+                                                </label>
+                                            ) : null}
+                                            {ops && has.has('autonomous') ? (
+                                                <label data-settings-row="autonomous" className={rowClass} title="Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Creating an agent always asks you. Applies to its next action.">
+                                                    <span className={labelClass}>Autonomous</span>
+                                                    <span data-auto-approve={ops.autoApprove ? 'on' : 'off'}><Switch checked={ops.autoApprove === true} onCheckedChange={(checked) => { touch('autonomous'); ops.onSetAutoApprove?.(checked); }} aria-label={`${agent.name} is autonomous`} /></span>
+                                                    {help(`${agent.name} sets up services, processes, sites and terminals without asking you.`)}
+                                                    {outcomeFor('autonomous')}
+                                                </label>
+                                            ) : null}
+                                            {ops && has.has('manage-tabs') ? (
+                                                <label data-settings-row="manage-tabs" className={rowClass} title={`The workspace’s default agent always can. Each change asks you unless ${agent.name} is autonomous.`}>
+                                                    <span className={labelClass}>May manage workspace tabs</span>
+                                                    <span data-manage-tabs={ops.manageTabs ? 'on' : 'off'}><Switch checked={ops.manageTabs === true} onCheckedChange={(checked) => { touch('manage-tabs'); ops.onSetManageTabs?.(checked); }} aria-label={`${agent.name} may manage workspace tabs`} /></span>
+                                                    {help(`${agent.name} can add, arrange and remove this workspace’s tabs and their panels.`)}
+                                                    {outcomeFor('manage-tabs')}
+                                                </label>
+                                            ) : null}
+                                            {ops && has.has('drive-pages') ? (
+                                                <label data-settings-row="drive-pages" className={rowClass} title={`The workspace’s default agent always can. A submit, or a click that changes or deletes something, always asks you first — even when ${agent.name} is autonomous.`}>
+                                                    <span className={labelClass}>May drive pages</span>
+                                                    <span data-drive-pages={ops.drivePages ? 'on' : 'off'}><Switch checked={ops.drivePages === true} onCheckedChange={(checked) => { touch('drive-pages'); ops.onSetDrivePages?.(checked); }} aria-label={`${agent.name} may drive pages`} /></span>
+                                                    {help(`${agent.name} can read this workspace’s Genie site pages, fill their fields and click through them.`)}
+                                                    {outcomeFor('drive-pages')}
+                                                </label>
+                                            ) : null}
+
+                                            {/* ── ISSUEWATCH: delivery, then the kinds in three groups. */}
+                                            {ops?.onSetIssueWatch && ops.issueWatch && has.has('issuewatch') ? (
+                                                <IssueWatchSettings name={agent.name} prefs={ops.issueWatch} onSet={(s) => { touch('issuewatch'); ops.onSetIssueWatch?.(s); }} outcome={outcomeFor('issuewatch')} />
+                                            ) : null}
+
+                                            {/* ── PERSONA: read-only here (editing is a later item). */}
+                                            {persona && has.has('persona') ? (
+                                                <section data-rail="persona">
+                                                    <p className="font-mono text-[11px] text-[var(--fg-2)]">
+                                                        {persona}
+                                                        {/* The board's `· committed`: git's own word on the file the session runs on; nothing when git said nothing. */}
+                                                        {personaGitShown ? <> · <span data-persona-git={personaGitShown} className={personaGitShown === 'committed' ? 'text-[var(--fg-3)]' : 'text-[var(--warning)]'}>{personaGitShown === 'committed' ? 'committed' : personaGitShown === 'modified' ? 'uncommitted changes' : 'not committed'}</span></> : null}
+                                                    </p>
+                                                    {personaShown ? (
+                                                        <pre data-persona-text="" className="mt-2 whitespace-pre-wrap rounded-md bg-[var(--bg-1)] px-2.5 py-2 font-mono text-[11.5px] leading-[19px] text-[var(--fg-2)]">{personaShown.lines.join('\n')}</pre>
+                                                    ) : null}
+                                                    {personaShown?.truncated ? <p data-persona-clipped="" className="mt-1 text-[11px] text-[var(--fg-4)]">… more in the file</p> : null}
+                                                    {personaError ? <p data-persona-error="" className="mt-1 text-[11px] text-[var(--warning)]">could not read it: {personaError}</p> : null}
+                                                </section>
+                                            ) : null}
+
+                                            {/* ── SKILLS: what the agent's OWN CLI can run (the owner, 2026-10-14), read-only; run one from the chat's `/` menu. */}
+                                            {session?.extensions && has.has('skills') ? (
+                                                <section data-rail="extensions">
+                                                    <h3 className="mb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Skills and commands</h3>
+                                                    {session.extensions.commands.length === 0 ? (
+                                                        <p className="text-[11px] text-[var(--fg-3)]">Its CLI offers none.</p>
+                                                    ) : (
+                                                        <ul data-rail-commands={session.extensions.commands.length} className="grid grid-cols-1 gap-x-6 font-mono text-[11px] text-[var(--fg-2)] md:grid-cols-2">
+                                                            {session.extensions.commands.map((c) => (
+                                                                <li key={c.name} data-command={c.name} className="flex justify-between gap-2 py-px">
+                                                                    <span className="truncate">/{c.name}</span>
+                                                                    <span className="shrink-0 truncate font-sans text-[var(--fg-4)]">{c.source ?? c.description}</span>
+                                                                </li>
+                                                            ))}
+                                                        </ul>
+                                                    )}
+                                                    {session.extensions.plugins && session.extensions.plugins.length > 0 ? (
+                                                        <p data-rail-plugins={session.extensions.plugins.length} className="mt-1.5 text-[11px] leading-normal text-[var(--fg-3)]">
+                                                            Plugins: {session.extensions.plugins.map((p) => (p.version ? `${p.name} ${p.version}` : p.name)).join(', ')}
+                                                        </p>
+                                                    ) : null}
+                                                    {session.extensions.subagents && session.extensions.subagents.length > 0 ? (
+                                                        <p data-rail-subagents={session.extensions.subagents.length} className="mt-1 text-[11px] leading-normal text-[var(--fg-3)]">
+                                                            Subagents: {session.extensions.subagents.join(', ')}
+                                                        </p>
+                                                    ) : null}
+                                                </section>
+                                            ) : null}
+                                        </div>
+                                    </div>
                                 ) : null}
                             </div>
-                        </div>
-                    ) : null}
+                        );
+                    })() : null}
 
                     {active === 'shells' ? <ShellsPanel shells={shells} agentName={agent.name} provider={agent.provider} /> : null}
 
@@ -1425,32 +1499,42 @@ export function AgentView({
  * How it hears — pushed as a turn, on its next turn, only the count on imDone, or not at all — and a box per kind. Never
  * set, it says so: the workspace's first agent hears the default kinds, every other agent nothing.
  */
-function IssueWatchSettings({ name, prefs, onSet }: { name: string; prefs: IssueWatchPrefs; onSet: (setting: IssueWatchSetting) => void }) {
+function IssueWatchSettings({ name, prefs, onSet, outcome }: { name: string; prefs: IssueWatchPrefs; onSet: (setting: IssueWatchSetting) => void; outcome?: ReactNode }) {
     return (
-        <div data-issue-watch="" className="mt-2 text-[11px] text-[var(--fg-3)]">
-            <label className="block">
-                GitHub, through IssueWatch: {name} hears it
-                <select data-issue-watch-delivery={prefs.delivery} value={prefs.delivery} onChange={(e) => onSet({ delivery: e.target.value as IwDelivery, kinds: prefs.kinds })} className="ml-2 rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
+        <div data-issue-watch="" className="text-[11px] text-[var(--fg-3)]">
+            <label className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-[var(--fg-2)]">GitHub, through IssueWatch: {name} hears it</span>
+                <select data-issue-watch-delivery={prefs.delivery} value={prefs.delivery} onChange={(e) => onSet({ delivery: e.target.value as IwDelivery, kinds: prefs.kinds })} className="rounded-md border border-[var(--border-1)] bg-transparent px-1 py-0.5">
                     {IW_DELIVERIES.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
                 </select>
+                {outcome}
             </label>
             {prefs.chosen ? null : (
-                <span data-issue-watch-default="" className="mt-0.5 block text-[var(--fg-4)]">
+                <span data-issue-watch-default="" className="mt-1 block text-[var(--fg-4)]">
                     {prefs.delivery === 'off' ? 'Never set: the workspace’s first agent hears GitHub, so this one does not.' : 'Never set: as the workspace’s first agent, it hears new issues, pull requests, security alerts and feedback.'}
                 </span>
             )}
-            <div className="mt-1 grid gap-0.5">
-                {IW_EVENT_KINDS.map((k) => (
-                    <label key={k.kind} className={`flex items-center gap-2 ${prefs.delivery === 'off' ? 'opacity-60' : ''}`}>
-                        <input
-                            type="checkbox"
-                            data-issue-watch-kind={k.kind}
-                            checked={prefs.kinds.includes(k.kind)}
-                            disabled={prefs.delivery === 'off'}
-                            onChange={(e) => onSet({ delivery: prefs.delivery, kinds: e.target.checked ? [...prefs.kinds, k.kind] : prefs.kinds.filter((x) => x !== k.kind) })}
-                        />
-                        <span>{k.label}</span>
-                    </label>
+            {/* The kinds in three short groups side by side (agent-management parity item 3), each kind's default marked. */}
+            <div className="mt-3 grid grid-cols-1 gap-x-6 gap-y-3 md:grid-cols-3">
+                {issueWatchGroups().map((g) => (
+                    <fieldset key={g.label} data-iw-group={g.label} className="min-w-0">
+                        <legend className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">{g.label}</legend>
+                        <div className="grid gap-1">
+                            {g.kinds.map((k) => (
+                                <label key={k.kind} title={k.label} className={`flex items-center gap-2 ${prefs.delivery === 'off' ? 'opacity-60' : ''}`}>
+                                    <input
+                                        type="checkbox"
+                                        data-issue-watch-kind={k.kind}
+                                        checked={prefs.kinds.includes(k.kind)}
+                                        disabled={prefs.delivery === 'off'}
+                                        onChange={(e) => onSet({ delivery: prefs.delivery, kinds: e.target.checked ? [...prefs.kinds, k.kind] : prefs.kinds.filter((x) => x !== k.kind) })}
+                                    />
+                                    <span className="truncate">{k.label}</span>
+                                    {k.default ? <span data-iw-default={k.kind} className="shrink-0 text-[var(--fg-4)]">· default</span> : null}
+                                </label>
+                            ))}
+                        </div>
+                    </fieldset>
                 ))}
             </div>
         </div>

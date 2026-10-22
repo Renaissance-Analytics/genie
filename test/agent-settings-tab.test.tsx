@@ -38,11 +38,20 @@ describe('the Settings tab', () => {
         expect(render('stream')).toContain('data-tab="settings"');
     });
 
-    it('on Settings: persona, mode, budget and skills are there, inside the full-width settings panel — each once', () => {
-        const html = render('settings');
-        const panel = html.slice(html.indexOf('data-agent-settings'));
-        expect(html.indexOf('data-agent-settings')).toBeGreaterThan(-1);
-        for (const s of SECTIONS) expect(panel.split(`data-rail="${s}"`).length - 1).toBe(1);
+    it('on Settings: persona, mode, budget and skills are there, inside the full-width settings panel — each once, each on its sub-tab', () => {
+        // Agent-management parity item 3: the one long page became sub-tabs. Mode is on General, the persona on Persona,
+        // skills on Skills; the budget is a strip above every sub-tab.
+        const where: Record<(typeof SECTIONS)[number], 'general' | 'persona' | 'skills'> = { persona: 'persona', mode: 'general', budget: 'general', extensions: 'skills' };
+        for (const s of SECTIONS) {
+            const html = render('settings', { settingsSection: where[s] });
+            const panel = html.slice(html.indexOf('data-agent-settings'));
+            expect(html.indexOf('data-agent-settings')).toBeGreaterThan(-1);
+            expect(panel.split(`data-rail="${s}"`).length - 1).toBe(1);
+        }
+        // CONTROL: General does not carry the persona or the skills — one sub-tab at a time.
+        const general = render('settings', { settingsSection: 'general' });
+        expect(general).not.toContain('data-rail="persona"');
+        expect(general).not.toContain('data-rail="extensions"');
     });
 
     it('on the Stream: NONE of them is in the rail any more — the rail is not in the way', () => {

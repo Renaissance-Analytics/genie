@@ -73,7 +73,7 @@ describe('the Settings tab shows it', () => {
     const session = { running: true, turnState: 'idle', startedAt: 0, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, plan: null } as unknown as LiveSession;
     const AGENT = { id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared' as const, cwd: '/w' };
     const opsFor = (autoApprove: boolean) => ({ mode: 'automated', accessScope: 'self', autoApprove, onMode: () => {}, onSetAutoApprove: () => {}, onRestart: () => {}, onDelete: () => {} }) as never;
-    const render = (ops: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={ops as never} />);
+    const render = (ops: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" settingsSection="permissions" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={ops as never} />);
 
     it('on and off, said plainly; no ops (a window that cannot set it) → no switch (CONTROL)', () => {
         // Fancy's Switch (2026-10-19): its state is the switch's own aria-checked, inside the marked span.
