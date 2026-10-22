@@ -267,12 +267,25 @@ export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSession
  * this list, and keeps Codex's default — prism refuses an approval naming a server it was not given, so with no servers
  * there is nothing to approve. The chosen model goes on thread/start and thread/resume; none = Codex's own.
  */
-export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: Record<string, 'approve'> } {
+export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: Record<string, 'approve'>; approvalPolicy?: 'never'; sandbox?: 'danger-full-access' } {
     return {
         cwd,
         ...(resumeSessionId ? { resumeSessionId } : {}),
         ...(record.model ? { model: record.model } : {}),
         ...(mcpServers.length > 0 ? { mcpServers, mcpToolApproval: Object.fromEntries(mcpServers.map((s) => [s.name, 'approve' as const])) } : {}),
+        /*
+         * YOLO FOR AN AUTONOMOUS CODEX AGENT (the owner, 2026-10-22: "make sure codex agents are using yolo mode";
+         * "apparently even when I have autonomous turned on for a codex agent, it still gets stuck" — tynn-slave parked
+         * 11 minutes on `git -C .ai/sandbox/g-agent-ops fetch origin`, waiting for a person). The Autonomous switch
+         * (`autoApprove`) already lets Genie's own gated actions run unasked; for Claude, 'all tools' is bypassPermissions,
+         * so a Claude agent never raised these prompts. Codex did: prism-acp before 0.23.0 hardcoded `approval_policy`
+         * `on-request`, and every command needed a card. prism-acp 0.23.0 passes Codex's documented `approvalPolicy` and
+         * `sandbox` on thread/start AND thread/resume: `never` + `danger-full-access` turns off Codex's approval prompts
+         * AND its sandbox — commands run with the person's full permissions and nobody is asked, which is what
+         * Autonomous means. Not Autonomous: nothing is passed, so Codex keeps its own defaults (on-request, its sandbox)
+         * and asks through the card as today.
+         */
+        ...(record.autoApprove === true ? { approvalPolicy: 'never' as const, sandbox: 'danger-full-access' as const } : {}),
     };
 }
 
