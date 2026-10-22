@@ -60,6 +60,14 @@ const pty: PtyPort = {
     onExit: () => () => {},
 };
 
+/**
+ * A REAL DURABLE SYNC HAS ITS OWN BUDGET (genie#1101's class; the header above says why a commit's sync stalls only
+ * under the full suite's parallel load). Measured on windows-latest, 2026-10-22: this file took 426 ms whole on main's
+ * green run (39849388427) and 6.4–6.7 s PER TEST on a loaded one (39862153281, "Test timed out in 5000ms" ×3). The
+ * gauge counts commits and never times them; the budget is for the syncs the counted commits cost.
+ */
+const REAL_SYNC_MS = 60_000;
+
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-knowledge-commits-'));
 });
@@ -82,7 +90,7 @@ describe('the WAL commit gauge', () => {
         } finally {
             db.close();
         }
-    });
+    }, REAL_SYNC_MS);
 });
 
 describe('a new knowledge store', () => {
@@ -94,7 +102,7 @@ describe('a new knowledge store', () => {
         } finally {
             store.close();
         }
-    });
+    }, REAL_SYNC_MS);
 
     it('reopened, writes nothing at all: the schema is there, so no commit reaches the log', () => {
         KnowledgeStore.open(dir).close();
@@ -105,7 +113,7 @@ describe('a new knowledge store', () => {
         } finally {
             again.close();
         }
-    });
+    }, REAL_SYNC_MS);
 
     it('is created whole or not at all: a schema that fails part way leaves none of its tables behind, and the file is not held open', async () => {
         // A TABLE already named like one of the store's INDEXES: `CREATE INDEX IF NOT EXISTS nodes_created` refuses
@@ -128,7 +136,7 @@ describe('a new knowledge store', () => {
         // The failed open closed its handle: the folder can be removed at once, on Windows too (no EBUSY).
         await rm(dir, { recursive: true, force: true });
         expect(existsSync(dir)).toBe(false);
-    });
+    }, REAL_SYNC_MS);
 });
 
 describe('a composition of all of Genie', () => {
@@ -138,5 +146,5 @@ describe('a composition of all of Genie', () => {
         const services = await composed.compose({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
         expect(services.knowledge).toBeDefined();
         expect(walCommits(join(runtimeDir(home), 'knowledge.db')).commits).toBe(floor + 1);
-    });
+    }, REAL_SYNC_MS);
 });

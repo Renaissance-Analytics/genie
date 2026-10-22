@@ -1214,7 +1214,7 @@ export function AgentView({
                                                 <label data-settings-row="autonomous" className={rowClass} title="Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Creating an agent always asks you. Applies to its next action.">
                                                     <span className={labelClass}>Autonomous</span>
                                                     <span data-auto-approve={ops.autoApprove ? 'on' : 'off'}><Switch checked={ops.autoApprove === true} onCheckedChange={(checked) => { touch('autonomous'); ops.onSetAutoApprove?.(checked); }} aria-label={`${agent.name} is autonomous`} /></span>
-                                                    {help(`${agent.name} sets up services, processes, sites and terminals without asking you.`)}
+                                                    {help(`${agent.name} sets up services, processes, sites and terminals without asking you.${agent.provider === 'codex' ? ' Codex runs commands and edits files without asking, outside its sandbox.' : ''}`)}
                                                     {outcomeFor('autonomous')}
                                                 </label>
                                             ) : null}
