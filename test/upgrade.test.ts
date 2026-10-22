@@ -26,9 +26,11 @@ describe('the updater can see the channel it publishes to', () => {
      * what keeps either from going stale, because this test fails if they stop agreeing. The
      * stable half (a plain tag → a full release) is held in test/update-channels.test.ts.
      */
-    it('publishes as a PRERELEASE by default — what a suffixed tag is, and what the dev channel sees', () => {
+    it('publishes as a DRAFT — public only when the owner publishes it; the prerelease flag is the workflow\'s (test/release-draft.test.ts)', () => {
         const yaml = readFileSync('electron-builder.yml', 'utf8');
-        expect(yaml).toMatch(/releaseType:\s*prerelease/);
+        expect(yaml).toMatch(/releaseType:\s*draft/);
+        const wf = readFileSync('.github/workflows/release.yml', 'utf8');
+        expect(wf).toMatch(/gh release create "\$GITHUB_REF_NAME"[^\n]*--draft[^\n]*\$prerelease/);
     });
 
     it('and the DEV channel allows prereleases in the updater', () => {

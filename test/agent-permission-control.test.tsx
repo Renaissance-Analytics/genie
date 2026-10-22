@@ -64,7 +64,7 @@ describe('the control', () => {
         ...over,
     });
     const render = (provider: string, o?: AgentOpsProps) => renderToStaticMarkup(
-        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider, fidelity: 'declared', cwd: '/w/tynn' }} session={null} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />,
+        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider, fidelity: 'declared', cwd: '/w/tynn' }} session={null} rows={[]} tab="settings" settingsSection="permissions" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />,
     );
 
     it('a Claude agent: a select of the two, the current one selected, and when it applies', () => {

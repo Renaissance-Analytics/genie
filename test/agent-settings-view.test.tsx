@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { LiveSession } from '../src/core/roster.js';
+import type { SettingsSection } from '../src/core/agent-settings-view.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
 
 /**
@@ -13,7 +14,7 @@ const session = { running: true, turnState: 'idle', startedAt: 0, pendingApprova
 const AGENT = { id: 'kai', name: 'kai', provider: 'codex', fidelity: 'declared' as const, cwd: '/w' };
 const switched: string[] = [];
 const ops = { mode: 'automated', accessScope: 'self', autoApprove: true, onMode: () => {}, onSetAutoApprove: () => {}, onSwitchDriver: (to: string) => { switched.push(to); }, onRestart: () => {}, onDelete: () => {} } as never;
-const render = (o: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={o as never} />);
+const render = (o: unknown, section: SettingsSection = 'general') => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" settingsSection={section} lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={o as never} />);
 const settings = (html: string) => html.slice(html.indexOf('data-agent-settings'));
 
 describe('the agent’s Settings tab', () => {
@@ -26,7 +27,7 @@ describe('the agent’s Settings tab', () => {
     });
 
     it('autonomy is a Fancy Switch, and says that creating an agent always asks you', () => {
-        const html = settings(render(ops));
+        const html = settings(render(ops, 'permissions')); // Autonomous is on the Permissions sub-tab
         expect(html).toMatch(/data-auto-approve="on"[\s\S]{0,400}?data-react-fancy-switch|data-react-fancy-switch[\s\S]{0,400}?data-auto-approve="on"/);
         expect(html).toMatch(/Creating an agent always asks you/);
         expect(html).not.toMatch(/<input type="checkbox"/);

@@ -14,6 +14,7 @@ import type { TynnNetworkBridge } from './relay-transport.js';
 import type { LiveSession } from '../core/roster.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import { AgentDetailViews, type AgentWireSubscribe } from '../core/agent-push-wire.js';
 import type { MailLike } from '../core/chat-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { BytesResult, BytesWriteResult, FileOpResult, FilesState, OpenResult, WriteResult } from '../main/files-host.js';
@@ -139,7 +140,7 @@ export interface GenieBridge {
     /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */
     browserWindow?: { open(address?: string, hosts?: readonly string[]): Promise<{ ok: true } | { ok: false; error: string }> };
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
-    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
+    host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
     tynnNetwork?: TynnNetworkBridge;
     /**
@@ -422,6 +423,8 @@ export interface GenieBridge {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string } | null>;
+        /** Read the release notes again when what is held is empty, unavailable or partial (UpdateHost.refreshNotes). */
+        notes?(): Promise<UpdateState | null>;
     };
 
     /**
@@ -509,6 +512,29 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
     onExit: () => () => {},
 };
 
+/**
+ * WHAT THE PRELOAD EXPOSES: the bridge, except an agent's live detail, which crosses as main's PATCH
+ * (`subscribeAgentWire`) and is rebuilt on the page's side by {@link pageBridge}. Whatever crosses `contextBridge` is
+ * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
+ * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
+ */
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent'> & {
+    subscribeAgentWire: AgentWireSubscribe<Omit<AgentDetail, 'rows'>, TimedEvent>;
+};
+
+const pageBridges = new WeakMap<PreloadBridge, GenieBridge>();
+
+/** The preload's bridge as the page uses it: one per window, so each agent has ONE receiver however many views watch it. */
+export function pageBridge(preload: PreloadBridge): GenieBridge {
+    const known = pageBridges.get(preload);
+    if (known !== undefined) return known;
+    const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(preload.subscribeAgentWire);
+    const { subscribeAgentWire: _wire, ...rest } = preload;
+    const bridge: GenieBridge = { ...rest, subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
+    pageBridges.set(preload, bridge);
+    return bridge;
+}
+
 declare global {
     interface Window {
         /**
@@ -516,7 +542,7 @@ declare global {
          * bridge cannot be rendered in a test, and the surfaces are then only ever checked by
          * launching the app — which is exactly how four releases shipped unexamined.
          */
-        genie?: GenieBridge;
+        genie?: PreloadBridge;
     }
 }
 

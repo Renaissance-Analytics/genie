@@ -99,7 +99,7 @@ describe('the control', () => {
         ...over,
     });
     const render = (o: AgentOpsProps) => renderToStaticMarkup(
-        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' }} session={null} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />,
+        <AgentView agent={{ id: 'agent_a', name: 'atlas', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' }} session={null} rows={[]} tab="settings" settingsSection="permissions" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />,
     );
 
     it('offers ask between all tools and edits only, selected when the agent is set so (positive control: not selected when all)', () => {
