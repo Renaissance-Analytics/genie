@@ -214,4 +214,16 @@ describe('the Active Plan column after a restart', () => {
         expect((column.match(/data-plan-step=/g) ?? []).length).toBe(3);
         expect(column).toMatch(/data-plan-step="in_progress"[^>]*data-current="true"/);
     });
+
+    it('the kept steps reach the page through the agent wire (#1121: the detail crosses as a patch) — and on a rows-only patch', () => {
+        type D = { session: { plan: unknown; planSteps?: unknown } };
+        let push: ((payload: AgentPushPayload<D, string>) => void) | null = null;
+        const views = new AgentDetailViews<D, string>((_id, onPayload) => { push = onPayload; return () => {}; });
+        const seen: Array<(D & { rows: readonly string[] }) | null> = [];
+        views.subscribe('a1', (detail) => seen.push(detail));
+        const session = { plan: { step: 1, of: 3, doing: 'Build the fixes' }, planSteps: steps };
+        push!({ seq: 1, detail: { session }, rows: { base: null, keep: 0, append: ['r0'] } });
+        push!({ seq: 2, detail: { session }, rows: { base: 1, keep: 1, append: ['r1'] } });
+        expect(seen.map((d) => d?.session.planSteps)).toEqual([steps, steps]);
+    });
 });
