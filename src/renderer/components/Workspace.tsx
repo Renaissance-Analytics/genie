@@ -38,6 +38,7 @@ import type { DeckItem } from '../../core/deck.js';
 import { FidelityDot } from './Dashboard.js';
 import { headerRepos, repoChip } from '../../core/repo-status.js';
 import { WorkspaceDashboard } from './WorkspaceDashboard.js';
+import { AgentRosterView, type AgentRosterViewProps } from './ImportedAgents.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -107,6 +108,11 @@ export interface WorkspaceOpsProps {
         readonly onSet: (key: string, value: boolean | string) => void;
         readonly onReset: (key: string) => void;
     } | undefined;
+    /**
+     * ITS AGENT ROSTER (agent management parity item 2; Genie 1's workspace roster): Registered, and On disk only with
+     * Reattach — the way back for an agent unmounted from Genie. Absent = not offered (a host that cannot read the files).
+     */
+    readonly agentRoster?: AgentRosterViewProps | undefined;
     /**
      * THIS workspace's agent files (§6.9): what Genie's last sync did here — when, and whether it was Genie's start or
      * you — and a Sync now for this workspace alone. `report: null` = not synced since Genie started; `results` = the
@@ -694,6 +700,15 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             })}
                         </ul>
                     )}
+                </section>
+            ) : null}
+            {onScreen === 'settings' && ops?.agentRoster ? (
+                <section data-ws-card="agents" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-sm font-semibold">Agents</h2>
+                        <span className="text-[var(--fg-4)]">the agents registered in {workspace.name ?? workspace.id}, and the agent files here Genie has none for</span>
+                    </div>
+                    <AgentRosterView {...ops.agentRoster} />
                 </section>
             ) : null}
             {onScreen === 'settings' && onOpenRuntime ? (
