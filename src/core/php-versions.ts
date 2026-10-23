@@ -33,15 +33,17 @@ export interface PhpRecipe {
 
 /**
  * The versions this release installs: the newest of each supported line, as windows.php.net's own `sha256sum.txt`
- * listed them on 2026-10-15 (`php-8.5.11-nts-Win32-vs17-x64.zip`, `php-8.4.26-nts-Win32-vs17-x64.zip`,
- * `php-8.3.35-nts-Win32-vs16-x64.zip`, `php-8.2.34-nts-Win32-vs16-x64.zip`). The toolsets are Genie 1's (8.4 vs17,
- * 8.3/8.2 vs16) plus 8.5 on vs17. Newest first.
+ * listed them on 2026-10-22 (`php-8.5.12-nts-Win32-vs17-x64.zip`, `php-8.4.27-nts-Win32-vs17-x64.zip`,
+ * `php-8.3.36-nts-Win32-vs16-x64.zip`, `php-8.2.35-nts-Win32-vs16-x64.zip`) — the PHP2Shell releases of 2026-10-21,
+ * each the first of its line that is not vulnerable to CVE-2026-109618 / CVE-2026-109619 (core/php-advisories.ts; the
+ * four this list held before, 8.5.11 / 8.4.26 / 8.3.35 / 8.2.34, all were). The toolsets are Genie 1's (8.4 vs17,
+ * 8.3/8.2 vs16) plus 8.5 on vs17. Newest first. test/php-advisories.test.tsx holds every entry at or above the floor.
  */
 export const PHP_RECIPES: readonly PhpRecipe[] = [
-    { version: '8.5.11', vs: 'vs17' },
-    { version: '8.4.26', vs: 'vs17' },
-    { version: '8.3.35', vs: 'vs16' },
-    { version: '8.2.34', vs: 'vs16' },
+    { version: '8.5.12', vs: 'vs17' },
+    { version: '8.4.27', vs: 'vs17' },
+    { version: '8.3.36', vs: 'vs16' },
+    { version: '8.2.35', vs: 'vs16' },
 ];
 
 /** What a version is: `8`, `8.3` or `8.3.35` — Genie 1's `cleanEngineVersion` (sites-config.ts), the same shape. */

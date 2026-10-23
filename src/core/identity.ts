@@ -152,6 +152,21 @@ export interface AgentRecord {
      * first was numbered 1 (the owner's rail, 2026-10-16). OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
      */
     readonly lastTurn?: number;
+    /**
+     * THE AGENT'S LATEST PLAN, every step (the owner, 2026-10-21: "The plan loaded in genie should survive a restart, how
+     * else will agents know what to pick up on."). Written as each plan arrives — Genie's `plan` tool or the provider's
+     * own (main, SessionHost `onPlan`) — and seeded into every run, so a relaunch, a restart or a fresh conversation keeps
+     * it until the agent reports a new one. Kept HERE rather than read from the thread: the record is in hand when a run
+     * starts, while the thread is read asynchronously and only its last HISTORY_LIMIT rows — an older plan row falls out
+     * of it. OPTIONAL and not in AGENT_RECORD_FIELDS: older records load.
+     */
+    readonly plan?: readonly PlanStepRecord[];
+}
+
+/** One step of a kept plan: what it is, and the status the agent (or its provider) gave it. */
+export interface PlanStepRecord {
+    readonly content: string;
+    readonly status: string;
 }
 
 /**

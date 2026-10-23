@@ -63,8 +63,13 @@ export interface AgentManifest {
     readonly tuis?: readonly string[];
 }
 
+/**
+ * A switch that happened also says what it LEFT with the old provider: `discarded` — the old provider's conversation
+ * (`null` = the agent never ran, so there was none) — and `droppedModel` — a model the new provider does not list
+ * (`null` = none dropped). Absent on the pure decision and on a no-op; the host fills them in when it switches.
+ */
 export type SwitchDecision =
-    | { ok: true; carries: string[]; from: string; to: string; noop?: true }
+    | { ok: true; carries: string[]; from: string; to: string; noop?: true; discarded?: string | null; droppedModel?: string | null }
     | { ok: false; reason: string };
 
 export function switchDriverDecision(manifest: AgentManifest, from: string, to: string, _by: 'user' | 'agent'): SwitchDecision {
@@ -73,6 +78,21 @@ export function switchDriverDecision(manifest: AgentManifest, from: string, to: 
         return { ok: false, reason: `${manifest.name}’s AGENT.md allows tuis: ${manifest.tuis.join(', ')}; ${to} is not among them` };
     }
     return { ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from, to };
+}
+
+/**
+ * WHAT THE VIEW SAYS AFTER A SWITCH. A provider's conversation is the provider's (a Claude session id means nothing to
+ * Codex), so the agent starts a NEW one on the new provider — said plainly, so nobody expects the old chat to continue
+ * there. Genie's own record of the agent (identity, inbox, history, prompt) is what comes along.
+ */
+export function switchOutcome(agentName: string, decision: SwitchDecision): string {
+    if (!decision.ok) return decision.reason;
+    if (decision.noop) return `${agentName} already runs on ${decision.to}`;
+    const parts = [`${agentName} switched ${decision.from} → ${decision.to}`, `it starts a new conversation on ${decision.to}`];
+    if (decision.discarded) parts.push(`its ${decision.from} conversation stays with ${decision.from}`);
+    if (decision.droppedModel) parts.push(`"${decision.droppedModel}" is a ${decision.from} model; ${decision.to} starts on its default model`);
+    parts.push(`kept: ${decision.carries.join(', ')}`);
+    return `${parts.join('; ')}. Start it when ready.`;
 }
 
 export type BudgetDecision =

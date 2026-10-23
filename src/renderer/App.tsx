@@ -27,6 +27,8 @@ import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal
 import type { Approval } from '../core/approval.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
+import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
+import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
@@ -58,7 +60,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
-import { applyOutcome, type DeletePlan } from '../core/agent-ops.js';
+import { applyOutcome, switchOutcome, type DeletePlan } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
@@ -352,6 +354,26 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
     }, [snapshot, settings]);
 }
 
+/**
+ * THE DRIFT WATCHER'S ALARM (core/toolchain-alerts.ts): the toolchain probe's statuses arrive with the feature data; a
+ * tool newly under its security floor raises the `ghsecurity` alert once — the sound and notification the person set
+ * for "a security alert" — the moment the probe reports it, not when Settings is next opened.
+ */
+function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null): void {
+    const prev = useRef<readonly ToolStatus[] | null>(null);
+    useEffect(() => {
+        if (tools === null) return;
+        for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
+            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+                const toast = toastFor(alert);
+                try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
+            }
+        }
+        prev.current = tools;
+    }, [tools, settings]);
+}
+
 export interface AppProps {
     /** Injected by tests and by the live check. The real app reads `window.genie`. */
     bridge?: GenieBridge | undefined;
@@ -534,6 +556,7 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
+    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;
@@ -853,11 +876,14 @@ function DesktopApp({ bridge }: AppProps) {
               onSetDrivePages: (on) => { void resolvedBridge.agents.setDrivePages(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetIssueWatch: (setting) => { void resolvedBridge.agents.setIssueWatch(agentId, setting).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },
-              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.noop ? `already running on ${r.to}` : `switched ${r.from} → ${r.to}; carried ${r.carries.join(', ')}. Start it when ready.`) : r.reason }))); },
+              // A switch starts a NEW conversation on the new provider; switchOutcome says so, and names a dropped model.
+              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(detail?.agent.name ?? 'the agent', r) })); if (r.ok && !r.noop) setModelsAsked((n) => n + 1); }); },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
               onPreviewDelete: (outcome) => { void resolvedBridge.agents.previewDelete(agentId, outcome, []).then((r) => setOpsView((v) => (r.ok ? { ...v, deletePreview: r.plan } : { ...v, lastOutcome: r.reason }))); },
-              onConfirmDelete: (outcome, also) => {
-                  void resolvedBridge.agents.delete(agentId, outcome, also).then((r) => {
+              onConfirmDelete: (outcome, also, handoff) => {
+                  // The handoff wait is bounded (45 s) but not instant: say what is happening while it runs.
+                  if (handoff) setOpsView((v) => ({ ...v, lastOutcome: `asking ${detail?.agent.name ?? 'the agent'} for a handoff first — up to 45 s` }));
+                  void resolvedBridge.agents.delete(agentId, outcome, also, handoff).then((r) => {
                       if (r.ok) { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); navigate(DEFAULT_ROUTE); }
                       else setOpsView((v) => ({ ...v, lastOutcome: r.reason }));
                   });

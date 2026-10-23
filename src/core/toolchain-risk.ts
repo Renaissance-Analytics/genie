@@ -44,6 +44,18 @@ export function runsOnNode(command: string): boolean {
     return NODE_LAUNCHERS.has(word);
 }
 
+/** A command's first word, without its directory, quotes or a Windows extension. */
+function firstWord(command: string): string {
+    const first = command.trim().match(/^"([^"]+)"|^(\S+)/);
+    return (first?.[1] ?? first?.[2] ?? '').split(/[\\/]/).pop()!.toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, '');
+}
+
+/** Executes PHP: `php …` (artisan serve, a queue worker) or a `php-cgi` worker, by whatever path. */
+export function runsOnPhp(command: string): boolean {
+    const word = firstWord(command);
+    return word === 'php' || word === 'php-cgi';
+}
+
 const list = (names: readonly string[]): string => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 const are = (n: number) => (n === 1 ? 'is' : 'are');
 
@@ -70,6 +82,24 @@ export function updateRisk(tool: string, activity: ToolchainActivity, target: { 
                 risk: 'blocked',
                 affected: busy,
                 reason: `${list(busy)} ${are(busy.length)} running on Node right now. Updating Node pulls the runtime out from under ${busy.length === 1 ? 'it' : 'them'}. Stop ${busy.length === 1 ? 'it' : 'them'} first, then update.`,
+            };
+        }
+        return { risk: 'safe' };
+    }
+
+    /*
+     * PHP (PHP2Shell, 2026-10-22): Genie installs each PHP into its own directory, so an update overwrites no running
+     * binary — never blocked. But the php-cgi pool, `artisan serve` and the queue workers keep EXECUTING the old PHP
+     * until they are restarted, and a security update that leaves them on the old one has fixed nothing yet. Warned,
+     * naming them, so the restart is part of the update and not a surprise found later.
+     */
+    if (tool === 'php') {
+        const busy = activity.processes.filter((p) => runsOnPhp(p.command)).map((p) => p.label);
+        if (busy.length > 0) {
+            return {
+                risk: 'warn',
+                affected: busy,
+                reason: `${list(busy)} ${are(busy.length)} running on PHP right now, and ${busy.length === 1 ? 'it keeps' : 'they keep'} running the old PHP until ${busy.length === 1 ? 'it is' : 'they are'} restarted. Restart ${busy.length === 1 ? 'it' : 'them'} after the update.`,
             };
         }
         return { risk: 'safe' };

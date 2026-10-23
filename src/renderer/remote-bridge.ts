@@ -206,7 +206,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),
             previewDelete: (agentId, outcome, also) => answer('agents.previewDelete', agentId, outcome, [...also]),
-            delete: (agentId, outcome, also) => answer('agents.delete', agentId, outcome, [...also]),
+            delete: (agentId, outcome, also, handoff) => answer('agents.delete', agentId, outcome, [...also], handoff === true),
             switchDriver: (agentId, to) => answer('agents.switchDriver', agentId, to),
             setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),

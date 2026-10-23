@@ -12,13 +12,13 @@ import { installPhpVersion, listPhpVersions, removePhpVersion, resolvePhpCgi, ty
  */
 
 const ROOT = join('/data', 'genie2-toolchain', 'php-versions');
-const V = '8.4.26';
+const V = '8.4.27';
 const RECIPE = PHP_RECIPES.find((r) => r.version === V)!;
 const FILE = phpZipName(RECIPE);
-const ZIP = new TextEncoder().encode('the official php 8.4.26 nts zip bytes');
+const ZIP = new TextEncoder().encode('the official php 8.4.27 nts zip bytes');
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 const sumsWith = (hash: string) => [
-    `${'a'.repeat(64)} *php-8.3.35-nts-Win32-vs16-x64.zip`,
+    `${'a'.repeat(64)} *php-8.3.36-nts-Win32-vs16-x64.zip`,
     `${hash} *${FILE}`,
     `${'b'.repeat(64)} *php-debug-pack-${V}-nts-Win32-vs17-x64.zip`,
 ].join('\n');
@@ -111,10 +111,10 @@ describe('parsing what windows.php.net publishes and what is on disk', () => {
     });
 
     it('the view: Genie’s versions (with the sites on each), the PATH php-cgi, and what this release can install', async () => {
-        const { ports } = winPorts({ files: installed('8.3.35', V), systemPhp: '8.4.13' });
+        const { ports } = winPorts({ files: installed('8.3.35', V), systemPhp: '8.4.27' });
         const view = await listPhpVersions(ports, [{ host: 'shop.gen', pin: '8.4' }]);
         expect(view.managed.map((m) => [m.version, m.usedBy])).toEqual([[V, ['shop.gen']], ['8.3.35', []]]);
-        expect(view.system).toEqual({ version: '8.4.13' });
+        expect(view.system).toEqual({ version: '8.4.27' });
         expect(view.available).toEqual(PHP_RECIPES.map((r) => ({ version: r.version, installed: r.version === V || r.version === '8.3.35' })));
         expect(view.installRefused).toBeUndefined();
     });
@@ -224,7 +224,7 @@ describe('the php-cgi a site starts', () => {
         const { ports } = winPorts({ files: installed(V) });
         const r = resolvePhpCgi('8.2', ports);
         expect(r.ok).toBe(false);
-        expect((r as { reason: string }).reason).toMatch(/pinned to PHP 8\.2, which Genie does not manage on this machine.*8\.4\.26/);
+        expect((r as { reason: string }).reason).toMatch(/pinned to PHP 8\.2, which Genie does not manage on this machine.*8\.4\.27/);
         expect(resolvePhpCgi('latest', ports)).toMatchObject({ ok: false, reason: expect.stringMatching(/not a PHP version/) });
     });
 

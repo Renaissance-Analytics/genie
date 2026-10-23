@@ -1,6 +1,6 @@
 import { observedRowFor, type TakeOverProbe } from '../core/observed.js';
 import { ACP_PROVIDERS, isAcpProvider } from '../core/engine.js';
-import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, threadIdIsResumable } from '../core/identity.js';
+import { OS_AGENT_NAME, agentRecord, mintAgentId, type AgentRecord, type AgentId, type AgentPermissions, type PlanStepRecord, threadIdIsResumable } from '../core/identity.js';
 import type { IssueWatchSetting } from '../core/issue-watch.js';
 import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
@@ -462,12 +462,19 @@ export class Registry {
         return cleared;
     }
 
-    /** Switch driver: identity, inbox, history and prompt stay; only the provider changes. */
-    async setProvider(agentId: AgentId, provider: string): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
+    /**
+     * Switch driver: identity, inbox, history and prompt stay. What belonged to the OLD provider does not: its
+     * conversation (`threadId` → `null`, "never ran on this provider" — a Claude session id handed to Codex would be a
+     * resume of nothing) and, unless the caller found it in the new provider's own list (`keepModel`), its model. The
+     * owner, 2026-10-21: "I need to be able to change provider as well as model". The same provider changes nothing.
+     */
+    async setProvider(agentId: AgentId, provider: string, options: { keepModel: boolean }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }> {
         if (!isAcpProvider(provider)) return { ok: false, reason: `Genie cannot run a "${provider}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return { ok: false, reason: `No agent ${agentId}.` };
-        const record: AgentRecord = { ...existing, provider };
+        if (existing.provider === provider) return { ok: true, record: existing };
+        const { model: _oldModel, ...withoutModel } = existing;
+        const record: AgentRecord = { ...(options.keepModel ? existing : withoutModel), provider, threadId: null };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(record.id);
@@ -534,6 +541,12 @@ export class Registry {
     /** The agent's last turn number (identity.ts `lastTurn`): what its next session numbers on from. */
     async setLastTurn(agentId: AgentId, lastTurn: number): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => (a.lastTurn === lastTurn ? a : { ...a, lastTurn }));
+    }
+
+    /** The agent's latest plan (identity.ts `plan`): what its next run shows at once, and what the `plan` tool reads back. */
+    async setPlan(agentId: AgentId, plan: readonly PlanStepRecord[]): Promise<AgentRecord | null> {
+        const steps = plan.map((s) => ({ content: s.content, status: s.status }));
+        return this.#update(agentId, (a) => (JSON.stringify(a.plan ?? null) === JSON.stringify(steps) ? a : { ...a, plan: steps }));
     }
 
     /**

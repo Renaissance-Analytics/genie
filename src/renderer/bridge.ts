@@ -302,7 +302,8 @@ export interface GenieBridge {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | { ok: false; reason: string }>;
         /** What a delete WOULD do — shown before the person confirms. Touches nothing. */
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
-        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        /** `handoff`: ask a running agent for a handoff first; the call returns once it lands or the bounded wait ends. */
+        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff?: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;

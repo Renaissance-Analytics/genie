@@ -13,7 +13,7 @@ describe('agentOpsMenu', () => {
         expect(agentOpsMenu({ provider: 'claude', fidelity: 'declared' })).toEqual([
             { id: 'restart-graceful', label: 'Restart gracefully', hint: 'same conversation; refuses if it cannot resume' },
             { id: 'restart-fresh', label: 'Restart fresh', hint: 'discards the conversation on purpose' },
-            { id: 'switch:codex', label: 'Switch driver to codex', hint: 'identity, inbox, history and prompt carry across' },
+            { id: 'switch:codex', label: 'Switch driver to codex', hint: 'starts a new conversation; identity, inbox, history and prompt carry across' },
             { id: 'diagnose', label: 'Diagnose', hint: 'names a cause and the repair that fits' },
             { id: 'delete-unmount', label: 'Unmount from Genie…', hint: 'keeps every .agents/* file' },
             { id: 'delete-delete', label: 'Delete…', hint: 'removes the persona folder too', danger: true },

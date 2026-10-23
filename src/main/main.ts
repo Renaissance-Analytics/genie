@@ -38,7 +38,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
@@ -844,6 +844,8 @@ async function boot(): Promise<void> {
         },
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
         onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
+        // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
+        onPlan: (agentId, steps) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
         onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
@@ -1147,7 +1149,7 @@ async function boot(): Promise<void> {
             find: (id) => registry?.find(id as AgentId) ?? null,
             forget: (id) => registry!.forget(id),
             clearThread: (id) => registry!.clearThread(id),
-            setProvider: (id, provider) => registry!.setProvider(id, provider),
+            setProvider: (id, provider, options) => registry!.setProvider(id, provider, options),
             setBudget: (id, usd) => registry!.setBudget(id, usd),
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
@@ -1174,6 +1176,16 @@ async function boot(): Promise<void> {
             }
         },
         removeDir: (path) => rm(path, { recursive: true, force: true }),
+        realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
+        // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.
+        handoff: {
+            ask: (id, text) => host?.prompt(id, text, 'genie') ?? false,
+            landedSince: (id, since) => (services?.attention.finished() ?? []).some((f) => f.agentId === id && f.handoff !== null && Date.parse(f.at) >= since),
+            now: Date.now,
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+            waitMs: 45_000,
+            pollMs: 1_000,
+        },
         removeHandoff: async (record) => {
             const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
             if (workspace) await rm(join(workspace, '.ai', 'handoff', `${record.name}.md`), { force: true });
@@ -1241,9 +1253,9 @@ async function boot(): Promise<void> {
         if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
         return previewDelete(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []);
     });
-    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
+    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown, handoff: unknown) => {
         if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []).finally(() => registry?.touch());
+        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : [], { handoff: handoff === true }).finally(() => registry?.touch());
     });
     ipcMain.handle('genie:agent-switch-driver', (_event, raw: unknown, to: unknown) => {
         if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
@@ -1897,7 +1909,7 @@ async function boot(): Promise<void> {
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),
                 previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
-                delete: (id, outcome, also) => deleteAgent(agentOps, id, outcome, also),
+                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }),
                 switchDriver: (id, to) => switchDriver(agentOps, id, to),
                 setBudget: (id, usd) => setBudget(agentOps, id, usd),
                 setMode: (id, mode) => setMode(agentOps, id, mode),
@@ -2123,6 +2135,8 @@ async function boot(): Promise<void> {
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
             reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
+            // ...and read back from the agent's record, where every plan is kept across restarts (identity.ts `plan`).
+            readPlan: (agentId) => registry?.find(agentId as AgentId)?.plan ?? null,
             terminals: {
                 list: () => terminals!.list(),
                 open: (options) => terminals!.open(options),

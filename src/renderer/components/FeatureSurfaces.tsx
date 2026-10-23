@@ -777,9 +777,13 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                                 <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                     <span className="font-medium">{t.tool}</span>
                                     {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
-                                    {word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
+                                    {t.tone === 'security-update' ? (
+                                        <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
+                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    {t.advisory ? <span data-tool-advisory={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
                                     {/* Update from here: to the version Genie knows of, or — with none known — whatever the tool's own update path finds newest. */}
-                                    {t.tone === 'update-available' && t.latest ? (
+                                    {(t.tone === 'update-available' || t.tone === 'security-update') && t.latest ? (
                                         <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
                                     ) : t.tone === 'unknown' && t.installed !== null ? (
                                         <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update</button>
@@ -821,12 +825,15 @@ function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<
             <p data-php-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
                 {php.system ? `Unpinned php sites run PHP ${php.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'}
             </p>
+            {/* THE FLOOR (PHP2Shell, core/php-advisories.ts): a version under it says so in red, beside the number — never a quiet "update available". */}
+            {php.system?.advisory ? <p data-php-system-advisory="" className="px-5 py-1 text-xs text-[var(--danger)]">{php.system.advisory}</p> : null}
             <ul className="divide-y divide-[var(--border-1)]">
                 {php.managed.map((m) => (
-                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} className="flex items-center gap-3 px-5 py-2 text-sm">
+                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">PHP {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         {m.usedBy.length > 0 ? <span className="text-xs text-[var(--fg-2)]">pinned by {m.usedBy.join(', ')}</span> : null}
+                        {m.advisory ? <span data-php-advisory={m.version} className="basis-full text-xs text-[var(--danger)]">{m.advisory}</span> : null}
                         <button type="button" disabled={busy || m.usedBy.length > 0} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</button>
                     </li>
                 ))}

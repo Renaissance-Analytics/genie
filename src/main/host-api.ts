@@ -107,7 +107,8 @@ export interface HostApiDeps {
     agentOps: {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
-        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        /** `handoff`: ask a running agent for a handoff first (bounded wait); see agent-ops-host `deleteAgent`. */
+        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
@@ -196,7 +197,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.previewDelete':
                 return deps.agentOps.previewDelete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
             case 'agents.delete':
-                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
+                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : [], args[3] === true);
             case 'agents.switchDriver':
                 return deps.agentOps.switchDriver(str(args[0]), str(args[1]));
             case 'agents.setBudget':
