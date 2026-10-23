@@ -34,11 +34,11 @@
     "@particle-academy/fancy-ws": "0.1.1",
     "@particle-academy/holy-sheet": "2.10.1",
     "@particle-academy/last-word": "0.10.0",
-    "@particle-academy/prism-acp": "0.23.2",
+    "@particle-academy/prism-acp": "0.24.0",
     "@particle-academy/prism-harness": "0.7.0",
     "@particle-academy/prism-mcp": "^0.3.0",
-    "@particle-academy/prism-mcp-server": "0.3.0",
-    "@particle-academy/react-fancy": "5.53.1",
+    "@particle-academy/prism-mcp-server": "0.3.1",
+    "@particle-academy/react-fancy": "5.59.0",
     "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
@@ -54,7 +54,7 @@
     "tsx": "^4.23.15",
     "typescript": "^5.9.3",
     "vite": "^7.3.7",
-    "vitest": "^5.0.3"
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "global-agent": "^4.1.3"
