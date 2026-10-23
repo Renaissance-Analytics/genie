@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterAll, describe, expect, it } from 'vitest';
+import { AgentDetailViews, type AgentPushPayload } from '../src/core/agent-push-wire.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { PlanKeepalive } from '../src/core/plan-keepalive.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
