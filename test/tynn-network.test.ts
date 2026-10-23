@@ -34,7 +34,7 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
             { id: 'ws_pat', name: 'Pat’s laptop', status: 'active', is_local: true, connectable: false, source: null },
         ];
         const result = await connectableWorkstations(async (path, init) => { asked.push(`${init.method} ${path}`); return json(200, { workstations: rows }); }, 'ws_me');
-        expect(asked).toEqual(['GET /workstations/connectable']);
+        expect(asked).toEqual(['GET /api/v1/workstations/connectable']);
         expect(result).toEqual({
             ok: true,
             workstations: [
@@ -56,7 +56,7 @@ describe('mintConnectGrant — a grant for one workstation, bound to this connec
         const pop = PopKeypair.generate();
         let body: unknown;
         const result = await mintConnectGrant(async (path, init) => {
-            expect(`${init.method} ${path}`).toBe('POST /workstations/ws_cloud/connect-grant');
+            expect(`${init.method} ${path}`).toBe('POST /api/v1/workstations/ws_cloud/connect-grant');
             body = init.body;
             return json(200, { token: 'jws', relay_endpoint: 'wss://relay.example.com', workstation_id: 'ws_cloud' });
         }, 'ws_cloud', pop.publicJwk);

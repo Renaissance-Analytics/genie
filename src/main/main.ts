@@ -1983,12 +1983,17 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
-    // THIS GENIE'S TYNN ACCOUNT: the key encrypted by the OS in ~/.genie, for the host in settings (main/tynn-account.ts).
-    // Genie 1's Tynn session, in its own persistent partition: Chromium keeps its cookies on disk under the OS's own
-    // encryption, and nothing else Genie loads (the window, the Genie Browser) shares them.
+    // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
+    // the one-time pairing exchange; ordinary API requests explicitly omit it.
     const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
         host: () => TYNN_HOST,
+        file: join(genieHome(), 'tynn.json'),
+        cipher: {
+            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
+            encrypt: (text) => safeStorage.encryptString(text),
+            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        },
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {

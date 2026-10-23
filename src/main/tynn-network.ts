@@ -36,11 +36,11 @@ async function tynnSays(res: { status: number; json(): Promise<unknown> }, fallb
     return typeof body?.message === 'string' && body.message !== '' ? body.message : `${fallback} (${res.status})`;
 }
 
-/** `GET /workstations/connectable`, never this machine itself, each once. */
+/** `GET /api/v1/workstations/connectable`, never this machine itself, each once. */
 export async function connectableWorkstations(request: SessionRequest, ownWorkstationId: string | null): Promise<TynnWorkstations> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
-        res = await request('/workstations/connectable', { method: 'GET' });
+        res = await request('/api/v1/workstations/connectable', { method: 'GET' });
     } catch (error) {
         return { ok: false, reason: `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})` };
     }
@@ -63,11 +63,11 @@ export async function connectableWorkstations(request: SessionRequest, ownWorkst
     return { ok: true, workstations: [...byId.values()] };
 }
 
-/** `POST /workstations/{id}/connect-grant {pop_jwk}`: the grant and the relay to dial. */
+/** `POST /api/v1/workstations/{id}/connect-grant {pop_jwk}`: the grant and the relay to dial. */
 export async function mintConnectGrant(request: SessionRequest, workstationId: string, popJwk: PopJwk): Promise<{ ok: true; token: string; relayEndpoint: string } | { ok: false; reason: string }> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
-        res = await request(`/workstations/${encodeURIComponent(workstationId)}/connect-grant`, { method: 'POST', body: { pop_jwk: popJwk } });
+        res = await request(`/api/v1/workstations/${encodeURIComponent(workstationId)}/connect-grant`, { method: 'POST', body: { pop_jwk: popJwk } });
     } catch (error) {
         return { ok: false, reason: `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})` };
     }
