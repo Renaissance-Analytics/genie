@@ -766,6 +766,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                 <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
             ))}
             {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
+            {tc?.node ? <NodeVersions node={tc.node} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -857,6 +858,47 @@ function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<
                     {addable.map((a) => (
                         <button key={a.version} type="button" data-php-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPhp', version: a.version, consent: true })}>
                             PHP {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+/**
+ * GENIE'S OWN NODE (the owner, 2026-10-23: "genie has its own install path"): the versions Genie manages, the node on
+ * PATH, and an Install per version this release offers — each Install is the person's consent. Where Genie installs none
+ * it says so instead of offering a button.
+ */
+function NodeVersions({ node, busy, onAction, refusals = [] }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const addable = node.available.filter((a) => !a.installed);
+    return (
+        <section data-node-versions={node.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">Node versions</h3>
+            {refusals.map((r) => (
+                <p key={r.version} data-node-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <p data-node-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {node.system ? `The node on your PATH is ${node.system.version}.` : 'No node on your PATH.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {node.managed.map((m) => (
+                    <li key={m.version} data-node-version={m.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Node {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        <button type="button" disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {node.installRefused ? (
+                <p data-node-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{node.installRefused}</p>
+            ) : addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install from nodejs.org (checked against its published sha256):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-node-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installNode', version: a.version, consent: true })}>
+                            Node {a.version}
                         </button>
                     ))}
                 </div>
