@@ -115,7 +115,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test
+      # Windows gets the 30 s per-test budget CI's unit (windows) job has (test/ci-windows-test-budget.test.ts says why:
+      # the beta.37 release failed here on a 5019 ms test); Linux keeps vitest's 5 s default.
+      - run: npm test ${{ runner.os == 'Windows' && '-- --testTimeout=30000' || '' }}
       - run: npm run build
       # electron-builder finds the draft guard made for this tag on the repository named in
       # electron-builder.yml and uploads the installer, its blockmap and latest*.yml into it. There is no macOS job:

@@ -107,7 +107,10 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - run: npm test
+      # A 30 s budget per test HERE ONLY (test/ci-windows-test-budget.test.ts holds it): windows-latest runs the real-I/O
+      # suites five to ten times slower than Linux, and one day's PRs timed out on six different ones at the 5 s default,
+      # none touched by the PR (2026-10-22). A hang still fails; a slow runner no longer does. Linux keeps 5 s.
+      - run: npm test -- --testTimeout=30000
 
   smoke:
     name: a real window
