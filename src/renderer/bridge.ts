@@ -214,7 +214,8 @@ export interface GenieBridge {
      * names its reason and leaves the item on the Deck.
      */
     restartWithHandoff(agentId: string, finishedId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
-    addAgent(workspaceId: string): void;
+    /** The New agent form's answer (renderer/components/NewAgentModal.tsx): created, or the host's refusal in words. */
+    addAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string } | { ok: false; reason: string }>;
     /**
      * Open the folder picker and register what the user chose.
      *

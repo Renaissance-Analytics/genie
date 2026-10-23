@@ -165,7 +165,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // The host's reply ends the answer's flight and a refusal is said on the card (core/approval-answering.ts).
         answerApproval: (agentId, optionId, note) => answer<{ ok: true }>('answerApproval', agentId, optionId, note ?? ''),
         restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
-        addAgent: (workspaceId) => fire('addAgent', workspaceId),
+        addAgent: (workspaceId, input) => answer<{ ok: true; id: string }>('addAgent', workspaceId, input),
         addWorkspace: () => fire('addWorkspace'),
         takeOver: (agentId) => answer<{ ok: true; terminalId: string }>('takeOver', agentId),
         workspaces: {
