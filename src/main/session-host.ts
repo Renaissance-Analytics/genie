@@ -32,6 +32,16 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
  * prism-acp) or Genie has no driver for the provider: unknown is not "yes", and no turn Stop is offered on it.
  * Read through a record because the field is newer than the types an older prism-acp ships.
  */
+/**
+ * Whether an agent's driver REPLAYS a resumed conversation's history (prism-acp `transcriptReplay`: Codex `true`,
+ * Claude `false`). Genie keeps its own history, so a resumed session on such a driver does not record the replay
+ * (AgentSessionOptions.replaysTranscript). Unknown is `false`: nothing is dropped that was not declared a replay.
+ */
+export function transcriptReplayFor(provider: string): boolean {
+    const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
+    return caps !== null && (caps as Readonly<Record<string, unknown>>)['transcriptReplay'] === true;
+}
+
 export function turnCancelFor(provider: string): boolean | null {
     const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
     const declared = caps === null ? undefined : (caps as Readonly<Record<string, unknown>>)['cancel'];
@@ -755,6 +765,7 @@ export class SessionHost {
             runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
+            replaysTranscript: transcriptReplayFor(record.provider),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),

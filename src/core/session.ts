@@ -235,6 +235,12 @@ export interface AgentSessionOptions {
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
     /**
+     * The driver REPLAYS the conversation's history when it resumes, before its `ready` resolves (prism-acp's
+     * `transcriptReplay` capability: Codex yes, Claude no). Genie keeps its own history, so those replayed rows are not
+     * recorded again (test/codex-replay-not-recorded.test.ts).
+     */
+    replaysTranscript?: boolean;
+    /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
      * `meta.replacesLast` means this row SUPERSEDES the one emitted immediately before it: the
@@ -319,6 +325,8 @@ export class AgentSession {
     #held = false;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
+    /** A resumed thread's history being replayed by the driver, before its `ready` (AgentSessionOptions.replaysTranscript). */
+    #replaying = false;
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
@@ -1010,7 +1018,11 @@ export class AgentSession {
         const ready = this.#driver.ready;
         if (ready !== undefined) {
             this.#starting = true;
-            const done = (): void => { this.#starting = false; this.#changed(); };
+            // A resumed thread whose driver replays it: what arrives before `ready` is that replay (2026-10-23 — a
+            // resumed Codex agent wrote its whole past into the ledger again: as `peer` rows under prism-acp 0.24.0, as
+            // agent messages under 0.24.1). Genie already holds that history; the replay is not recorded twice.
+            this.#replaying = Boolean(this.#options.resumeSessionId) && this.#options.replaysTranscript === true;
+            const done = (): void => { this.#starting = false; this.#replaying = false; this.#changed(); };
             ready.then(done, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
@@ -1386,6 +1398,9 @@ export class AgentSession {
 
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
+        // The provider replaying a resumed thread's history (see `#replaying`): not recorded again. Notices (the model,
+        // a rate-limit reading) still are — they are about now, not the past.
+        if (this.#replaying && (event.kind === 'message' || event.kind === 'think' || event.kind === 'tool' || event.kind === 'plan')) return;
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
