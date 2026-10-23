@@ -117,9 +117,12 @@ describe('AgentSession', () => {
 
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'on it' } });
         d.emit({ sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Bash', title: 'npm test' });
-        await vi.waitFor(async () => {
-            expect(await openAgentThread(store, id).count()).toBe(2);
-        });
+        // Waited for by the session's own `settled()`, not polled: `vi.waitFor` gives up after 1 s, and a ledger write
+        // (a lock file, a temp file, a rename) outlasted that on a loaded windows-latest runner (beta.41's release PR,
+        // run 39903276660). The write's own promise has no budget of its own to lose; the test's timeout still ends one
+        // that never comes.
+        await session.settled();
+        expect(await openAgentThread(store, id).count()).toBe(2);
 
         const rows = await openAgentThread(store, id).messages();
         expect(rows.map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'tool']);
@@ -131,7 +134,8 @@ describe('AgentSession', () => {
         const id = mintAgentId();
         const d = fakeDriver();
 
-        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree }).start();
+        const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree });
+        session.start();
         d.emit({ sessionUpdate: 'available_commands_update', availableCommands: [] });
 
         // POSITIVE CONTROL in the same test: a real row still lands, so "nothing was written"
@@ -150,9 +154,12 @@ describe('AgentSession', () => {
          */
         d.endTurn();
 
-        await vi.waitFor(async () => {
-            expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
-        });
+        // Waited for by the session's own `settled()`, not polled: `vi.waitFor` gives up after 1 s, and a ledger write
+        // (a lock file, a temp file, a rename) outlasted that on a loaded windows-latest runner (beta.41's release PR,
+        // run 39903276660). The write's own promise has no budget of its own to lose; the test's timeout still ends one
+        // that never comes.
+        await session.settled();
+        expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
     });
 
     it('does not write a message that is still being streamed', async () => {
@@ -171,7 +178,8 @@ describe('AgentSession', () => {
         const id = mintAgentId();
         const d = fakeDriver();
 
-        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree }).start();
+        const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree });
+        session.start();
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'still typ' } });
 
         // Long enough for a write to have happened if one were going to.
@@ -180,9 +188,12 @@ describe('AgentSession', () => {
 
         // POSITIVE CONTROL: it is not that persistence is broken — closing it writes it (and the turn's `finished` row).
         d.endTurn();
-        await vi.waitFor(async () => {
-            expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
-        });
+        // Waited for by the session's own `settled()`, not polled: `vi.waitFor` gives up after 1 s, and a ledger write
+        // (a lock file, a temp file, a rename) outlasted that on a loaded windows-latest runner (beta.41's release PR,
+        // run 39903276660). The write's own promise has no budget of its own to lose; the test's timeout still ends one
+        // that never comes.
+        await session.settled();
+        expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
     });
 
     it('starting twice REATTACHES — it never makes a second copy of the agent', () => {
