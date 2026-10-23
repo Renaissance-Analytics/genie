@@ -47,12 +47,41 @@ describe('agent operations', () => {
         expect(await registry.clearThread('agent_nope' as never)).toBeNull();
     });
 
-    it('setProvider changes the driver and keeps everything else; an unknown provider is refused by name', async () => {
+    it('setProvider changes the driver and keeps the agent; an unknown provider is refused by name', async () => {
+        const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        const switched = await registry.setProvider(a.id, 'codex', { keepModel: false });
+        expect(switched).toMatchObject({ ok: true, record: { id: a.id, provider: 'codex', name: 'atlas', workspaceId: 'tynn' } });
+        expect(await registry.setProvider(a.id, 'kimi' as never, { keepModel: false })).toEqual({ ok: false, reason: 'Genie cannot run a "kimi" agent; the providers it knows are claude, codex' });
+    });
+
+    it('a NEW provider starts a new conversation: the old provider’s thread never carries over (null = never ran on this provider), on disk too', async () => {
+        const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        await registry.recordThread(a.id, 'claude-sess-1');
+        const switched = await registry.setProvider(a.id, 'codex', { keepModel: false });
+        expect(switched.ok && switched.record.threadId).toBeNull();
+        const reopened = new Registry(new Store(dir));
+        await reopened.load({ name: 'alphar', healthy: true });
+        expect(reopened.find(a.id)).toMatchObject({ provider: 'codex', threadId: null });
+    });
+
+    it('the model goes with the old provider unless the caller says the new one lists it (keepModel)', async () => {
+        const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        await registry.setModel(a.id, 'opus');
+        const dropped = await registry.setProvider(a.id, 'codex', { keepModel: false });
+        expect(dropped.ok && dropped.record.model).toBeUndefined();
+
+        const b = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'nova' });
+        await registry.setModel(b.id, 'shared-model');
+        const kept = await registry.setProvider(b.id, 'codex', { keepModel: true });
+        expect(kept.ok && kept.record.model).toBe('shared-model');
+    });
+
+    it('setProvider to the SAME provider changes nothing: the thread and model stay', async () => {
         const a = await registry.register({ workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
         await registry.recordThread(a.id, 'sess-1');
-        const switched = await registry.setProvider(a.id, 'codex');
-        expect(switched).toMatchObject({ ok: true, record: { id: a.id, provider: 'codex', threadId: 'sess-1', name: 'atlas' } });
-        expect(await registry.setProvider(a.id, 'kimi' as never)).toEqual({ ok: false, reason: 'Genie cannot run a "kimi" agent; the providers it knows are claude, codex' });
+        await registry.setModel(a.id, 'opus');
+        const same = await registry.setProvider(a.id, 'claude', { keepModel: false });
+        expect(same).toMatchObject({ ok: true, record: { provider: 'claude', threadId: 'sess-1', model: 'opus' } });
     });
 
     it('setBudget stores a daily limit (or clears it) as an OPTIONAL field — older records without it still load', async () => {

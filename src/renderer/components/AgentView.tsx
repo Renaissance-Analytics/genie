@@ -134,7 +134,8 @@ export interface AgentOpsProps {
     readonly onSwitchDriver: (to: string) => void;
     readonly onDiagnose: () => void;
     readonly onPreviewDelete: (outcome: 'unmount' | 'delete') => void;
-    readonly onConfirmDelete: (outcome: 'unmount' | 'delete', alsoRemoveFrom: string[]) => void;
+    /** `handoff`: ask the running agent for a handoff before it is stopped (Genie 1's AgentDeleteModal). */
+    readonly onConfirmDelete: (outcome: 'unmount' | 'delete', alsoRemoveFrom: string[], handoff: boolean) => void;
     readonly onCancelDelete: () => void;
     readonly onSetBudget: (dailyLimitUsd: number | null) => void;
 }
@@ -718,7 +719,7 @@ export function AgentView({
                         e.preventDefault();
                         const data = new FormData(e.currentTarget);
                         const also = ops.deletePreview!.external.filter((x) => x.action === 'kept' && data.get(`also-${x.system}`) === 'on').map((x) => x.system);
-                        ops.onConfirmDelete(ops.deletePreview!.outcome, also);
+                        ops.onConfirmDelete(ops.deletePreview!.outcome, also, data.get('handoff') === 'on');
                     }}
                 >
                     <p className="font-semibold">{ops.deletePreview.outcome === 'delete' ? `Delete ${agent.name} — this removes files` : `Unmount ${agent.name} from Genie`}</p>
@@ -746,6 +747,24 @@ export function AgentView({
                             )}
                         </div>
                     ) : null}
+                    {/* ASK FOR A HANDOFF FIRST (Genie 1's AgentDeleteModal, its words): ticked by default for a running agent;
+                        a stopped one is told why there is nothing to ask rather than shown a mute greyed box. The one confirm
+                        card both ways in reach it: the overflow menu and General's "Remove from workspace". */}
+                    {session?.running === true ? (
+                        <label className="mt-2 flex items-start gap-2">
+                            <input type="checkbox" name="handoff" defaultChecked />
+                            <span>
+                                Ask for a handoff first
+                                <span className="block text-[var(--fg-4)]">
+                                    {ops.deletePreview.outcome === 'delete'
+                                        ? 'It writes what it was doing to .ai/handoff/ before stopping. That note survives even though its .agents/ files do not. Without one, whatever it had in flight is lost.'
+                                        : 'It writes what it was doing to .ai/handoff/ before stopping, so the next run picks up where it left off. Without one, whatever it had in flight is lost.'}
+                                </span>
+                            </span>
+                        </label>
+                    ) : (
+                        <p className="mt-2 text-[var(--fg-4)]">{agent.name} is not running, so there is nothing to ask for a handoff.</p>
+                    )}
                     <div className="mt-3 flex gap-2">
                         <button type="submit" data-action="confirm-delete" className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">{ops.deletePreview.outcome === 'delete' ? 'Delete' : 'Unmount'} {agent.name}</button>
                         <button type="button" onClick={ops.onCancelDelete} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
@@ -1039,11 +1058,12 @@ export function AgentView({
                                             {/* ── GENERAL: provider and model first (the owner's first ask), mode, run controls; Remove at the foot. */}
                                             {ops && has.has('provider') ? (
                                                 <div data-settings-row="provider-model" className="grid grid-cols-1 gap-3 border-b border-[var(--border-1)] pb-3 md:grid-cols-2">
-                                                    {/* PROVIDER: the CLI it runs on; changing it is Switch driver — identity, inbox and history stay. */}
+                                                    {/* PROVIDER: the CLI it runs on; changing it is Switch driver — identity, inbox and history stay, and
+                                                        the agent starts a NEW conversation there (a provider's conversation is its own). */}
                                                     <section data-rail="provider" data-agent-provider={agent.provider}>
                                                         <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
                                                         <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: p }))} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
-                                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Its name, inbox and history stay; its next turn runs on the new provider.{outcomeFor('provider')}</p>
+                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its name, inbox and history stay; it starts a new conversation on the new provider.')}{outcomeFor('provider')}</p>
                                                     </section>
                                                     {/* MODEL: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
                                                     {has.has('model') ? (() => {

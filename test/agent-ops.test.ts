@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, type AgentManifest } from '../src/core/agent-ops.js';
+import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, switchOutcome, type AgentManifest } from '../src/core/agent-ops.js';
 
 /**
  * AGENT OPERATIONS (§6.2) — the pure half of the operations that were still missing.
@@ -65,6 +65,34 @@ describe('switch driver — the same rule for human and agent', () => {
 
     it('switching to the same driver is a no-op, not an error', () => {
         expect(switchDriverDecision(manifest(), 'claude', 'claude', 'user')).toEqual({ ok: true, carries: [], from: 'claude', to: 'claude', noop: true });
+    });
+});
+
+describe('switch driver — what the view says afterwards', () => {
+    const switched = { ok: true as const, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex' };
+
+    it('says the conversation starts FRESH on the new provider — the old provider’s conversation does not come along', () => {
+        const text = switchOutcome('atlas', { ...switched, discarded: 'sess-1', droppedModel: null });
+        expect(text).toMatch(/^atlas switched claude → codex/);
+        expect(text).toMatch(/starts a new conversation on codex/);
+        expect(text).toMatch(/claude conversation stays with claude/);
+        expect(text).toMatch(/kept: identity, inbox, history, prompt/);
+        expect(text).not.toMatch(/model/);
+    });
+
+    it('names a model it dropped and says the new provider runs its own default', () => {
+        expect(switchOutcome('atlas', { ...switched, discarded: null, droppedModel: 'opus' })).toMatch(/"opus" is a claude model; codex starts on its default model/);
+    });
+
+    it('a never-run agent had no conversation, so none is said to be left behind', () => {
+        const text = switchOutcome('atlas', { ...switched, discarded: null, droppedModel: null });
+        expect(text).toMatch(/starts a new conversation on codex/);
+        expect(text).not.toMatch(/stays with claude/);
+    });
+
+    it('a no-op and a refusal are said as they are', () => {
+        expect(switchOutcome('atlas', { ok: true, carries: [], from: 'claude', to: 'claude', noop: true })).toBe('atlas already runs on claude');
+        expect(switchOutcome('atlas', { ok: false, reason: 'nope' })).toBe('nope');
     });
 });
 
