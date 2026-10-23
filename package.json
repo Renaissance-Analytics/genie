@@ -19,12 +19,12 @@
     "verify:leak": "tsx test/live/terminal-leak.live.ts"
   },
   "dependencies": {
+    "@particle-academy/agent-integrations": "0.47.1",
     "@particle-academy/dark-slide": "0.19.0",
     "@particle-academy/fancy-code": "0.15.0",
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",
     "@particle-academy/fancy-flow": "^0.81.0",
-    "@particle-academy/agent-integrations": "0.47.1",
     "@particle-academy/fancy-git": "0.3.1",
     "@particle-academy/fancy-git-ui": "0.5.0",
     "@particle-academy/fancy-sheets": "0.12.0",
@@ -48,12 +48,12 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "electron": "^44.7.0",
+    "electron": "^45.0.0",
     "electron-builder": "^26.5.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3",
-    "vite": "^7.3.7",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
     "vitest": "^5.0.5"
   },
   "overrides": {
