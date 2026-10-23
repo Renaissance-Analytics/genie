@@ -1,4 +1,5 @@
 import type { AgentId, AgentRecord } from './identity.js';
+import { isOsAgent } from './os-agent.js';
 
 /**
  * AGENTINBOX — the pure half (§6.4). Addressing, reachability, attachment rules.
@@ -143,6 +144,8 @@ export function reachable(
     options: ReachableOptions = {},
 ): boolean {
     if (from === HUMAN || to === HUMAN) return true;
+    // The OS agent is the person's coordinator: every agent may reach it, and its own access is unrestricted.
+    if (isOsAgent(from) || isOsAgent(to)) return true;
     if (options.wroteTo?.(to.id, from.id) === true) return true;
     if (to.accessScope === 'none') return false;
 

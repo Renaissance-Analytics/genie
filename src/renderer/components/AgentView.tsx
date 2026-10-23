@@ -18,6 +18,7 @@ import type { GenieBridge } from '../bridge.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
+import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
 import type { DeletePlan } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
@@ -151,7 +152,7 @@ export interface AgentViewProps {
     planOpen?: boolean | undefined;
     /** Where the index column's collapsed state is remembered; `undefined` = the browser's localStorage, `null` = nowhere (tests). */
     indexStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
     session: LiveSession | null;
     rows: readonly TimedEvent[];
     tab: AgentTab;
@@ -974,6 +975,7 @@ export function AgentView({
                         a strip above them. Which tab holds which control is `core/agent-settings-view.ts`. */}
                     {active === 'settings' ? (() => {
                         const sections = settingsSections({
+                            name: agent.name, workspaceId: agent.workspaceId,
                             fidelity: agent.fidelity, provider: agent.provider, ops: ops !== undefined,
                             model: ops?.onSetModel !== undefined, tools: ops?.onSetPermissions !== undefined, autonomous: ops?.onSetAutoApprove !== undefined,
                             manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
@@ -993,6 +995,7 @@ export function AgentView({
                         const showStrip = budget || budgetLimit !== null || headroom || policy || session?.mcpServers || note;
                         return (
                             <div data-agent-settings="" className="flex min-h-0 flex-1 flex-col text-xs">
+                                {isOsAgent(agent) ? <p data-os-agent-policy="" className="shrink-0 border-b border-[var(--border-1)] px-4 py-2 text-[var(--fg-3)]">{OS_AGENT_POLICY_NOTE}</p> : null}
                                 {/* BUDGET, a strip (the owner: no half-empty column): context, cost and turns, the limit, the MCP, headroom. */}
                                 {showStrip ? (
                                     <section data-rail="budget" data-settings-strip="" className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-1)] px-5 py-2 text-[11px] text-[var(--fg-3)]">

@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { OS_AGENT_NAME } from './os-agent.js';
 import type { AcpProvider } from './engine.js';
 import type { IssueWatchSetting } from './issue-watch.js';
 
@@ -46,7 +47,7 @@ export function asAgentId(value: string): AgentId | null {
  * ADDRESS: the rail links `genie://agent/genie` because the OS agent's id is minted on first boot and
  * the rail cannot know it.
  */
-export const OS_AGENT_NAME = 'genie';
+export { OS_AGENT_NAME };
 
 /**
  * Narrow a reference from the renderer: a minted id, or exactly the OS agent's name. The registry turns

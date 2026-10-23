@@ -6,6 +6,7 @@ import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
+import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 
 /**
@@ -37,7 +38,7 @@ import { folderName } from '../core/workspace-name.js';
  * the one agent that belongs to no workspace still has a well-formed record.
  */
 export { OS_AGENT_NAME };
-export const OS_WORKSPACE = '__genie__';
+export { OS_WORKSPACE };
 
 /** What the registry can see of a running session. Supplied by whatever owns the sessions. */
 export type SessionProbe = (id: AgentId) => LiveSession | null;
@@ -93,14 +94,22 @@ export class Registry {
      * inflate that workspace's count — the group header's `4 agents` is a census people read.
      */
     async #seedOsAgent(): Promise<void> {
-        if (this.#agents.some((a) => a.workspaceId === OS_WORKSPACE && a.name === OS_AGENT_NAME)) return;
+        const existing = this.#agents.find(isOsAgent);
+        if (existing) {
+            const normalized = withOsAgentPolicy(existing);
+            if (normalized !== existing) {
+                this.#agents = this.#agents.map((a) => a.id === existing.id ? normalized : a);
+                await this.#store.writeAgents(this.#agents);
+            }
+            return;
+        }
 
-        const record = agentRecord({
+        const record = withOsAgentPolicy(agentRecord({
             id: mintAgentId(),
             workspaceId: OS_WORKSPACE,
             provider: 'claude',
             name: OS_AGENT_NAME,
-        });
+        }));
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
     }
@@ -298,6 +307,7 @@ export class Registry {
     }
 
     async addWorkspace(workspace: WorkspaceRecord): Promise<void> {
+        if (workspace.id === OS_WORKSPACE) throw new Error('The built-in Genie workspace is reserved; choose a regular workspace');
         if (this.#workspaces.some((w) => w.id === workspace.id)) return;
         this.#workspaces = [...this.#workspaces, workspace];
         await this.#store.writeWorkspaces(this.#workspaces);
@@ -312,6 +322,7 @@ export class Registry {
      * before anyone is ready to spend a provider turn on it.
      */
     async register(input: { workspaceId: string; provider: AgentRecord['provider']; name: string; instructions?: string | null }): Promise<AgentRecord> {
+        if (input.workspaceId === OS_WORKSPACE) throw new Error('The built-in Genie identity is reserved; agents belong to a regular workspace');
         const record = agentRecord({ id: mintAgentId(), ...input });
         this.#agents = [...this.#agents, record];
         await this.#store.writeAgents(this.#agents);
@@ -527,7 +538,7 @@ export class Registry {
     async #update(agentId: AgentId, change: (a: AgentRecord) => AgentRecord): Promise<AgentRecord | null> {
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return null;
-        const record = change(existing);
+        const record = withOsAgentPolicy(change(existing));
         this.#agents = this.#agents.map((a) => (a.id === agentId ? record : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(record.id);
