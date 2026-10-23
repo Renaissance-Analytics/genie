@@ -9,7 +9,7 @@ import type { Stack } from '../core/serve-config.js';
 import { mailpitInboxUrl } from '../core/mailpit-name.js';
 import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, engineKindOf, imageFor, SERVICE_CATALOG, sliceIsDroppable, type ServiceInstance } from '../core/services.js';
 import {
-    createService, createSite, detachService, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateSite, useService,
+    createService, createSite, detachService, detectSite, openSite, removeService, removeSite, restartSite, serviceLogs, siteDefaultsIn, siteEditProblems, siteEditTarget, siteLogs, siteStatus, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type HostingServices, type OpenInBrowser,
 } from './hosting-actions.js';
 import { callerFrom } from './mcp-callers.js';
@@ -24,9 +24,10 @@ import type { SiteInfo } from './site-manager.js';
  * What an agent may do is decided HERE, before anything is called:
  * - Its OWN workspace only. It sees its workspace's engines and the shared ones; it changes only its workspace's own
  *   (a shared engine serves every workspace, so stopping or removing one is the person's). A site is its workspace's.
- * - `services add` and `remove`, and `sites update` and `remove`, wait for the PERSON's approval (approval-queue.ts). For
+ * - `services add`, `update` and `remove`, and `sites update` and `remove`, wait for the PERSON's approval (approval-queue.ts). For
  *   an add the person sees the engine, the version and the image Genie will pull — that approval is the pull's consent;
  *   for a site update, every field that changes, before and after. A change Genie would refuse is refused WITHOUT asking.
+ *   An engine update names the actual image and every affected workspace/site/process, including a shared engine's.
  * - `sites detect` reads a folder and answers what Genie would serve: nothing is started, written or kept. `status`,
  *   `logs`, `restart` and `open` act at once, on the workspace's own sites only; `open` puts the site in front of the
  *   person in Genie's browser.
@@ -45,7 +46,7 @@ import type { SiteInfo } from './site-manager.js';
  * A refusal never asks for approval, and an answer never carries a credential.
  */
 
-export type HostingApproval = 'services.add' | 'services.remove' | 'services.use' | 'services.exec' | 'sites.update' | 'sites.remove';
+export type HostingApproval = 'services.add' | 'services.remove' | 'services.use' | 'services.exec' | 'services.update' | 'sites.update' | 'sites.remove';
 
 /**
  * Runs ONE command line through the platform's shell (core/shell-launch.ts) in `cwd`, with `env` over Genie's own
@@ -211,6 +212,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
             'Your workspace’s service engines — Postgres, MySQL, MariaDB, Redis, MongoDB, Mailpit (SMTP + a web inbox), WebSockets (Sockudo, Pusher protocol; Laravel reads it through its reverb driver), Meilisearch, S3 (SeaweedFS), or a custom image. GENIE runs them: never run `docker` (or docker compose) yourself. '
                 + 'Genie pulls the image, creates, starts and stops the container, and gives every terminal and site in this workspace the connection variables (DB_*, DATABASE_URL, REDIS_URL, MAIL_*, REVERB_*, MEILISEARCH_*, AWS_*…). '
                 + 'Actions: `catalog` — the engines and versions Genie offers, with each image and variant (postgres: `pgvector`). '
+                + '`update` {id} — the person approves a fresh pull of this engine’s existing image tag and recreation in place. The approval names every affected workspace/site/process. Name, data volumes, ports and credentials stay; a stopped engine stays stopped. '
                 + '`list` — this workspace’s engines and the shared ones, with live status (Mailpit’s `inbox` is its web inbox); `inUse` marks the one of each kind the env comes from. '
                 + '`env` — the variables a process here gets: names and values, secrets masked. '
                 + '`logs` {id, tail?} — the last lines the engine wrote (default 500), credentials masked. '
@@ -226,7 +228,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'use', 'detach', 'start', 'stop', 'remove'] },
+                    action: { type: 'string', enum: ['catalog', 'list', 'env', 'logs', 'exec', 'add', 'use', 'detach', 'start', 'stop', 'update', 'remove'] },
                     command: { type: 'string', description: 'exec: the command line to run, as you would type it (&&, pipes and quoting work).' },
                     cwd: { type: 'string', description: 'exec: the folder to run it in, inside this workspace (default the workspace root).' },
                     engine: { type: 'string', description: 'add: the engine, as `catalog` names it (postgres, mysql, mariadb, redis, mongo, mailpit, websockets, meilisearch, seaweedfs, custom).' },
@@ -238,7 +240,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     port: { type: 'number', description: 'add (custom): the port the image listens on inside its container.' },
                     env: { type: 'object', description: 'add (custom): NAME: value strings for the container — and this workspace’s processes.' },
                     name: { type: 'string', description: `add (custom): a short name (lowercase, digits, hyphens); default "${DEFAULT_CUSTOM_NAME}".` },
-                    id: { type: 'string', description: 'logs / use / detach / start / stop / remove: the engine’s id, from `list`.' },
+                    id: { type: 'string', description: 'logs / use / detach / start / stop / update / remove: the engine’s id, from `list`.' },
                     tail: { type: 'number', description: 'logs: how many of the last lines (default 500, at most 5000).' },
                     deleteData: { type: 'boolean', description: 'Never true: an agent cannot delete a service’s data.' },
                 },
@@ -387,6 +389,18 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     await stopService(s, i.id);
                     return ok({ ok: true, service: serviceView(i, caller.workspaceId, await statusOf(i.id)) });
                 }
+                case 'update': {
+                    const i = own(str(args.id));
+                    if (typeof i === 'string') return err(i);
+                    const preview = await updateService(s, i.id);
+                    if (preview.kind !== 'needs-consent') return err('the engine did not return an update preview; nothing was updated');
+                    const affected = preview.dependents.length > 0 ? ` Affected: ${preview.dependents.join('; ')}. Confirm interruption of these dependents.` : '';
+                    const verdict = await deps.approve(caller, 'services.update', `${labelOf(i)} — ${preview.note}${affected}`);
+                    if (verdict !== 'allowed') return err('the person did not allow updating this engine; nothing was updated');
+                    const r = await updateService(s, i.id, { consent: true, confirmed: true, expectedImage: preview.image, approvedDependents: preview.dependents });
+                    if (r.kind === 'needs-consent') return err('the engine image or its dependents changed after approval; ask again so the person can review the new impact');
+                    return ok({ ok: true, update: r, service: serviceView(i, caller.workspaceId, await statusOf(i.id)) });
+                }
                 case 'remove': {
                     // Refused outright, never put to the person: an agent does not delete data, approved or not.
                     if (args.deleteData !== undefined && args.deleteData !== false) return err('an agent never deletes a service’s data; `remove` always keeps it. Deleting the data is the person’s, from the Services tab. Nothing was done');
@@ -408,7 +422,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     return ok({ ok: true, removed: i.id, dataKept: true });
                 }
                 default:
-                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, add, use, detach, start, stop, remove`);
+                    return err(`unknown action ${JSON.stringify(action)}; the actions are catalog, list, env, logs, add, use, detach, start, stop, update, remove`);
             }
         }),
     };

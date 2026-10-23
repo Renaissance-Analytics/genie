@@ -2485,7 +2485,7 @@ async function boot(): Promise<void> {
         if (action.kind === 'browser.forward') browserPane?.forward();
         if (action.kind === 'browser.reload') browserPane?.reload();
         // An engine's log, once asked for, stays open across pushed snapshots until the person hides it (H6).
-        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null };
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null, serviceUpdating: data.services?.updating ?? null };
         return data;
     });
 

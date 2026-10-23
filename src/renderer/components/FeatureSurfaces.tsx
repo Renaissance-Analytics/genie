@@ -637,6 +637,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                             <button type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</button>
                                         )}
                                         <button type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</button>
+                                        <button type="button" data-service-update={i.id} disabled={status === 'docker-not-running' || status === 'absent'} onClick={() => onAction({ kind: 'services.update', serviceId: i.id })}>Update image…</button>
                                         <button type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</button>
                                         <button type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</button>
                                     </span>
@@ -644,6 +645,16 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
                                 {status === 'docker-not-running' && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
                                 {confirming === i.id ? <DeleteDataConfirm instance={i} workspaces={workspaces} onAction={onAction} onCancel={() => setConfirming(null)} /> : null}
+                                {services.updating?.serviceId === i.id ? (
+                                    <div data-service-update-confirm={i.id} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
+                                        <p>{services.updating.note}</p>
+                                        {services.updating.dependents.length > 0 ? <p className="text-[var(--warning)]">This interrupts: {services.updating.dependents.join('; ')}.</p> : null}
+                                        <div className="flex gap-3">
+                                            <button type="button" onClick={() => onAction({ kind: 'services.update', serviceId: i.id, consent: true, confirmed: true })}>{services.updating.dependents.length > 0 ? 'Update and interrupt' : 'Pull and update'}</button>
+                                            <button type="button" onClick={() => onAction({ kind: 'services.cancelUpdate' })}>Cancel</button>
+                                        </div>
+                                    </div>
+                                ) : null}
                                 {myLog ? (
                                     <div data-service-log={i.id} className="flex flex-col gap-1">
                                         <div className="flex items-center gap-3 text-xs text-[var(--fg-3)]">

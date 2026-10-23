@@ -235,7 +235,7 @@ export interface FeatureData {
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
     readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
-    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null } | null;
+    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
     readonly toolchain: ToolchainSection | null;
     readonly inbox: InboxSection | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
@@ -329,6 +329,8 @@ export type FeatureAction =
     | { kind: 'services.detach'; workspaceId: string; serviceId: string }
     | { kind: 'services.start'; serviceId: string }
     | { kind: 'services.stop'; serviceId: string }
+    | { kind: 'services.update'; serviceId: string; consent?: boolean; confirmed?: boolean }
+    | { kind: 'services.cancelUpdate' }
     /**
      * `deleteData` acts for `workspaceId` — the engine's sole data holder, which the row sends (core/service-tenancy.ts
      * `soleHolderOf`); main refuses it, naming them, while any OTHER workspace keeps data in the engine.

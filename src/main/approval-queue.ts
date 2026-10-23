@@ -38,6 +38,7 @@ const VERBS: Record<string, string> = {
     // An agent's `services` / `sites` tools (mcp-tools-hosting.ts): the detail names the engine, version and image.
     'services.add': 'add a service',
     'services.remove': 'remove a service',
+    'services.update': 'update a service image',
     // `use` and `detach`: the detail names the engine, and what the workspace uses for that kind before and after.
     'services.use': 'change which service this workspace uses',
     // `services exec`: the detail is the command line, run with the workspace's service variables.

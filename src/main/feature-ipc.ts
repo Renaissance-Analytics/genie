@@ -25,7 +25,7 @@ import type { InstallOutcome } from './toolchain-ops.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
 import type { ComposedServices } from './compose.js';
 import {
-    createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite, useService,
+    createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
@@ -154,6 +154,7 @@ export interface FeatureState {
     serviceAdding?: ServiceAdding | null;
     /** The engine log the person opened in the Services tab (H6), until they hide it. */
     serviceLogs?: ServiceLogs | null;
+    serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
     /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
@@ -322,7 +323,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
-        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null },
+        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
@@ -573,6 +574,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'services.stop':
             await stopService(services, action.serviceId);
+            break;
+        case 'services.update': {
+            const previous = state.serviceUpdating?.serviceId === action.serviceId ? state.serviceUpdating : null;
+            const r = await updateService(services, action.serviceId, { ...action, ...(previous ? { expectedImage: previous.image, approvedDependents: previous.dependents } : {}) });
+            next.serviceUpdating = r.kind === 'needs-consent' ? r : null;
+            break;
+        }
+        case 'services.cancelUpdate':
+            next.serviceUpdating = null;
             break;
         case 'services.remove':
             // A delete-data acts for `workspaceId` (the Services tab sends the engine's sole data holder, core/service-tenancy.ts);
