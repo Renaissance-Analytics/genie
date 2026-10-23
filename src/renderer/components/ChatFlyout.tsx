@@ -487,9 +487,10 @@ export function ChatFlyout({
                     if (who === 'thinking') {
                         return (
                             <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
-                                <summary className="flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                                <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
                                     <Icon name="sparkles" size="xs" />
-                                    <span>{m.from}’s thinking</span>
+                                    {/* Underlined on hover so it reads as something to open (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it"). */}
+                                    <span className="group-hover:underline">{m.from}’s thinking</span>
                                     {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
                                 </summary>
                                 <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
