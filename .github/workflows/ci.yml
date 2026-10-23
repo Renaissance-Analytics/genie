@@ -200,9 +200,13 @@ jobs:
           name: smoke-screenshots
           path: smoke-*.png
           if-no-files-found: warn
+          retention-days: 7
 
   package:
     name: it packages
+    # Installers on pushes to main only (2026-10-23, the CI cost trims): a release builds and verifies its own
+    # (release.yml), and main's build catches a packaging break the day it merges. Not on every PR push.
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -247,6 +251,7 @@ jobs:
             release/*.AppImage
             release/*.yml
           if-no-files-found: error
+          retention-days: 7
 
   smoke-windows:
     name: a real window (windows)
@@ -352,3 +357,4 @@ jobs:
           name: smoke-screenshots-windows
           path: smoke-*.png
           if-no-files-found: warn
+          retention-days: 7
