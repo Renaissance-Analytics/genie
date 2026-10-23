@@ -27,6 +27,8 @@ import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal
 import type { Approval } from '../core/approval.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
+import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
+import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
@@ -352,6 +354,26 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
     }, [snapshot, settings]);
 }
 
+/**
+ * THE DRIFT WATCHER'S ALARM (core/toolchain-alerts.ts): the toolchain probe's statuses arrive with the feature data; a
+ * tool newly under its security floor raises the `ghsecurity` alert once — the sound and notification the person set
+ * for "a security alert" — the moment the probe reports it, not when Settings is next opened.
+ */
+function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null): void {
+    const prev = useRef<readonly ToolStatus[] | null>(null);
+    useEffect(() => {
+        if (tools === null) return;
+        for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
+            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+                const toast = toastFor(alert);
+                try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
+            }
+        }
+        prev.current = tools;
+    }, [tools, settings]);
+}
+
 export interface AppProps {
     /** Injected by tests and by the live check. The real app reads `window.genie`. */
     bridge?: GenieBridge | undefined;
@@ -534,6 +556,7 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
+    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;

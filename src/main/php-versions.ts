@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { phpAdvisoryText } from '../core/php-advisories.js';
 import {
     PHP_RECIPES,
     PHP_VERSION,
@@ -67,10 +68,13 @@ export interface PhpVersionsPorts {
 }
 
 export interface PhpVersionsView {
-    /** Genie's own, newest first, each with the sites pinned to it (Remove is refused while there are any). */
-    readonly managed: ReadonlyArray<{ readonly version: string; readonly dir: string; readonly usedBy: readonly string[] }>;
-    /** The php-cgi on PATH — what an unpinned site runs — or `null` when none answers. */
-    readonly system: { readonly version: string } | null;
+    /**
+     * Genie's own, newest first, each with the sites pinned to it (Remove is refused while there are any). `advisory`:
+     * why this version is unsafe and what to move to (core/php-advisories.ts) — absent for a safe one.
+     */
+    readonly managed: ReadonlyArray<{ readonly version: string; readonly dir: string; readonly usedBy: readonly string[]; readonly advisory?: string }>;
+    /** The php-cgi on PATH — what an unpinned site runs — or `null` when none answers. `advisory` as above. */
+    readonly system: { readonly version: string; readonly advisory?: string } | null;
     /** What this release can install, and whether each is here already. Empty where Genie installs none. */
     readonly available: ReadonlyArray<{ readonly version: string; readonly installed: boolean }>;
     /** Why nothing can be installed here (macOS/Linux), when that is so. */
@@ -180,19 +184,25 @@ export function refreshManagedIni(pin: string | undefined, ports: PhpCgiPorts): 
     ports.fs.mkdirp(phpCacheDir(found.dir));
 }
 
+/** The advisory words as an optional field — present only for a version under its floor (core/php-advisories.ts). */
+function withAdvisory(version: string): { advisory?: string } {
+    const advisory = phpAdvisoryText(version);
+    return advisory === null ? {} : { advisory };
+}
+
 /** What the Toolchain surface lists: Genie's own versions (with the sites on each), the PATH PHP, and what can be added. */
 export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly SitePin[] = []): Promise<PhpVersionsView> {
     const managed = managedPhp(ports);
     let system: PhpVersionsView['system'] = null;
     try {
         const banner = parsePhpBanner((await ports.run('php-cgi', ['-v'])).stdout);
-        if (banner) system = { version: banner.version };
+        if (banner) system = { version: banner.version, ...withAdvisory(banner.version) };
     } catch {
         // no php-cgi on PATH: an unpinned php site cannot start either, and Toolchain's php row says how to install one
     }
     const have = new Set(managed.map((m) => m.version));
     return {
-        managed: managed.map((m) => ({ ...m, usedBy: sitesOn(m.version, pins, managed) })),
+        managed: managed.map((m) => ({ ...m, usedBy: sitesOn(m.version, pins, managed), ...withAdvisory(m.version) })),
         system,
         available: ports.platform === 'win32' ? PHP_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) : [],
         ...(ports.platform === 'win32' ? {} : { installRefused: NOT_HERE }),
@@ -211,6 +221,11 @@ const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
 export async function installPhpVersion(version: string, consent: boolean, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
     if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; PHP ${version} was not installed` };
     if (ports.platform !== 'win32') return { kind: 'refused', reason: NOT_HERE };
+    // THE FLOOR FIRST (PHP2Shell, 2026-10-22): a version under it is refused by name — the CVEs and the release to take
+    // instead — before the recipe list is consulted and before a byte is fetched. "Genie has no installer for 8.4.24"
+    // would be true and would hide the reason there is none.
+    const unsafe = phpAdvisoryText(version);
+    if (unsafe !== null) return { kind: 'refused', reason: `${unsafe}; Genie will not install it` };
     const recipe = PHP_RECIPES.find((r) => r.version === version);
     if (!recipe) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; this release installs ${PHP_RECIPES.map((r) => r.version).join(', ')}` };
     const dir = join(ports.root, version);
