@@ -217,6 +217,15 @@ export function failedRunText(failure: string, code: number | null, signal: stri
 /** What a held agent is told when its provider's limit has reset and nothing was sent while it waited (Tynn #793). */
 export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continue where you left off.";
 
+/**
+ * AN OVERLOADED PROVIDER IS WAITED OUT (the owner, 2026-10-23, a Codex agent "Broken · 8h 45m · serverOverloaded": "we
+ * need to catch codex errors like this one"). prism-acp sorts Codex's `serverOverloaded` and Claude's 529 into
+ * `failure.kind: 'overloaded'`. It is the provider's and it passes, so the agent is not Broken: Genie waits these long,
+ * in turn, and sends the turn on again; the overload after the last of them IS Broken, with the reason.
+ */
+export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000];
+export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
+
 export interface AgentSessionOptions {
     agentId: AgentId;
     cwd: string;
@@ -298,6 +307,8 @@ export interface AgentSessionOptions {
     onStraggler?: () => void;
     /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
     clock?: () => number;
+    /** Run `fire` after `ms`; answers a cancel. Injected so a test can fire it; default `setTimeout`. */
+    retryLater?: (ms: number, fire: () => void) => () => void;
 }
 
 export class AgentSession {
@@ -308,6 +319,9 @@ export class AgentSession {
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
     /** Prompts sent while held: recorded as sent, handed to the provider on resume. */
+    /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
+    #overloads = 0;
+    #overloadCancel: (() => void) | null = null;
     #heldPrompts: Array<{ text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null }> = [];
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
@@ -478,12 +492,19 @@ export class AgentSession {
 
     /** The limit has reset (the gate's timer, or the person's Resume now): what waited goes out in order; nothing waited -> continue. */
     resumeAfterLimit(): void {
+        this.#resumeHeld(LIMIT_RESUME_PROMPT);
+    }
+
+    /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's. */
+    #resumeHeld(nothingWaited: string): void {
         if (!this.#held) return;
         this.#held = false;
+        this.#overloadCancel?.();
+        this.#overloadCancel = null;
         const waiting = this.#heldPrompts;
         this.#heldPrompts = [];
         if (waiting.length === 0) {
-            this.prompt(LIMIT_RESUME_PROMPT, 'genie');
+            this.prompt(nothingWaited, 'genie');
             return;
         }
         for (const p of waiting) this.#send(p.text, p.by, p.sent);
@@ -791,7 +812,9 @@ export class AgentSession {
                     // because prism-acp files `oauth_org_not_allowed` under `auth` and logging in does not fix it.
                     const paused = crashed && !byLimit ? accountPauseOf(outcome.failure) : null;
                     const bySignOut = crashed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
-                    this.#lastTurnEnd = byLimit ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
+                    const byOverload = crashed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
+                    this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
@@ -803,6 +826,16 @@ export class AgentSession {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
                         // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
                         if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
+                    } else if (byOverload) {
+                        const ms = OVERLOAD_RETRY_MS[this.#overloads]!;
+                        this.#overloads += 1;
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                        this.#failedAt = null;
+                        this.#held = true;
+                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
+                        const later = this.#options.retryLater ?? ((wait: number, fire: () => void) => { const t = setTimeout(fire, wait); return () => clearTimeout(t); });
+                        this.#overloadCancel = later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
                     } else if (paused !== null) {
                         // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
                         // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
@@ -828,6 +861,7 @@ export class AgentSession {
                         this.#turnState = 'idle';
                         this.#failure = null;
                         this.#failedAt = null;
+                        this.#overloads = 0;
                         // A turn that went through: whatever login it ran on is signed in, and its account is in order.
                         this.#signedOut = false;
                         this.#accountPaused = null;
@@ -864,6 +898,9 @@ export class AgentSession {
                     this.#changed();
                 },
                 onExit: (code, signal) => {
+                    // A retry waiting out an overload has nobody to send to now.
+                    this.#overloadCancel?.();
+                    this.#overloadCancel = null;
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
                     // should cost the rest of the sentence, not the part it already said.
                     this.#closeMessage();
