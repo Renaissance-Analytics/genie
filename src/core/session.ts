@@ -202,6 +202,18 @@ export type StopVerdict =
 /** How many lines of provider output to keep. Enough to explain a failure, bounded. */
 const STDERR_KEPT = 50;
 
+/** How many of the last stderr lines a failed run's ledger notice carries, and the notice's ceiling in characters. */
+const FAILED_RUN_STDERR = 12;
+const FAILED_RUN_MAX = 3000;
+
+/** The one ledger line a failed run leaves: what failed, how the process ended, and the provider's last words. */
+export function failedRunText(failure: string, code: number | null, signal: string | null, stderr: readonly string[]): string {
+    const exit = signal ? `ended by ${signal}` : code === null ? 'exit unknown' : `exit code ${code}`;
+    const tail = stderr.slice(-FAILED_RUN_STDERR).join('\n');
+    const text = `The run failed: ${failure} (${exit}).${tail ? `\nLast lines the provider wrote:\n${tail}` : ''}`;
+    return text.length > FAILED_RUN_MAX ? `${text.slice(0, FAILED_RUN_MAX - 1)}…` : text;
+}
+
 /** What a held agent is told when its provider's limit has reset and nothing was sent while it waited (Tynn #793). */
 export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continue where you left off.";
 
@@ -889,6 +901,15 @@ export class AgentSession {
                      * stop reading red.
                      */
                     this.#turnState = this.#failure ? 'failed' : 'stopped';
+                    /*
+                     * **And written down** (2026-10-22): the failure and the stderr above live in THIS session's memory,
+                     * and a restart replaces the session — a Codex agent's graceful restart died with "a codex app-server
+                     * error" and its words were gone before anyone read them. A failed run leaves one `error` notice in
+                     * the ledger, which outlives the run: the reason, the exit, and the last stderr lines (where a
+                     * provider explains itself), capped so a chatty one cannot flood the thread. A clean exit writes
+                     * nothing (test/session.test.ts holds both).
+                     */
+                    if (this.#failure) void this.#emitRow({ kind: 'notice', level: 'error', message: failedRunText(this.#failure, code, signal, this.#stderr) });
                     const waiters = this.#exitWaiters;
                     this.#exitWaiters = [];
                     for (const w of waiters) w();

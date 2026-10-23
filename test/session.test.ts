@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
-import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory } from '../src/core/thread-store.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import {
     AgentSession,
@@ -919,5 +919,61 @@ describe('a streamed reply is ONE message, not one row per chunk', () => {
 
         const messages = rows.filter((r) => r.kind === 'message');
         expect(messages.at(-1)).toMatchObject({ text: 'second answer' });
+    });
+});
+
+describe('a FAILED run leaves its reason in the ledger, where a restart cannot erase it', () => {
+    /**
+     * 2026-10-22: a Codex agent's graceful restart died nine seconds in with "a codex app-server error", and the words
+     * were gone before anyone could read them — the failure and the provider's stderr lived in this session's MEMORY
+     * only, and the owner's Restart fresh replaced the session. Finding the cause took another agent reading three other
+     * logs. So a run that ends failed writes ONE `error` notice to the ledger: the reason, the exit, and the last stderr
+     * lines (where a provider explains itself). A clean exit writes nothing — a red line for every stop teaches people
+     * to stop reading red.
+     */
+    function openOnDisk() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const store = openDurableStore(dir);
+        const agentId = mintAgentId();
+        const session = new AgentSession({ agentId, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree });
+        session.start();
+        const errors = async () => (await readHistory(store, agentId)).rows.map((r) => r.event).filter((e) => e.kind === 'notice' && e.level === 'error') as Array<{ message: string }>;
+        return { d, session, errors };
+    }
+
+    it('the reason, the exit and the provider’s last stderr lines are one error notice on disk', async () => {
+        const { d, session, errors } = openOnDisk();
+        d.stderr('loading thread 01a16563');
+        d.stderr('Invalid request: unknown variant `none`, expected one of `notLoaded`, `summary`, `full`');
+        d.protocolError('Codex app-server startup failed (RPC code -32600)');
+        d.exit(1, null);
+        await session.settled();
+        const found = await errors();
+        expect(found).toHaveLength(1);
+        expect(found[0]!.message).toContain('Codex app-server startup failed (RPC code -32600)');
+        expect(found[0]!.message).toContain('unknown variant `none`');
+        expect(found[0]!.message).toMatch(/exit code 1/);
+    });
+
+    it('CONTROL: a run that ends cleanly writes no error', async () => {
+        const { d, session, errors } = openOnDisk();
+        d.stderr('just chatty logging');
+        d.endTurn();
+        d.exit(0, null);
+        await session.settled();
+        expect(await errors()).toEqual([]);
+    });
+
+    it('only the last stderr lines, so a chatty provider cannot flood the ledger', async () => {
+        const { d, session, errors } = openOnDisk();
+        for (let i = 0; i < 200; i++) d.stderr(`line ${i}`);
+        d.protocolError('it broke');
+        d.exit(1, null);
+        await session.settled();
+        const message = (await errors())[0]!.message;
+        expect(message).toContain('line 199');
+        expect(message).not.toMatch(/\bline 0\b/);
+        expect(message.length).toBeLessThan(4000);
     });
 });
