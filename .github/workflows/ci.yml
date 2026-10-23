@@ -96,6 +96,9 @@ jobs:
   # (genie#1101). Each was found by the release, after the tag. This puts it on the PR instead.
   test-windows:
     name: unit (windows)
+    # On pushes to main only (the owner, 2026-10-23: "main only"): Windows minutes cost the most, a Windows-only break
+    # shows right after merge, and every release builds and tests on Windows itself before anything is published.
+    if: github.event_name == 'push'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -255,6 +258,9 @@ jobs:
 
   smoke-windows:
     name: a real window (windows)
+    # On pushes to main only (the owner, 2026-10-23: "main only"): Windows minutes cost the most, a Windows-only break
+    # shows right after merge, and every release builds and tests on Windows itself before anything is published.
+    if: github.event_name == 'push'
     runs-on: windows-latest
     timeout-minutes: 20
     steps:

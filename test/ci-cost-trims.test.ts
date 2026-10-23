@@ -30,6 +30,14 @@ describe('CI keeps less and builds installers where they are used', () => {
         expect(job.length).toBeGreaterThan(0);
     });
 
+    it('the Windows unit and Windows smoke jobs run on pushes to main, not on pull requests (the owner, 2026-10-23: "main only")', () => {
+        for (const job of ['\n  test-windows:', '\n  smoke-windows:']) {
+            const start = ci.indexOf(job);
+            expect(start, job).toBeGreaterThan(-1);
+            expect(ci.slice(start, ci.indexOf('runs-on', start)), job).toMatch(/if: github\.event_name == 'push'/);
+        }
+    });
+
     it('a pull request’s superseded runs are cancelled', () => {
         expect(ci).toMatch(/cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
     });
