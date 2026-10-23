@@ -102,9 +102,7 @@ const bridge: PreloadBridge = {
 
     prompt: (agentId, text, attachments) => ipcRenderer.invoke('genie:prompt', agentId, text, attachments) as Promise<{ ok: boolean; reason?: string }>,
 
-    addAgent: (workspaceId) => {
-        void ipcRenderer.invoke('genie:add-agent', workspaceId);
-    },
+    addAgent: (workspaceId, input) => ipcRenderer.invoke('genie:add-agent', workspaceId, input) as Promise<{ ok: true; id: string } | { ok: false; reason: string }>,
 
     // The host's reply comes back: `ok` ends the answer's flight, a refusal is said on the card (core/approval-answering.ts).
     answerApproval: (agentId, optionId, note) => ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '') as Promise<{ ok: true } | { ok: false; reason: string }>,

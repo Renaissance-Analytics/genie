@@ -67,6 +67,7 @@ import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGi
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
+import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
@@ -282,6 +283,25 @@ function tynnProjectFor(workspaceId: string): string | null {
     let manifest: string | null = null;
     if (workspace) { try { manifest = readFileSync(join(workspace.path, 'project.json'), 'utf8'); } catch { manifest = null; } }
     return tynnProjectIdOf(manifest);
+}
+/**
+ * THE NEW AGENT FORM ON THIS HOST (main/agent-create-host.ts): the local window's `genie:add-agent` and a remote window's
+ * `addAgent` both land here — the AGENT.md written under the workspace, then the agent registered on it.
+ */
+function agentCreatePorts(): AgentCreatePorts {
+    return {
+        workspace: (id) => registry?.workspace(id) ?? null,
+        agentsOf: (id) => registry?.agentsOf(id) ?? [],
+        exists: async (path) => existsSync(path),
+        mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
+        writeText: async (path, text) => { await writeFileText(path, text, 'utf8'); },
+        register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
+        sacredName: async (workspaceId) => {
+            const projectId = tynnProjectFor(workspaceId);
+            if (projectId === null || !tynnAccount) return null;
+            return sacredNameOf(await tynnAccount.projects(), projectId);
+        },
+    };
 }
 /** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
 function issueWatchPanels(): Record<string, IssueWatchPanelView> {
@@ -1120,14 +1140,13 @@ async function boot(): Promise<void> {
         return host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '');
     });
 
-    ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown) => {
-        if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false };
-        const record = await registry.register({
-            workspaceId: rawWorkspaceId,
-            provider: 'claude',
-            name: `agent-${Date.now().toString(36)}`,
-        });
-        return { ok: true, id: record.id };
+    // The New agent form (the owner, 2026-10-23: "it just created an agent with some dumb name and default settings").
+    ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown, rawInput: unknown) => {
+        if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false, reason: 'no workspace named' };
+        const input = (typeof rawInput === 'object' && rawInput !== null ? rawInput : {}) as Record<string, unknown>;
+        const text = (v: unknown) => (typeof v === 'string' ? v : '');
+        const created = await createAgent(agentCreatePorts(), rawWorkspaceId, { name: text(input['name']), purpose: text(input['purpose']), provider: text(input['provider']) });
+        return created.ok ? { ok: true, id: created.id } : created;
     });
 
     /*
@@ -1854,10 +1873,7 @@ async function boot(): Promise<void> {
                 answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
             },
-            registerAgent: async (workspaceId) => {
-                const record = await registry!.register({ workspaceId, provider: 'claude', name: `agent-${Date.now().toString(36)}` });
-                return { id: record.id };
-            },
+            registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
             attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
             terminals: {
                 open: (options) => terminals!.open(options),

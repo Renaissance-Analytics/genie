@@ -26,7 +26,7 @@ import { isAcpProvider, type AcpProvider } from './engine.js';
 export const RESERVED_AGENT_NAMES: readonly string[] = Object.freeze(['general', 'genie', 'tynn']);
 
 /** An agent name in Genie 2 — createAgent's shape (mcp-tools-agents.ts). */
-const AGENT_NAME = /^[a-z][a-z0-9-]{0,39}$/;
+export const AGENT_NAME = /^[a-z][a-z0-9-]{0,39}$/;
 
 /** A folder under `.agents/` that holds an `AGENT.md`, with the file's text. */
 export interface AgentFile {

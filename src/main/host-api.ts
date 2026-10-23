@@ -41,7 +41,8 @@ export interface HostApiDeps {
         resumeLimit(provider: string): void;
         subscribe(listener: (agentId: string) => void): () => void;
     };
-    registerAgent(workspaceId: string): Promise<{ id: string }>;
+    /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
+    registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
     attention: { finished(): readonly Finished[]; markSeen(id: string): void };
     terminals: {
         open(options: TerminalOptions): PtyOpened;
@@ -184,8 +185,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return r ? deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') : { ok: false, reason: 'unknown agent' };
             }
             case 'addAgent': {
-                const created = await deps.registerAgent(str(args[0]));
-                return { ok: true, id: created.id };
+                const raw = (typeof args[1] === 'object' && args[1] !== null ? args[1] : {}) as Record<string, unknown>;
+                const created = await deps.registerAgent(str(args[0]), { name: str(raw['name']), purpose: str(raw['purpose']), provider: str(raw['provider']) });
+                return created.ok ? { ok: true, id: created.id } : created;
             }
             case 'restartWithHandoff': {
                 const r = agent(args[0]);
