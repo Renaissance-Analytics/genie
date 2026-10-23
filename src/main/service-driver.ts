@@ -1,4 +1,8 @@
 import { containerPlan, SERVICE_CATALOG, type Credentials, type CustomEngineSpec, type EngineAdmin, type ServiceScope } from '../core/services.js';
+import { randomUUID } from 'node:crypto';
+import { maskUpdateFailure, parseUpdateContainer, recreateServiceArgs, updateFingerprint } from '../core/service-update.js';
+
+export type ServiceImageUpdate = { kind: 'needs-consent'; image: string; note: string } | { kind: 'updated'; image: string; restarted: boolean };
 
 /**
  * SERVICE ENGINES — the Docker driver (§6.6).
@@ -127,6 +131,7 @@ const DATA_DIRS: Record<string, string> = {
 
 export class ServiceDriver {
     readonly #run: DockerRunner;
+    readonly #updating = new Set<string>();
 
     constructor(run: DockerRunner) {
         this.#run = run;
@@ -152,6 +157,85 @@ export class ServiceDriver {
         const pulled = await this.#run(['pull', image]);
         if (pulled.exitCode !== 0) throw new Error(pulled.stdout.trim() || `docker pull ${image} failed`);
         return { kind: 'pulled', image };
+    }
+
+    /** Pull FIRST. Keep the old container until replacement and credential restoration succeed, for rollback. */
+    async update(name: string, options: { consent: boolean; afterStart?: () => Promise<void>; beforeStop?: () => void }): Promise<ServiceImageUpdate> {
+        if (this.#updating.has(name)) throw new Error(`${name} is already being updated; wait for that update to finish`);
+        if (!options.consent) return this.#update(name, options);
+        this.#updating.add(name);
+        try { return await this.#update(name, options); }
+        finally { this.#updating.delete(name); }
+    }
+
+    async #update(name: string, options: { consent: boolean; afterStart?: () => Promise<void>; beforeStop?: () => void }): Promise<ServiceImageUpdate> {
+        const inspected = await this.#run(['container', 'inspect', name]);
+        if (inspected.exitCode !== 0) throw new Error(`cannot inspect ${name}; nothing was updated`);
+        const before = parseUpdateContainer(inspected.stdout);
+        const args = recreateServiceArgs(name, before);
+        const token = randomUUID();
+        const ownerLabel = 'ai.genie.service-update';
+        args.splice(args.indexOf('--entrypoint'), 0, '--label', `${ownerLabel}=${token}`);
+        const image = before.Config!.Image!;
+        if (!options.consent) return { kind: 'needs-consent', image, note: `Pull ${image} fresh from ${registryOf(image)} and recreate this engine, keeping its name, volumes, ports and credentials. A running engine is interrupted; a stopped one stays stopped.` };
+        const checked = async (argv: readonly string[]) => {
+            const r = await this.#run(argv);
+            if (r.exitCode !== 0) throw new Error(maskUpdateFailure(r.stdout.trim() || `docker ${argv[0]} failed (exit ${r.exitCode})`, before));
+        };
+        await checked(['pull', image]);
+        const now = await this.#run(['container', 'inspect', name]);
+        if (now.exitCode !== 0 || updateFingerprint(parseUpdateContainer(now.stdout)) !== updateFingerprint(before)) throw new Error('The engine changed while its image was downloading; nothing was replaced. Review it and try again.');
+        options.beforeStop?.();
+        const backup = `${name}-before-update-${randomUUID()}`;
+        const running = before.State!.Status === 'running';
+        let originalName = name;
+        const inspect = async (key: string) => {
+            const r = await this.#run(['container', 'inspect', key]);
+            if (r.exitCode === 0) return parseUpdateContainer(r.stdout);
+            if (/no such (container|object)/i.test(r.stdout)) return null;
+            throw new Error(maskUpdateFailure(`Docker could not locate ${key}: ${r.stdout.trim()}`, before));
+        };
+        try {
+            if (running) await this.stop(name);
+            await checked(['rename', name, backup]);
+            originalName = backup;
+            await checked(args);
+            if (running) {
+                await this.start(name);
+                await options.afterStart?.();
+                if ((await this.status(name)).state !== 'running') throw new Error('the replacement exited instead of staying running');
+            }
+        } catch (error) {
+            try {
+                // Read back even a failed/timed-out rename: Docker may have changed the name before the cut.
+                const saved = await inspect(backup);
+                const current = await inspect(name);
+                if (saved?.Id === before.Id) {
+                    originalName = backup;
+                    if (current) {
+                        // Only this operation's replacement. Another process may have claimed the name.
+                        if (current.Config?.Labels?.[ownerLabel] !== token) throw new Error(`the name ${name} is held by an unrelated container; it was left untouched`);
+                        await checked(['rm', '-f', name]);
+                    }
+                    await checked(['rename', backup, name]);
+                    originalName = name;
+                } else if (current?.Id !== before.Id) {
+                    throw new Error('Docker did not show the original container under its saved or original name');
+                }
+                if (running) {
+                    await this.start(name);
+                    // A stop discarded Redis's in-memory ACLs even when the old container was restored.
+                    await options.afterStart?.();
+                }
+            } catch (rollback) {
+                throw new Error(maskUpdateFailure(`Update failed: ${(error as Error).message}. Restoring the original failed: ${(rollback as Error).message}. The original container is kept as ${originalName}; its volumes were not deleted.`, before));
+            }
+            throw new Error(maskUpdateFailure(`Update failed: ${(error as Error).message}. The original container was restored; its volumes were not deleted.`, before));
+        }
+        // A cleanup failure does not undo a working replacement. Name the retained backup for recovery.
+        try { await checked(['rm', '-f', backup]); }
+        catch (error) { throw new Error(maskUpdateFailure(`The engine was updated, but the stopped backup ${backup} could not be removed: ${(error as Error).message}`, before)); }
+        return { kind: 'updated', image, restarted: running };
     }
 
     /** `configFile`: the host file an engine that reads its tenants from one (Sockudo) is given, read-only. */

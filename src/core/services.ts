@@ -25,8 +25,8 @@ import { APP_ENGINES, SOCKUDO_COMMAND, SOCKUDO_CONFIG_TARGET, SOCKUDO_IMAGE, SOC
  * Genie 1's engines hold every workspace's data, and every workspace's `.env` already names them —
  * Genie 1 WROTE those files (its env-sync, genie#242). So Genie 2 takes the containers over IN
  * PLACE (core/v1-services.ts plans it): same container, same volume, same credentials, same port.
- * An adopted instance is never created, pulled or re-keyed by Genie 2 — every engine bakes its
- * credential into its data directory on first init, so a fresh one would lock the apps out.
+ * Adoption never creates, pulls or re-keys it. An explicitly approved image update may recreate its container,
+ * preserving the observed volumes, ports and credentials — a new credential could not open its existing data.
  *
  * Genie 1's engines are MULTI-TENANT where Genie 2's are not: one Postgres, a database + role per
  * workspace (`ws_<slug>`), each with its own password. That is a `slice` per workspace, and the
@@ -215,7 +215,7 @@ export interface ServiceInstance {
     readonly internalPort?: number;
     /** The data volume, as observed; Genie 1 named its volumes, so `<container>-data` is not assumed. */
     readonly volume?: string;
-    /** Taken over from Genie 1 in place: never created, pulled, or re-keyed by Genie 2. */
+    /** Taken over from Genie 1 in place. Only an explicitly approved update recreates it; its credentials/data stay. */
     readonly adopted?: 'v1';
     /** The engine's own superuser — as Genie 1 minted it, or generated once for a new shared engine. Kept (it is baked into the volume); never handed to a workspace. */
     readonly admin?: EngineAdmin;
