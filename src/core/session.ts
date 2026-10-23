@@ -319,11 +319,9 @@ export class AgentSession {
     #held = false;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
-    /** Prompts sent while held: recorded as sent, handed to the provider on resume. */
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
-    #heldPrompts: Array<{ text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null }> = [];
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -498,17 +496,15 @@ export class AgentSession {
 
     /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's. */
     #resumeHeld(nothingWaited: string): void {
-        if (!this.#held) return;
+        if (!this.#held || !this.running) return;
         this.#held = false;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
-        const waiting = this.#heldPrompts;
-        this.#heldPrompts = [];
-        if (waiting.length === 0) {
+        if (this.#afterTurn.length === 0) {
             this.prompt(nothingWaited, 'genie');
             return;
         }
-        for (const p of waiting) this.#send(p.text, p.by, p.sent);
+        this.#flushAfterTurn();
         this.#changed();
     }
 
@@ -695,6 +691,11 @@ export class AgentSession {
                 if (!this.#inTurn) throw error;
             }
         }
+        this.#queuePrompt(text, by, sent, context);
+    }
+
+    /** One queue holds input waiting for either a turn or a provider pause. */
+    #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): void {
         const id = randomUUID();
         this.#afterTurn.push({ id, text, by, sent, context });
         const row = promptRow(text, by, sent, context);
@@ -702,19 +703,23 @@ export class AgentSession {
         this.#changed();
     }
 
-    /** A turn ended: hand off ONE queued message. Each subsequent turn drains the next. */
+    /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
         if (this.#afterTurn.length === 0 || !this.running || this.#approval !== null || this.#inTurn || this.#held) return;
-        const next = this.#afterTurn[0]!;
-        try {
-            this.#send(next.text, next.by, next.sent, false, next.context);
-        } catch (error) {
-            this.#leaveQueuedAsDrafts();
-            void this.#emitRow({ kind: 'notice', level: 'error', message: `Queued input was not delivered: ${error instanceof Error ? error.message : String(error)}` });
-            return;
+        while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
+            const next = this.#afterTurn[0]!;
+            try {
+                this.#send(next.text, next.by, next.sent, false, next.context);
+            } catch (error) {
+                // One message started a turn. The rest still wait, including after a provider hold resumes.
+                if (this.#inTurn) return;
+                this.#leaveQueuedAsDrafts();
+                void this.#emitRow({ kind: 'notice', level: 'error', message: `Queued input was not delivered: ${error instanceof Error ? error.message : String(error)}` });
+                return;
+            }
+            this.#afterTurn.shift();
+            void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
         }
-        this.#afterTurn.shift();
-        void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
     }
 
     hasQueuedPrompt(id: string): boolean {
@@ -917,7 +922,7 @@ export class AgentSession {
                         this.#turnState = 'working';
                     }
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
-                    if (crashed) this.#leaveQueuedAsDrafts();
+                    if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
                     else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
@@ -1027,10 +1032,7 @@ export class AgentSession {
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
         if (!this.#driver) throw new Error('session is not started');
         if (this.#held) {
-            // Held for the limit: recorded now, as it was sent; handed to the provider when the limit resets.
-            void this.#emitRow(promptRow(text, by, sent, context));
-            this.#heldPrompts.push({ text, by, sent });
-            this.#changed();
+            this.#queuePrompt(text, by, sent, context);
             return;
         }
         this.#send(text, by, sent, true, context);
@@ -1082,6 +1084,8 @@ export class AgentSession {
     stop(signal: NodeJS.Signals = 'SIGTERM', options: { graceMs?: number } = {}): Promise<StopVerdict> {
         if (this.#stopping) return this.#stopping;
         this.#ended = true;
+        this.#overloadCancel?.();
+        this.#overloadCancel = null;
         this.#leaveQueuedAsDrafts();
 
         // A promise nobody will ever resolve is a provider process waiting forever. `stop` means stop, and that has to

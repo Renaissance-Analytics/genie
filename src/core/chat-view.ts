@@ -53,6 +53,8 @@ export interface ChatMessage {
     delivered: boolean;
     /** Genie holds this message until the provider's current turn ends. */
     queued?: boolean;
+    /** The turn has ended, but the provider is still paused. */
+    queuedForProvider?: boolean;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
@@ -189,6 +191,7 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
+            ...(queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
             ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;

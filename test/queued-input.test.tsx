@@ -49,10 +49,25 @@ async function open(provider: 'codex' | 'claude' = 'codex') {
         const reopened = new SessionHost(options);
         cleanups.unshift(async () => { reopened.stopAll(); await reopened.settled(); });
         return reopened;
+    }, holdProvider: () => {
+        busy = false;
+        events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error', failure: { kind: 'rate_limit', reason: 'rate_limit' } });
     }, refuse: (reason: string | null) => { refusal = reason; }, protocolError: () => events.onProtocolError?.('transport failed'), exit: () => events.onExit?.(1, null) };
 }
 
 describe('input sent during a Codex turn', () => {
+    it('shows input waiting for a provider pause to end, and preserves input already queued before that pause', async () => {
+        const s = await open();
+        s.host.promptWith(s.record.id, 'first', []);
+        s.host.promptWith(s.record.id, 'before pause', []);
+        s.holdProvider();
+        s.host.promptWith(s.record.id, 'during pause', []);
+        expect(s.messages().slice(1).map(m => [m.text, m.delivered, m.queued])).toEqual([['before pause', false, true], ['during pause', false, true]]);
+        const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: s.record.id, name: 'worker', fidelity: 'declared', unread: null, messages: s.messages(), context: null }} onSend={() => {}} onClose={() => {}} />);
+        expect(html).toContain('Queued · waiting for the provider to resume');
+        expect(html).not.toContain('Not delivered.');
+    });
+
     it('is visible immediately as waiting, then delivered once in FIFO order as your own turns', async () => {
         const s = await open();
         expect(s.host.promptWith(s.record.id, 'first task', [])).toEqual({ ok: true });
