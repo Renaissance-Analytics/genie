@@ -1,6 +1,7 @@
 import { backgroundTasksOf, taskEventOf, type BackgroundTask, type TaskEvent } from './background-tasks.js';
 import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
 import type { ToolStatus } from '@particle-academy/prism-acp';
+import type { PromptBlock } from './prompt-content.js';
 
 /**
  * THE STREAM LEDGER — one line per event.
@@ -38,7 +39,9 @@ export interface NoticeMail {
 }
 
 export type StreamEvent =
-    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; mail?: readonly NoticeMail[] }
+    | { kind: 'message'; speaker: 'agent' | 'you' | 'peer'; peerName: string | null; text: string; attachments?: readonly string[]; mail?: readonly NoticeMail[]; pending?: { id: string; content: readonly PromptBlock[] | null } }
+    /** A queued message's receipt. Separate rows preserve the original message, time and append-only wire. */
+    | { kind: 'prompt_delivery'; id: string; status: 'sent' | 'undelivered' | 'discarded' }
     | {
           kind: 'think';
           text: string;

@@ -135,6 +135,8 @@ describe('the bridge over the wire', () => {
         const { bridge } = remote;
 
         expect(await bridge.restartWithHandoff('agent_a', 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
+        expect(await bridge.resolvePrompt('agent_a', 'draft1', 'send')).toEqual({ ok: true });
+        expect(api.calls).toContainEqual({ method: 'resolvePrompt', args: ['agent_a', 'draft1', 'send'] });
         expect(await bridge.takeOver('agent_a')).toEqual({ ok: false, reason: 'takeOver opens a window on alphar; do it there' });
         bridge.addWorkspace();
         await tick();
@@ -167,6 +169,7 @@ describe('the bridge over the wire', () => {
         remote.bridge.prompt('agent_a', 'x');
         await tick();
         expect(remote.state().lastRefusal).toBe('this Genie is locked');
+        expect(await remote.bridge.resolvePrompt('agent_a', 'draft1', 'discard')).toMatchObject({ ok: false, reason: 'this Genie is locked' });
         expect(await remote.unlock()).toEqual({ ok: true });
     });
 });

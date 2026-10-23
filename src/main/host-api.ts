@@ -34,6 +34,7 @@ export interface HostApiDeps {
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
     host: RestartPorts & {
+        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id']): CancelOutcome;
@@ -177,7 +178,13 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
-                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text) };
+                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text, 'you') };
+            }
+            case 'resolvePrompt': {
+                const r = agent(args[0]);
+                const action = args[2];
+                if (!r || typeof args[1] !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+                return deps.host.resolvePrompt?.(r.id, args[1], action) ?? { ok: false, reason: 'This host does not support queued drafts.' };
             }
             case 'answerApproval': {
                 const r = agent(args[0]);

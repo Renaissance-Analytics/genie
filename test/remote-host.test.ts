@@ -233,6 +233,8 @@ describe('a guest’s scope', () => {
         await g.call('baton.take');
         expect(await g.call('openAgent', 'agent_b')).toMatchObject({ ok: false, reason: 'agent_b is not in the workspace this link shares' });
         expect(await g.call('openAgent', 'agent_a')).toMatchObject({ ok: true });
+        expect(await g.call('resolvePrompt', 'agent_b', 'draft1', 'send')).toMatchObject({ ok: false, reason: 'agent_b is not in the workspace this link shares' });
+        expect(await g.call('resolvePrompt', 'agent_a', 'draft1', 'discard')).toMatchObject({ ok: true });
 
         host.issuePin();
         const o = connect();

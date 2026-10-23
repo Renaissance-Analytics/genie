@@ -12,6 +12,7 @@ import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { RATE_LIMIT_META } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
+import { randomUUID } from 'node:crypto';
 
 /**
  * ONE RUNNING AGENT.
@@ -676,36 +677,60 @@ export class AgentSession {
     }
 
     /** Messages a provider refused mid-turn, sent in order as soon as a turn ends. */
-    #afterTurn: Array<{ text: string; by: string | null }> = [];
+    #afterTurn: Array<{ id: string; text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
 
     /**
      * A MESSAGE FOR THE AGENT THAT MUST ARRIVE: sent now when the provider takes it (Claude reads it at its next step);
      * held for the end of the turn when it refuses a prompt mid-turn (Codex), then sent in order. An approval's note
      * (item 16) — from the card here, or from a Genie approval answered on the Deck (main/feature-ipc.ts).
      */
-    deliver(text: string, by: string | null): void {
+    deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+        if (!this.running) throw new Error('session is not running');
         if (this.#afterTurn.length === 0) {
             try {
-                this.prompt(text, by);
+                this.prompt(text, by, sent, context);
                 return;
-            } catch {
-                // Refused (Codex: a turn already in flight). Nothing was recorded; it waits for the turn to end.
+            } catch (error) {
+                // Only a refusal DURING a turn can wait for its end. An idle driver failure must reach the caller.
+                if (!this.#inTurn) throw error;
             }
         }
-        this.#afterTurn.push({ text, by });
+        const id = randomUUID();
+        this.#afterTurn.push({ id, text, by, sent, context });
+        const row = promptRow(text, by, sent, context);
+        if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } });
+        this.#changed();
     }
 
-    /** A turn ended: what waited goes out, oldest first, until the provider refuses again. */
+    /** A turn ended: hand off ONE queued message. Each subsequent turn drains the next. */
     #flushAfterTurn(): void {
-        while (this.#afterTurn.length > 0 && this.running && this.#approval === null) {
-            const next = this.#afterTurn[0]!;
-            try {
-                this.prompt(next.text, next.by);
-            } catch {
-                return;
-            }
-            this.#afterTurn.shift();
+        if (this.#afterTurn.length === 0 || !this.running || this.#approval !== null || this.#inTurn || this.#held) return;
+        const next = this.#afterTurn[0]!;
+        try {
+            this.#send(next.text, next.by, next.sent, false, next.context);
+        } catch (error) {
+            this.#leaveQueuedAsDrafts();
+            void this.#emitRow({ kind: 'notice', level: 'error', message: `Queued input was not delivered: ${error instanceof Error ? error.message : String(error)}` });
+            return;
         }
+        this.#afterTurn.shift();
+        void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
+    }
+
+    hasQueuedPrompt(id: string): boolean {
+        return this.#afterTurn.some((p) => p.id === id);
+    }
+
+    discardPrompt(id: string): void {
+        this.#afterTurn = this.#afterTurn.filter((p) => p.id !== id);
+        void this.#emitRow({ kind: 'prompt_delivery', id, status: 'discarded' });
+        this.#changed();
+    }
+
+    #leaveQueuedAsDrafts(): void {
+        const waiting = this.#afterTurn;
+        this.#afterTurn = [];
+        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: 'undelivered' });
     }
 
     start(): void {
@@ -733,6 +758,7 @@ export class AgentSession {
                         return;
                     }
                     this.#turnState = 'failed';
+                    this.#leaveQueuedAsDrafts();
                     this.#changed();
                     /*
                      * The FIRST error, not the last.
@@ -891,13 +917,15 @@ export class AgentSession {
                         this.#turnState = 'working';
                     }
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
-                    if (!crashed && !this.#inTurn) this.#flushAfterTurn();
+                    if (crashed) this.#leaveQueuedAsDrafts();
+                    else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
                     // Working (found in the first doctor trial, 2026-10-13).
                     this.#changed();
                 },
                 onExit: (code, signal) => {
+                    this.#leaveQueuedAsDrafts();
                     // A retry waiting out an overload has nobody to send to now.
                     this.#overloadCancel?.();
                     this.#overloadCancel = null;
@@ -1054,6 +1082,7 @@ export class AgentSession {
     stop(signal: NodeJS.Signals = 'SIGTERM', options: { graceMs?: number } = {}): Promise<StopVerdict> {
         if (this.#stopping) return this.#stopping;
         this.#ended = true;
+        this.#leaveQueuedAsDrafts();
 
         // A promise nobody will ever resolve is a provider process waiting forever. `stop` means stop, and that has to
         // include the things stop is waiting ON.
