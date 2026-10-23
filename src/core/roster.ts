@@ -83,6 +83,11 @@ export interface LiveSession {
     links?: readonly CommsLink[] | null | undefined;
     /** The agent's own plan, when it reports one. */
     plan: { step: number; of: number; doing: string } | null;
+    /**
+     * That plan's steps — the kept plan's at a run's start, before any plan row of this run is in the rows (identity.ts
+     * `plan`). Absent or `null` (an older remote host does not send it) = the column reads its steps from the rows.
+     */
+    planSteps?: readonly { content: string; status: string }[] | null | undefined;
     /** What started this turn and the tool it is in now (core/turn-now.ts); absent or `null` = not reported. */
     asked?: string | null | undefined;
     tool?: string | null | undefined;

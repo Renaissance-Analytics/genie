@@ -34,12 +34,26 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 const gate = vi.hoisted(() => {
     let release: () => void = () => {};
     let held: Promise<void> | null = null;
+    let arrivals: Array<() => void> = [];
     return {
         /** Writes entered and now held at the gate — so a test knows a write is IN FLIGHT, not merely queued. */
         waiting: 0,
         hold(): void { held = new Promise<void>((r) => { release = r; }); },
         open(): void { held = null; release(); },
         get held(): Promise<void> | null { return held; },
+        /** A write reached the gate: called by the held `put`, and it wakes everyone waiting in `reached()`. */
+        arrived(): void { const wake = arrivals; arrivals = []; for (const w of wake) w(); },
+        /**
+         * Resolves once a write IS held at the gate — told by the write itself, not polled for.
+         *
+         * WHY not `vi.waitFor(() => gate.waiting === 1)`: that polls on a 1 s budget, and the write reaches the gate only
+         * after the store's lock file is created — real disk work. On a loaded Windows runner (genie#1114's `unit
+         * (windows)`, run 39714287722: this file took 6098 ms against 462–706 ms on three other Windows runs of the same
+         * code path, which #1114 does not touch) that took longer than 1 s, and the positive control read 0 though the
+         * write was on its way. Waiting for the arrival itself has no budget of its own to lose; the test's timeout
+         * still ends a write that never comes.
+         */
+        reached(): Promise<void> { return this.waiting > 0 ? Promise.resolve() : new Promise<void>((r) => { arrivals.push(r); }); },
     };
 });
 
@@ -56,7 +70,7 @@ vi.mock('../src/core/thread-store.js', async (importOriginal) => {
                 get: (key) => store.get(key),
                 async put(key, payload, ttlSeconds) {
                     const held = gate.held;
-                    if (held) { gate.waiting += 1; await held; gate.waiting -= 1; }
+                    if (held) { gate.waiting += 1; gate.arrived(); await held; gate.waiting -= 1; }
                     return store.put(key, payload, ttlSeconds);
                 },
                 forget: (key) => store.forget(key),
@@ -107,7 +121,8 @@ describe('a row on screen is not yet a row on disk', () => {
         // On screen at once — synchronously, by design.
         expect(shown.map((e) => e.kind)).toEqual(['turn', 'message']);
         // Held IN the write (positive control: the gate really is in the path, or "nothing on disk" proves nothing).
-        await vi.waitFor(() => expect(gate.waiting).toBe(1));
+        await gate.reached();
+        expect(gate.waiting).toBe(1);
         expect(await kindsOnDisk(dir, session.agentId)).toEqual([]);
         gate.open();
         await vi.waitFor(async () => expect(await kindsOnDisk(dir, session.agentId)).toEqual(['turn', 'message']));
@@ -118,7 +133,8 @@ describe('a row on screen is not yet a row on disk', () => {
         gate.hold();
         const { session } = startSession(store);
         session.prompt('hello', 'you');
-        await vi.waitFor(() => expect(gate.waiting).toBe(1));
+        await gate.reached();
+        expect(gate.waiting).toBe(1);
         await rm(store, { recursive: true, force: true });
         expect(existsSync(store)).toBe(false);
         gate.open();
@@ -139,7 +155,8 @@ describe('settled(): what a teardown — or anything that treats the thread as f
         gate.hold();
         const { session } = startSession(dir);
         session.prompt('hello', 'you');
-        await vi.waitFor(() => expect(gate.waiting).toBe(1));
+        await gate.reached();
+        expect(gate.waiting).toBe(1);
         let done = false;
         const settling = session.settled().then(() => { done = true; });
         await tick(30);
@@ -166,7 +183,8 @@ describe('settled(): what a teardown — or anything that treats the thread as f
         void events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'on it' } });
         expect(host.stop(record.id)).toBe(true);
         events.onExit?.(0, null);
-        await vi.waitFor(() => expect(gate.waiting).toBe(1));
+        await gate.reached();
+        expect(gate.waiting).toBe(1);
 
         let done = false;
         const settling = host.settled().then(() => { done = true; });

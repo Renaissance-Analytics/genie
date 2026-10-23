@@ -844,6 +844,8 @@ async function boot(): Promise<void> {
         },
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
         onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
+        // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
+        onPlan: (agentId, steps) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
         onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
@@ -2133,6 +2135,8 @@ async function boot(): Promise<void> {
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
             reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
+            // ...and read back from the agent's record, where every plan is kept across restarts (identity.ts `plan`).
+            readPlan: (agentId) => registry?.find(agentId as AgentId)?.plan ?? null,
             terminals: {
                 list: () => terminals!.list(),
                 open: (options) => terminals!.open(options),
