@@ -678,6 +678,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
     return {
         agent: {
             id: record.id,
+            workspaceId: record.workspaceId,
             name: record.name,
             provider: record.provider,
             // Every registered agent speaks ACP; `observed` while its Take Over window is open; `remote` belongs to
