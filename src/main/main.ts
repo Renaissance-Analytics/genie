@@ -110,6 +110,7 @@ import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { installNodeVersion, listNodeVersions, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -2409,6 +2410,15 @@ async function boot(): Promise<void> {
         },
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
+    const nodeVersionsPorts = (): NodeVersionsPorts => ({
+        platform: process.platform as NodeVersionsPorts['platform'],
+        root: nodeVersionsRoot(toolchainDataDir()),
+        fs: nodePhpVersionsFs(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
@@ -2438,6 +2448,12 @@ async function boot(): Promise<void> {
                 list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
                 install: (version, consent) => installPhpVersion(version, consent, phpVersionsPorts()),
                 remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
+            },
+            // Genie's own Node (main/node-versions.ts) — same busy line.
+            node: {
+                list: () => listNodeVersions(nodeVersionsPorts()),
+                install: (version, consent) => installNodeVersion(version, consent, nodeVersionsPorts()),
+                remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
             },
         },
     };
