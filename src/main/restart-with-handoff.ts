@@ -17,7 +17,7 @@ export interface RestartPorts {
     /** How the last stop ended, once it has (`SessionHost.ended`): the start waits for it, or a Claude in its grace refuses it. */
     ended(agentId: AgentRecord['id']): Promise<StopVerdict | null>;
     start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
-    prompt(agentId: AgentRecord['id'], text: string): boolean;
+    prompt(agentId: AgentRecord['id'], text: string, by?: string | null): boolean;
 }
 
 export interface FinishedPort {

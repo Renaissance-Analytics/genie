@@ -1128,6 +1128,12 @@ async function boot(): Promise<void> {
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
     });
 
+    ipcMain.handle('genie:resolve-prompt', (_event, raw: unknown, promptId: unknown, action: unknown) => {
+        const record = agentFromRenderer(raw);
+        if (!record || !host || typeof promptId !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+        return host.resolvePrompt(record.id, promptId, action);
+    });
+
     ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
         const record = agentFromRenderer(raw);
         // Every refusal names its reason: the card says it (core/approval-answering.ts). A bare `{ ok: false }` was a
@@ -1869,7 +1875,8 @@ async function boot(): Promise<void> {
                 ended: (id) => host!.ended(id),
                 cancel: (id) => host!.cancel(id),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
-                prompt: (id, text) => host!.prompt(id, text),
+                prompt: (id, text, by) => host!.prompt(id, text, by),
+                resolvePrompt: (id, promptId, action) => host!.resolvePrompt(id, promptId, action),
                 answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
             },

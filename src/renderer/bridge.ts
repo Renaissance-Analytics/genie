@@ -196,6 +196,7 @@ export interface GenieBridge {
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.
      */
     prompt(agentId: string, text: string, attachments?: readonly Attachment[]): Promise<{ ok: boolean; reason?: string }>;
+    resolvePrompt(agentId: string, promptId: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * Answer a parked approval, with the PROVIDER'S own option id.
      *

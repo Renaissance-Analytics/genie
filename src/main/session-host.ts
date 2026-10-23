@@ -87,7 +87,8 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
-import { openDurableStore, readHistory } from '../core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory, RUN_FIELD } from '../core/thread-store.js';
+import { promptDeliveries } from '../core/prompt-delivery.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -372,6 +373,8 @@ interface Running {
 const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionHost {
+    /** Serialises draft actions: two rapid Send presses must never deliver the same draft twice. */
+    #promptActions: Promise<unknown> = Promise.resolve();
     readonly #userData: string;
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
@@ -937,13 +940,49 @@ export class SessionHost {
      */
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
         const entry = this.#running.get(agentId);
-        if (!entry) return { ok: false, reason: null };
-        if (attachments.length === 0) return this.prompt(agentId, text, by) ? { ok: true } : { ok: false, reason: null };
+        if (!entry || !entry.session.running) return { ok: false, reason: null };
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
-        entry.session.prompt(text, by, { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
+        try {
+            entry.session.deliver(text, by, attachments.length === 0 ? null : { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
         this.#emit(agentId);
         return { ok: true };
+    }
+
+    /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
+    resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+            await this.settled();
+            const { rows } = await readHistory(this.#store(), agentId);
+            const status = promptDeliveries(rows).get(id);
+            const row = rows.find(({ event: e }) => e.kind === 'message' && e.pending?.id === id)?.event;
+            if (!row || row.kind !== 'message' || !row.pending || !status || status === 'sent' || status === 'discarded') return { ok: false, reason: 'This draft was already sent or discarded.' };
+            const session = this.#running.get(agentId)?.session;
+            if (action === 'send') {
+                if (!session?.running) return { ok: false, reason: 'Restart the agent before sending this draft.' };
+                if (session.hasQueuedPrompt(id)) return { ok: false, reason: 'This message is already queued for the current turn.' };
+                try {
+                    session.deliver(row.text, row.speaker === 'you' ? 'you' : row.peerName,
+                        row.pending.content ? { content: row.pending.content, attachments: row.attachments ?? [] } : null,
+                        row.mail ? { mail: row.mail } : {});
+                } catch (error) {
+                    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+                }
+            }
+            if (session?.running) session.discardPrompt(id);
+            else {
+                await openAgentThread(this.#store(), agentId).record([{ kind: 'prompt_delivery', id, status: 'discarded', [RUN_FIELD]: randomUUID() }]);
+                this.#histories.delete(agentId);
+            }
+            this.#emit(agentId);
+            return { ok: true };
+        };
+        const result = this.#promptActions.then(resolve, resolve);
+        this.#promptActions = result.catch(() => undefined);
+        return result;
     }
 
     /**
@@ -987,7 +1026,8 @@ export class SessionHost {
     prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
-        entry.session.prompt(text, by, null, context);
+        if (!entry.session.running) return false;
+        entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
         return true;
     }

@@ -1041,6 +1041,12 @@ function DesktopApp({ bridge }: AppProps) {
     // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
     // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
     const [drafts, setDrafts] = useState<readonly Draft[]>([]);
+    const [draftProblems, setDraftProblems] = useState<Readonly<Record<string, string>>>({});
+    const draftAction = (id: string, action: Promise<{ ok: boolean; reason?: string }>): void => {
+        const problem = (text?: string) => setDraftProblems((p) => { const next = { ...p }; if (text) next[id] = text; else delete next[id]; return next; });
+        void action.then((r) => problem(r.ok ? undefined : r.reason ?? 'The draft could not be sent. Try again.'),
+            (error: unknown) => problem(error instanceof Error ? error.message : String(error)));
+    };
     const [paletteOpen, setPaletteOpen] = useState(false);
     const send = (agentId: string, text: string, attachments: readonly Attachment[] = []): void => {
         // A Take Over window has no session to prompt: its mail goes to its inbox, which its TUI reads over MCP.
@@ -1056,10 +1062,21 @@ function DesktopApp({ bridge }: AppProps) {
         }
         void resolvedBridge?.prompt(agentId, text, attachments).then((r) => {
             if (!r.ok) keep(r.reason);
-        });
+        }).catch((error: unknown) => keep(error instanceof Error ? error.message : String(error)));
     };
     const restartAndSend = (draftId: string): void => {
         const draft = drafts.find((d) => d.id === draftId);
+        const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
+        if (queued && chatThread && resolvedBridge) {
+            const agentId = chatThread.agentId;
+            const send = () => resolvedBridge.resolvePrompt(agentId, queued.promptId!, 'send');
+            if (queued.resend === 'restart') {
+                const session = chatDetail?.agent.id === agentId ? chatDetail.session ?? null : null;
+                if (draftSendVia(session) === 'restart') draftAction(draftId, resolvedBridge.agents.restart(agentId, 'graceful').then((r) => r.ok ? send() : r));
+                else draftAction(draftId, Promise.resolve(resolvedBridge.openAgent(agentId)).then(send));
+            } else draftAction(draftId, send());
+            return;
+        }
         if (!draft || !resolvedBridge) return;
         const send = () => resolvedBridge.prompt(draft.agentId, draft.text, draft.attachments ?? []).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
         // A broken session restarts on its thread; an agent that is not running is STARTED (a graceful restart refuses
@@ -1074,10 +1091,18 @@ function DesktopApp({ bridge }: AppProps) {
     // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
     // thread reads every row of the subject's ledger.
     const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now)), [chatDetail, chatSubject, snapshot.agents]);
-    const chatThread: ChatThread | null = chatBase === null
+    const chatDrafts: ChatThread | null = chatBase === null
         ? null
         : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatDetail?.agent.id === chatBase.agentId && chatDetail.session?.running === true });
-    const discardDraft = (draftId: string): void => setDrafts((d) => d.filter((x) => x.id !== draftId));
+    const chatThread: ChatThread | null = chatDrafts === null || Object.keys(draftProblems).length === 0 ? chatDrafts : { ...chatDrafts, messages: chatDrafts.messages.map((m) => {
+        const problem = draftProblems[m.id];
+        return problem ? { ...m, draftProblem: problem } : m;
+    }) };
+    const discardDraft = (draftId: string): void => {
+        const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
+        if (queued && chatThread && resolvedBridge) draftAction(draftId, resolvedBridge.resolvePrompt(chatThread.agentId, queued.promptId!, 'discard'));
+        else setDrafts((d) => d.filter((x) => x.id !== draftId));
+    };
 
     // SAVED PROMPTS (Tynn #758): the library from Settings → Agents, sent from the Command Window or by a prompt's own
     // hotkey to the agent in front of the person — its chat if open, else the agent on screen, else Genie — and that chat
