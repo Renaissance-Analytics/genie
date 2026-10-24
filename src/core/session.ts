@@ -30,6 +30,8 @@ import { randomUUID } from 'node:crypto';
 /** The slice of `prism-acp`'s driver this module needs. Narrow on purpose — it is the seam. */
 export interface SessionDriver {
     start(): void;
+    /** Deferred drivers surround the actual synchronous spawn with the session's ownership snapshot. */
+    startTracked?(aroundSpawn: (spawn: () => void) => void): void;
     /** Text, or ACP prompt content blocks when files are attached (prism-acp's `prompt`). */
     prompt(content: string | readonly PromptBlock[]): void;
     kill(signal?: NodeJS.Signals): void;
@@ -690,7 +692,7 @@ export class AgentSession {
      */
     deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
         if (!this.running) throw new Error('session is not running');
-        if (this.#afterTurn.length === 0) {
+        if (this.#afterTurn.length === 0 && !this.#starting) {
             try {
                 this.prompt(text, by, sent, context);
                 return;
@@ -713,7 +715,7 @@ export class AgentSession {
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        if (this.#afterTurn.length === 0 || !this.running || this.#approval !== null || this.#inTurn || this.#held) return;
+        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held) return;
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
@@ -1003,14 +1005,20 @@ export class AgentSession {
             },
         });
         const tree = this.#options.processTree ?? systemProcessTree;
-        const before = tree.snapshot();
-        this.#driver.start();
-        const after = before === null ? null : tree.snapshot();
-        if (before !== null && after !== null) {
-            this.#roots = newChildrenOf(before, after, process.pid);
-            this.#members = subtreeOf(after, this.#roots);
-            this.#options.onSpawned?.(this.#members);
-        }
+        const aroundSpawn = (spawn: () => void): void => {
+            const before = tree.snapshot();
+            try { spawn(); }
+            finally {
+                const after = before === null ? null : tree.snapshot();
+                if (before !== null && after !== null) {
+                    this.#roots = newChildrenOf(before, after, process.pid);
+                    this.#members = subtreeOf(after, this.#roots);
+                    this.#options.onSpawned?.(this.#members);
+                } else this.#roots = null;
+            }
+        };
+        if (this.#driver.startTracked) this.#driver.startTracked(aroundSpawn);
+        else aroundSpawn(() => this.#driver!.start());
         this.#alive = true;
         // READY, when the driver declares when (see `SessionDriver.ready`): announced, so whatever waits for it (the inbox
         // push) is told without polling. A rejection is still the end of starting — the failure itself arrives through
@@ -1023,7 +1031,7 @@ export class AgentSession {
             // agent messages under 0.24.1). Genie already holds that history; the replay is not recorded twice.
             this.#replaying = Boolean(this.#options.resumeSessionId) && this.#options.replaysTranscript === true;
             const done = (): void => { this.#starting = false; this.#replaying = false; this.#changed(); };
-            ready.then(done, done);
+            ready.then(() => { done(); this.#flushAfterTurn(); }, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
         // turns it already had.
@@ -1043,7 +1051,7 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
         if (!this.#driver) throw new Error('session is not started');
-        if (this.#held) {
+        if (this.#held || this.#starting) {
             this.#queuePrompt(text, by, sent, context);
             return;
         }
