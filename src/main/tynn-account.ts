@@ -6,7 +6,7 @@ import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
 /** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
 type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
-export type SessionFetch = (url: string, init: { method: Method; headers: Record<string, string>; body?: string; credentials: 'include' | 'omit'; redirect: 'error' }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+export type SessionFetch = (url: string, init: { method: Method; headers: Record<string, string>; body?: string; credentials: 'include' | 'omit'; redirect: 'error'; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export interface TynnAccountPorts {
     readonly file: string;
@@ -33,6 +33,8 @@ export interface TynnAccountPorts {
  * Waking the computer and an agent asking IssueWatch ask again too (`recheck`).
  */
 export const TYNN_RETRY_MS: readonly number[] = [30_000, 120_000, 600_000, 1_800_000];
+/** One deadline includes response headers and body; a stalled service must not block account or agent startup. */
+export const TYNN_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface TynnUser {
     readonly name: string;
@@ -159,10 +161,10 @@ export class TynnAccount implements TynnAccountPort {
         await this.#persist(null);
     }
 
-    async #whoami(): Promise<void> {
+    async #whoami(signal?: AbortSignal): Promise<void> {
         const credential = this.#credential;
         if (!credential || credential.host !== this.host()) return;
-        const res = await this.#fetch('/api/v1/me', { method: 'GET' }, credential);
+        const res = await this.#fetch('/api/v1/me', { method: 'GET', ...(signal ? { signal } : {}) }, credential);
         if (this.#credential !== credential) return;
         if ([401, 404, 419].includes(res.status)) { await this.#forget(credential); return; }
         if (!res.ok) throw new Error(UNREACHABLE);
@@ -236,18 +238,21 @@ export class TynnAccount implements TynnAccountPort {
         return { ok: true, revoked: false, reason: 'This Genie is signed out. Tynn credential revocation could not be confirmed; revoke this device in Tynn if it remains listed.' };
     }).catch(() => { throw new Error('Local Tynn sign-out could not be saved. Try again before closing Genie.'); }); }
 
-    async request(path: string, init: { method: Method; body?: unknown }): Promise<TynnResponse> {
+    async request(path: string, init: { method: Method; body?: unknown; signal?: AbortSignal }): Promise<TynnResponse> {
         const credential = this.#credential;
         if (!credential || credential.host !== this.host()) throw new Error('Sign in to Tynn first');
         const res = await this.#fetch(path, init, credential);
         if (this.#credential === credential) {
             if (res.status === 401 || res.status === 419) await this.#forget(credential);
-            else if (res.status === 404 && path !== '/api/v1/me') { try { await this.#whoami(); } catch { /* A transient check retains the saved credential. */ } }
+            else if (res.status === 404 && path !== '/api/v1/me') {
+                try { await this.#whoami(init.signal); }
+                catch (error) { if (init.signal?.aborted) throw error; /* A transient check retains the saved credential. */ }
+            }
         }
         return res;
     }
 
-    async #fetch(path: string, init: { method: Method; body?: unknown }, credential: Credential | null, exchangeHost?: string): Promise<TynnResponse> {
+    async #fetch(path: string, init: { method: Method; body?: unknown; signal?: AbortSignal }, credential: Credential | null, exchangeHost?: string): Promise<TynnResponse> {
         const host = credential?.host ?? exchangeHost ?? this.host();
         if (!path.startsWith('/api/v1/') || path.includes('\\') || /[\r\n]/.test(path)) throw new Error('Invalid Tynn API path');
         const url = new URL(`${host}${path}`);
@@ -255,10 +260,34 @@ export class TynnAccount implements TynnAccountPort {
         const headers: Record<string, string> = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
         if (credential) headers.Authorization = `Bearer ${credential.token}`;
         if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-        let res: Awaited<ReturnType<SessionFetch>>;
-        try { res = await this.#ports.fetch(url.href, { method: init.method, headers, credentials: credential ? 'omit' : 'include', redirect: 'error', ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) }); }
-        catch { throw new Error(UNREACHABLE); }
-        return { ok: res.ok, status: res.status, json: async () => { const text = await res.text(); return text === '' ? null : JSON.parse(text) as unknown; } };
+        const cancelled = () => Object.assign(new Error('Tynn request cancelled.'), { name: 'AbortError' });
+        if (init.signal?.aborted) throw cancelled();
+        const controller = new AbortController();
+        let interrupt!: () => void;
+        const interrupted = new Promise<never>((_resolve, reject) => {
+            interrupt = () => {
+                reject(init.signal?.aborted ? cancelled() : new Error(UNREACHABLE));
+                controller.abort();
+            };
+        });
+        const timer = setTimeout(interrupt, TYNN_REQUEST_TIMEOUT_MS);
+        init.signal?.addEventListener('abort', interrupt, { once: true });
+        const cleanup = () => {
+            clearTimeout(timer);
+            init.signal?.removeEventListener('abort', interrupt);
+        };
+        const failure = () => init.signal?.aborted ? cancelled() : new Error(UNREACHABLE);
+        try {
+            const res = await Promise.race([this.#ports.fetch(url.href, {
+                method: init.method, headers, credentials: credential ? 'omit' : 'include', redirect: 'error', signal: controller.signal,
+                ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+            }), interrupted]);
+            // Return headers promptly for auth handling; the body retains the same deadline and cancellation.
+            const body = Promise.race([res.text(), interrupted]).catch(() => { throw failure(); }).finally(cleanup);
+            // A status-only caller need not read json(), but its failed/aborted body must still be handled.
+            void body.catch(() => {});
+            return { ok: res.ok, status: res.status, json: async () => { const text = await body; return text === '' ? null : JSON.parse(text) as unknown; } };
+        } catch { cleanup(); throw failure(); }
     }
 
     /** The person's projects — Genie 1's GET /api/v1/projects. Signed out is refused before any request. */
