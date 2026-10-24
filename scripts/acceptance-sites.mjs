@@ -20,9 +20,9 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { request } from 'node:https';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fetchLocalSite } from './local-site-probe.mjs';
 
 const exe = process.argv[2];
 if (!exe || !existsSync(exe)) throw new Error(`usage: node scripts/acceptance-sites.mjs <installed Genie.exe> (got ${exe})`);
@@ -57,16 +57,12 @@ console.log(`seeded ${ws} with ${sites.map((s) => `${s.name}.gen`).join(', ')}`)
 
 // ---- what the outcomes are measured with ------------------------------------------------------------------------
 /** GET https://<host>/ through the front door on 127.0.0.1:443, SNI and Host = the .gen name. */
-const fetchSite = (host) => new Promise((resolve) => {
-    const req = request({ host: '127.0.0.1', port: 443, path: '/', servername: host, headers: { Host: host }, rejectUnauthorized: false, timeout: 5000 }, (res) => {
-        let body = '';
-        res.on('data', (c) => { body += c; });
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
-    });
-    req.on('timeout', () => { req.destroy(); resolve({ status: 0, body: 'timeout' }); });
-    req.on('error', (e) => resolve({ status: 0, body: e.message }));
-    req.end();
-});
+const fetchSite = (host) => {
+    let ca;
+    try { ca = readFileSync(join(runtime, 'gen-ca', 'ca.crt')); }
+    catch { return Promise.resolve({ status: 0, body: 'local CA not ready' }); }
+    return fetchLocalSite(host, ca);
+};
 const waitForSites = async (seconds) => {
     const until = Date.now() + seconds * 1000;
     let last = [];

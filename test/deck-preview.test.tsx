@@ -51,7 +51,7 @@ describe('the row', () => {
 
     it('CONTROL: a short item is drawn whole, with nothing to open (COUNTED: one expand for two items)', () => {
         const html = render(itemsOf([SHORT, LONG]));
-        expect(html).toContain(SHORT.replace('’', '’'));
+        expect(html).toContain(SHORT);
         expect(html.match(/data-action="deck-expand"/g)).toHaveLength(1);
     });
 });
