@@ -1,10 +1,9 @@
 import { Icon, VirtualList } from '@particle-academy/react-fancy';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { STREAM_LIVE_ROWS, StreamPrep } from '../../core/stream-prep.js';
 import {
     editLineCounts,
     ledgerRow,
-    activityRows, resolveThinkTokens, resolveTurnCosts,
-    resolveToolDurations,
     visibleRows,
     type StreamFilter,
     type TimedEvent,
@@ -87,28 +86,34 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
         if (at !== null) setFollowing(false);
     }, [at]);
 
-    const prepared = useMemo(() => {
+    /**
+     * NEVER THE WHOLE LEDGER PER PUSH (the owner, 2026-10-22). `StreamPrep` folds only the rows a push adds
+     * (core/stream-prep.ts), and Following Live the list holds the last STREAM_LIVE_ROWS activity rows; the rows behind
+     * them page in from the control above the list. Parked, the window holds still (new rows arrive below without moving
+     * what is on screen); back at the end it is the live 500 again. A deep link gets the whole stream.
+     */
+    const prepRef = useRef<StreamPrep | null>(null);
+    prepRef.current ??= new StreamPrep();
+    const [extra, setExtra] = useState(0);
+    const parkedStart = useRef<number | null>(null);
+    useEffect(() => { if (following) { setExtra(0); parkedStart.current = null; } }, [following]);
+
+    const view = useMemo(() => {
         // Token deltas and durations are computed over the WHOLE stream, then the filter is
         // applied. Computing them after filtering would attribute a thought's cost from
         // whichever usage rows happened to survive the lane selection — a number that changes
         // when you change the view, which is the definition of a figure not worth printing.
         // The activity: replies live in the chat, debug notices are not rows (`activityRows`).
-        const withTokens = resolveTurnCosts(resolveThinkTokens(activityRows(rows)));
-        // Over every frame, BEFORE the updates fold into their call (`activityRows`): a duration is a call's first frame to
-        // its terminal update.
-        const durations = resolveToolDurations(rows);
-        const visible = visibleRows(withTokens, lanes);
+        // The same as activityRows → resolveThinkTokens → resolveTurnCosts, resolveToolDurations over every frame (BEFORE
+        // the updates fold into their call), and each compaction's summarised turns over the WHOLE stream — as a fold.
+        const { rows: withTokens, durations, summarised } = prepRef.current!.update(rows);
+        const all = visibleRows(withTokens, lanes);
+        // Following Live: the last STREAM_LIVE_ROWS (+ pages asked for). Parked: where it was. A deep link: everything.
+        const liveStart = Math.max(0, all.length - STREAM_LIVE_ROWS - extra);
+        const start = at !== null ? 0 : following ? liveStart : Math.min(parkedStart.current ??= liveStart, liveStart);
+        const visible = start === 0 ? all : all.slice(start);
 
-        // The turns each compaction summarised: the highest turn started before it, over the WHOLE stream (a lane
-        // filter that hid the turn markers must not make the divider forget them).
-        const summarised = new Map<string, number>();
-        let turnsSoFar = 0;
-        for (const row of withTokens) {
-            if (row.event.kind === 'turn') turnsSoFar = Math.max(turnsSoFar, row.event.n);
-            else if (row.event.kind === 'divider') summarised.set(row.id, turnsSoFar);
-        }
-
-        return visible.map((row) => {
+        const mapped = visible.map((row) => {
             const context =
                 row.event.kind === 'tool'
                     ? {
@@ -122,7 +127,9 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                       : { agentName };
             return ledgerRow(row, context);
         });
-    }, [rows, lanes, diffs, agentName]);
+        return { rows: mapped, behind: start };
+    }, [rows, lanes, diffs, agentName, at, following, extra]);
+    const prepared = view.rows;
 
     // The live thought: the LAST row of the whole stream (not of the filtered view) while the turn runs.
     const last = rows.at(-1);
@@ -182,6 +189,11 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
 
     return (
         <div data-stream="rows" className="flex h-full flex-col">
+            {view.behind > 0 ? (
+                <button type="button" data-stream-earlier={view.behind} onClick={() => { parkedStart.current = Math.max(0, view.behind - STREAM_LIVE_ROWS); setExtra((n) => n + STREAM_LIVE_ROWS); }} className="shrink-0 self-center py-1 font-mono text-[11px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">
+                    {view.behind.toLocaleString('en-US')} earlier {view.behind === 1 ? 'row' : 'rows'} · show more
+                </button>
+            ) : null}
             <div className="relative min-h-0 flex-1">
             <VirtualList
                 items={prepared}

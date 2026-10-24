@@ -10,6 +10,7 @@
 import { performance } from 'node:perf_hooks';
 import { chatThreadFrom, type ChatDetail } from '../src/core/chat-view.js';
 import { activityRows, resolveThinkTokens, resolveToolDurations, resolveTurnCosts, type TimedEvent } from '../src/core/stream-view.js';
+import { StreamPrep } from '../src/core/stream-prep.js';
 
 function history(n: number): TimedEvent[] {
     const rows: TimedEvent[] = [];
@@ -41,5 +42,13 @@ for (const n of [3_000, 30_000, 100_000]) {
     time('chat: chatThreadFrom', 20, () => chatThreadFrom(detail, 'agent_a', [], Date.now));
     time('chat: chatThreadFrom, last 500 lines', 20, () => chatThreadFrom(detail, 'agent_a', [], Date.now, 500));
     time('stream: prepare (activity+tokens+costs+durations)', 20, () => { resolveTurnCosts(resolveThinkTokens(activityRows(rows))); resolveToolDurations(rows); });
+    const prep = new StreamPrep();
+    prep.update(rows);
+    // The pushed ledgers are built BEFORE timing (the preload builds them, not the Stream): each one row longer.
+    const pushes: TimedEvent[][] = [];
+    let grown = rows;
+    for (let k = 0; k < 23; k += 1) { grown = [...grown, { id: `x${k}`, event: { kind: 'think', text: `t${k}`, tokens: null } as unknown as TimedEvent['event'], at: null }]; pushes.push(grown); }
+    let next = 0;
+    time('stream: StreamPrep, one row appended', 20, () => prep.update(pushes[next++]!));
 }
 console.log('\nAt 20 pushes a second, every 50 ms of work per push is a whole core.');
