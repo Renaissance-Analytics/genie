@@ -109,8 +109,8 @@ import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
-import { installNodeVersion, listNodeVersions, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
+import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -2398,6 +2398,8 @@ async function boot(): Promise<void> {
         packageManager,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
         now: Date.now,
+        // Genie's own Node, newest first (main/node-versions.ts): Check and repair makes it the node and npm Genie runs.
+        genieNode: () => managedNode({ root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
     });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
@@ -2453,7 +2455,13 @@ async function boot(): Promise<void> {
             // Genie's own Node (main/node-versions.ts) — same busy line.
             node: {
                 list: () => listNodeVersions(nodeVersionsPorts()),
-                install: (version, consent) => installNodeVersion(version, consent, nodeVersionsPorts()),
+                // An installed Node becomes the one Genie runs at once (and at every launch after): the owner's "genie
+                // has its own install path".
+                install: async (version, consent) => {
+                    const outcome = await installNodeVersion(version, consent, nodeVersionsPorts());
+                    if (outcome.kind === 'installed') preferGenieNode(toolchainOps(), outcome.dir);
+                    return outcome;
+                },
                 remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
             },
         },
