@@ -1,7 +1,7 @@
-import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
+import { migratePrivateCredential, preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
 
 /** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
@@ -10,6 +10,8 @@ export type SessionFetch = (url: string, init: { method: Method; headers: Record
 
 export interface TynnAccountPorts {
     readonly file: string;
+    /** Previous shared-home file; migration restricts this file, never its parent directory. */
+    readonly legacyFile?: string;
     readonly cipher: { isAvailable(): boolean; encrypt(text: string): Buffer; decrypt(bytes: Buffer): string };
     /** Fixed Tynn origin in production; injected origin in isolated tests. */
     readonly host: () => string;
@@ -96,8 +98,14 @@ export class TynnAccount implements TynnAccountPort {
         return account;
     }
 
+    async #prepareStorage(): Promise<void> {
+        if (this.#ports.legacyFile) await migratePrivateCredential(this.#ports.legacyFile, this.#ports.file);
+        await preparePrivateCredential(this.#ports.file);
+    }
+
     async #restore(): Promise<void> {
         try {
+            await this.#prepareStorage();
             const text = await readFile(this.#ports.file, 'utf8');
             if (text.length > 32_768) return;
             const data = JSON.parse(text) as Record<string, unknown>;
@@ -112,16 +120,12 @@ export class TynnAccount implements TynnAccountPort {
 
     #persist(credential: Credential | null): Promise<void> {
         const run = async () => {
+            if (this.#ports.legacyFile) await migratePrivateCredential(this.#ports.legacyFile, this.#ports.file);
             const data = credential ? {
                 version: 1, state: 'signed-in', host: credential.host, userId: credential.userId, scopes: credential.scopes,
                 tokenEnc: this.#ports.cipher.encrypt(credential.token).toString('base64'), usedCodes: this.#usedCodes,
             } : { version: 1, state: 'signed-out', host: this.host(), usedCodes: this.#usedCodes };
-            await mkdir(dirname(this.#ports.file), { recursive: true, mode: 0o700 });
-            const temp = `${this.#ports.file}.${randomUUID()}.tmp`;
-            try {
-                await writeFile(temp, JSON.stringify(data), { mode: 0o600 });
-                await rename(temp, this.#ports.file);
-            } finally { await rm(temp, { force: true }).catch(() => {}); }
+            await writePrivateCredential(this.#ports.file, JSON.stringify(data));
         };
         const work = this.#diskWork.then(run, run);
         this.#diskWork = work.catch(() => {});
@@ -193,6 +197,7 @@ export class TynnAccount implements TynnAccountPort {
         const hash = createHash('sha256').update(code).digest('hex');
         if (this.#usedCodes.includes(hash)) return this.status().signedIn ? { ok: true, user: this.#me!.user } : { ok: false, reason: 'That code was already used. Open Tynn again for a fresh sign-in code.' };
         if (!this.#ports.cipher.isAvailable()) return { ok: false, reason: 'OS credential encryption is unavailable. Unlock your keychain before pairing Tynn.' };
+        await this.#prepareStorage();
         const host = this.host();
         const previous = { credential: this.#credential, me: this.#me, host: this.#meHost };
         this.#retry?.cancel(); this.#retry = null; this.#credential = null; this.#set(null);

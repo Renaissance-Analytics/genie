@@ -1989,7 +1989,8 @@ async function boot(): Promise<void> {
     const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
         host: () => TYNN_HOST,
-        file: join(genieHome(), 'tynn.json'),
+        file: join(genieHome(), 'credentials', 'tynn.json'),
+        legacyFile: join(genieHome(), 'tynn.json'),
         cipher: {
             isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
             encrypt: (text) => safeStorage.encryptString(text),

@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { chmod, mkdir, rename, stat, symlink } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { TynnAccount, type TynnAccountPorts } from '../src/main/tynn-account.js';
 
 import { fakeTynnStorage, PAIRING_SCOPES, PAIRING_TOKEN } from './helpers/tynn-storage.js';
@@ -47,6 +49,39 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
     };
     return { ports, jar, calls, state, endSession: () => { sessionLive = false; } };
 }
+
+describe.skipIf(process.platform === 'win32')('Tynn account credential permissions', () => {
+    it('restricts an existing permissive directory before any account exchange', async () => {
+        const t = fakeTynn(); await chmod(dirname(t.ports.file), 0o755);
+        await TynnAccount.open(t.ports);
+        expect((await stat(dirname(t.ports.file))).mode & 0o777).toBe(0o700);
+        expect(t.calls).toHaveLength(0);
+    });
+
+    it('restricts an existing credential file before restoring its bearer', async () => {
+        const t = fakeTynn(); await (await TynnAccount.open(t.ports)).signIn(CODE);
+        await chmod(t.ports.file, 0o644);
+        expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(true);
+        expect((await stat(t.ports.file)).mode & 0o777).toBe(0o600);
+    });
+
+    it('refuses a symlinked credential file before restoring or sending its bearer', async () => {
+        const t = fakeTynn(); await (await TynnAccount.open(t.ports)).signIn(CODE);
+        const before = t.calls.length; await rename(t.ports.file, `${t.ports.file}.original`);
+        await symlink(`${t.ports.file}.original`, t.ports.file);
+        expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(false);
+        expect(t.calls).toHaveLength(before);
+    });
+
+    it('refuses a symlinked credential directory before exchanging the sign-in code', async () => {
+        const t = fakeTynn(); const root = dirname(t.ports.file);
+        const target = join(root, 'real'); const link = join(root, 'alias');
+        await mkdir(target); await symlink(target, link);
+        const account = await TynnAccount.open({ ...t.ports, file: join(link, 'tynn.json') });
+        expect((await account.signIn(CODE)).ok).toBe(false);
+        expect(t.calls).toHaveLength(0);
+    });
+});
 
 describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
     it('drops the code as genie_token on the Tynn origin and asks /api/v1/me, which returns the scoped pairing credential', async () => {
