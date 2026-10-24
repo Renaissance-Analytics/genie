@@ -76,9 +76,16 @@ export function resolveRepoDir(manifest: Record<string, unknown>, repo: string):
     return `repos/${repo}`;
 }
 
-/** A shell word for the dev-server command line: bare when safe, double-quoted otherwise. */
+/** The process parser accepts enclosing quotes, not backslash escapes. Refuse values it cannot represent. */
+function commandProblem(argv: readonly string[]): string | null {
+    if (argv.some((token) => token.includes('"'))) return 'its command contains a literal double quote, which the process argument parser cannot represent';
+    if (argv.some((token) => token.includes('\0'))) return 'its command contains NUL, which cannot be passed to a process';
+    return null;
+}
+
+/** One validated process argument, not a shell expression; backslashes remain literal on every platform. */
 function word(token: string): string {
-    return /^[A-Za-z0-9_@%+=:,./\\{}-]+$/.test(token) ? token : `"${token.replace(/"/g, '\\"')}"`;
+    return /^[A-Za-z0-9_@%+=:,./\\{}-]+$/.test(token) ? token : `"${token}"`;
 }
 
 function stackOf(argv: readonly string[], entry: Record<string, unknown>): EnvelopeStack {
@@ -103,6 +110,8 @@ const portFlagAt = (tokens: readonly string[]): number => tokens.findIndex((t, i
  * fallback for its stack (Laravel `--port=`, Django `127.0.0.1:`, Vite `--port --strictPort`, else `PORT`).
  */
 export function devServerFor(argv: readonly string[], entry: Record<string, unknown>): { command: string; portEnv?: Record<string, string> } {
+    const problem = commandProblem(argv);
+    if (problem !== null) throw new Error(problem);
     let tokens = argv.map((a) => a.replace(/^--host=0\.0\.0\.0$/, '--host=127.0.0.1'));
     let portEnv: Record<string, string> | undefined;
     if (tokens.some((t) => t.includes('{port}'))) {
@@ -178,6 +187,8 @@ function mapEntry(manifest: Record<string, unknown>, key: string, entry: Record<
     const argv = Array.isArray(entry.command) && entry.command.length > 0 ? entry.command : Array.isArray(entry.serve) && entry.serve.length > 0 ? entry.serve : null;
     if (argv === null) return refuse('it names no way to serve it: no hostServe, no command, no hostPort');
     if (!argv.every((a): a is string => typeof a === 'string')) return refuse('its command is not a list of strings');
+    const problem = commandProblem(argv);
+    if (problem !== null) return refuse(problem);
     const dev = devServerFor(argv, entry);
     return { ...base, serve: { mode: 'proxy' }, devServer: { stack: stackOf(argv, entry), command: dev.command }, ...(dev.portEnv ? { portEnv: dev.portEnv } : {}) };
 }
@@ -203,11 +214,28 @@ export interface NewSiteEntry {
     readonly hostPort?: number;
 }
 
-/** A command line back to argv (quotes honoured), for the `command` Genie 1's shape stores. */
-function argvOf(command: string): string[] {
+/**
+ * Read whole quoted words with literal backslashes, as the process parser does. Single-quoted
+ * input is also accepted when saving a person's command; the formatter emits double quotes.
+ * A quote cannot join another word or be escaped: that would invent an unsupported argv value.
+ */
+function argvOf(command: string): string[] | null {
     const out: string[] = [];
-    const re = /"((?:[^"\\]|\\"|\\(?!"))*)"|'([^']*)'|(\S+)/g;
-    for (let m = re.exec(command); m !== null; m = re.exec(command)) out.push(m[1] !== undefined ? m[1].replace(/\\"/g, '"') : (m[2] ?? m[3]!));
+    let at = 0;
+    while (at < command.length) {
+        if (/\s/.test(command[at]!)) { at++; continue; }
+        const quote = command[at];
+        if (quote === '"' || quote === "'") {
+            const end = command.indexOf(quote, at + 1);
+            if (end < 0 || (end + 1 < command.length && !/\s/.test(command[end + 1]!))) return null;
+            out.push(command.slice(at + 1, end));
+            at = end + 1;
+        } else {
+            const start = at;
+            while (at < command.length && !/\s/.test(command[at]!)) at++;
+            out.push(command.slice(start, at));
+        }
+    }
     return out;
 }
 
@@ -234,7 +262,13 @@ export function siteEntryFor(manifest: Record<string, unknown>, site: NewSiteEnt
     if (site.serve.mode === 'static') entry.hostServe = { mode: 'static', root: site.serve.root, spa: site.serve.spa };
     else if (site.serve.mode === 'php') entry.hostServe = { mode: 'php', root: site.serve.root, ...(site.serve.version ? { version: site.serve.version } : {}) };
     else if (site.hostPort !== undefined) entry.hostPort = site.hostPort;
-    else if (site.devServer) entry.command = argvOf(site.devServer.command);
+    else if (site.devServer) {
+        const argv = argvOf(site.devServer.command);
+        if (argv === null) return { ok: false, reason: 'its command contains an unfinished or unsupported quote' };
+        const problem = commandProblem(argv);
+        if (problem !== null) return { ok: false, reason: problem };
+        entry.command = argv;
+    }
     else return { ok: false, reason: 'a proxy site needs a dev server or a hostPort' };
     return { ok: true, entry };
 }
