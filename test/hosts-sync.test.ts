@@ -265,3 +265,74 @@ describe('a Trust carries a due hosts write in its ONE prompt', () => {
         expect(t.sync.result).toEqual({ changed: true, elevated: true });
     });
 });
+
+describe('observing completion without requesting another sync', () => {
+    it('waits for the existing debounce and in-flight write without firing or replacing the debounce', async () => {
+        const t = setup();
+        let release!: () => void;
+        let entered!: () => void;
+        const held = new Promise<void>((resolve) => { release = resolve; });
+        const writing = new Promise<void>((resolve) => { entered = resolve; });
+        const write = t.io.port.write;
+        t.io.port.write = async (next) => { entered(); await held; await write(next); };
+        t.setNames(['docs.gen']);
+        t.sync.begin();
+        let completed = false;
+        const idle = t.sync.settled().then(() => { completed = true; });
+        await Promise.resolve();
+        expect(completed).toBe(false);
+        expect(t.clock.live()).toBe(1);
+        expect(t.io.calls).toEqual([]);
+        t.clock.fire();
+        await writing;
+        expect(completed).toBe(false);
+        release();
+        await idle;
+        expect(t.io.calls).toEqual(['read', 'write']);
+        expect(t.io.content()).toContain('::1 docs.gen');
+        await t.sync.settled();
+        expect(t.io.calls).toEqual(['read', 'write']);
+    });
+
+    it('follows a replacement debounce and waits for the final names once', async () => {
+        const t = setup();
+        t.sync.begin();
+        const idle = t.sync.settled();
+        t.setNames(['old.gen']);
+        t.sync.changed();
+        t.setNames(['final.gen']);
+        t.sync.changed();
+        expect(t.clock.live()).toBe(1);
+        t.clock.fire();
+        await idle;
+        expect(t.io.calls).toEqual(['read', 'write']);
+        expect(t.results).toEqual([{ changed: true, elevated: false }]);
+        expect(t.io.content()).toContain('::1 final.gen');
+        expect(t.io.content()).not.toContain('old.gen');
+    });
+
+    it('resolves a cancelled debounce on close without reading or writing', async () => {
+        const t = setup();
+        t.setNames(['docs.gen']);
+        t.sync.begin();
+        const idle = t.sync.settled();
+        t.sync.close();
+        await idle;
+        expect(t.clock.live()).toBe(0);
+        t.clock.fire();
+        expect(t.io.calls).toEqual([]);
+        expect(t.results).toEqual([]);
+    });
+
+    it('does not retry a declined elevation while observing idle state', async () => {
+        const t = setup('127.0.0.1 localhost\n', { denyPlain: true });
+        t.setNames(['docs.gen']);
+        t.prompt.state.declined = true;
+        await t.sync.flush();
+        const before = [...t.io.calls];
+        await t.sync.settled();
+        expect(t.io.calls).toEqual(before);
+        expect(t.prompt.batches).toEqual([[HOSTS_STEP_ID]]);
+        expect(t.sync.result).toMatchObject({ error: 'Request dismissed' });
+    });
+});

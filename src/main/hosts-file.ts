@@ -50,6 +50,7 @@ export class HostsSync {
     readonly #deps: HostsSyncDeps;
     #armed = false;
     #cancel: (() => void) | null = null;
+    #pending: { promise: Promise<void>; resolve: () => void } | null = null;
     #lock: Promise<unknown> = Promise.resolve();
     /** The names (joined) the last sync tried — landed or not. The same names are not tried again by a change. */
     #tried: string | null = null;
@@ -74,6 +75,16 @@ export class HostsSync {
         if (!this.#armed) return;
         if (this.#key() === this.#tried) return;
         this.#request();
+    }
+
+    /** Observe queued work, including its debounce, without requesting a sync or retrying a declined prompt. */
+    async settled(): Promise<void> {
+        for (;;) {
+            await this.#pending?.promise;
+            const lock = this.#lock;
+            await lock;
+            if (this.#pending === null && this.#lock === lock) return;
+        }
     }
 
     /** Sync now — the person's Try again. Serialised behind any sync in flight; a pending debounce is folded into it. */
@@ -120,6 +131,9 @@ export class HostsSync {
 
     #request(): void {
         this.#cancelPending();
+        let resolve!: () => void;
+        const promise = new Promise<void>((done) => { resolve = done; });
+        this.#pending = { promise, resolve };
         this.#cancel = this.#deps.schedule(() => {
             this.#cancel = null;
             void this.flush();
@@ -129,6 +143,8 @@ export class HostsSync {
     #cancelPending(): void {
         this.#cancel?.();
         this.#cancel = null;
+        this.#pending?.resolve();
+        this.#pending = null;
     }
 
     #locked<T>(fn: () => Promise<T>): Promise<T> {
