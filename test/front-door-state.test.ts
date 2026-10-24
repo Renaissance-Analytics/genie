@@ -630,3 +630,74 @@ describe('completion under a slow port', () => {
         expect(batches).toEqual([['trust']]);
     });
 });
+
+describe('completion after rejected front-door work', () => {
+    it('settles a rejected startup probe while status and listeners retain its failure, then allows recovery', async () => {
+        const held = gate();
+        ports.port.probe = async () => { await held.promise; throw new Error('startup probe failed'); };
+        services = await compose();
+        const heard: FrontDoorStatus[] = [];
+        services.onFrontDoorChange(() => heard.push(services!.externalFrontDoor));
+        const completed = expect(services.frontDoorSettled()).resolves.toBeUndefined();
+        held.release();
+        await completed;
+        expect(services.externalFrontDoor).toMatchObject({ running: false, reason: expect.stringContaining('startup probe failed') });
+        expect(heard).toContainEqual(services.externalFrontDoor);
+        expect(pty.caddy()).toHaveLength(0);
+        expect(batches).toEqual([]);
+        ports.port.probe = async () => 'free';
+        expect(await services.retryFrontDoor()).toMatchObject({ running: true });
+        await settle();
+        expect(pty.caddy()).toHaveLength(1);
+        expect(services.externalFrontDoor).not.toHaveProperty('reason');
+    });
+
+    it('settles a rejected holder lookup while notifying its failure and preserving the blocked port', async () => {
+        services = await compose();
+        await settle();
+        const held = gate();
+        ports.port.holder = async () => { await held.promise; throw new Error('holder lookup failed'); };
+        const heard: FrontDoorStatus[] = [];
+        services.onFrontDoorChange(() => heard.push(services!.externalFrontDoor));
+        pty.emit(pty.caddy()[0]!.id, CADDY_SAYS_HELD);
+        const completed = expect(services.frontDoorSettled()).resolves.toBeUndefined();
+        held.release();
+        await completed;
+        expect(services.externalFrontDoor).toMatchObject({ running: false, reason: expect.stringContaining('holder lookup failed'), blocked: { port: 443, holder: null } });
+        expect(heard).toContainEqual(services.externalFrontDoor);
+        expect(services.supervisor.status('genie-front-door')?.state).toBe('stopped');
+        expect(pty.caddy()).toHaveLength(1);
+    });
+
+    it('settles an explicit retry failure without swallowing the caller rejection or status notification', async () => {
+        ports.probes[443] = 'held';
+        services = await compose();
+        await settle();
+        const held = gate();
+        ports.port.probe = async () => { await held.promise; throw new Error('retry probe failed'); };
+        const heard: FrontDoorStatus[] = [];
+        services.onFrontDoorChange(() => heard.push(services!.externalFrontDoor));
+        const rejected = expect(services.retryFrontDoor()).rejects.toThrow('retry probe failed');
+        const completed = expect(services.frontDoorSettled()).resolves.toBeUndefined();
+        held.release();
+        try { await completed; } finally { await rejected; }
+        expect(services.externalFrontDoor).toMatchObject({ running: false, reason: expect.stringContaining('retry probe failed'), blocked: { port: 443, holder: null } });
+        expect(heard).toContainEqual(services.externalFrontDoor);
+        expect(pty.caddy()).toHaveLength(0);
+    });
+
+    it('does not let a late holder failure overwrite a successful retry', async () => {
+        services = await compose();
+        await settle();
+        const held = gate();
+        ports.port.holder = async () => { await held.promise; throw new Error('obsolete holder lookup failed'); };
+        pty.emit(pty.caddy()[0]!.id, CADDY_SAYS_HELD);
+        expect(await services.retryFrontDoor()).toMatchObject({ running: true });
+        const completed = expect(services.frontDoorSettled()).resolves.toBeUndefined();
+        held.release();
+        await completed;
+        expect(services.externalFrontDoor).toMatchObject({ running: true });
+        expect(services.externalFrontDoor).not.toHaveProperty('reason');
+        expect(pty.caddy()).toHaveLength(2);
+    });
+});
