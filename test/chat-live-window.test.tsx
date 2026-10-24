@@ -62,6 +62,12 @@ describe('what the chat draws', () => {
         expect(big.at(-1)).toBe('m99999');
     });
 
+    it('a thread derived from the ledger’s tail (core/chat-view.ts chatTailStart) offers the history behind it', () => {
+        const html = render({ ...thread(Array.from({ length: 40 }, (_, i) => msg(i))), earlier: true });
+        expect(rendered(html)).toHaveLength(40);
+        expect(html).toMatch(/data-chat-earlier="more"[^>]*>Earlier messages · show more</);
+    });
+
     it('CONTROL: a short thread draws every message and offers nothing earlier', () => {
         const html = render(thread(Array.from({ length: 40 }, (_, i) => msg(i))));
         expect(rendered(html)).toHaveLength(40);

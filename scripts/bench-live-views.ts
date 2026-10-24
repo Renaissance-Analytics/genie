@@ -15,6 +15,7 @@ function history(n: number): TimedEvent[] {
     const rows: TimedEvent[] = [];
     for (let i = 0; i < n; i += 1) {
         const k = i % 4;
+        if (i % 40 === 0) { rows.push({ id: `t${i}`, event: { kind: 'turn', n: i / 40, by: 'you' } as unknown as TimedEvent['event'], at: 1_700_000_000_000 + i * 1000 }); }
         const event = k === 0 ? { kind: 'message', speaker: 'you', peerName: null, text: `ask ${i}` }
             : k === 1 ? { kind: 'think', text: `thinking about ${i}` }
             : k === 2 ? { kind: 'tool', name: 'Bash', input: `ls ${i}`, status: 'done' }
@@ -38,6 +39,7 @@ for (const n of [3_000, 30_000, 100_000]) {
     const detail: ChatDetail = { agent: { id: 'agent_a', name: 'atlas', provider: 'claude', fidelity: 'declared' }, session: null, rows, comms: null };
     console.log(`${n.toLocaleString('en-US')} rows`);
     time('chat: chatThreadFrom', 20, () => chatThreadFrom(detail, 'agent_a', [], Date.now));
+    time('chat: chatThreadFrom, last 500 lines', 20, () => chatThreadFrom(detail, 'agent_a', [], Date.now, 500));
     time('stream: prepare (activity+tokens+costs+durations)', 20, () => { resolveTurnCosts(resolveThinkTokens(activityRows(rows))); resolveToolDurations(rows); });
 }
 console.log('\nAt 20 pushes a second, every 50 ms of work per push is a whole core.');

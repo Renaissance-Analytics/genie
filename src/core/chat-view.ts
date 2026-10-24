@@ -4,6 +4,7 @@ import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
+import { messageLines } from './chat-window.js';
 
 /**
  * THE CHAT FLYOUT'S THREAD, derived — no React in sight.
@@ -105,6 +106,8 @@ export interface ChatThreadView {
     context: ChatContext | null;
     /** The subject's own conversation is loaded (the flyout's `data-chat-loaded`). `false` = nothing read for it yet. */
     loaded: boolean;
+    /** Rows of the ledger lie before these messages ({@link chatTailStart}): earlier history, which pages in on request. */
+    earlier: boolean;
 }
 
 /** The slice of an agent's detail the thread reads (structurally `AgentDetail`, without binding core to the bridge). */
@@ -245,20 +248,51 @@ export function chatFollowKey(agentId: string | null, messages: readonly { reado
     return `${agentId ?? ''}:${messages.length}:${last ? `${last.id}:${last.text.length}` : ''}`;
 }
 
-export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, rows: readonly AgentRow[], _now: () => number): ChatThreadView {
+/** Rows after which nothing earlier changes a chat message: each resets the waiting state, and starts a fresh run of thoughts. */
+const BOUNDARY = new Set(['turn', 'stopped', 'run']);
+
+/**
+ * WHERE AN UPDATE STARTS READING THE LEDGER (the owner, 2026-10-22: never recompute the whole thread per update).
+ *
+ * Everything a chat message depends on comes from rows at or after the last turn/stopped/run boundary before it: whether
+ * it waits behind a step (`waitingMessages` clears at each boundary), whether thoughts merge (a boundary is not a
+ * thought), and a queued prompt's delivery (it always follows its message). So the chat's last `lines` lines are derived
+ * exactly from the boundary at or before where those lines begin — `0` when the ledger holds fewer, or has no boundary
+ * there. Walks back only as far as it needs: the window, and the turn it starts in.
+ */
+export function chatTailStart(ledger: readonly TimedEvent[], lines: number): number {
+    let seen = 0;
+    let i = ledger.length - 1;
+    for (; i >= 0; i -= 1) {
+        const e = ledger[i]!.event;
+        if (e.kind === 'message' || e.kind === 'think') seen += messageLines(e);
+        else if (e.kind === 'stopped' || e.kind === 'divider') seen += 1;
+        if (seen >= lines) break;
+    }
+    for (; i > 0; i -= 1) if (BOUNDARY.has(ledger[i]!.event.kind)) return i;
+    return 0;
+}
+
+/**
+ * The chat thread for a subject. `lines`: derive only the last `lines` lines' worth of the ledger (from
+ * {@link chatTailStart}) — what an update while Following Live needs; absent = the whole history.
+ */
+export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, rows: readonly AgentRow[], _now: () => number, lines?: number): ChatThreadView {
     const row = rows.find((r) => r.id === subjectId || r.name === subjectId) ?? null;
     // Only the SUBJECT's detail is its conversation (a route may name it by id or, for genie, by name). A detail still
     // loaded for another agent is never drawn under this one's name.
     const own = detail !== null && (detail.agent.id === subjectId || detail.agent.id === row?.id || detail.agent.name === subjectId);
     if (!own) detail = null;
+    const start = detail && lines !== undefined ? chatTailStart(detail.rows, lines) : 0;
     return {
         agentId: subjectId,
         name: detail?.agent.name ?? row?.name ?? subjectId,
         fidelity: detail?.agent.fidelity ?? row?.fidelity ?? 'declared',
         unread: null,
-        messages: detail ? byTime(chatMessages(detail, rows), commsRows(detail, rows)) : [],
+        messages: detail ? tailMessages(detail, rows, start) : [],
         context: detail ? chatContext(detail) : null,
         loaded: detail !== null,
+        earlier: start > 0,
     };
 }
 
@@ -315,6 +349,18 @@ function commsRows(detail: ChatDetail, rows: readonly AgentRow[]): ChatMessage[]
             const at = Date.parse(m.sentAt);
             return { id: m.id, who: 'mail' as const, from: `${name(m.from)} → ${name(m.to)}`, text: m.text, delivered: true, at: Number.isNaN(at) ? null : at, mailId: m.id };
         });
+}
+
+/**
+ * The messages from ledger row `start` on, with the mail among them. Mail sent before the first of those messages is
+ * earlier history, as it is in the whole chat — placed before it there, it would arrive at the top of this one.
+ */
+function tailMessages(detail: ChatDetail, rows: readonly AgentRow[], start: number): ChatMessage[] {
+    if (start === 0) return byTime(chatMessages(detail, rows), commsRows(detail, rows));
+    const own = chatMessages({ ...detail, rows: detail.rows.slice(start) }, rows);
+    const first = own.find((m) => m.at !== null)?.at ?? null;
+    const mail = commsRows(detail, rows).filter((m) => m.at === null || (first !== null && m.at > first));
+    return byTime(own, mail);
 }
 
 /** The system rows placed among the messages by when they were sent; a message with no time keeps its place. */

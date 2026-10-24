@@ -6,6 +6,7 @@ import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
@@ -1128,7 +1129,10 @@ function DesktopApp({ bridge }: AppProps) {
     };
     // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
     // thread reads every row of the subject's ledger.
-    const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now)), [chatDetail, chatSubject, snapshot.agents]);
+    // FOLLOWING LIVE (the owner, 2026-10-22): an update derives only the lines the chat shows (core/chat-view.ts
+    // chatTailStart) — the flyout says how many, and asks for more when the person pages into earlier history.
+    const [chatLines, setChatLines] = useState(CHAT_LIVE_LINES);
+    const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now, chatLines)), [chatDetail, chatSubject, snapshot.agents, chatLines]);
     const chatDrafts: ChatThread | null = chatBase === null
         ? null
         : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatDetail?.agent.id === chatBase.agentId && chatDetail.session?.running === true });
@@ -1279,6 +1283,7 @@ function DesktopApp({ bridge }: AppProps) {
             agentResolved={resolved}
             selectedRowId={selectedRowId}
             chatThread={chatThread}
+            onChatWindowLines={setChatLines}
             openedThreads={openedThreads}
             chatSession={chatDetail?.session ?? null}
             pinned={pinned}

@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
@@ -52,6 +52,8 @@ export interface ChatThread {
     context?: ChatContext | null | undefined;
     /** The subject's own conversation is loaded (`core/chat-view.ts`); absent = not said, drawn as not loaded. */
     loaded?: boolean | undefined;
+    /** Ledger rows lie before these messages (`core/chat-view.ts` chatTailStart): more history pages in on request. */
+    earlier?: boolean | undefined;
 }
 
 const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
@@ -163,6 +165,8 @@ export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpe
 
 export interface ChatFlyoutProps {
     thread: ChatThread | null;
+    /** How many lines the chat shows now (core/chat-window.ts): the caller derives only those from the ledger. */
+    onWindowLines?: ((lines: number) => void) | undefined;
     /**
      * The chat agent's REAL context usage and window (`core/composer.ts` `composerMeter`), for the composer's meter.
      * `null` or absent = not reported, and then there is no meter — never a made-up window.
@@ -243,7 +247,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 }
 
 export function ChatFlyout({
-    thread, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
+    thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
     onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
@@ -309,6 +313,9 @@ export function ChatFlyout({
         setLines((n) => n + CHAT_LIVE_LINES);
     };
     useLayoutEffect(() => { followRef.current = true; setLines(CHAT_LIVE_LINES); }, [thread?.agentId]);
+    useEffect(() => { onWindowLines?.(lines); }, [lines, onWindowLines]);
+    /** History behind what is drawn: messages held but not drawn, or ledger rows not derived yet. */
+    const behind = windowStart > 0 || thread?.earlier === true;
     useLayoutEffect(() => {
         const el = scrollRef.current;
         if (!el) return;
@@ -460,7 +467,7 @@ export function ChatFlyout({
                     // Back at the end: Following Live again, so only the live 500 lines stay in the DOM.
                     if (followRef.current && lines > CHAT_LIVE_LINES) setLines(CHAT_LIVE_LINES);
                     // At the top with history behind: the next page comes in.
-                    else if (el.scrollTop === 0 && windowStart > 0) showEarlier();
+                    else if (el.scrollTop === 0 && behind) showEarlier();
                 }}
                 className="min-h-0 flex-1 overflow-y-auto"
             >
@@ -500,9 +507,9 @@ export function ChatFlyout({
                     </div>
                 ) : null}
                 {/* EARLIER HISTORY (core/chat-window.ts): how many messages are behind the window, and the page that brings them in. */}
-                {windowStart > 0 ? (
-                    <button type="button" data-chat-earlier={windowStart} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
-                        {windowStart.toLocaleString('en-US')} earlier {windowStart === 1 ? 'message' : 'messages'} · show more
+                {behind ? (
+                    <button type="button" data-chat-earlier={windowStart > 0 ? windowStart : 'more'} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
+                        {windowStart > 0 ? `${windowStart.toLocaleString('en-US')} earlier ${windowStart === 1 ? 'message' : 'messages'} · show more` : 'Earlier messages · show more'}
                     </button>
                 ) : null}
                 {shown.map((m) => {

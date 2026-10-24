@@ -99,6 +99,8 @@ export interface ShellProps {
     selectedRowId: string | null;
     /** The chat thread the route names, when it names one. */
     chatThread: ChatThread | null;
+    /** How many lines of the thread the chat shows (core/chat-window.ts), so only those are derived. */
+    onChatWindowLines?: ((lines: number) => void) | undefined;
     /** The agents you last chatted with, newest first (`rememberThread`): a workspace's chat opens on the latest there. */
     openedThreads?: readonly string[] | undefined;
     /** The chat subject's session (§4.4): its approval is answered where the composer is; its running turn gets `[Stop]`. */
@@ -274,6 +276,7 @@ export function Shell({
     agentResolved,
     selectedRowId,
     chatThread,
+    onChatWindowLines,
     openedThreads,
     chatSession = null,
     onNavigate,
@@ -767,6 +770,7 @@ export function Shell({
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ChatFlyout
                         thread={chatThread}
+                        onWindowLines={onChatWindowLines}
                         dockWidth={chatDockWidth}
                         onDockWidth={setChatDockWidth}
                         contextUsage={chatThread ? composerMeter(chatSession) : null}
