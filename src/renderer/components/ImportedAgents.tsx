@@ -15,6 +15,31 @@ const button = 'rounded-md border border-[var(--border-1)] px-3 py-1 text-xs hov
 const primary = 'flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)] disabled:opacity-50';
 const muted = 'text-xs text-[var(--fg-3)]';
 
+/**
+ * The `.agents/*` with no registration here — ONE list for both screens (the offer after an add, the workspace's roster):
+ * each with its button, or the reason Genie will not take it and no button. `verb` is the screen's word for it. Called as a
+ * function, not mounted as a component: the views stay one hook-free tree a test can walk and press.
+ */
+function unregisteredAgentList({ agents, busy, verb, onAct }: { agents: readonly ImportedAgent[]; busy: string | null; verb: { action: string; label: string; busyLabel: string }; onAct: (name: string) => void }) {
+    if (agents.length === 0) return null;
+    return (
+        <ul className="flex flex-col gap-1.5">
+            {agents.map((a) => (
+                <li key={a.name} data-imported-agent={a.name} className="flex items-start justify-between gap-3 rounded-md border border-[var(--border-1)] px-2.5 py-1.5">
+                    <div className="flex min-w-0 flex-col">
+                        <span className="font-mono text-xs font-semibold">{a.name}{a.provider ? <span className="ml-2 font-sans font-normal text-[var(--fg-3)]">{a.provider}</span> : null}</span>
+                        <span className={`${muted} font-mono`}>{a.instructions}</span>
+                        {a.refusal ? <span data-adopt-refusal="" className="text-xs text-[var(--danger)]">{a.refusal}</span> : null}
+                    </div>
+                    {a.refusal === null ? (
+                        <button type="button" data-action={verb.action} data-agent={a.name} disabled={busy !== null} onClick={() => onAct(a.name)} className={button}>{busy === a.name ? verb.busyLabel : verb.label}</button>
+                    ) : null}
+                </li>
+            ))}
+        </ul>
+    );
+}
+
 export interface ImportedAgentsViewProps {
     readonly workspaceName: string;
     readonly path: string | null;
@@ -47,24 +72,59 @@ export function ImportedAgentsView({ workspaceName, path, agents, busy, notice, 
             ) : null}
             {error ? <p data-imported-agents-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             {notice ? <p data-imported-agents-notice="" role="status" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 text-xs">{notice}</p> : null}
-            {agents.length > 0 ? (
-                <ul className="flex flex-col gap-1.5">
-                    {agents.map((a) => (
-                        <li key={a.name} data-imported-agent={a.name} className="flex items-start justify-between gap-3 rounded-md border border-[var(--border-1)] px-2.5 py-1.5">
-                            <div className="flex min-w-0 flex-col">
-                                <span className="font-mono text-xs font-semibold">{a.name}{a.provider ? <span className="ml-2 font-sans font-normal text-[var(--fg-3)]">{a.provider}</span> : null}</span>
-                                <span className={`${muted} font-mono`}>{a.instructions}</span>
-                                {a.refusal ? <span data-adopt-refusal="" className="text-xs text-[var(--danger)]">{a.refusal}</span> : null}
-                            </div>
-                            {a.refusal === null ? (
-                                <button type="button" data-action="adopt-agent" data-agent={a.name} disabled={busy !== null} onClick={() => onAdopt(a.name)} className={button}>{busy === a.name ? 'Adopting…' : 'Adopt'}</button>
-                            ) : null}
-                        </li>
-                    ))}
-                </ul>
-            ) : null}
+            {unregisteredAgentList({ agents, busy, verb: { action: 'adopt-agent', label: 'Adopt', busyLabel: 'Adopting…' }, onAct: onAdopt })}
             <div className="flex items-center justify-end gap-2">
                 <button type="button" data-action="open-workspace" disabled={busy !== null} onClick={onOpen} className={primary}><Icon name="check" size="xs" />Open workspace</button>
+            </div>
+        </div>
+    );
+}
+
+export interface AgentRosterViewProps {
+    /** The agents registered in this workspace. */
+    readonly registered: readonly { readonly id: string; readonly name: string; readonly provider: string }[];
+    /** Its `.agents/*` with no registration here; `null` = not read yet. */
+    readonly onDisk: readonly ImportedAgent[] | null;
+    /** The agent being reattached now; every Reattach waits for it. */
+    readonly busy: string | null;
+    readonly notice: string | null;
+    readonly error: string | null;
+    readonly onReattach: (name: string) => void;
+}
+
+/**
+ * THE WORKSPACE'S AGENT ROSTER (agent management parity item 2; Genie 1's WorkspaceAgentRoster / AgentRosterList):
+ * Registered, and On disk only — an agent unmounted from Genie, or one the workspace came with — each with Reattach, or the
+ * reason it cannot come back. Reattaching is adoption: the same rules, the file read and never rewritten. Hook-free, so a
+ * test renders and presses it; the list and the busy state live with whoever draws it (App.tsx).
+ */
+export function AgentRosterView({ registered, onDisk, busy, notice, error, onReattach }: AgentRosterViewProps) {
+    return (
+        <div data-agent-roster="" className="flex flex-col gap-3">
+            <div data-roster-registered="" className="flex flex-col gap-1">
+                <span className="text-xs font-semibold">Registered</span>
+                {registered.length === 0 ? (
+                    <span className={muted}>No agents are registered here.</span>
+                ) : (
+                    <ul className="flex flex-wrap gap-1.5">
+                        {registered.map((a) => (
+                            <li key={a.id} data-roster-agent={a.name} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 font-mono text-xs">{a.name}<span className="ml-2 font-sans text-[var(--fg-3)]">{a.provider}</span></li>
+                        ))}
+                    </ul>
+                )}
+            </div>
+            <div data-roster-on-disk="" className="flex flex-col gap-1">
+                <span className="text-xs font-semibold">On disk only</span>
+                <span className={muted}>An <span className="font-mono">.agents/&lt;name&gt;/AGENT.md</span> Genie has no registration for — unmounted, or brought by the project. Reattach reads its file; it never rewrites it.</span>
+                {error ? <p data-imported-agents-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
+                {notice ? <p data-imported-agents-notice="" role="status" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 text-xs">{notice}</p> : null}
+                {onDisk === null ? (
+                    <span data-roster-on-disk-loading="" className={muted}>Reading .agents/…</span>
+                ) : onDisk.length === 0 ? (
+                    <span data-roster-on-disk-empty="" className={muted}>None: every agent file here is registered.</span>
+                ) : (
+                    unregisteredAgentList({ agents: onDisk, busy, verb: { action: 'reattach-agent', label: 'Reattach', busyLabel: 'Reattaching…' }, onAct: onReattach })
+                )}
             </div>
         </div>
     );

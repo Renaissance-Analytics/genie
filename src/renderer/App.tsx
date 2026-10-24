@@ -694,6 +694,23 @@ function DesktopApp({ bridge }: AppProps) {
         return resolvedBridge.workspaces.onSettingsChanged?.((changed) => { if (changed === workspaceId) reloadWsSettings(resolvedBridge, workspaceId); });
     }, [resolvedBridge, workspaceId]);
     useEffect(() => { setWsView({ removePreview: false, lastOutcome: null }); }, [workspaceId]);
+    /*
+     * THE WORKSPACE'S AGENT ROSTER (agent management parity item 2; Genie 1's agents:roster / agents:adopt): its
+     * `.agents/*` with no registration here, read again whenever its registered agents change — an unmount is one — and
+     * Reattach adopts one (agent-adoption's rules). A host that cannot read them offers no roster.
+     */
+    const wsAgentNames = workspaceId ? snapshot.agents.filter((a) => a.workspaceId === workspaceId).map((a) => a.name).sort().join(',') : '';
+    const [roster, setRoster] = useState<{ workspaceId: string; onDisk: readonly ImportedAgent[] | null; busy: string | null; notice: string | null; error: string | null } | null>(null);
+    const readRoster = (bridge: GenieBridge, id: string) => {
+        const read = bridge.workspaces.importedAgents;
+        if (!read) return;
+        void read(id).then(
+            (r) => setRoster((s) => (s && s.workspaceId === id ? { ...s, onDisk: r.ok ? r.agents : [], error: r.ok ? s.error : r.reason } : s)),
+            (e: unknown) => setRoster((s) => (s && s.workspaceId === id ? { ...s, onDisk: [], error: e instanceof Error ? e.message : String(e) } : s)),
+        );
+    };
+    useEffect(() => { setRoster(workspaceId ? { workspaceId, onDisk: null, busy: null, notice: null, error: null } : null); }, [workspaceId]);
+    useEffect(() => { if (resolvedBridge && workspaceId) readRoster(resolvedBridge, workspaceId); }, [resolvedBridge, workspaceId, wsAgentNames]);
     // ADD A WORKSPACE (Tynn #835): the folder is picked over the HOST's disk — the remote machine's, when this window
     // drives one — then the plan is shown before anything is written.
     // THE WINDOW'S ONE PICKER (Tynn #835): every file and folder is chosen over the HOST's disk — the remote machine's
@@ -794,6 +811,27 @@ function DesktopApp({ bridge }: AppProps) {
                   current: workspaceRow.defaultAgentId ?? null,
                   onSet: (agentId) => { void resolvedBridge.workspaces.setDefaultAgent(workspaceId, agentId).then((r) => { if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               },
+              ...(resolvedBridge.workspaces.importedAgents && resolvedBridge.workspaces.adoptAgent && roster && roster.workspaceId === workspaceId
+                  ? {
+                        agentRoster: {
+                            registered: snapshot.agents.filter((a) => a.workspaceId === workspaceId).map((a) => ({ id: a.id, name: a.name, provider: a.provider })),
+                            onDisk: roster.onDisk,
+                            busy: roster.busy,
+                            notice: roster.notice,
+                            error: roster.error,
+                            onReattach: (name: string) => {
+                                setRoster((s) => (s ? { ...s, busy: name, notice: null, error: null } : s));
+                                void resolvedBridge.workspaces.adoptAgent!(workspaceId, name)
+                                    .then(
+                                        // Name what happened and what it did NOT do.
+                                        (r) => setRoster((s) => (s && s.workspaceId === workspaceId ? (r.ok ? { ...s, notice: `${name} is registered. Its .agents/${name}/AGENT.md was read, not rewritten.` } : { ...s, error: r.reason }) : s)),
+                                        (e: unknown) => setRoster((s) => (s && s.workspaceId === workspaceId ? { ...s, error: e instanceof Error ? e.message : String(e) } : s)),
+                                    )
+                                    .finally(() => { setRoster((s) => (s ? { ...s, busy: null } : s)); readRoster(resolvedBridge, workspaceId); });
+                            },
+                        },
+                    }
+                  : {}),
               governs: {
                   children: workspaceRow.governs ?? [],
                   candidates: (snapshot.workspaces ?? []).filter((w) => w.id !== workspaceId).map((w) => ({ id: w.id, name: workspaceLabel(snapshot.workspaces, w.id) })),
