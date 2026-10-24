@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { NODE_LTS_DEFAULT } from '../core/node-versions.js';
 import { HOST_TOOLS, PREREQUISITES, parseVersionOutput, planInstall, vcRuntimeFiles, type PackageManager, type Platform } from '../core/toolchain.js';
 import {
     PRECEDENCE_TOOLS,
@@ -62,6 +63,12 @@ export interface ToolchainOpsPorts {
     /** What is happening now (`null` = done) — the surface's progress line. */
     readonly progress?: (step: string | null) => void;
     readonly now?: () => number;
+    /**
+     * Genie's own Node — the newest version it manages (main/node-versions.ts), `null` when it manages none. Present =
+     * Check and repair makes it the node and npm Genie runs, and the generic node shadow check stands aside (it would
+     * otherwise move a newer Herd node back in front of Genie's).
+     */
+    readonly genieNode?: () => { readonly version: string; readonly dir: string } | null;
 }
 
 export type InstallOutcome =
@@ -222,7 +229,7 @@ async function repairPhpCa(ports: ToolchainOpsPorts): Promise<FindingResult> {
     return { kind: 'repaired', detail: `${count} root certificates from this machine are in ${bundle}; the PHP Genie runs — sites' php-cgi included — reads it through ${ini}. Your php.ini is unchanged.` };
 }
 
-function remember(ports: ToolchainOpsPorts, dirs: readonly string[]): void {
+function remember(ports: Pick<ToolchainOpsPorts, 'platform' | 'fs' | 'dataDir'>, dirs: readonly string[]): void {
     if (dirs.length === 0) return;
     const { state } = toolchainPaths(ports.dataDir);
     let prior: string[] = [];
@@ -244,7 +251,9 @@ export async function checkAndRepair(ports: ToolchainOpsPorts): Promise<RepairRe
     try {
         ports.progress?.('Checking which copy of each tool runs');
         const moved: string[] = [];
+        const genieOwnsNode = ports.platform === 'win32' && ports.genieNode !== undefined;
         for (const t of PRECEDENCE_TOOLS) {
+            if (t.tool === 'node' && genieOwnsNode) continue;
             const shadow = findShadow(await copiesOf(t, ports));
             if (!shadow) continue;
             const dir = dirOf(shadow.newer.path);
@@ -260,6 +269,12 @@ export async function checkAndRepair(ports: ToolchainOpsPorts): Promise<RepairRe
             findings.push({ kind: 'path-shadow', tool: t.tool, first: shadow.first, newer: shadow.newer, result });
         }
         remember(ports, moved);
+
+        if (genieOwnsNode) {
+            ports.progress?.('Checking that Genie runs its own Node');
+            const finding = await checkGenieNode(ports);
+            if (finding) findings.push(finding);
+        }
 
         ports.progress?.("Checking PHP's CA bundle");
         const tls = await readPhpTls(ports);
@@ -281,6 +296,68 @@ export async function checkAndRepair(ports: ToolchainOpsPorts): Promise<RepairRe
         ports.progress?.(null);
     }
     return { findings, checkedAt: (ports.now ?? Date.now)() };
+}
+
+/** Every copy `where` lists, wrappers included (npm is a .cmd), in PATH order. */
+async function whereAll(name: string, ports: ToolchainOpsPorts): Promise<string[]> {
+    try {
+        const r = await ports.run('where', [name]);
+        return r.stdout.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.length > 0 && !/^INFO:/.test(l));
+    } catch {
+        return [];
+    }
+}
+
+const firstOf = (paths: readonly string[], ext: RegExp): string | null => paths.find((p) => ext.test(p)) ?? null;
+const sameDir = (a: string, b: string) => a.replace(/[\\/]+$/, '').toLowerCase() === b.replace(/[\\/]+$/, '').toLowerCase();
+const inDir = (file: string | null, dir: string) => file !== null && sameDir(dirOf(file), dir);
+
+/**
+ * GENIE'S OWN NODE FIRST (the owner, 2026-10-23: "we better not be using herds node. genie has its own install path").
+ * Finds a node or npm that is not Genie's winning on PATH, proves Genie's own npm runs (a node whose npm crashes is what
+ * this machine had), moves Genie's directory to the front of what Genie runs, and MEASURES both again with `where`.
+ */
+async function checkGenieNode(ports: ToolchainOpsPorts): Promise<RepairFinding | null> {
+    const genie = ports.genieNode?.() ?? null;
+    const firstNode = firstOf(await whereAll('node', ports), /\.exe$/i);
+    const firstNpm = firstOf(await whereAll('npm', ports), /\.(cmd|exe)$/i);
+    if (genie === null) {
+        return {
+            kind: 'genie-node',
+            problem: `the node Genie runs is ${firstNode ?? 'none (no node on PATH)'}, not Genie's own`,
+            result: { kind: 'unchanged', reason: `Install Node ${NODE_LTS_DEFAULT} in Toolchain → Node versions, then run Check and repair again` },
+        };
+    }
+    if (inDir(firstNode, genie.dir) && inDir(firstNpm, genie.dir)) return null;
+    const problem = `${[
+        inDir(firstNode, genie.dir) ? null : `node runs ${firstNode ?? 'from nowhere (none on PATH)'}`,
+        inDir(firstNpm, genie.dir) ? null : `npm runs ${firstNpm ?? 'from nowhere (none on PATH)'}`,
+    ].filter(Boolean).join(' and ')}, not Genie's Node ${genie.version}`;
+    let npmSaid = '';
+    let npmRuns = false;
+    try {
+        const r = await ports.run(`${genie.dir}\\node.exe`, [`${genie.dir}\\node_modules\\npm\\bin\\npm-cli.js`, '-v']);
+        npmRuns = r.exitCode === 0;
+        npmSaid = r.stdout;
+    } catch (error) {
+        npmSaid = error instanceof Error ? error.message : String(error);
+    }
+    if (!npmRuns) {
+        return { kind: 'genie-node', problem, result: { kind: 'unchanged', reason: `Genie's Node ${genie.version} is there, but its npm does not run${tail(npmSaid)}, so it was not put first; Remove and reinstall it in Toolchain → Node versions` } };
+    }
+    preferGenieNode(ports, genie.dir);
+    const nodeNow = firstOf(await whereAll('node', ports), /\.exe$/i);
+    const npmNow = firstOf(await whereAll('npm', ports), /\.(cmd|exe)$/i);
+    if (inDir(nodeNow, genie.dir) && inDir(npmNow, genie.dir)) {
+        return { kind: 'genie-node', problem, result: { kind: 'repaired', detail: `Genie now runs Node ${genie.version} and its own npm from ${genie.dir}. Your own PATH is unchanged; terminals and agents pick this up when Genie next starts them.` } };
+    }
+    return { kind: 'genie-node', problem, result: { kind: 'unchanged', reason: `moved ${genie.dir} to the front, but node resolves to ${nodeNow ?? 'nothing'} and npm to ${npmNow ?? 'nothing'}` } };
+}
+
+/** Put Genie's Node directory at the front of what Genie runs NOW, and remember it for the next launch. */
+export function preferGenieNode(ports: Pick<ToolchainOpsPorts, 'platform' | 'env' | 'fs' | 'dataDir'>, dir: string): void {
+    ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', dir, ports.platform));
+    remember(ports, [dir]);
 }
 
 /**

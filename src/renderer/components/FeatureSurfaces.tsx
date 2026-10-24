@@ -752,7 +752,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                     {tc.findings.map((f, i) => (
                         <li key={`${f.kind}-${i}`} data-finding={f.kind} data-result={f.result.kind} className="flex items-center gap-3 px-5 py-2 text-sm">
                             <span>
-                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
+                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' || f.kind === 'genie-node' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
                                 {f.result.kind === 'repaired' ? f.result.detail : f.result.reason}
                             </span>
                             {f.result.kind === 'needs-install' ? (

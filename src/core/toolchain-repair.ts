@@ -36,7 +36,9 @@ export type FindingResult =
 export type RepairFinding =
     | { readonly kind: 'path-shadow'; readonly tool: string; readonly first: ToolCopy; readonly newer: ToolCopy; readonly result: FindingResult }
     | { readonly kind: 'php-ca'; readonly problem: string; readonly result: FindingResult }
-    | { readonly kind: 'vc-runtime'; readonly missing: readonly string[]; readonly result: FindingResult };
+    | { readonly kind: 'vc-runtime'; readonly missing: readonly string[]; readonly result: FindingResult }
+    /** The node or npm Genie runs is not Genie's own (main/node-versions.ts) — Windows, where Genie installs one. */
+    | { readonly kind: 'genie-node'; readonly problem: string; readonly result: FindingResult };
 
 export interface RepairReport {
     readonly findings: readonly RepairFinding[];
