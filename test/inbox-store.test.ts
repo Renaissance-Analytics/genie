@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { InboxStore } from '../src/main/inbox-store.js';
@@ -123,27 +123,43 @@ describe('read receipts — your receive is the ONLY thing that marks mail read'
 });
 
 describe('long-poll — never a poll loop', () => {
+    beforeEach(() => { vi.useFakeTimers(); });
+    afterEach(() => { vi.useRealTimers(); });
+
     it('a waiting receive is WOKEN by delivery, with the message', async () => {
         const waiting = store.receive({ participant: b, wait: true, timeoutMs: 5_000 });
         const before = Date.now();
-        setTimeout(() => void store.send({ from: a, to: b, text: 'wake' }), 30);
+        await store.send({ from: a, to: b, text: 'wake' });
 
         const got = await waiting;
         expect(got.messages.map((m) => m.text)).toEqual(['wake']);
-        // Woken by the send, not by the timeout.
-        expect(Date.now() - before).toBeLessThan(2_000);
+        // Woken by the committed send without advancing the timeout clock.
+        expect(Date.now()).toBe(before);
     });
 
     it('a waiting receive with nothing arriving returns empty at the timeout, cursor unchanged', async () => {
-        const got = await store.receive({ participant: b, wait: true, timeoutMs: 50 });
+        let settled = false;
+        const waiting = store.receive({ participant: b, wait: true, timeoutMs: 50 }).then((page) => { settled = true; return page; });
+        await vi.advanceTimersByTimeAsync(49);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+        const got = await waiting;
         expect(got.messages).toEqual([]);
         expect(got.cursor).toBe(0);
     });
 
     it('mail for SOMEONE ELSE does not wake you', async () => {
-        const waiting = store.receive({ participant: b, wait: true, timeoutMs: 120 });
-        setTimeout(() => void store.send({ from: a, to: HUMAN, text: 'not for b' }), 20);
+        let settled = false;
+        const waiting = store.receive({ participant: b, wait: true, timeoutMs: 120 }).then((page) => { settled = true; return page; });
+        // Join the durable write before fixture cleanup, even when disk IO is slower than the receive timeout.
+        await store.send({ from: a, to: HUMAN, text: 'not for b' });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(119);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
         const got = await waiting;
+        expect(settled).toBe(true);
         expect(got.messages).toEqual([]);
     });
 });
