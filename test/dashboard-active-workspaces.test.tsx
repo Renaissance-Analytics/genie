@@ -1,6 +1,12 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
+import { agentRecord, mintAgentId } from '../src/core/identity.js';
+import { Registry } from '../src/main/registry.js';
+import { Store } from '../src/main/store.js';
 import { EMPTY_SNAPSHOT, type GenieSnapshot } from '../src/renderer/bridge.js';
 import { Dashboard, type DashboardProps } from '../src/renderer/components/Dashboard.js';
 import { Shell } from '../src/renderer/Shell.js';
@@ -28,6 +34,7 @@ const render = (over: Partial<DashboardProps> = {}) => renderToStaticMarkup(<Das
 />);
 const ids = (html: string) => [...html.matchAll(/data-agent="([^"]+)"/g)].map((match) => match[1]).sort();
 const sleeping = snapshot.workspaces!.filter((workspace) => workspace.asleep);
+const sleepingRows = snapshot.agents.filter((agent) => agent.workspaceId === 'sleeping');
 
 describe('Dashboard shows active workspaces only', () => {
     it.each(['workspace', 'status'] as const)('%s grouping hides hibernated agents and excludes them from every status chip', (group) => {
@@ -48,7 +55,7 @@ describe('Dashboard shows active workspaces only', () => {
     });
 
     it.each(['workspace', 'status'] as const)('with every workspace asleep, %s grouping retains genie and offers an honest empty state', (group) => {
-        const html = render({ group, workspaces: sleeping });
+        const html = render({ group, workspaces: sleeping, rows: sleepingRows });
         expect(ids(html)).toEqual(['genie']);
         expect(html).toContain('data-dashboard-no-active-workspaces'); expect(html).toContain('No active workspaces');
         expect(html).not.toContain('data-dashboard="first-run"');
@@ -57,7 +64,7 @@ describe('Dashboard shows active workspaces only', () => {
     });
 
     it('does not count hidden agents when all workspaces are asleep and genie has not been read', () => {
-        const html = render({ workspaces: sleeping, genie: null });
+        const html = render({ workspaces: sleeping, rows: sleepingRows, genie: null });
         expect(ids(html)).toEqual([]); expect(html).not.toContain('data-chip=');
         expect(html).toContain('data-dashboard-no-active-workspaces'); expect(html).not.toContain('Add a workspace');
     });
@@ -75,6 +82,29 @@ describe('Dashboard shows active workspaces only', () => {
         expect(ids(html)).toEqual(['active-idle', 'active-working', 'genie', 'sleep-remote', 'sleep-waiting', 'sleep-working']);
         expect(html).toContain('data-workspace="sleeping"'); expect(html).toContain('data-workspace="sleeping-empty"');
         expect(html).toContain('data-chip="waiting"'); expect(html).toContain('data-chip="remote"');
+    });
+
+    it('status grouping retains agents whose workspace is missing from the registry', () => {
+        const html = render({ group: 'status', rows: [...snapshot.agents, row('orphan-agent', 'unregistered')] });
+        expect(ids(html)).toEqual(['active-idle', 'active-working', 'genie', 'orphan-agent']);
+        expect(html).toMatch(/data-chip="working"[^>]*>[\s\S]*?3 working/);
+        expect(html).not.toContain('data-agent="sleep-working"');
+    });
+
+    it('an orphan from separately persisted registry files remains visible by status', async () => {
+        const dir = await mkdtemp(join(tmpdir(), 'genie-dashboard-orphan-'));
+        try {
+            const store = new Store(dir);
+            await store.writeWorkspaces([{ id: 'active', path: '/fixture/active' }]);
+            const orphan = agentRecord({ id: mintAgentId(), workspaceId: 'unregistered', name: 'persisted-orphan', provider: 'codex' });
+            await store.writeAgents([orphan]);
+            const registry = new Registry(store); await registry.load({ name: 'fixture', healthy: true });
+            const restored = registry.snapshot();
+            expect(restored.workspaces?.map((workspace) => workspace.id)).toEqual(['active']);
+            expect(restored.agents.map((agent) => agent.id)).toContain(orphan.id);
+            const html = render({ workspaces: restored.workspaces, rows: restored.agents, genie: restored.osAgent ?? null, group: 'status' });
+            expect(ids(html)).toContain(orphan.id);
+        } finally { await rm(dir, { recursive: true, force: true }); }
     });
 
     it('CONTROL: unknown workspace data stays loading and a truly empty registry keeps first-run onboarding', () => {

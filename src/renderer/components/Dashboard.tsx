@@ -451,10 +451,10 @@ export interface DashboardProps {
 }
 
 export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
-    // Groups, counts, reveals and keyboard navigation all use the same active workspace set.
+    // Hide known hibernated workspaces consistently; unregistered agents keep their status visibility.
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
-    const activeIds = new Set((workspaces ?? []).map((workspace) => workspace.id));
-    const rows = reportedRows.filter((row) => activeIds.has(row.workspaceId));
+    const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
+    const rows = reportedRows.filter((row) => !hibernatedIds.has(row.workspaceId));
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
