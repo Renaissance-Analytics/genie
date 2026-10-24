@@ -25,10 +25,21 @@
  *
  * ## What it deliberately does NOT do
  *
- * It is not a codex emulator and must never grow into one. It answers four frames and asks one
+ * It is not a codex emulator and must never grow into one. It answers the startup/model frames below and asks one
  * question. Anything it cannot answer it says so about, loudly, on stderr — a stub that
  * silently ignores an unexpected frame would make a protocol change look like a UI bug.
  */
+
+import { appendFileSync } from 'node:fs';
+
+// Opt-in protocol-test journal: public method names only, never frame params or credentials.
+const methodLogIndex = process.argv.indexOf('--record-methods');
+const methodLog = methodLogIndex < 0 ? undefined : process.argv[methodLogIndex + 1];
+function recordMethod(method, unhandled = false) {
+    if (methodLog && typeof method === 'string' && /^[A-Za-z0-9_/.]+$/.test(method)) {
+        appendFileSync(methodLog, `${unhandled ? 'unhandled:' : ''}${method}\n`, { mode: 0o600 });
+    }
+}
 
 const THREAD_ID = 'stub_thread_0001';
 const TURN_ID = 'stub_turn_0001';
@@ -113,6 +124,7 @@ process.stdin.on('data', (chunk) => {
 
 function handle(frame) {
     const { id, method, result, error } = frame;
+    if (id !== undefined) recordMethod(method);
 
     // A RESPONSE to our approval request: the human answered, and this is the decision coming
     // back through the real driver. Saying so on stderr is what makes the round trip visible
@@ -131,12 +143,31 @@ function handle(frame) {
             // A notification; no id, no reply.
             return;
 
+        case 'config/read':
+            // This fixture has no inherited MCP servers or shell-policy overrides.
+            respond(id, { config: { mcp_servers: {}, shell_environment_policy: {} } });
+            return;
+
+        case 'account/rateLimits/read':
+            // No account usage is available in this fixture: null windows, no invented quota or reset.
+            respond(id, { ordinaryUsageAllowed: null, rateLimits: { primary: null, secondary: null } });
+            return;
+
         case 'thread/start':
             respond(id, { thread: { id: THREAD_ID } });
             return;
 
         case 'thread/resume':
             respond(id, { thread: { id: THREAD_ID } });
+            return;
+
+        case 'thread/turns/list':
+            // One synthetic turn exercises the resume item's page without inventing conversation text.
+            respond(id, { data: [{ id: TURN_ID, status: 'completed', items: [], error: null }], nextCursor: null });
+            return;
+
+        case 'thread/items/list':
+            respond(id, { data: [], nextCursor: null });
             return;
 
         // The model list (prism-acp 0.22 `listModels` / `modelState`): two models the picker shows, one it must not —
@@ -166,6 +197,7 @@ function handle(frame) {
 
         default:
             if (id !== undefined) {
+                recordMethod(method, true);
                 // Answer rather than hang: an unanswered request blocks the driver forever, and
                 // the symptom is an app that looks frozen rather than a stub that is incomplete.
                 note(`unhandled request ${method} — answering empty so the driver does not hang`);

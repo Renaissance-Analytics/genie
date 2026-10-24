@@ -29,14 +29,17 @@ async function threadStart(rec: AgentRecord, servers: readonly McpServer[]): Pro
         send: (frame) => {
             const f = frame as { id?: number; method?: string; params?: Record<string, unknown> };
             if (f.method === 'initialize') queueMicrotask(() => h.onFrame({ jsonrpc: '2.0', id: f.id, result: {} }));
+            // The SDK reads effective policy before starting a thread with an explicit session bearer.
+            if (f.method === 'config/read') queueMicrotask(() => h.onFrame({ jsonrpc: '2.0', id: f.id, result: { config: { mcp_servers: {}, shell_environment_policy: {} } } }));
             if (f.method === 'thread/start') params = f.params ?? {};
         },
         close: () => {},
     }));
     void Promise.resolve(driver.start()).catch(() => {});
-    await vi.waitFor(() => expect(params).not.toBeNull());
-    driver.kill();
-    return params!;
+    try {
+        await vi.waitFor(() => expect(params).not.toBeNull());
+        return params!;
+    } finally { driver.kill(); }
 }
 
 describe('Codex runs Genie’s tools without asking — every server Genie passes it', () => {
