@@ -1,0 +1,21 @@
+# VM harness CodeQL triage
+
+These scripts are developer acceptance/CDP tooling run in dedicated test VMs. They are not product request handlers. The dispositions below rely on each data flow, rather than dismissing a finding simply because it is in a test script.
+
+| Alert | Location | Disposition and evidence |
+| --- | --- | --- |
+| 29: disabled certificate validation | `scripts/acceptance-sites.mjs` | Fix: pass the local `runtime/gen-ca/ca.crt` to the loopback HTTPS probe and retain Node's default certificate and hostname validation. A missing CA remains an unsuccessful probe until startup creates it. No OS root is installed. Real HTTPS tests require the correct CA and hostname, and reject an unrelated CA and a wrong hostname. |
+| 30: dynamic method call | `scripts/glyph-coverage.mjs` | False positive: `pending` is a `Map`; its only values are locally created response callbacks, registered under locally allocated numeric request IDs. A response ID can select a pending callback or miss; it cannot select an object/prototype method or write a callback. Missing IDs are ignored. |
+| 31: dynamic method call | `scripts/agents-hold-no-pty-cdp.mjs` | False positive: private `#pending` is a `Map` populated only with local Promise resolvers by `send`. Incoming IDs perform `.get`; unknown IDs are ignored, and a matched resolver is removed before invocation. No user-named method dispatch. |
+| 32: dynamic method call | `scripts/layout-sweep.mjs` | False positive: a `Map` stores only locally created Promise resolvers for numeric CDP request IDs. An incoming response cannot introduce a method or reach `Object.prototype`; absent IDs are ignored. |
+| 33: dynamic method call | `scripts/smoke-cdp.mjs` | False positive: private `#pending` contains only local Promise resolvers added by `send`. `.get(frame.id)` selects an existing callback, the entry is deleted, and unknown IDs return before invocation. |
+| 34: dynamic method call | `scripts/update-cdp.mjs` | False positive: private `Map` values are exclusively local Promise resolvers keyed by locally minted request IDs. The incoming ID cannot name an inherited/arbitrary method or change the stored function. |
+| 35: dynamic method call | `scripts/upgrade-from-v1-cdp.mjs` | False positive: private `Map` plus local Promise-resolver registration, guarded lookup and deletion. Response data supplies the resolver argument, not executable code or a method name. |
+| 37: code sanitization | `scripts/smoke-cdp.mjs`, `rowsNamed` | False positive: `JSON.stringify(prefix)` forms a JavaScript string literal in an expression sent directly through CDP `Runtime.evaluate`, never an HTML/script-tag document. Its caller supplies the script's own `SMOKE_NAME` constant. HTML closing-tag escaping is not needed in this execution context. |
+| 38, 39: code sanitization | `scripts/smoke-cdp.mjs`, prompt-offer assertion | False positive: both insertions use `JSON.stringify(name)` directly in CDP JavaScript source. `name` is the local `SMOKE_NAME` plus generated hexadecimal suffix. No HTML parser or user-supplied JavaScript is involved. |
+| 41: code sanitization | `scripts/smoke-cdp.mjs`, old-address assertion | False positive: `JSON.stringify(ADDRESS.workspace)` serializes the script's own static regular-expression string as a JavaScript literal for direct CDP evaluation. It is intentionally a regex assertion; neither executable source nor HTML comes from an external input. |
+| 40: identity replacement | `test/deck-preview.test.tsx` | Remove the no-op replacement of the curly apostrophe with itself. The assertion still requires the exact same `SHORT` text, with the counted expand control unchanged. |
+
+The probe's network destination remains `127.0.0.1`; the fixture hostname supplies SNI and the Host header. Explicit local-CA trust keeps this acceptance independent of a person's decision to install a root while still authenticating the certificate and hostname. The tests use generated fixture keys and an ephemeral loopback HTTPS listener, never a production site, provider or owner-desktop application.
+
+The CDP source and its dispatch/serialization are unchanged. No broad suppression, query exclusion, TLS bypass or SDK modification is part of this triage.
