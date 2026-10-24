@@ -93,7 +93,9 @@ describe('2 — the chat follows a reply as it grows', () => {
         const src = readFileSync(new URL('../src/renderer/components/ChatFlyout.tsx', import.meta.url), 'utf8')
             .split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
         expect(src.match(/const followKey = chatFollowKey\(thread\?\.agentId \?\? null, thread\?\.messages \?\? \[\]\);/g) ?? []).toHaveLength(1);
-        expect(src.match(/if \(el && followRef\.current\) el\.scrollTop = el\.scrollHeight;\s*\}, \[followKey\]\);/g) ?? []).toHaveLength(1);
+        // The one scroll effect: it follows to the end when the reader is there, keyed on followKey (and on the live
+        // window's size, core/chat-window.ts, so a page of history keeps the reader's place) — never on a message count.
+        expect(src.match(/else if \(followRef\.current\) el\.scrollTop = el\.scrollHeight;\s*\}, \[followKey, lines\]\);/g) ?? []).toHaveLength(1);
         expect(src).not.toMatch(/\[thread\?\.agentId, messageCount\]/);
     });
 });
