@@ -6,6 +6,37 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
+const NATIVE_ACL_TIMEOUT_MS = 15_000;
+let failureLog: ((line: string) => void) | undefined;
+
+/** The composition root supplies its existing rotating log; credential paths never choose a log destination. */
+export function setPrivateCredentialFailureLog(log: (line: string) => void): () => void {
+    const previous = failureLog;
+    failureLog = log;
+    return () => { if (failureLog === log) failureLog = previous; };
+}
+
+function recordNativeFailure(error: unknown, began: number): void {
+    try {
+        const native = error as { code?: unknown; errno?: unknown; killed?: unknown; signal?: unknown } | null;
+        const code = typeof native?.code === 'number' && Number.isInteger(native.code) ? native.code
+            : typeof native?.code === 'string' && /^E[A-Z0-9_]{1,63}$/.test(native.code) ? native.code : null;
+        const errno = typeof native?.errno === 'number' && Number.isInteger(native.errno) ? native.errno : null;
+        const signal = typeof native?.signal === 'string' && /^SIG[A-Z]{1,12}$/.test(native.signal) ? native.signal : null;
+        const killed = native?.killed === true;
+        const elapsedMs = Math.max(0, Math.round(performance.now() - began));
+        // Node does not expose a distinct timeout errno. Preserve the observed termination signature,
+        // rather than claiming that a generic refusal identifies a historical failure's cause.
+        const reason = code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' ? 'output-limit'
+            : killed ? (code === null && signal === 'SIGTERM' && elapsedMs >= NATIVE_ACL_TIMEOUT_MS ? 'terminated-after-deadline' : 'terminated')
+                : typeof code === 'number' ? 'process-exit' : code ? 'spawn-error' : 'unknown';
+        const diagnostic = { operation: 'restrict-private-credential-acl', elapsedMs, timeoutMs: NATIVE_ACL_TIMEOUT_MS, reason, code, errno, killed, signal };
+        // Never log the native Error: it carries encoded commands, paths, stdout and stderr.
+        try { console.warn('PRIVATE_CREDENTIAL_ACL_FAILURE', diagnostic); } catch { /* Diagnostic sinks cannot change refusal/cleanup. */ }
+        try { failureLog?.(`PRIVATE_CREDENTIAL_ACL_FAILURE ${JSON.stringify(diagnostic)}`); } catch { /* Keep the original refusal. */ }
+    } catch { /* Even malformed diagnostic metadata cannot replace the storage refusal. */ }
+}
+
 type Target = { path: string; directory: boolean };
 class SharedCredentialDirectoryError extends Error {
     constructor() { super('Private Tynn credential directory contains unrelated entries; refusing to change its permissions.'); }
@@ -81,9 +112,15 @@ try {
 `;
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
-    await run(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
-        '-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
-    ], { env, windowsHide: true, timeout: 15_000, maxBuffer: 65_536 }).catch(() => { throw new Error(REFUSED); });
+    const began = performance.now();
+    try {
+        await run(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
+            '-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
+        ], { env, windowsHide: true, timeout: NATIVE_ACL_TIMEOUT_MS, maxBuffer: 65_536 });
+    } catch (error) {
+        recordNativeFailure(error, began);
+        throw new Error(REFUSED);
+    }
 }
 
 /** Restrict existing storage before reading it or issuing a credential. Final links are refused. */
