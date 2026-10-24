@@ -412,13 +412,13 @@ const CHIP_DOT: Record<AgentState, string> = {
 export interface DashboardProps {
     rows: readonly AgentRow[];
     /**
-     * Every workspace Genie knows, in rail order — including those with no agents.
+     * Registry workspaces in rail order, including those with no agents. Hibernated entries are filtered here.
      *
      * `null` = **not read yet**, which renders a skeleton. `[]` = read, and there are none,
      * which renders the first-run invitation. Collapsing them puts a confident claim about an
      * empty machine on screen before anybody has looked.
      */
-    workspaces: readonly { id: string; path: string; name?: string | undefined; governedBy?: string | null | undefined }[] | null;
+    workspaces: readonly { id: string; path: string; name?: string | undefined; governedBy?: string | null | undefined; asleep?: boolean | undefined }[] | null;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
@@ -450,7 +450,11 @@ export interface DashboardProps {
     onNavigate?: ((route: string) => void) | undefined;
 }
 
-export function Dashboard({ rows, genie = null, workspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
+    // Groups, counts, reveals and keyboard navigation all use the same active workspace set.
+    const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
+    const activeIds = new Set((workspaces ?? []).map((workspace) => workspace.id));
+    const rows = reportedRows.filter((row) => activeIds.has(row.workspaceId));
     const groups = groupByWorkspace(
         rows,
         (workspaces ?? []).map((w) => w.id),
@@ -535,7 +539,7 @@ export function Dashboard({ rows, genie = null, workspaces, onOpenAgent, onAddAg
      * So: no table at all, because column headers over a void read as a list that failed to
      * load. One sentence that is true, and the single action that leads anywhere.
      */
-    if (workspaces.length === 0) {
+    if (knownWorkspaces?.length === 0) {
         return (
             <div data-dashboard="first-run" data-surface="dashboard" className="flex h-full flex-col items-center justify-center gap-4 px-8 text-center">
                 <h1 className="text-lg font-semibold tracking-tight">Nothing is being worked on yet</h1>
@@ -679,6 +683,11 @@ export function Dashboard({ rows, genie = null, workspaces, onOpenAgent, onAddAg
             ))}
             </>
             )}
+            {workspaces.length === 0 ? (
+                <p data-dashboard-no-active-workspaces="" role="status" className="px-7 py-5 text-[13px] text-[var(--fg-3)]">
+                    No active workspaces. Wake a hibernated workspace from the sidebar to see it here.
+                </p>
+            ) : null}
         </div>
     );
 }
