@@ -1,19 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { TynnAccount, type TynnAccountPorts } from '../src/main/tynn-account.js';
 
-/**
- * THIS GENIE'S TYNN ACCOUNT — GENIE 1'S SESSION, AS IT WAS (the owner, 2026-10-19: "tynn already had this half.
- * everything was already working in genie 1").
- *
- * Genie 1's `redeemToken`: the single-use code from /genie/callback is dropped as a `genie_token` cookie on the Tynn
- * origin, then `GET /api/v1/me` swaps it for a real Tynn session (Tynn's GenieAuthController::exchange). From then on
- * every call rides that session's cookies; a write carries the `X-XSRF-TOKEN` Laravel checks. Sign out ends the session
- * at Tynn (`POST /logout`) and clears the cookies. Nothing new on Tynn's side, and no key of Genie's own anywhere.
- *
- * The cookie jar and the session-bound fetch are ports (Electron's persistent `persist:tynn` session in the app); here a
- * fake Tynn that behaves like the real one: the code works once, the session is a cookie, /logout needs the XSRF token.
- */
+import { fakeTynnStorage, PAIRING_SCOPES, PAIRING_TOKEN } from './helpers/tynn-storage.js';
 
+/** Existing account behavior, now over a durable scoped bearer. Cookies are exchange-only. */
 const HOST = 'https://tynn.example';
 const CODE = 'aB3'.repeat(21) + 'x';
 const USER = { id: '7', name: 'Ada', email: 'ada@example.com' };
@@ -27,6 +17,7 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
     // is indistinguishable from a path that does not exist).
     const state = { reachable: opts.reachable ?? true, authFail: opts.authFail ?? 401 };
     const ports: TynnAccountPorts = {
+        ...fakeTynnStorage(),
         host: () => HOST,
         cookies: {
             set: async (host, name, value) => { expect(host).toBe(HOST); jar.set(name, value); },
@@ -38,14 +29,17 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
             const path = url.slice(HOST.length);
             calls.push({ method: init.method, path, headers: init.headers, ...(init.body !== undefined ? { body: JSON.parse(init.body) } : {}) });
             const ok = (status: number, body: unknown) => ({ ok: status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)) });
+            const bearer = init.headers.Authorization === `Bearer ${PAIRING_TOKEN}` && sessionLive;
             if (path === '/api/v1/me') {
-                // Tynn's exchange: a valid genie_token becomes the session (laravel_session + XSRF-TOKEN cookies), once.
-                if (!sessionLive && jar.get('genie_token') === CODE && codeValid) { codeValid = false; sessionLive = true; jar.set('laravel_session', 'sess'); jar.set('XSRF-TOKEN', 'xsrf%3Dvalue'); }
-                return sessionLive && jar.get('laravel_session') === 'sess' ? ok(200, USER) : ok(state.authFail, { error: 'unauthenticated' });
+                if (init.credentials === 'include' && !sessionLive && jar.get('genie_token') === CODE && codeValid) {
+                    codeValid = false; sessionLive = true;
+                    jar.set('laravel_session', 'sess'); jar.set('XSRF-TOKEN', 'xsrf%3Dvalue');
+                    return ok(200, { ...USER, pairing_token: PAIRING_TOKEN, pairing_scopes: PAIRING_SCOPES });
+                }
+                return bearer ? ok(200, USER) : ok(state.authFail, { error: 'unauthenticated' });
             }
-            if (!sessionLive || jar.get('laravel_session') !== 'sess') return ok(state.authFail, { message: 'Unauthenticated.' });
-            if (init.method !== 'GET' && init.headers['X-XSRF-TOKEN'] !== 'xsrf=value') return ok(419, { message: 'CSRF token mismatch.' });
-            if (path === '/logout') { sessionLive = false; return ok(204, undefined); }
+            if (!bearer || init.credentials !== 'omit') return ok(state.authFail, { message: 'Unauthenticated.' });
+            if (path === '/api/v1/pairing-token' && init.method === 'DELETE') { sessionLive = false; return ok(200, { revoked: true }); }
             if (path === '/api/v1/projects') return ok(200, { data: [{ id: '42', name: 'Tynn.ai', slug: 'tynn' }] });
             if (path === '/api/v1/user/issue-watch/refresh') return ok(200, { refreshed: true });
             return ok(404, { message: 'Not Found' });
@@ -55,16 +49,16 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
 }
 
 describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
-    it('drops the code as genie_token on the Tynn origin and asks /api/v1/me, which swaps it for a session', async () => {
+    it('drops the code as genie_token on the Tynn origin and asks /api/v1/me, which returns the scoped pairing credential', async () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
         expect(account.status()).toEqual({ signedIn: false });
 
         expect(await account.signIn(CODE)).toEqual({ ok: true, user: { name: 'Ada', email: 'ada@example.com' } });
         expect(account.status()).toEqual({ signedIn: true, host: HOST, user: { name: 'Ada', email: 'ada@example.com' } });
-        expect(t.jar.get('laravel_session')).toBe('sess');
-        // The ONLY requests: /me at open (signed out) and /me with the code. No endpoint of Genie 2's own.
-        expect(t.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/v1/me', 'GET /api/v1/me']);
+        expect(t.jar.size).toBe(0);
+        // No saved credential: launch makes no authenticated probe. Only the exchange reaches /me.
+        expect(t.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/v1/me']);
     });
 
     it('a pasted genie:// URL works as well as the bare code', async () => {
@@ -79,7 +73,7 @@ describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
         expect((await account.signIn(CODE)).ok).toBe(true);
         await account.signOut();
         const again = await account.signIn(CODE);
-        expect(again).toEqual({ ok: false, reason: 'Tynn did not accept that code. Codes work once and expire 5 minutes after the Tynn page opens — open Tynn again for a fresh one.' });
+        expect(again).toEqual({ ok: false, reason: 'That code was already used. Open Tynn again for a fresh sign-in code.' });
         expect(account.status()).toEqual({ signedIn: false });
         expect(t.jar.has('genie_token')).toBe(false);
     });
@@ -96,13 +90,13 @@ describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
         t.state.reachable = false;
-        expect(await account.signIn(CODE)).toEqual({ ok: false, reason: 'Tynn could not be reached (getaddrinfo ENOTFOUND tynn.example)' });
+        expect(await account.signIn(CODE)).toEqual({ ok: false, reason: 'Tynn pairing could not be completed. Check your connection and OS keychain, then try again.' });
         expect(account.status()).toEqual({ signedIn: false });
     });
 });
 
 describe('TynnAccount across launches', () => {
-    it('a later launch is still signed in: the session cookie answers /api/v1/me', async () => {
+    it('a later launch restores the encrypted bearer and verifies it at /api/v1/me', async () => {
         const t = fakeTynn();
         await (await TynnAccount.open(t.ports)).signIn(CODE);
         const next = await TynnAccount.open(t.ports);
@@ -116,20 +110,20 @@ describe('TynnAccount across launches', () => {
         expect((await TynnAccount.open(t.ports)).status()).toEqual({ signedIn: false });
     });
 
-    it('Tynn unreachable at launch: signed out for now, and the session cookies are KEPT for when it answers', async () => {
+    it('Tynn unreachable at launch: signed out for now, while the encrypted credential is kept for recheck', async () => {
         const t = fakeTynn();
         await (await TynnAccount.open(t.ports)).signIn(CODE);
         t.state.reachable = false;
         const offline = await TynnAccount.open(t.ports);
         expect(offline.status()).toEqual({ signedIn: false });
-        expect(t.jar.get('laravel_session')).toBe('sess');
+        expect(t.jar.size).toBe(0);
         t.state.reachable = true;
         expect(await offline.recheck()).toEqual({ signedIn: true, host: HOST, user: { name: 'Ada', email: 'ada@example.com' } });
     });
 });
 
 describe('TynnAccount.signOut', () => {
-    it('ends the session at Tynn (POST /logout with its XSRF token), then clears the cookies', async () => {
+    it('revokes the scoped bearer at Tynn, then stays durably signed out', async () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
@@ -137,41 +131,41 @@ describe('TynnAccount.signOut', () => {
         account.onChange(() => changes.push(account.status().signedIn));
 
         expect(await account.signOut()).toEqual({ ok: true, revoked: true });
-        expect(t.calls.at(-1)).toMatchObject({ method: 'POST', path: '/logout', headers: { 'X-XSRF-TOKEN': 'xsrf=value', 'X-Requested-With': 'XMLHttpRequest' } });
+        expect(t.calls.at(-1)).toMatchObject({ method: 'DELETE', path: '/api/v1/pairing-token', headers: { Authorization: `Bearer ${PAIRING_TOKEN}`, 'X-Requested-With': 'XMLHttpRequest' } });
         expect(t.jar.size).toBe(0);
         expect(account.status()).toEqual({ signedIn: false });
         expect(changes).toEqual([false]);
     });
 
-    it('Tynn unreachable: this Genie is still signed out (cookies cleared), and says the Tynn session ends on its own', async () => {
+    it('Tynn unreachable: local sign-out is durable and remote revocation is reported unconfirmed', async () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
         t.state.reachable = false;
-        expect(await account.signOut()).toEqual({ ok: true, revoked: false, reason: 'Tynn could not be reached (getaddrinfo ENOTFOUND tynn.example) — this Genie is signed out; the Tynn session ends when it expires.' });
+        expect(await account.signOut()).toEqual({ ok: true, revoked: false, reason: 'This Genie is signed out. Tynn credential revocation could not be confirmed; revoke this device in Tynn if it remains listed.' });
         expect(t.jar.size).toBe(0);
     });
 });
 
-describe('TynnAccount.request — every call rides the session', () => {
-    it('a write carries X-XSRF-TOKEN (decoded) and the JSON body; a read carries none', async () => {
+describe('TynnAccount.request — every call uses the scoped bearer', () => {
+    it('a write carries the scoped bearer and JSON body; a read carries no content type', async () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
         const res = await account.request('/api/v1/user/issue-watch/refresh', { method: 'POST', body: { project_id: 'p1' } });
         expect(res.status).toBe(200);
-        expect(t.calls.at(-1)).toEqual({ method: 'POST', path: '/api/v1/user/issue-watch/refresh', headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json', 'X-XSRF-TOKEN': 'xsrf=value' }, body: { project_id: 'p1' } });
+        expect(t.calls.at(-1)).toEqual({ method: 'POST', path: '/api/v1/user/issue-watch/refresh', headers: { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', 'Content-Type': 'application/json', Authorization: `Bearer ${PAIRING_TOKEN}` }, body: { project_id: 'p1' } });
         await account.request('/api/v1/projects', { method: 'GET' });
-        expect(t.calls.at(-1)!.headers).toEqual({ Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' });
+        expect(t.calls.at(-1)!.headers).toEqual({ Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest', Authorization: `Bearer ${PAIRING_TOKEN}` });
     });
 
     // Tynn #839: revoking a share link is a DELETE (Genie 1's revokeWorkspaceShareLink) — a write, so it carries the token.
-    it('a DELETE is a write: it carries X-XSRF-TOKEN', async () => {
+    it('a DELETE uses the scoped bearer without a browser CSRF cookie', async () => {
         const t = fakeTynn();
         const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
-        await account.request('/workstations/ws_1/share-links/inv_1', { method: 'DELETE' });
-        expect(t.calls.find((c) => c.method === 'DELETE')).toMatchObject({ path: '/workstations/ws_1/share-links/inv_1', headers: { 'X-XSRF-TOKEN': 'xsrf=value' } });
+        await account.request('/api/v1/workstations/ws_1/share-links/inv_1', { method: 'DELETE' });
+        expect(t.calls.find((c) => c.method === 'DELETE')).toMatchObject({ path: '/api/v1/workstations/ws_1/share-links/inv_1', headers: { Authorization: `Bearer ${PAIRING_TOKEN}` } });
     });
 
     it('Tynn answering 401 means the session is gone: this Genie shows signed out', async () => {

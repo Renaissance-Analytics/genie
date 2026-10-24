@@ -52,7 +52,7 @@ async function refusal(res: { status: number; json(): Promise<unknown> }, what: 
 }
 
 const reach = (error: unknown) => `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`;
-const linksPath = (workstationId: string) => `/workstations/${encodeURIComponent(workstationId)}/share-links`;
+const linksPath = (workstationId: string) => `/api/v1/workstations/${encodeURIComponent(workstationId)}/share-links`;
 
 /** `workspaceId: null` = the whole workstation (`all_workspaces`, never with a list). */
 export async function mintShareLink(

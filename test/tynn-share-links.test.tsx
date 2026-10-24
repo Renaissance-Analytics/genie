@@ -29,7 +29,7 @@ describe('mintShareLink', () => {
     it('one workspace: POST /workstations/{this machine}/share-links {workspace, capability, expires_in_days}', async () => {
         const t = tynn(() => ({ status: 201, body: { link: LINK } }));
         const r = await mintShareLink(t.request, 'ws_me', { workspaceId: 'w_tynn', capability: 'control', expiresInDays: 14 });
-        expect(t.calls).toEqual([{ path: '/workstations/ws_me/share-links', method: 'POST', body: { workspace: 'w_tynn', capability: 'control', expires_in_days: 14 } }]);
+        expect(t.calls).toEqual([{ path: '/api/v1/workstations/ws_me/share-links', method: 'POST', body: { workspace: 'w_tynn', capability: 'control', expires_in_days: 14 } }]);
         expect(r).toEqual({ ok: true, link: { id: 'inv_1', url: 'https://tynn.example.com/i/abc', capability: 'control', whole: false, workspaceIds: ['w_tynn'], expiresAt: '2026-10-26T00:00:00Z' } });
     });
 
@@ -65,7 +65,7 @@ describe('listShareLinks / revokeShareLink', () => {
             { ...LINK, id: 'inv_3', workspace_ids: [], all_workspaces: true, url: undefined },
         ] } }));
         const r = await listShareLinks(t.request, 'ws_me', 'w_tynn');
-        expect(t.calls).toEqual([{ path: '/workstations/ws_me/share-links', method: 'GET' }]);
+        expect(t.calls).toEqual([{ path: '/api/v1/workstations/ws_me/share-links', method: 'GET' }]);
         expect(r.ok && r.links.map((l) => l.id)).toEqual(['inv_1', 'inv_3']);
         expect(r.ok && r.links.every((l) => l.url === null)).toBe(true);
     });
@@ -73,7 +73,7 @@ describe('listShareLinks / revokeShareLink', () => {
     it('revoke: DELETE /workstations/{this machine}/share-links/{id}', async () => {
         const t = tynn(() => ({ status: 200, body: { ok: true } }));
         expect(await revokeShareLink(t.request, 'ws_me', 'inv_1')).toEqual({ ok: true });
-        expect(t.calls).toEqual([{ path: '/workstations/ws_me/share-links/inv_1', method: 'DELETE' }]);
+        expect(t.calls).toEqual([{ path: '/api/v1/workstations/ws_me/share-links/inv_1', method: 'DELETE' }]);
     });
 });
 
