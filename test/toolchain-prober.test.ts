@@ -18,14 +18,14 @@ describe('probing', () => {
     it('reports every managed tool: installed version from its banner, latest from the index, and the honest tone', async () => {
         const run = runner({
             'node --version': { stdout: 'v22.23.2\n', exitCode: 0 },
-            'php --version': { stdout: 'PHP 8.4.11 (cli)', exitCode: 0 },
+            'php --version': { stdout: 'PHP 8.4.27 (cli)', exitCode: 0 },
             'git --version': { stdout: 'git version 2.51.0', exitCode: 0 },
         });
         const index = async (tool: string) => (tool === 'node' ? { version: '22.24.0', source: 'nodejs.org index' } : null);
         const statuses = await probeTools(run, index);
         const by = Object.fromEntries(statuses.map((s) => [s.tool, s]));
         expect(by.node).toEqual({ tool: 'node', installed: '22.23.2', latest: '22.24.0', tone: 'update-available', source: 'nodejs.org index' });
-        expect(by.php).toMatchObject({ installed: '8.4.11', latest: null, tone: 'unknown' });
+        expect(by.php).toMatchObject({ installed: '8.4.27', latest: null, tone: 'unknown' });
         expect(by.git).toMatchObject({ installed: '2.51.0', tone: 'unknown' });
         expect(by.python).toMatchObject({ installed: null, tone: 'not-installed' });
         // COUNTED: every tool in the registry has a row, including the ones that are not installed.

@@ -1,6 +1,6 @@
 {
   "name": "genie",
-  "version": "2.0.0-beta.38",
+  "version": "2.0.0-beta.42",
   "private": true,
   "type": "module",
   "description": "Genie 2 — an agent is a session, never a terminal.",
@@ -19,12 +19,12 @@
     "verify:leak": "tsx test/live/terminal-leak.live.ts"
   },
   "dependencies": {
+    "@particle-academy/agent-integrations": "0.47.1",
     "@particle-academy/dark-slide": "0.19.0",
     "@particle-academy/fancy-code": "0.15.0",
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",
     "@particle-academy/fancy-flow": "^0.81.0",
-    "@particle-academy/agent-integrations": "0.47.1",
     "@particle-academy/fancy-git": "0.3.1",
     "@particle-academy/fancy-git-ui": "0.5.0",
     "@particle-academy/fancy-sheets": "0.12.0",
@@ -34,11 +34,11 @@
     "@particle-academy/fancy-ws": "0.1.1",
     "@particle-academy/holy-sheet": "2.10.1",
     "@particle-academy/last-word": "0.10.0",
-    "@particle-academy/prism-acp": "0.22.0",
+    "@particle-academy/prism-acp": "0.24.1",
     "@particle-academy/prism-harness": "0.7.0",
     "@particle-academy/prism-mcp": "^0.3.0",
-    "@particle-academy/prism-mcp-server": "0.3.0",
-    "@particle-academy/react-fancy": "5.53.1",
+    "@particle-academy/prism-mcp-server": "0.3.1",
+    "@particle-academy/react-fancy": "5.59.0",
     "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
@@ -48,13 +48,13 @@
     "@types/node": "^26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "electron": "^44.7.0",
+    "electron": "^45.0.0",
     "electron-builder": "^26.5.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
-    "typescript": "^5.9.3",
-    "vite": "^7.3.7",
-    "vitest": "^5.0.3"
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5",
+    "vitest": "^5.0.5"
   },
   "overrides": {
     "global-agent": "^4.1.3"

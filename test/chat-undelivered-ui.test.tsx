@@ -26,4 +26,11 @@ describe('an undelivered message', () => {
         expect(html).not.toContain('data-chat-undelivered');
         expect(html).not.toContain('restart-and-send');
     });
+
+    it('a refused retry says why beside the kept draft, with the retry action still available', () => {
+        const html = render({ ...thread, messages: [{ ...thread.messages[0]!, draftProblem: 'The previous run is still stopping.' }] });
+        expect(html).toContain('role="alert"');
+        expect(html).toContain('The previous run is still stopping.');
+        expect(html).toContain('Restart lark and send');
+    });
 });

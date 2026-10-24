@@ -2,7 +2,7 @@ import { listModels, type ListModelsOptions, type McpServer, type SessionModelSt
 import { homedir } from 'node:os';
 import type { ListProviderModels } from '../core/provider-models.js';
 import type { SessionStore } from '@particle-academy/prism-harness';
-import { LiveReadings } from '../core/live-readings.js';
+import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
@@ -32,6 +32,16 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
  * prism-acp) or Genie has no driver for the provider: unknown is not "yes", and no turn Stop is offered on it.
  * Read through a record because the field is newer than the types an older prism-acp ships.
  */
+/**
+ * Whether an agent's driver REPLAYS a resumed conversation's history (prism-acp `transcriptReplay`: Codex `true`,
+ * Claude `false`). Genie keeps its own history, so a resumed session on such a driver does not record the replay
+ * (AgentSessionOptions.replaysTranscript). Unknown is `false`: nothing is dropped that was not declared a replay.
+ */
+export function transcriptReplayFor(provider: string): boolean {
+    const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
+    return caps !== null && (caps as Readonly<Record<string, unknown>>)['transcriptReplay'] === true;
+}
+
 export function turnCancelFor(provider: string): boolean | null {
     const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
     const declared = caps === null ? undefined : (caps as Readonly<Record<string, unknown>>)['cancel'];
@@ -87,7 +97,8 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
-import { openDurableStore, readHistory } from '../core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory, RUN_FIELD } from '../core/thread-store.js';
+import { promptDeliveries } from '../core/prompt-delivery.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
 
@@ -255,23 +266,45 @@ export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSession
 
 /**
  * A Codex agent's driver options (Tynn #797). Codex asks before an MCP server's tools run, and a session has nobody to
- * answer, so Genie's tools were declined on every call. Genie's OWN server is approved (`default_tools_approval_mode`
- * through prism-acp's `mcpToolApproval`), as a Claude agent already runs them unasked: each Genie tool that acts for the
- * person gates itself. No other server is touched, and with no Genie server there is nothing to approve (prism refuses
- * an approval naming a server it was not given). The chosen model goes on thread/start and thread/resume; none = Codex's own.
+ * answer, so Genie's tools were declined on every call. EVERY server in `mcpServers` is approved
+ * (`default_tools_approval_mode` through prism-acp's `mcpToolApproval`), as a Claude agent already runs them unasked.
+ *
+ * WHY every server and not `genie` alone (2026-10-22): the list comes from `mcpServersFor` only — Genie's own `genie`
+ * server and the `tynn` server Genie itself wrote into the workspace for the agent (#1098) — so each one is Genie's to
+ * approve, and each Genie/Tynn tool that acts for the person gates itself. Approving `genie` alone declined the other
+ * one Genie had just handed the agent; prism-slave's ledger, 2026-10-22 20:56:36Z: `Codex asked "tynn" for an answer this
+ * driver cannot give (form): Allow the tynn MCP server to run tool "project"?. Declined. Set mcpToolApproval for "tynn"
+ * to let its tools run without asking.` A server a person wrote by hand lives in Codex's own config.toml, is never in
+ * this list, and keeps Codex's default — prism refuses an approval naming a server it was not given, so with no servers
+ * there is nothing to approve. The chosen model goes on thread/start and thread/resume; none = Codex's own.
  */
-export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: { genie: 'approve' } } {
+export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: Record<string, 'approve'>; approvalPolicy?: 'never'; sandbox?: 'danger-full-access' } {
     return {
         cwd,
         ...(resumeSessionId ? { resumeSessionId } : {}),
         ...(record.model ? { model: record.model } : {}),
-        ...(mcpServers.length > 0 ? { mcpServers } : {}),
-        ...(mcpServers.some((s) => s.name === 'genie') ? { mcpToolApproval: { genie: 'approve' as const } } : {}),
+        ...(mcpServers.length > 0 ? { mcpServers, mcpToolApproval: Object.fromEntries(mcpServers.map((s) => [s.name, 'approve' as const])) } : {}),
+        /*
+         * YOLO FOR AN AUTONOMOUS CODEX AGENT (the owner, 2026-10-22: "make sure codex agents are using yolo mode";
+         * "apparently even when I have autonomous turned on for a codex agent, it still gets stuck" — tynn-slave parked
+         * 11 minutes on `git -C .ai/sandbox/g-agent-ops fetch origin`, waiting for a person). The Autonomous switch
+         * (`autoApprove`) already lets Genie's own gated actions run unasked; for Claude, 'all tools' is bypassPermissions,
+         * so a Claude agent never raised these prompts. Codex did: prism-acp before 0.23.0 hardcoded `approval_policy`
+         * `on-request`, and every command needed a card. prism-acp 0.23.0 passes Codex's documented `approvalPolicy` and
+         * `sandbox` on thread/start AND thread/resume: `never` + `danger-full-access` turns off Codex's approval prompts
+         * AND its sandbox — commands run with the person's full permissions and nobody is asked, which is what
+         * Autonomous means. Not Autonomous: nothing is passed, so Codex keeps its own defaults (on-request, its sandbox)
+         * and asks through the card as today.
+         */
+        ...(record.autoApprove === true ? { approvalPolicy: 'never' as const, sandbox: 'danger-full-access' as const } : {}),
     };
 }
 
 /** How long the picker waits for a provider's model list. Claude answered in about a second (prism-acp's measurement). */
 const MODEL_LIST_TIMEOUT_MS = 20_000;
+
+/** `answerApproval`'s refusal when the session holds no request: a second press, a turn that ended, a request Codex withdrew. */
+const NOTHING_PARKED = 'nothing is waiting for an answer — it was already answered, or the turn ended';
 
 /**
  * HOW GENIE ASKS A PROVIDER FOR ITS MODELS (prism-acp 0.22 `listModels`): the SAME binary — and, for a configured
@@ -350,11 +383,14 @@ interface Running {
 const NO_ROWS: readonly TimedEvent[] = [];
 
 export class SessionHost {
+    /** Serialises draft actions: two rapid Send presses must never deliver the same draft twice. */
+    #promptActions: Promise<unknown> = Promise.resolve();
     readonly #userData: string;
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
+    readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
@@ -432,6 +468,12 @@ export class SessionHost {
          */
         onTurnNumbered?: (agentId: AgentId, n: number) => void;
         /**
+         * A PLAN ARRIVED — Genie's `plan` tool or the provider's own — with its readable steps. Main keeps it on the record
+         * (`plan`), and the next run is seeded with it: the owner, 2026-10-21, "The plan loaded in genie should survive a
+         * restart, how else will agents know what to pick up on."
+         */
+        onPlan?: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => void;
+        /**
          * WHAT AN AGENT DID (Tynn #766 row C): each action once — started, a reply ended, a tool call by its provider's
          * category, its plan (once a turn), being stopped — and for a whole login, its rate limit and the resume. Main
          * pushes it to the window, which plays the sound the person chose for it.
@@ -467,6 +509,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#onTurnNumbered = options.onTurnNumbered;
+        this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
@@ -709,6 +752,9 @@ export class SessionHost {
         const runId = randomUUID();
         const entry: Running = { session: null as unknown as AgentSession, provider: record.provider, rows, startedAt, runId, nextRowId: 0, sounded: new Set<string>(), mcp: mcpServers.map((s) => s.name), accepts: promptAcceptsFor(record.provider), resumed: Boolean(record.threadId), cancelDeclared: turnCancelFor(record.provider) === true, run: ++this.#runs, readings: new LiveReadings(), background: new BackgroundCount(), marker: { id: `${record.id}:run`, event: { kind: 'run', resumed: Boolean(record.threadId) }, at: startedAt }, numbered: null, ledger: null };
 
+        // The plan kept from before this run: shown at once, until the run reports its own (identity.ts `plan`).
+        if (record.plan && record.plan.length > 0) entry.readings.seedPlan(record.plan);
+
         let reportedTurns = record.lastTurn ?? 0;
         let numberedTurn = record.lastTurn ?? 0;
         const session: AgentSession = new AgentSession({
@@ -719,6 +765,7 @@ export class SessionHost {
             runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
+            replaysTranscript: transcriptReplayFor(record.provider),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
@@ -764,6 +811,8 @@ export class SessionHost {
                     numberedTurn = event.n;
                     this.#onTurnNumbered?.(record.id, event.n);
                 }
+                // A PLAN ARRIVED: kept on the record now, so the next run — after a relaunch, a restart, a new conversation — shows it.
+                if (event.kind === 'plan') this.#onPlan?.(record.id, planStepsOf(event));
                 /*
                  * `replacesLast` means the SAME message with another chunk of text on the end.
                  *
@@ -869,17 +918,21 @@ export class SessionHost {
     /**
      * Answer a parked approval, with the provider's own option id.
      *
-     * Returns false when there was nothing parked or the id was not offered — the session
-     * checks, because the renderer is not trusted to send back a valid one.
+     * Refuses, WITH THE REASON, when the agent is not running, nothing is parked, or the id was not offered — the
+     * session checks the id, because the renderer is not trusted to send back a valid one. The reason is for the card:
+     * a bare `false` reached the console only, and a refused press looked like a dead button (the owner, 2026-10-22).
      */
-    answerApproval(agentId: AgentId, optionId: string, note = ''): boolean {
+    answerApproval(agentId: AgentId, optionId: string, note = ''): { ok: true } | { ok: false; reason: string } {
         const entry = this.#running.get(agentId);
-        if (!entry) return false;
+        if (!entry) return { ok: false, reason: 'this agent is not running' };
+        const parked = entry.session.pendingApproval;
+        if (!parked) return { ok: false, reason: NOTHING_PARKED };
+        if (!parked.options.some((o) => o.id === optionId)) return { ok: false, reason: `“${optionId}” is not one of the options this request offered` };
 
         // The person's note, when there is one, reaches the agent after the answer (AgentSession.answerApproval, item 16).
-        const answered = entry.session.answerApproval(optionId, note);
-        if (answered) this.#emit(agentId);
-        return answered;
+        if (!entry.session.answerApproval(optionId, note)) return { ok: false, reason: NOTHING_PARKED };
+        this.#emit(agentId);
+        return { ok: true };
     }
 
     /** A message that must reach the agent, now or when its turn ends (AgentSession.deliver); false = no session. */
@@ -898,13 +951,49 @@ export class SessionHost {
      */
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): { ok: true } | { ok: false; reason: string | null } {
         const entry = this.#running.get(agentId);
-        if (!entry) return { ok: false, reason: null };
-        if (attachments.length === 0) return this.prompt(agentId, text, by) ? { ok: true } : { ok: false, reason: null };
+        if (!entry || !entry.session.running) return { ok: false, reason: null };
         const built = promptContent(text, attachments, entry.accepts, (bytes) => Buffer.from(bytes).toString('base64'));
         if (!built.ok) return { ok: false, reason: built.reason };
-        entry.session.prompt(text, by, { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
+        try {
+            entry.session.deliver(text, by, attachments.length === 0 ? null : { content: typeof built.content === 'string' ? [{ type: 'text', text: built.content }] : built.content, attachments: built.names });
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
         this.#emit(agentId);
         return { ok: true };
+    }
+
+    /** A stopped run's queued input is durable. Only an explicit Send/Discard resolves its draft. */
+    resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
+        const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+            await this.settled();
+            const { rows } = await readHistory(this.#store(), agentId);
+            const status = promptDeliveries(rows).get(id);
+            const row = rows.find(({ event: e }) => e.kind === 'message' && e.pending?.id === id)?.event;
+            if (!row || row.kind !== 'message' || !row.pending || !status || status === 'sent' || status === 'discarded') return { ok: false, reason: 'This draft was already sent or discarded.' };
+            const session = this.#running.get(agentId)?.session;
+            if (action === 'send') {
+                if (!session?.running) return { ok: false, reason: 'Restart the agent before sending this draft.' };
+                if (session.hasQueuedPrompt(id)) return { ok: false, reason: 'This message is already queued for the current turn.' };
+                try {
+                    session.deliver(row.text, row.speaker === 'you' ? 'you' : row.peerName,
+                        row.pending.content ? { content: row.pending.content, attachments: row.attachments ?? [] } : null,
+                        row.mail ? { mail: row.mail } : {});
+                } catch (error) {
+                    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+                }
+            }
+            if (session?.running) session.discardPrompt(id);
+            else {
+                await openAgentThread(this.#store(), agentId).record([{ kind: 'prompt_delivery', id, status: 'discarded', [RUN_FIELD]: randomUUID() }]);
+                this.#histories.delete(agentId);
+            }
+            this.#emit(agentId);
+            return { ok: true };
+        };
+        const result = this.#promptActions.then(resolve, resolve);
+        this.#promptActions = result.catch(() => undefined);
+        return result;
     }
 
     /**
@@ -948,7 +1037,8 @@ export class SessionHost {
     prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): boolean {
         const entry = this.#running.get(agentId);
         if (!entry) return false;
-        entry.session.prompt(text, by, null, context);
+        if (!entry.session.running) return false;
+        entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
         return true;
     }
@@ -1179,6 +1269,7 @@ export class SessionHost {
             lastDelivery: readings.delivery(rows, this.#clock()),
             ...commsFields(this.#comms?.(agentId, startedAt) ?? null),
             plan: readings.plan,
+            planSteps: readings.planSteps,
             // The workspace dashboard's card (q_09d1f4a0): what started this turn, and the tool it is in now.
             ...(({ prompt, tool }) => ({ asked: prompt, tool }))(readings.turnNow()),
             model: readings.model,

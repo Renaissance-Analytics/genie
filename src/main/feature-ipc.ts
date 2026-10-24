@@ -22,10 +22,11 @@ import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
+import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
 import type { ComposedServices } from './compose.js';
 import {
-    createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateSite, useService,
+    createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
@@ -93,6 +94,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<PhpInstallOutcome>;
             remove(version: string, pins: readonly SitePin[]): PhpRemoveOutcome;
         };
+        /** Genie's own Node (main/node-versions.ts): nodejs.org zips, checksum-verified, under its toolchain directory. */
+        node?: {
+            list(): Promise<NodeVersionsView>;
+            install(version: string, consent: boolean): Promise<NodeInstallOutcome>;
+            remove(version: string): NodeRemoveOutcome;
+        };
     };
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
@@ -148,12 +155,14 @@ export interface FeatureState {
     /** Refused or failed toolchain actions, one per row, each cleared by that row's next action. */
     toolchainRefusals?: readonly ToolchainRefusal[] | null;
     toolchainPhp?: PhpVersionsView | null;
+    toolchainNode?: NodeVersionsView | null;
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
     serviceAdding?: ServiceAdding | null;
     /** The engine log the person opened in the Services tab (H6), until they hide it. */
     serviceLogs?: ServiceLogs | null;
+    serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
     /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
@@ -186,6 +195,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainResult ? { result: state.toolchainResult } : {}),
         ...(state.toolchainRefusals && state.toolchainRefusals.length > 0 ? { refusals: state.toolchainRefusals } : {}),
         ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
+        ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
     };
 }
 
@@ -201,6 +211,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainResult: section?.result ?? null,
         toolchainRefusals: section?.refusals ?? null,
         toolchainPhp: section?.php ?? null,
+        toolchainNode: section?.node ?? null,
     };
 }
 
@@ -214,6 +225,7 @@ export function sitePins(services: Pick<ComposedServices, 'sites'>): SitePin[] {
 /** Re-probe every tool (the snapshot shows the MEASURED state, never a command's word) and how each missing one would install. */
 async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
     if (tc.php) next.toolchainPhp = await tc.php.list(pins);
+    if (tc.node) next.toolchainNode = await tc.node.list();
     const tools = await tc.probe();
     next.toolStatuses = tools;
     next.toolchainCheckedAt = tc.now();
@@ -322,7 +334,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
-        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null },
+        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
@@ -574,6 +586,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'services.stop':
             await stopService(services, action.serviceId);
             break;
+        case 'services.update': {
+            const previous = state.serviceUpdating?.serviceId === action.serviceId ? state.serviceUpdating : null;
+            const r = await updateService(services, action.serviceId, { ...action, ...(previous ? { expectedImage: previous.image, approvedDependents: previous.dependents } : {}) });
+            next.serviceUpdating = r.kind === 'needs-consent' ? r : null;
+            break;
+        }
+        case 'services.cancelUpdate':
+            next.serviceUpdating = null;
+            break;
         case 'services.remove':
             // A delete-data acts for `workspaceId` (the Services tab sends the engine's sole data holder, core/service-tenancy.ts);
             // refused, with the other holders named, while anyone else keeps data in it.
@@ -693,6 +714,42 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             }
             next.toolchainResult = `PHP ${outcome.version} was removed.`;
             next.toolchainPhp = await tc.php.list(sitePins(services));
+            break;
+        }
+        case 'toolchain.installNode': {
+            clearRefusal(next, 'node', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'node', `Genie installs nothing without your go-ahead; Node ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.node) {
+                refuse(next, 'node', 'no Node version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.node.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'node', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Node ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Node ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Node ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainNode = await tc.node.list();
+            break;
+        }
+        case 'toolchain.removeNode': {
+            const tc = ports.toolchain;
+            clearRefusal(next, 'node', action.version);
+            if (!tc?.node) {
+                refuse(next, 'node', 'no Node version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.node.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'node', outcome.reason, action.version);
+            else next.toolchainResult = `Node ${outcome.version} was removed.`;
+            next.toolchainNode = await tc.node.list();
             break;
         }
         case 'toolchain.repair': {

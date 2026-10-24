@@ -578,6 +578,21 @@ export class ServiceRegistry {
         this.#changed();
     }
 
+    /** Update the recorded engine in place. Its registry identity, env and the person's stopped state stay intact. */
+    async update(id: string, options: { consent: boolean; beforeStop?: () => void }) {
+        const i = this.#find(id);
+        try {
+            const result = await this.#driver.update(this.#nameOf(id), { ...options, afterStart: () => this.restoreSlices(id) });
+            if (result.kind === 'updated') this.#changed();
+            return result;
+        } catch (error) {
+            // An adopted image may read a secret file: its env is not every credential this engine holds.
+            const secrets = [i.credentials.password, i.admin?.password, ...Object.values(i.slices ?? {}).map((s) => s.password), ...Object.values(i.env ?? {})]
+                .filter((s): s is string => typeof s === 'string' && s.length >= 4).sort((a, b) => b.length - a.length);
+            throw new Error(secrets.reduce((text, secret) => text.split(secret).join('********'), (error as Error).message));
+        }
+    }
+
     /** Fires with an engine's id each time it is started — added, or started again (Tynn #766 C2b: its sound). */
     onStarted(listener: (id: string) => void): () => void {
         this.#startedListeners.add(listener);

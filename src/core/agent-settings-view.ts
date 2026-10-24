@@ -1,6 +1,7 @@
 import { agentOpsMenu, type AgentOpsItem } from './agent-ops-menu.js';
 import type { Fidelity } from './dashboard-view.js';
 import { IW_EVENT_KINDS } from './issue-watch.js';
+import { isOsAgent } from './os-agent.js';
 
 /**
  * THE AGENT SETTINGS TAB, IN SUB-TABS (agent-management parity item 3). The owner, 2026-10-21, on the one long page:
@@ -22,6 +23,8 @@ export type SettingsControl =
 
 /** What the view knows: the agent, and which setters the window was given (absent setter = absent control). */
 export interface SettingsFacts {
+    readonly name?: string | undefined;
+    readonly workspaceId?: string | undefined;
     readonly fidelity: Fidelity;
     readonly provider: string;
     /** The window can operate agents at all (`AgentOpsProps` given). */
@@ -59,7 +62,7 @@ export function settingsSections(f: SettingsFacts): SettingsSectionView[] {
     const push = (id: SettingsSection, controls: SettingsControl[]) => { if (controls.length > 0) out.push({ id, label: SETTINGS_LABEL[id], controls }); };
     if (f.ops) {
         push('general', ['provider', ...(f.model ? ['model' as const] : []), 'mode', 'run', 'remove']);
-        push('permissions', [
+        if (!isOsAgent(f)) push('permissions', [
             ...(f.provider === 'claude' && f.tools ? ['tools' as const] : []),
             'access',
             ...(f.autonomous ? ['autonomous' as const] : []),

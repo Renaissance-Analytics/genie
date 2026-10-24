@@ -637,6 +637,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                             <button type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</button>
                                         )}
                                         <button type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</button>
+                                        <button type="button" data-service-update={i.id} disabled={status === 'docker-not-running' || status === 'absent'} onClick={() => onAction({ kind: 'services.update', serviceId: i.id })}>Update image…</button>
                                         <button type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</button>
                                         <button type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</button>
                                     </span>
@@ -644,6 +645,16 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
                                 {status === 'docker-not-running' && note ? <p className="text-xs text-[var(--warning)]">{note}</p> : null}
                                 {confirming === i.id ? <DeleteDataConfirm instance={i} workspaces={workspaces} onAction={onAction} onCancel={() => setConfirming(null)} /> : null}
+                                {services.updating?.serviceId === i.id ? (
+                                    <div data-service-update-confirm={i.id} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
+                                        <p>{services.updating.note}</p>
+                                        {services.updating.dependents.length > 0 ? <p className="text-[var(--warning)]">This interrupts: {services.updating.dependents.join('; ')}.</p> : null}
+                                        <div className="flex gap-3">
+                                            <button type="button" onClick={() => onAction({ kind: 'services.update', serviceId: i.id, consent: true, confirmed: true })}>{services.updating.dependents.length > 0 ? 'Update and interrupt' : 'Pull and update'}</button>
+                                            <button type="button" onClick={() => onAction({ kind: 'services.cancelUpdate' })}>Cancel</button>
+                                        </div>
+                                    </div>
+                                ) : null}
                                 {myLog ? (
                                     <div data-service-log={i.id} className="flex flex-col gap-1">
                                         <div className="flex items-center gap-3 text-xs text-[var(--fg-3)]">
@@ -741,7 +752,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                     {tc.findings.map((f, i) => (
                         <li key={`${f.kind}-${i}`} data-finding={f.kind} data-result={f.result.kind} className="flex items-center gap-3 px-5 py-2 text-sm">
                             <span>
-                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
+                                {f.kind === 'path-shadow' ? `${f.tool} ${f.first.version} at ${f.first.path} was running instead of ${f.newer.version} at ${f.newer.path}. ` : f.kind === 'php-ca' || f.kind === 'genie-node' ? `${f.problem}. ` : `Missing: ${f.missing.join(', ')}. `}
                                 {f.result.kind === 'repaired' ? f.result.detail : f.result.reason}
                             </span>
                             {f.result.kind === 'needs-install' ? (
@@ -755,6 +766,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                 <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
             ))}
             {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
+            {tc?.node ? <NodeVersions node={tc.node} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -777,9 +789,13 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                                 <li key={t.tool} data-tool={t.tool} data-tone={t.tone} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                     <span className="font-medium">{t.tool}</span>
                                     {t.installed !== null ? <span className="font-mono text-xs">{t.installed}</span> : null}
-                                    {word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    {/* A SECURITY UPDATE is not a badge colour away from "update available" (PHP2Shell, 2026-10-22): the danger colour, and the advisory in words. */}
+                                    {t.tone === 'security-update' ? (
+                                        <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
+                                    ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
+                                    {t.advisory ? <span data-tool-advisory={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
                                     {/* Update from here: to the version Genie knows of, or — with none known — whatever the tool's own update path finds newest. */}
-                                    {t.tone === 'update-available' && t.latest ? (
+                                    {(t.tone === 'update-available' || t.tone === 'security-update') && t.latest ? (
                                         <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
                                     ) : t.tone === 'unknown' && t.installed !== null ? (
                                         <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update</button>
@@ -821,12 +837,15 @@ function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<
             <p data-php-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
                 {php.system ? `Unpinned php sites run PHP ${php.system.version} from your PATH.` : 'No php-cgi on your PATH: an unpinned php site cannot start until PHP is installed above.'}
             </p>
+            {/* THE FLOOR (PHP2Shell, core/php-advisories.ts): a version under it says so in red, beside the number — never a quiet "update available". */}
+            {php.system?.advisory ? <p data-php-system-advisory="" className="px-5 py-1 text-xs text-[var(--danger)]">{php.system.advisory}</p> : null}
             <ul className="divide-y divide-[var(--border-1)]">
                 {php.managed.map((m) => (
-                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} className="flex items-center gap-3 px-5 py-2 text-sm">
+                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">PHP {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         {m.usedBy.length > 0 ? <span className="text-xs text-[var(--fg-2)]">pinned by {m.usedBy.join(', ')}</span> : null}
+                        {m.advisory ? <span data-php-advisory={m.version} className="basis-full text-xs text-[var(--danger)]">{m.advisory}</span> : null}
                         <button type="button" disabled={busy || m.usedBy.length > 0} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</button>
                     </li>
                 ))}
@@ -839,6 +858,47 @@ function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<
                     {addable.map((a) => (
                         <button key={a.version} type="button" data-php-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPhp', version: a.version, consent: true })}>
                             PHP {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+/**
+ * GENIE'S OWN NODE (the owner, 2026-10-23: "genie has its own install path"): the versions Genie manages, the node on
+ * PATH, and an Install per version this release offers — each Install is the person's consent. Where Genie installs none
+ * it says so instead of offering a button.
+ */
+function NodeVersions({ node, busy, onAction, refusals = [] }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const addable = node.available.filter((a) => !a.installed);
+    return (
+        <section data-node-versions={node.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">Node versions</h3>
+            {refusals.map((r) => (
+                <p key={r.version} data-node-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <p data-node-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {node.system ? `The node on your PATH is ${node.system.version}.` : 'No node on your PATH.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {node.managed.map((m) => (
+                    <li key={m.version} data-node-version={m.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Node {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        <button type="button" disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {node.installRefused ? (
+                <p data-node-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{node.installRefused}</p>
+            ) : addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install from nodejs.org (checked against its published sha256):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-node-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installNode', version: a.version, consent: true })}>
+                            Node {a.version}
                         </button>
                     ))}
                 </div>

@@ -12,6 +12,7 @@ import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { RATE_LIMIT_META } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
+import { randomUUID } from 'node:crypto';
 
 /**
  * ONE RUNNING AGENT.
@@ -202,8 +203,29 @@ export type StopVerdict =
 /** How many lines of provider output to keep. Enough to explain a failure, bounded. */
 const STDERR_KEPT = 50;
 
+/** How many of the last stderr lines a failed run's ledger notice carries, and the notice's ceiling in characters. */
+const FAILED_RUN_STDERR = 12;
+const FAILED_RUN_MAX = 3000;
+
+/** The one ledger line a failed run leaves: what failed, how the process ended, and the provider's last words. */
+export function failedRunText(failure: string, code: number | null, signal: string | null, stderr: readonly string[]): string {
+    const exit = signal ? `ended by ${signal}` : code === null ? 'exit unknown' : `exit code ${code}`;
+    const tail = stderr.slice(-FAILED_RUN_STDERR).join('\n');
+    const text = `The run failed: ${failure} (${exit}).${tail ? `\nLast lines the provider wrote:\n${tail}` : ''}`;
+    return text.length > FAILED_RUN_MAX ? `${text.slice(0, FAILED_RUN_MAX - 1)}…` : text;
+}
+
 /** What a held agent is told when its provider's limit has reset and nothing was sent while it waited (Tynn #793). */
 export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continue where you left off.";
+
+/**
+ * AN OVERLOADED PROVIDER IS WAITED OUT (the owner, 2026-10-23, a Codex agent "Broken · 8h 45m · serverOverloaded": "we
+ * need to catch codex errors like this one"). prism-acp sorts Codex's `serverOverloaded` and Claude's 529 into
+ * `failure.kind: 'overloaded'`. It is the provider's and it passes, so the agent is not Broken: Genie waits these long,
+ * in turn, and sends the turn on again; the overload after the last of them IS Broken, with the reason.
+ */
+export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000];
+export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
 
 export interface AgentSessionOptions {
     agentId: AgentId;
@@ -212,6 +234,12 @@ export interface AgentSessionOptions {
     driverFactory: SessionDriverFactory;
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
+    /**
+     * The driver REPLAYS the conversation's history when it resumes, before its `ready` resolves (prism-acp's
+     * `transcriptReplay` capability: Codex yes, Claude no). Genie keeps its own history, so those replayed rows are not
+     * recorded again (test/codex-replay-not-recorded.test.ts).
+     */
+    replaysTranscript?: boolean;
     /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
@@ -286,6 +314,8 @@ export interface AgentSessionOptions {
     onStraggler?: () => void;
     /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
     clock?: () => number;
+    /** Run `fire` after `ms`; answers a cancel. Injected so a test can fire it; default `setTimeout`. */
+    retryLater?: (ms: number, fire: () => void) => () => void;
 }
 
 export class AgentSession {
@@ -295,8 +325,11 @@ export class AgentSession {
     #held = false;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
-    /** Prompts sent while held: recorded as sent, handed to the provider on resume. */
-    #heldPrompts: Array<{ text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null }> = [];
+    /** A resumed thread's history being replayed by the driver, before its `ready` (AgentSessionOptions.replaysTranscript). */
+    #replaying = false;
+    /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
+    #overloads = 0;
+    #overloadCancel: (() => void) | null = null;
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -466,15 +499,20 @@ export class AgentSession {
 
     /** The limit has reset (the gate's timer, or the person's Resume now): what waited goes out in order; nothing waited -> continue. */
     resumeAfterLimit(): void {
-        if (!this.#held) return;
+        this.#resumeHeld(LIMIT_RESUME_PROMPT);
+    }
+
+    /** What waited goes out in order; nothing waited -> `nothingWaited`, as Genie's. */
+    #resumeHeld(nothingWaited: string): void {
+        if (!this.#held || !this.running) return;
         this.#held = false;
-        const waiting = this.#heldPrompts;
-        this.#heldPrompts = [];
-        if (waiting.length === 0) {
-            this.prompt(LIMIT_RESUME_PROMPT, 'genie');
+        this.#overloadCancel?.();
+        this.#overloadCancel = null;
+        if (this.#afterTurn.length === 0) {
+            this.prompt(nothingWaited, 'genie');
             return;
         }
-        for (const p of waiting) this.#send(p.text, p.by, p.sent);
+        this.#flushAfterTurn();
         this.#changed();
     }
 
@@ -643,36 +681,69 @@ export class AgentSession {
     }
 
     /** Messages a provider refused mid-turn, sent in order as soon as a turn ends. */
-    #afterTurn: Array<{ text: string; by: string | null }> = [];
+    #afterTurn: Array<{ id: string; text: string; by: string | null; sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null; context: PromptContext }> = [];
 
     /**
      * A MESSAGE FOR THE AGENT THAT MUST ARRIVE: sent now when the provider takes it (Claude reads it at its next step);
      * held for the end of the turn when it refuses a prompt mid-turn (Codex), then sent in order. An approval's note
      * (item 16) — from the card here, or from a Genie approval answered on the Deck (main/feature-ipc.ts).
      */
-    deliver(text: string, by: string | null): void {
+    deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+        if (!this.running) throw new Error('session is not running');
         if (this.#afterTurn.length === 0) {
             try {
-                this.prompt(text, by);
+                this.prompt(text, by, sent, context);
                 return;
-            } catch {
-                // Refused (Codex: a turn already in flight). Nothing was recorded; it waits for the turn to end.
+            } catch (error) {
+                // Only a refusal DURING a turn can wait for its end. An idle driver failure must reach the caller.
+                if (!this.#inTurn) throw error;
             }
         }
-        this.#afterTurn.push({ text, by });
+        this.#queuePrompt(text, by, sent, context);
     }
 
-    /** A turn ended: what waited goes out, oldest first, until the provider refuses again. */
+    /** One queue holds input waiting for either a turn or a provider pause. */
+    #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): void {
+        const id = randomUUID();
+        this.#afterTurn.push({ id, text, by, sent, context });
+        const row = promptRow(text, by, sent, context);
+        if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } });
+        this.#changed();
+    }
+
+    /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        while (this.#afterTurn.length > 0 && this.running && this.#approval === null) {
+        if (this.#afterTurn.length === 0 || !this.running || this.#approval !== null || this.#inTurn || this.#held) return;
+        while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
-                this.prompt(next.text, next.by);
-            } catch {
+                this.#send(next.text, next.by, next.sent, false, next.context);
+            } catch (error) {
+                // One message started a turn. The rest still wait, including after a provider hold resumes.
+                if (this.#inTurn) return;
+                this.#leaveQueuedAsDrafts();
+                void this.#emitRow({ kind: 'notice', level: 'error', message: `Queued input was not delivered: ${error instanceof Error ? error.message : String(error)}` });
                 return;
             }
             this.#afterTurn.shift();
+            void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
         }
+    }
+
+    hasQueuedPrompt(id: string): boolean {
+        return this.#afterTurn.some((p) => p.id === id);
+    }
+
+    discardPrompt(id: string): void {
+        this.#afterTurn = this.#afterTurn.filter((p) => p.id !== id);
+        void this.#emitRow({ kind: 'prompt_delivery', id, status: 'discarded' });
+        this.#changed();
+    }
+
+    #leaveQueuedAsDrafts(): void {
+        const waiting = this.#afterTurn;
+        this.#afterTurn = [];
+        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: 'undelivered' });
     }
 
     start(): void {
@@ -700,6 +771,7 @@ export class AgentSession {
                         return;
                     }
                     this.#turnState = 'failed';
+                    this.#leaveQueuedAsDrafts();
                     this.#changed();
                     /*
                      * The FIRST error, not the last.
@@ -748,6 +820,10 @@ export class AgentSession {
                     // Two turns are two replies even with nothing between them. Without this a
                     // whole conversation would accumulate into one unbounded row.
                     this.#closeMessage();
+                    // An echo that never came is not still expected: a `you` row after this turn is a message, never
+                    // the prompt's echo (see `#handle`).
+                    this.#echo = null;
+                    this.#echoSeen = '';
 
                     // A provider turn that ends while Genie holds none open ran SILENTLY — no reply, no tool — so nothing
                     // opened its marker: it is the oldest queued prompt's turn, marked now. Nothing queued: no prompt's
@@ -775,7 +851,9 @@ export class AgentSession {
                     // because prism-acp files `oauth_org_not_allowed` under `auth` and logging in does not fix it.
                     const paused = crashed && !byLimit ? accountPauseOf(outcome.failure) : null;
                     const bySignOut = crashed && !byLimit && paused === null && outcome.failure?.kind === 'auth';
-                    this.#lastTurnEnd = byLimit ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
+                    // Overloaded (the provider's, and it passes): waited out and sent on again, until OVERLOAD_RETRY_MS runs out.
+                    const byOverload = crashed && !byLimit && paused === null && !bySignOut && outcome.failure?.kind === 'overloaded' && this.#overloads < OVERLOAD_RETRY_MS.length;
+                    this.#lastTurnEnd = byLimit || byOverload ? 'held' : bySignOut ? 'signed-out' : crashed ? 'failed' : outcome.stopReason === 'cancelled' ? 'stopped' : 'replied';
                     this.#limitThisTurn = false;
                     if (byLimit) {
                         // HELD, not failed (Tynn #793): the provider's own reading said its limit was reached. Nothing is
@@ -787,6 +865,16 @@ export class AgentSession {
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: "Paused: the provider's rate limit was reached. Genie resumes this agent when the limit resets." });
                         // A reading already told the gate; a failure alone has not, and it carries no reset of its own.
                         if (!readingSaidSo && outcome.failure) this.#options.onLimitBreach?.(outcome.failure.reason);
+                    } else if (byOverload) {
+                        const ms = OVERLOAD_RETRY_MS[this.#overloads]!;
+                        this.#overloads += 1;
+                        this.#turnState = 'idle';
+                        this.#failure = null;
+                        this.#failedAt = null;
+                        this.#held = true;
+                        void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
+                        const later = this.#options.retryLater ?? ((wait: number, fire: () => void) => { const t = setTimeout(fire, wait); return () => clearTimeout(t); });
+                        this.#overloadCancel = later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
                     } else if (paused !== null) {
                         // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
                         // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
@@ -812,6 +900,7 @@ export class AgentSession {
                         this.#turnState = 'idle';
                         this.#failure = null;
                         this.#failedAt = null;
+                        this.#overloads = 0;
                         // A turn that went through: whatever login it ran on is signed in, and its account is in order.
                         this.#signedOut = false;
                         this.#accountPaused = null;
@@ -841,13 +930,18 @@ export class AgentSession {
                         this.#turnState = 'working';
                     }
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
-                    if (!crashed && !this.#inTurn) this.#flushAfterTurn();
+                    if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
+                    else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
                     // Working (found in the first doctor trial, 2026-10-13).
                     this.#changed();
                 },
                 onExit: (code, signal) => {
+                    this.#leaveQueuedAsDrafts();
+                    // A retry waiting out an overload has nobody to send to now.
+                    this.#overloadCancel?.();
+                    this.#overloadCancel = null;
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
                     // should cost the rest of the sentence, not the part it already said.
                     this.#closeMessage();
@@ -885,6 +979,15 @@ export class AgentSession {
                      * stop reading red.
                      */
                     this.#turnState = this.#failure ? 'failed' : 'stopped';
+                    /*
+                     * **And written down** (2026-10-22): the failure and the stderr above live in THIS session's memory,
+                     * and a restart replaces the session — a Codex agent's graceful restart died with "a codex app-server
+                     * error" and its words were gone before anyone read them. A failed run leaves one `error` notice in
+                     * the ledger, which outlives the run: the reason, the exit, and the last stderr lines (where a
+                     * provider explains itself), capped so a chatty one cannot flood the thread. A clean exit writes
+                     * nothing (test/session.test.ts holds both).
+                     */
+                    if (this.#failure) void this.#emitRow({ kind: 'notice', level: 'error', message: failedRunText(this.#failure, code, signal, this.#stderr) });
                     const waiters = this.#exitWaiters;
                     this.#exitWaiters = [];
                     for (const w of waiters) w();
@@ -915,7 +1018,11 @@ export class AgentSession {
         const ready = this.#driver.ready;
         if (ready !== undefined) {
             this.#starting = true;
-            const done = (): void => { this.#starting = false; this.#changed(); };
+            // A resumed thread whose driver replays it: what arrives before `ready` is that replay (2026-10-23 — a
+            // resumed Codex agent wrote its whole past into the ledger again: as `peer` rows under prism-acp 0.24.0, as
+            // agent messages under 0.24.1). Genie already holds that history; the replay is not recorded twice.
+            this.#replaying = Boolean(this.#options.resumeSessionId) && this.#options.replaysTranscript === true;
+            const done = (): void => { this.#starting = false; this.#replaying = false; this.#changed(); };
             ready.then(done, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
@@ -937,10 +1044,7 @@ export class AgentSession {
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
         if (!this.#driver) throw new Error('session is not started');
         if (this.#held) {
-            // Held for the limit: recorded now, as it was sent; handed to the provider when the limit resets.
-            void this.#emitRow(promptRow(text, by, sent, context));
-            this.#heldPrompts.push({ text, by, sent });
-            this.#changed();
+            this.#queuePrompt(text, by, sent, context);
             return;
         }
         this.#send(text, by, sent, true, context);
@@ -992,6 +1096,9 @@ export class AgentSession {
     stop(signal: NodeJS.Signals = 'SIGTERM', options: { graceMs?: number } = {}): Promise<StopVerdict> {
         if (this.#stopping) return this.#stopping;
         this.#ended = true;
+        this.#overloadCancel?.();
+        this.#overloadCancel = null;
+        this.#leaveQueuedAsDrafts();
 
         // A promise nobody will ever resolve is a provider process waiting forever. `stop` means stop, and that has to
         // include the things stop is waiting ON.
@@ -1291,6 +1398,9 @@ export class AgentSession {
 
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
+        // The provider replaying a resumed thread's history (see `#replaying`): not recorded again. Notices (the model,
+        // a rate-limit reading) still are — they are about now, not the past.
+        if (this.#replaying && (event.kind === 'message' || event.kind === 'think' || event.kind === 'tool' || event.kind === 'plan')) return;
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
@@ -1321,11 +1431,14 @@ export class AgentSession {
          * chopped up, each piece with its own time. Consecutive thought chunks grow one row; anything else closes it.
          * While it is open and the turn is running, the surface shows it as the live `Thinking…` row.
          */
-        // The provider's echo of the prompt just sent — identical, before anything else arrives — is already in the
-        // thread (`prompt`). Anything else ends the watch; a user message that is not that echo (history replayed on
-        // resume) is kept.
-        if (this.#echo !== null) {
-            if (event.kind === 'message' && event.speaker === 'you' && this.#echo.startsWith(this.#echoSeen + event.text)) {
+        // The provider's echo of the prompt just sent — identical — is already in the thread (`prompt`). Only a MESSAGE
+        // ends the watch: the agent's or a peer's reply, or a user message that is not that echo (history replayed on
+        // resume), which is kept. Everything else passes through with the watch still open — Codex sends debug notices
+        // (`thread/status/changed has no other ACP mapping`) BEFORE its echo, which arrives seconds later; when the first
+        // notice ended the watch, the echo was recorded as a second `you` row and the owner saw every message twice
+        // (2026-10-22). Claude never echoes, which is why only Codex showed it. The turn ending ends it too (`onTurnEnd`).
+        if (this.#echo !== null && event.kind === 'message') {
+            if (event.speaker === 'you' && this.#echo.startsWith(this.#echoSeen + event.text)) {
                 this.#echoSeen += event.text;
                 if (this.#echoSeen === this.#echo) { this.#echo = null; this.#echoSeen = ''; }
                 return;

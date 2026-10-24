@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
-import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory } from '../src/core/thread-store.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import {
     AgentSession,
@@ -117,9 +117,12 @@ describe('AgentSession', () => {
 
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'on it' } });
         d.emit({ sessionUpdate: 'tool_call', toolCallId: 't1', name: 'Bash', title: 'npm test' });
-        await vi.waitFor(async () => {
-            expect(await openAgentThread(store, id).count()).toBe(2);
-        });
+        // Waited for by the session's own `settled()`, not polled: `vi.waitFor` gives up after 1 s, and a ledger write
+        // (a lock file, a temp file, a rename) outlasted that on a loaded windows-latest runner (beta.41's release PR,
+        // run 39903276660). The write's own promise has no budget of its own to lose; the test's timeout still ends one
+        // that never comes.
+        await session.settled();
+        expect(await openAgentThread(store, id).count()).toBe(2);
 
         const rows = await openAgentThread(store, id).messages();
         expect(rows.map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'tool']);
@@ -131,7 +134,8 @@ describe('AgentSession', () => {
         const id = mintAgentId();
         const d = fakeDriver();
 
-        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree }).start();
+        const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree });
+        session.start();
         d.emit({ sessionUpdate: 'available_commands_update', availableCommands: [] });
 
         // POSITIVE CONTROL in the same test: a real row still lands, so "nothing was written"
@@ -150,9 +154,12 @@ describe('AgentSession', () => {
          */
         d.endTurn();
 
-        await vi.waitFor(async () => {
-            expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
-        });
+        // Waited for by the session's own `settled()`, not polled: `vi.waitFor` gives up after 1 s, and a ledger write
+        // (a lock file, a temp file, a rename) outlasted that on a loaded windows-latest runner (beta.41's release PR,
+        // run 39903276660). The write's own promise has no budget of its own to lose; the test's timeout still ends one
+        // that never comes.
+        await session.settled();
+        expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
     });
 
     it('does not write a message that is still being streamed', async () => {
@@ -171,7 +178,8 @@ describe('AgentSession', () => {
         const id = mintAgentId();
         const d = fakeDriver();
 
-        new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree }).start();
+        const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree });
+        session.start();
         d.emit({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'still typ' } });
 
         // Long enough for a write to have happened if one were going to.
@@ -180,9 +188,12 @@ describe('AgentSession', () => {
 
         // POSITIVE CONTROL: it is not that persistence is broken — closing it writes it (and the turn's `finished` row).
         d.endTurn();
-        await vi.waitFor(async () => {
-            expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
-        });
+        // Waited for by the session's own `settled()`, not polled: `vi.waitFor` gives up after 1 s, and a ledger write
+        // (a lock file, a temp file, a rename) outlasted that on a loaded windows-latest runner (beta.41's release PR,
+        // run 39903276660). The write's own promise has no budget of its own to lose; the test's timeout still ends one
+        // that never comes.
+        await session.settled();
+        expect((await openAgentThread(store, id).messages()).map((r) => (r.message as { kind: string }).kind)).toEqual(['message', 'finished']);
     });
 
     it('starting twice REATTACHES — it never makes a second copy of the agent', () => {
@@ -919,5 +930,61 @@ describe('a streamed reply is ONE message, not one row per chunk', () => {
 
         const messages = rows.filter((r) => r.kind === 'message');
         expect(messages.at(-1)).toMatchObject({ text: 'second answer' });
+    });
+});
+
+describe('a FAILED run leaves its reason in the ledger, where a restart cannot erase it', () => {
+    /**
+     * 2026-10-22: a Codex agent's graceful restart died nine seconds in with "a codex app-server error", and the words
+     * were gone before anyone could read them — the failure and the provider's stderr lived in this session's MEMORY
+     * only, and the owner's Restart fresh replaced the session. Finding the cause took another agent reading three other
+     * logs. So a run that ends failed writes ONE `error` notice to the ledger: the reason, the exit, and the last stderr
+     * lines (where a provider explains itself). A clean exit writes nothing — a red line for every stop teaches people
+     * to stop reading red.
+     */
+    function openOnDisk() {
+        const dir = tempDir();
+        const d = fakeDriver();
+        const store = openDurableStore(dir);
+        const agentId = mintAgentId();
+        const session = new AgentSession({ agentId, cwd: dir, store, driverFactory: d.factory, processTree: noProcessTree });
+        session.start();
+        const errors = async () => (await readHistory(store, agentId)).rows.map((r) => r.event).filter((e) => e.kind === 'notice' && e.level === 'error') as Array<{ message: string }>;
+        return { d, session, errors };
+    }
+
+    it('the reason, the exit and the provider’s last stderr lines are one error notice on disk', async () => {
+        const { d, session, errors } = openOnDisk();
+        d.stderr('loading thread 01a16563');
+        d.stderr('Invalid request: unknown variant `none`, expected one of `notLoaded`, `summary`, `full`');
+        d.protocolError('Codex app-server startup failed (RPC code -32600)');
+        d.exit(1, null);
+        await session.settled();
+        const found = await errors();
+        expect(found).toHaveLength(1);
+        expect(found[0]!.message).toContain('Codex app-server startup failed (RPC code -32600)');
+        expect(found[0]!.message).toContain('unknown variant `none`');
+        expect(found[0]!.message).toMatch(/exit code 1/);
+    });
+
+    it('CONTROL: a run that ends cleanly writes no error', async () => {
+        const { d, session, errors } = openOnDisk();
+        d.stderr('just chatty logging');
+        d.endTurn();
+        d.exit(0, null);
+        await session.settled();
+        expect(await errors()).toEqual([]);
+    });
+
+    it('only the last stderr lines, so a chatty provider cannot flood the ledger', async () => {
+        const { d, session, errors } = openOnDisk();
+        for (let i = 0; i < 200; i++) d.stderr(`line ${i}`);
+        d.protocolError('it broke');
+        d.exit(1, null);
+        await session.settled();
+        const message = (await errors())[0]!.message;
+        expect(message).toContain('line 199');
+        expect(message).not.toMatch(/\bline 0\b/);
+        expect(message.length).toBeLessThan(4000);
     });
 });

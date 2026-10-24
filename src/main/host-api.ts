@@ -34,14 +34,16 @@ export interface HostApiDeps {
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
     host: RestartPorts & {
-        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): boolean;
+        resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
+        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
         cancel(agentId: AgentRecord['id']): CancelOutcome;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
         resumeLimit(provider: string): void;
         subscribe(listener: (agentId: string) => void): () => void;
     };
-    registerAgent(workspaceId: string): Promise<{ id: string }>;
+    /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
+    registerAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string; name: string } | { ok: false; reason: string }>;
     attention: { finished(): readonly Finished[]; markSeen(id: string): void };
     terminals: {
         open(options: TerminalOptions): PtyOpened;
@@ -107,7 +109,8 @@ export interface HostApiDeps {
     agentOps: {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
-        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        /** `handoff`: ask a running agent for a handoff first (bounded wait); see agent-ops-host `deleteAgent`. */
+        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         setMode(agentId: string, mode: 'automated' | 'manual'): Promise<unknown>;
@@ -175,15 +178,23 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
-                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text) };
+                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text, 'you') };
+            }
+            case 'resolvePrompt': {
+                const r = agent(args[0]);
+                const action = args[2];
+                if (!r || typeof args[1] !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+                return deps.host.resolvePrompt?.(r.id, args[1], action) ?? { ok: false, reason: 'This host does not support queued drafts.' };
             }
             case 'answerApproval': {
                 const r = agent(args[0]);
-                return { ok: r !== null && deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') };
+                // The host's refusal, with its reason, goes back to the card that pressed (core/approval-answering.ts).
+                return r ? deps.host.answerApproval(r.id, str(args[1]), typeof args[2] === 'string' ? args[2] : '') : { ok: false, reason: 'unknown agent' };
             }
             case 'addAgent': {
-                const created = await deps.registerAgent(str(args[0]));
-                return { ok: true, id: created.id };
+                const raw = (typeof args[1] === 'object' && args[1] !== null ? args[1] : {}) as Record<string, unknown>;
+                const created = await deps.registerAgent(str(args[0]), { name: str(raw['name']), purpose: str(raw['purpose']), provider: str(raw['provider']) });
+                return created.ok ? { ok: true, id: created.id } : created;
             }
             case 'restartWithHandoff': {
                 const r = agent(args[0]);
@@ -195,7 +206,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.previewDelete':
                 return deps.agentOps.previewDelete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
             case 'agents.delete':
-                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
+                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : [], args[3] === true);
             case 'agents.switchDriver':
                 return deps.agentOps.switchDriver(str(args[0]), str(args[1]));
             case 'agents.setBudget':

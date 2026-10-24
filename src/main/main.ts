@@ -15,6 +15,7 @@ import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
+import { tynnMcpServersOnDisk } from './tynn-agent-token.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
@@ -37,7 +38,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
-import { readFile, rm } from 'node:fs/promises';
+import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
@@ -66,6 +67,7 @@ import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGi
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
 import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
+import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
@@ -107,7 +109,8 @@ import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -281,6 +284,25 @@ function tynnProjectFor(workspaceId: string): string | null {
     let manifest: string | null = null;
     if (workspace) { try { manifest = readFileSync(join(workspace.path, 'project.json'), 'utf8'); } catch { manifest = null; } }
     return tynnProjectIdOf(manifest);
+}
+/**
+ * THE NEW AGENT FORM ON THIS HOST (main/agent-create-host.ts): the local window's `genie:add-agent` and a remote window's
+ * `addAgent` both land here — the AGENT.md written under the workspace, then the agent registered on it.
+ */
+function agentCreatePorts(): AgentCreatePorts {
+    return {
+        workspace: (id) => registry?.workspace(id) ?? null,
+        agentsOf: (id) => registry?.agentsOf(id) ?? [],
+        exists: async (path) => existsSync(path),
+        mkdirp: async (dir) => { await mkdir(dir, { recursive: true }); },
+        writeText: async (path, text) => { await writeFileText(path, text, 'utf8'); },
+        register: async (input) => { const record = await registry!.register(input); return { id: record.id, name: record.name }; },
+        sacredName: async (workspaceId) => {
+            const projectId = tynnProjectFor(workspaceId);
+            if (projectId === null || !tynnAccount) return null;
+            return sacredNameOf(await tynnAccount.projects(), projectId);
+        },
+    };
 }
 /** Every workspace's GitHub panel (Tynn #806), as the features snapshot carries it. */
 function issueWatchPanels(): Record<string, IssueWatchPanelView> {
@@ -657,6 +679,7 @@ function detailFor(agentId: AgentId): AgentDetail | null {
     return {
         agent: {
             id: record.id,
+            workspaceId: record.workspaceId,
             name: record.name,
             provider: record.provider,
             // Every registered agent speaks ACP; `observed` while its Take Over window is open; `remote` belongs to
@@ -843,6 +866,8 @@ async function boot(): Promise<void> {
         },
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
         onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
+        // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
+        onPlan: (agentId, steps) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
         onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
@@ -869,7 +894,13 @@ async function boot(): Promise<void> {
          */
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
-        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        // A CODEX session also gets the Tynn server Genie wrote into its workspace (#1098), so the session can approve it
+        // (codexOptionsFor approves every server in this list; prism only lets it approve a server it was given). Claude
+        // reads `.mcp.json` itself and runs Genie's tools unasked, so it is given nothing it does not already have.
+        mcpServersFor: (record) => [
+            ...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+            ...(record.provider === 'codex' ? tynnMcpServersOnDisk(cwdFor(record), (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }) : []),
+        ],
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
         onThreadId: (agentId, threadId) => {
@@ -1099,22 +1130,31 @@ async function boot(): Promise<void> {
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
     });
 
-    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
+    ipcMain.handle('genie:resolve-prompt', (_event, raw: unknown, promptId: unknown, action: unknown) => {
         const record = agentFromRenderer(raw);
-        if (!record || !host || typeof optionId !== 'string') return { ok: false };
-        // The session checks the id against the parked request. A refusal leaves the approval
-        // parked, which is recoverable; answering with something meaningless is not.
-        return { ok: host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '') };
+        if (!record || !host || typeof promptId !== 'string' || (action !== 'send' && action !== 'discard')) return { ok: false, reason: 'Invalid draft action.' };
+        return host.resolvePrompt(record.id, promptId, action);
     });
 
-    ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown) => {
-        if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false };
-        const record = await registry.register({
-            workspaceId: rawWorkspaceId,
-            provider: 'claude',
-            name: `agent-${Date.now().toString(36)}`,
-        });
-        return { ok: true, id: record.id };
+    ipcMain.handle('genie:answer-approval', (_event, raw: unknown, optionId: unknown, note: unknown) => {
+        const record = agentFromRenderer(raw);
+        // Every refusal names its reason: the card says it (core/approval-answering.ts). A bare `{ ok: false }` was a
+        // button that did nothing.
+        if (!record) return { ok: false, reason: 'Genie does not know this agent' };
+        if (!host) return { ok: false, reason: 'Genie’s agents are not running yet' };
+        if (typeof optionId !== 'string') return { ok: false, reason: 'no option was chosen' };
+        // The session checks the id against the parked request. A refusal leaves the approval
+        // parked, which is recoverable; answering with something meaningless is not.
+        return host.answerApproval(record.id, optionId, typeof note === 'string' ? note : '');
+    });
+
+    // The New agent form (the owner, 2026-10-23: "it just created an agent with some dumb name and default settings").
+    ipcMain.handle('genie:add-agent', async (_event, rawWorkspaceId: unknown, rawInput: unknown) => {
+        if (typeof rawWorkspaceId !== 'string' || !registry) return { ok: false, reason: 'no workspace named' };
+        const input = (typeof rawInput === 'object' && rawInput !== null ? rawInput : {}) as Record<string, unknown>;
+        const text = (v: unknown) => (typeof v === 'string' ? v : '');
+        const created = await createAgent(agentCreatePorts(), rawWorkspaceId, { name: text(input['name']), purpose: text(input['purpose']), provider: text(input['provider']) });
+        return created.ok ? { ok: true, id: created.id } : created;
     });
 
     /*
@@ -1136,7 +1176,7 @@ async function boot(): Promise<void> {
             find: (id) => registry?.find(id as AgentId) ?? null,
             forget: (id) => registry!.forget(id),
             clearThread: (id) => registry!.clearThread(id),
-            setProvider: (id, provider) => registry!.setProvider(id, provider),
+            setProvider: (id, provider, options) => registry!.setProvider(id, provider, options),
             setBudget: (id, usd) => registry!.setBudget(id, usd),
             setMode: (id, mode) => registry!.setMode(id, mode),
             setAccessScope: (id, scope) => registry!.setAccessScope(id, scope),
@@ -1163,6 +1203,16 @@ async function boot(): Promise<void> {
             }
         },
         removeDir: (path) => rm(path, { recursive: true, force: true }),
+        realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
+        // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.
+        handoff: {
+            ask: (id, text) => host?.prompt(id, text, 'genie') ?? false,
+            landedSince: (id, since) => (services?.attention.finished() ?? []).some((f) => f.agentId === id && f.handoff !== null && Date.parse(f.at) >= since),
+            now: Date.now,
+            sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+            waitMs: 45_000,
+            pollMs: 1_000,
+        },
         removeHandoff: async (record) => {
             const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId)?.path;
             if (workspace) await rm(join(workspace, '.ai', 'handoff', `${record.name}.md`), { force: true });
@@ -1230,9 +1280,9 @@ async function boot(): Promise<void> {
         if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
         return previewDelete(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []);
     });
-    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
+    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown, handoff: unknown) => {
         if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []).finally(() => registry?.touch());
+        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : [], { handoff: handoff === true }).finally(() => registry?.touch());
     });
     ipcMain.handle('genie:agent-switch-driver', (_event, raw: unknown, to: unknown) => {
         if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
@@ -1827,14 +1877,12 @@ async function boot(): Promise<void> {
                 ended: (id) => host!.ended(id),
                 cancel: (id) => host!.cancel(id),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
-                prompt: (id, text) => host!.prompt(id, text),
+                prompt: (id, text, by) => host!.prompt(id, text, by),
+                resolvePrompt: (id, promptId, action) => host!.resolvePrompt(id, promptId, action),
                 answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
             },
-            registerAgent: async (workspaceId) => {
-                const record = await registry!.register({ workspaceId, provider: 'claude', name: `agent-${Date.now().toString(36)}` });
-                return { id: record.id };
-            },
+            registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
             attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },
             terminals: {
                 open: (options) => terminals!.open(options),
@@ -1886,7 +1934,7 @@ async function boot(): Promise<void> {
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),
                 previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
-                delete: (id, outcome, also) => deleteAgent(agentOps, id, outcome, also),
+                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }),
                 switchDriver: (id, to) => switchDriver(agentOps, id, to),
                 setBudget: (id, usd) => setBudget(agentOps, id, usd),
                 setMode: (id, mode) => setMode(agentOps, id, mode),
@@ -2112,6 +2160,8 @@ async function boot(): Promise<void> {
             openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
             reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
+            // ...and read back from the agent's record, where every plan is kept across restarts (identity.ts `plan`).
+            readPlan: (agentId) => registry?.find(agentId as AgentId)?.plan ?? null,
             terminals: {
                 list: () => terminals!.list(),
                 open: (options) => terminals!.open(options),
@@ -2348,6 +2398,8 @@ async function boot(): Promise<void> {
         packageManager,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
         now: Date.now,
+        // Genie's own Node, newest first (main/node-versions.ts): Check and repair makes it the node and npm Genie runs.
+        genieNode: () => managedNode({ root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
     });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
@@ -2359,6 +2411,15 @@ async function boot(): Promise<void> {
             const r = await installTool('vcredist', true, toolchainOps());
             return r.kind === 'installed' || r.kind === 'already-installed' ? { ok: true } : { ok: false, reason: r.reason };
         },
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
+    const nodeVersionsPorts = (): NodeVersionsPorts => ({
+        platform: process.platform as NodeVersionsPorts['platform'],
+        root: nodeVersionsRoot(toolchainDataDir()),
+        fs: nodePhpVersionsFs(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
     const featurePorts: FeaturePorts = {
@@ -2390,6 +2451,18 @@ async function boot(): Promise<void> {
                 list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
                 install: (version, consent) => installPhpVersion(version, consent, phpVersionsPorts()),
                 remove: (version, pins) => removePhpVersion(version, pins, phpVersionsBase()),
+            },
+            // Genie's own Node (main/node-versions.ts) — same busy line.
+            node: {
+                list: () => listNodeVersions(nodeVersionsPorts()),
+                // An installed Node becomes the one Genie runs at once (and at every launch after): the owner's "genie
+                // has its own install path".
+                install: async (version, consent) => {
+                    const outcome = await installNodeVersion(version, consent, nodeVersionsPorts());
+                    if (outcome.kind === 'installed') preferGenieNode(toolchainOps(), outcome.dir);
+                    return outcome;
+                },
+                remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
             },
         },
     };
@@ -2437,7 +2510,7 @@ async function boot(): Promise<void> {
         if (action.kind === 'browser.forward') browserPane?.forward();
         if (action.kind === 'browser.reload') browserPane?.reload();
         // An engine's log, once asked for, stays open across pushed snapshots until the person hides it (H6).
-        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null };
+        featureState = { ...featureState, siteAdding: data.hosting?.adding ?? null, siteEditing: data.hosting?.editing ?? null, flowAdding: data.flows?.adding ?? null, serviceAdding: data.services?.adding ?? null, serviceLogs: data.services?.logs ?? null, serviceUpdating: data.services?.updating ?? null };
         return data;
     });
 

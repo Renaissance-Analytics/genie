@@ -10,6 +10,8 @@
  * file turns those answers into a status, a plan, and an outcome.
  */
 
+import { phpAdvisoryText } from './php-advisories.js';
+
 export type Platform = 'win32' | 'darwin' | 'linux';
 export type PackageManager = 'winget' | 'brew' | 'apt' | 'dnf';
 
@@ -126,7 +128,7 @@ export interface ToolProbe {
     readonly source: string | null;
 }
 
-export type Tone = 'update-available' | 'up-to-date' | 'unknown' | 'not-installed';
+export type Tone = 'security-update' | 'update-available' | 'up-to-date' | 'unknown' | 'not-installed';
 
 export interface ToolStatus {
     readonly tool: string;
@@ -134,10 +136,23 @@ export interface ToolStatus {
     readonly latest: string | null;
     readonly tone: Tone;
     readonly source: string | null;
+    /** Why the installed version is unsafe (`security-update` only): the CVEs and the version to move to. */
+    readonly advisory?: string;
 }
 
-/** The badge. `unknown` when no source could name a latest — never `up-to-date` by default. */
+/** What is known to be unsafe, per tool. Only PHP has a floor today (core/php-advisories.ts); the shape takes more. */
+function advisoryFor(tool: string, installed: string): string | null {
+    return tool === 'php' ? phpAdvisoryText(installed) : null;
+}
+
+/**
+ * The badge. `unknown` when no source could name a latest — never `up-to-date` by default. A version under its
+ * security floor is `security-update` BEFORE any comparison with "latest": the owner's PHP read "update available" for
+ * three days of PHP2Shell, which is the wording of a nicety, not of a hole (the owner, 2026-10-22).
+ */
 export function toolStatus(p: ToolProbe): ToolStatus {
+    const advisory = p.installed === null ? null : advisoryFor(p.tool, p.installed);
+    if (advisory !== null) return { tool: p.tool, installed: p.installed, latest: p.latest, tone: 'security-update', source: p.source, advisory };
     let tone: Tone;
     if (p.installed === null) tone = 'not-installed';
     else if (p.latest === null) tone = 'unknown';
@@ -269,6 +284,8 @@ export function groupTools<T extends { readonly tool: string }>(tools: readonly 
  */
 export function toneLabel(tone: Tone): string | null {
     switch (tone) {
+        case 'security-update':
+            return 'Security update required';
         case 'update-available':
             return 'Update available';
         case 'up-to-date':

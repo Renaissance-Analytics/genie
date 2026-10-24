@@ -11,6 +11,7 @@ import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
+import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
@@ -228,6 +229,8 @@ export interface ToolchainSection {
     readonly refusals?: readonly ToolchainRefusal[];
     /** T4: Genie-managed PHP versions (with the sites pinned to each), the PATH PHP, and what can be installed. */
     readonly php?: PhpVersionsView;
+    /** Genie's own Node versions, the PATH node, and what can be installed. */
+    readonly node?: NodeVersionsView;
 }
 
 export interface FeatureData {
@@ -235,7 +238,7 @@ export interface FeatureData {
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
     readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
-    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null } | null;
+    readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
     readonly toolchain: ToolchainSection | null;
     readonly inbox: InboxSection | null;
     readonly settings: { values: Readonly<Record<string, boolean | string>> | null };
@@ -329,6 +332,8 @@ export type FeatureAction =
     | { kind: 'services.detach'; workspaceId: string; serviceId: string }
     | { kind: 'services.start'; serviceId: string }
     | { kind: 'services.stop'; serviceId: string }
+    | { kind: 'services.update'; serviceId: string; consent?: boolean; confirmed?: boolean }
+    | { kind: 'services.cancelUpdate' }
     /**
      * `deleteData` acts for `workspaceId` — the engine's sole data holder, which the row sends (core/service-tenancy.ts
      * `soleHolderOf`); main refuses it, naming them, while any OTHER workspace keeps data in the engine.
@@ -347,6 +352,9 @@ export type FeatureAction =
     | { kind: 'toolchain.installPhp'; version: string; consent: boolean }
     /** Remove a managed PHP version — refused while a site is pinned to it. */
     | { kind: 'toolchain.removePhp'; version: string }
+    /** Install one Genie-managed Node version (nodejs.org, checksum-verified). `consent` is the person's click. */
+    | { kind: 'toolchain.installNode'; version: string; consent: boolean }
+    | { kind: 'toolchain.removeNode'; version: string }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent. */
     | { kind: 'deck.answer'; item: DeckItem; optionId: string; note?: string }
@@ -421,5 +429,6 @@ export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): To
     const refusals = data.toolchain?.refusals ?? [];
     if (action.kind === 'toolchain.update' || action.kind === 'toolchain.install') return refusals.find((r) => r.tool === action.tool && r.version === undefined) ?? null;
     if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
+    if (action.kind === 'toolchain.installNode' || action.kind === 'toolchain.removeNode') return refusals.find((r) => r.tool === 'node' && r.version === action.version) ?? null;
     return null;
 }

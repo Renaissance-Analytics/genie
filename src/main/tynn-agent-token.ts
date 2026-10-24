@@ -1,6 +1,9 @@
 import { join } from 'node:path';
+import type { McpServer } from '@particle-academy/prism-acp';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import type { SyncFlags, SyncFs } from './config-sync-targets.js';
+import type { AgentRecord } from '../core/identity.js';
+import { tynnAgentIdentities, type AgentCredentialPorts } from './tynn-agent-identities.js';
 
 /**
  * TYNN AGENT-TOKEN SETUP (add-workspace parity item 4; Genie 1 `main/tynn/provision.ts`). A workspace whose project.json
@@ -25,6 +28,7 @@ import type { SyncFlags, SyncFs } from './config-sync-targets.js';
 /** The signed-in Tynn session, as TynnAccount provides it. */
 export interface TynnSessionPort {
     status(): { readonly signedIn: boolean };
+    userId?(): string | null;
     request(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 }
 
@@ -36,8 +40,8 @@ export interface TynnMcp {
 export type TynnAgentToken =
     /** No `tynn.projectId` in project.json: not Tynn's business. */
     | { readonly status: 'unlinked' }
-    | { readonly status: 'already' | 'minted'; readonly mcp: TynnMcp }
-    | { readonly status: 'failed'; readonly reason: string };
+    | { readonly status: 'already' | 'minted'; readonly mcp: TynnMcp; readonly remoteAgentId?: string }
+    | { readonly status: 'failed'; readonly reason: string; readonly code?: 'offline' | 'inactive' | 'conflict' | 'pending' | 'storage' | 'refused' };
 
 export const TYNN_SERVER_KEY = 'tynn';
 
@@ -90,6 +94,19 @@ function fromToml(text: string | null): TynnMcp | null {
     return url && token ? { url, token } : null;
 }
 
+/**
+ * THE TYNN SERVER A SESSION STARTS WITH (2026-10-22): the one config sync wrote into the workspace (`.codex/config.toml`
+ * — or the Claude / Cursor config, same token), read back, as a session `mcpServers` entry beside Genie's own. Codex loads
+ * `[mcp_servers.tynn]` from the file on its own, but asks before its tools run, and a session can only approve a server it
+ * was GIVEN (prism-acp: `mcpToolApproval names "tynn", which is not one of the MCP servers given`) — so it is given, the
+ * way `genie` is. Nothing is minted here; `read` is synchronous because a session starts synchronously. None = [].
+ */
+export function tynnMcpServersOnDisk(workspacePath: string, read: (path: string) => string | null): McpServer[] {
+    const at = (...parts: string[]) => join(workspacePath, ...parts).replace(/\\/g, '/');
+    const mcp = fromJson(read(at('.mcp.json'))) ?? fromJson(read(at('.cursor', 'mcp.json'))) ?? fromToml(read(at('.codex', 'config.toml')));
+    return mcp ? [{ type: 'http', name: TYNN_SERVER_KEY, url: mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${mcp.token}` }] }] : [];
+}
+
 /** The Tynn token a sync already wrote into any of the three configs, or null. */
 async function onDisk(workspacePath: string, fs: SyncFs): Promise<TynnMcp | null> {
     const at = (...parts: string[]) => join(workspacePath, ...parts).replace(/\\/g, '/');
@@ -118,7 +135,8 @@ async function mint(tynn: TynnSessionPort, projectId: string): Promise<TynnMcp |
 }
 
 /** One per Genie: a workspace being set up already is waited on, not minted for twice. */
-export function tynnAgentTokens() {
+export function tynnAgentTokens(credentials?: AgentCredentialPorts) {
+    const identities = credentials ? tynnAgentIdentities(credentials) : null;
     const inFlight = new Map<string, Promise<TynnAgentToken>>();
     // What this Genie minted, per workspace and project: a write that failed after the mint, or a sync that read the disk
     // before the first one wrote, reuses it rather than minting another live token.
@@ -147,7 +165,14 @@ export function tynnAgentTokens() {
     }
 
     return {
-        ensure(input: Parameters<typeof decide>[0]): Promise<TynnAgentToken> {
+        ensure(input: Parameters<typeof decide>[0] & { agent?: AgentRecord }): Promise<TynnAgentToken> {
+            if (input.agent) {
+                if (!identities) return Promise.resolve({ status: 'failed', code: 'storage', reason: 'Private Tynn agent credential storage is not configured.' });
+                return input.fs.read(join(input.workspacePath, 'project.json').replace(/\\/g, '/')).then((text): Promise<TynnAgentToken> | TynnAgentToken => {
+                    const projectId = tynnProjectIdOf(text);
+                    return projectId ? identities.ensure({ projectId, agent: input.agent!, tynn: input.tynn }) : { status: 'unlinked' };
+                }).catch((): TynnAgentToken => ({ status: 'failed', code: 'storage', reason: 'The workspace Tynn link could not be read.' }));
+            }
             const key = input.workspacePath.replace(/\\/g, '/').replace(/\/+$/, '');
             const running = inFlight.get(key);
             if (running) return running;

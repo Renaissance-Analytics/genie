@@ -3,6 +3,7 @@ import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import type { TimedEvent } from './stream-view.js';
 import type { Attachment } from './prompt-content.js';
+import { promptDeliveries } from './prompt-delivery.js';
 
 /**
  * THE CHAT FLYOUT'S THREAD, derived — no React in sight.
@@ -50,6 +51,14 @@ export interface ChatMessage {
     from: string;
     text: string;
     delivered: boolean;
+    /** Genie holds this message until the provider's current turn ends. */
+    queued?: boolean;
+    /** The turn has ended, but the provider is still paused. */
+    queuedForProvider?: boolean;
+    /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
+    promptId?: string;
+    /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
+    draftProblem?: string;
     /** Epoch ms, or `null` when the event carried none — never synthesised. */
     at: number | null;
     /**
@@ -131,6 +140,7 @@ export function chatContext(detail: ChatDetail): ChatContext {
 export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = []): ChatMessage[] {
     const out: ChatMessage[] = [];
     const waiting = waitingMessages(detail.rows);
+    const deliveries = promptDeliveries(detail.rows);
     // Whether the row before was a thought: a reply (or any other row) between two thoughts splits them.
     let lastWasThink = false;
     for (const row of detail.rows) {
@@ -159,6 +169,8 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         }
         lastWasThink = false;
         if (e.kind !== 'message') continue;
+        const delivery = e.pending ? deliveries.get(e.pending.id) : undefined;
+        if (delivery === 'discarded') continue;
         // GENIE'S NOTICE, WITH ITS CONTEXT (beta.33 item 18): not its instruction to the agent ("collect it with
         // agentinbox receive") but the messages it told about — who wrote each and what it says. A notice recorded
         // before notices carried their mail has nothing to list, and stays Genie's message as it was.
@@ -174,8 +186,13 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         }
         const who: ChatWho = e.speaker;
         const from = who === 'you' ? 'you' : who === 'peer' ? `${e.peerName ?? 'peer'} → ${detail.agent.name}` : detail.agent.name;
-        const waits = who === 'you' ? waiting.get(row.id) : undefined;
-        out.push({ id: row.id, who, from, text: e.text, delivered: true, at: row.at, ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
+        const delivered = delivery === undefined || delivery === 'sent';
+        const queued = delivery === 'queued' && detail.session?.running === true;
+        const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
+        out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
+            ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
+            ...(queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
+            ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;
 }

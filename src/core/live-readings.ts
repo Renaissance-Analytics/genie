@@ -23,9 +23,21 @@ import { TurnNowTracker, type TurnNow } from './turn-now.js';
 export class LiveReadings {
     #usage: { used: number; size: number } | null = null;
     #plan: Extract<StreamEvent, { kind: 'plan' }> | null = null;
+    /** The plan kept from before this run (`seedPlan`): what stands until the run reports one of its own. */
+    #seed: Extract<StreamEvent, { kind: 'plan' }> | null = null;
     #model: string | null = null;
     #delivery = new DeliveryTracker();
     #turn = new TurnNowTracker();
+
+    /**
+     * THE PLAN KEPT FROM BEFORE THIS RUN (the owner, 2026-10-21: "The plan loaded in genie should survive a restart"):
+     * every run starts with no rows, so without this the column emptied on every relaunch, restart and setting change.
+     * It stands until a plan row of this run replaces it — and survives a `rebuild`, which reads only this run's rows.
+     */
+    seedPlan(steps: readonly { content: string; status: string }[]): void {
+        this.#seed = steps.length > 0 ? { kind: 'plan', entries: steps.map((s) => ({ content: s.content, status: s.status })) } : null;
+        if (this.#plan === null) this.#plan = this.#seed;
+    }
 
     /** The row at `index` — the newest — arrived. */
     added(rows: readonly TimedEvent[], index: number): void {
@@ -54,7 +66,7 @@ export class LiveReadings {
     /** Read every row again, from the start. */
     rebuild(rows: readonly TimedEvent[]): void {
         this.#usage = null;
-        this.#plan = null;
+        this.#plan = this.#seed;
         this.#model = null;
         this.#delivery = new DeliveryTracker();
         this.#turn = new TurnNowTracker();
@@ -67,6 +79,13 @@ export class LiveReadings {
 
     get plan(): { step: number; of: number; doing: string } | null {
         return this.#plan === null ? null : planOf(this.#plan);
+    }
+
+    /** The current plan's steps, each `{ content, status }` (what the column draws and the `plan` tool keeps); `null` = none. */
+    get planSteps(): readonly { content: string; status: string }[] | null {
+        if (this.#plan === null) return null;
+        const steps = planStepsOf(this.#plan);
+        return steps.length === 0 ? null : steps;
     }
 
     get model(): string | null {
@@ -114,12 +133,17 @@ export function planFrom(rows: readonly TimedEvent[]): { step: number; of: numbe
     return null;
 }
 
-function planOf(event: Extract<StreamEvent, { kind: 'plan' }>): { step: number; of: number; doing: string } | null {
-    const steps = event.entries.flatMap((e) => {
+/** A plan event's READABLE steps, `{ content, status }` only — a provider's extra fields (Codex's `priority`) are not kept. */
+export function planStepsOf(event: Extract<StreamEvent, { kind: 'plan' }>): { content: string; status: string }[] {
+    return event.entries.flatMap((e) => {
         if (typeof e !== 'object' || e === null) return [];
         const r = e as Record<string, unknown>;
         return typeof r['content'] === 'string' && typeof r['status'] === 'string' ? [{ content: r['content'], status: r['status'] }] : [];
     });
+}
+
+function planOf(event: Extract<StreamEvent, { kind: 'plan' }>): { step: number; of: number; doing: string } | null {
+    const steps = planStepsOf(event);
     if (steps.length === 0) return null;
 
     const done = steps.filter((s) => s.status === 'completed').length;

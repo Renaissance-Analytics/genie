@@ -162,9 +162,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false }; }
             return { ok: (r.value as { ok?: boolean } | null)?.ok === true };
         }),
-        answerApproval: (agentId, optionId, note) => fire('answerApproval', agentId, optionId, note ?? ''),
+        resolvePrompt: (agentId, promptId, action) => answer<{ ok: true }>('resolvePrompt', agentId, promptId, action),
+        // The host's reply ends the answer's flight and a refusal is said on the card (core/approval-answering.ts).
+        answerApproval: (agentId, optionId, note) => answer<{ ok: true }>('answerApproval', agentId, optionId, note ?? ''),
         restartWithHandoff: (agentId, finishedId) => answer<{ ok: true }>('restartWithHandoff', agentId, finishedId),
-        addAgent: (workspaceId) => fire('addAgent', workspaceId),
+        addAgent: (workspaceId, input) => answer<{ ok: true; id: string }>('addAgent', workspaceId, input),
         addWorkspace: () => fire('addWorkspace'),
         takeOver: (agentId) => answer<{ ok: true; terminalId: string }>('takeOver', agentId),
         workspaces: {
@@ -205,7 +207,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),
             previewDelete: (agentId, outcome, also) => answer('agents.previewDelete', agentId, outcome, [...also]),
-            delete: (agentId, outcome, also) => answer('agents.delete', agentId, outcome, [...also]),
+            delete: (agentId, outcome, also, handoff) => answer('agents.delete', agentId, outcome, [...also], handoff === true),
             switchDriver: (agentId, to) => answer('agents.switchDriver', agentId, to),
             setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),

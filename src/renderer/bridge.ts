@@ -83,7 +83,7 @@ export interface GenieSnapshot {
  * history down the wire to redraw one line.
  */
 export interface AgentDetail {
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; raisesApprovals?: boolean | null | undefined; dailyBudgetUsd?: number | null; mode?: 'automated' | 'manual'; accessScope?: 'none' | 'self' | 'specific' | 'all'; /** Autonomous (Tynn #801). */ autoApprove?: boolean; manageTabs?: boolean; /** May drive pages (browser rebuild step 7). */ drivePages?: boolean; issueWatch?: IssueWatchPrefs; permissions?: AgentPermissions; /** The model CHOSEN for it; `null` = the provider's default. The one IN USE is `session.model`. */ model?: string | null; /** The persona file, workspace-relative (`.agents/<name>/AGENT.md`); `null` when the record names none. */ instructions?: string | null };
     /** `null` when the agent is registered but not running. Not an error. */
     session: LiveSession | null;
     rows: readonly TimedEvent[];
@@ -196,21 +196,27 @@ export interface GenieBridge {
      * why when the host knows (a file the provider cannot take); absent = the agent is not running.
      */
     prompt(agentId: string, text: string, attachments?: readonly Attachment[]): Promise<{ ok: boolean; reason?: string }>;
+    resolvePrompt(agentId: string, promptId: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * Answer a parked approval, with the PROVIDER'S own option id.
      *
      * The id goes back over the wire verbatim and the main process checks it against the
      * request before sending it on — the renderer is not trusted to produce a valid one, and
      * a provider receiving an option it never offered is a protocol error at best.
+     *
+     * The host's reply ENDS the answer's flight (core/approval-answering.ts): `ok` = the session resolved the request;
+     * a refusal names its reason (nothing parked, an option not offered, the agent not running) and the card says it.
+     * Fire-and-forget left the card locked on a refusal nobody saw (the owner, 2026-10-22).
      */
-    answerApproval(agentId: string, optionId: string, note?: string): void;
+    answerApproval(agentId: string, optionId: string, note?: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     /**
      * "Restart with this" on a finish (§4.5): stop, start, and send the agent its own handoff note
      * as the first prompt; the finish is marked seen only when the prompt was taken. A refusal
      * names its reason and leaves the item on the Deck.
      */
     restartWithHandoff(agentId: string, finishedId: string): Promise<{ ok: true } | { ok: false; reason: string }>;
-    addAgent(workspaceId: string): void;
+    /** The New agent form's answer (renderer/components/NewAgentModal.tsx): created, or the host's refusal in words. */
+    addAgent(workspaceId: string, input: { name: string; purpose: string; provider: string }): Promise<{ ok: true; id: string } | { ok: false; reason: string }>;
     /**
      * Open the folder picker and register what the user chose.
      *
@@ -298,7 +304,8 @@ export interface GenieBridge {
         restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | { ok: false; reason: string }>;
         /** What a delete WOULD do — shown before the person confirms. Touches nothing. */
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
-        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
+        /** `handoff`: ask a running agent for a handoff first; the call returns once it lands or the bounded wait ends. */
+        delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff?: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         switchDriver(agentId: string, to: string): Promise<SwitchDecision>;
         setBudget(agentId: string, dailyLimitUsd: number | null): Promise<{ ok: true; decision: BudgetDecision } | { ok: false; reason: string }>;
         diagnose(agentId: string): Promise<{ ok: true; diagnosis: Diagnosis } | { ok: false; reason: string }>;

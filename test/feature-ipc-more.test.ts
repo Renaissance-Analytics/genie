@@ -52,7 +52,9 @@ beforeEach(async () => {
 
 afterEach(async () => {
     await services.shutdown();
-    await rm(dir, { recursive: true, force: true });
+    // The runtime folder can still be taking a write as shutdown returns (#1140's CI: ENOTEMPTY on .../runtime); the
+    // retrying rm the other host suites use (activity-feeds-host, agent-stream-perf) — the teardown, not the assertions.
+    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
 describe('toolchain', () => {

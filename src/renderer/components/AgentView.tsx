@@ -18,6 +18,7 @@ import type { GenieBridge } from '../bridge.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
+import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
 import type { DeletePlan } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
@@ -134,7 +135,8 @@ export interface AgentOpsProps {
     readonly onSwitchDriver: (to: string) => void;
     readonly onDiagnose: () => void;
     readonly onPreviewDelete: (outcome: 'unmount' | 'delete') => void;
-    readonly onConfirmDelete: (outcome: 'unmount' | 'delete', alsoRemoveFrom: string[]) => void;
+    /** `handoff`: ask the running agent for a handoff before it is stopped (Genie 1's AgentDeleteModal). */
+    readonly onConfirmDelete: (outcome: 'unmount' | 'delete', alsoRemoveFrom: string[], handoff: boolean) => void;
     readonly onCancelDelete: () => void;
     readonly onSetBudget: (dailyLimitUsd: number | null) => void;
 }
@@ -150,7 +152,7 @@ export interface AgentViewProps {
     planOpen?: boolean | undefined;
     /** Where the index column's collapsed state is remembered; `undefined` = the browser's localStorage, `null` = nowhere (tests). */
     indexStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
-    agent: { id: string; name: string; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
+    agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
     session: LiveSession | null;
     rows: readonly TimedEvent[];
     tab: AgentTab;
@@ -164,8 +166,10 @@ export interface AgentViewProps {
     cost: number | null;
     /** The agent the chat flyout is open on, from the route. Decides where an approval acts. */
     chatSubject?: string | null | undefined;
-    /** `null` unless an answer is in flight. */
+    /** The option id in flight for THIS agent's parked approval (core/approval-answering.ts); `null` = none. */
     answeringApproval?: string | null | undefined;
+    /** The host's refusal of the last answer to THIS approval, in words, for the card. */
+    approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onNavigate: (route: string) => void;
@@ -267,7 +271,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
-    chatSubject, answeringApproval, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
+    chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
@@ -335,7 +339,11 @@ export function AgentView({
     const plan = planFor(session);
     // The plan's steps (the board): from the latest plan update in the rows; null keeps the step/of line alone.
     // Read from the rows when THEY change, not on every render of the window (the owner, 2026-10-20: "severe UI lag").
-    const steps = useMemo(() => planSteps(rows), [rows]);
+    const rowSteps = useMemo(() => planSteps(rows), [rows]);
+    // After a restart the plan is the KEPT one (the session's `planSteps`) until this run reports its own — the rows may
+    // hold no plan row at all (the owner, 2026-10-21: "The plan loaded in genie should survive a restart").
+    const keptSteps = session?.planSteps ?? null;
+    const steps = useMemo(() => (keptSteps && keptSteps.length > 0 ? keptSteps.map((s) => ({ content: s.content, status: s.status, current: s.status === 'in_progress' })) : rowSteps), [keptSteps, rowSteps]);
     const budget = budgetFor(session, cost, turns);
     // The provider's headroom (the board's rail row): the latest rate-limit reading in the ledger; none, no row.
     const headroom = useMemo(() => headroomOf(rows), [rows]);
@@ -716,7 +724,7 @@ export function AgentView({
                         e.preventDefault();
                         const data = new FormData(e.currentTarget);
                         const also = ops.deletePreview!.external.filter((x) => x.action === 'kept' && data.get(`also-${x.system}`) === 'on').map((x) => x.system);
-                        ops.onConfirmDelete(ops.deletePreview!.outcome, also);
+                        ops.onConfirmDelete(ops.deletePreview!.outcome, also, data.get('handoff') === 'on');
                     }}
                 >
                     <p className="font-semibold">{ops.deletePreview.outcome === 'delete' ? `Delete ${agent.name} — this removes files` : `Unmount ${agent.name} from Genie`}</p>
@@ -744,6 +752,24 @@ export function AgentView({
                             )}
                         </div>
                     ) : null}
+                    {/* ASK FOR A HANDOFF FIRST (Genie 1's AgentDeleteModal, its words): ticked by default for a running agent;
+                        a stopped one is told why there is nothing to ask rather than shown a mute greyed box. The one confirm
+                        card both ways in reach it: the overflow menu and General's "Remove from workspace". */}
+                    {session?.running === true ? (
+                        <label className="mt-2 flex items-start gap-2">
+                            <input type="checkbox" name="handoff" defaultChecked />
+                            <span>
+                                Ask for a handoff first
+                                <span className="block text-[var(--fg-4)]">
+                                    {ops.deletePreview.outcome === 'delete'
+                                        ? 'It writes what it was doing to .ai/handoff/ before stopping. That note survives even though its .agents/ files do not. Without one, whatever it had in flight is lost.'
+                                        : 'It writes what it was doing to .ai/handoff/ before stopping, so the next run picks up where it left off. Without one, whatever it had in flight is lost.'}
+                                </span>
+                            </span>
+                        </label>
+                    ) : (
+                        <p className="mt-2 text-[var(--fg-4)]">{agent.name} is not running, so there is nothing to ask for a handoff.</p>
+                    )}
                     <div className="mt-3 flex gap-2">
                         <button type="submit" data-action="confirm-delete" className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">{ops.deletePreview.outcome === 'delete' ? 'Delete' : 'Unmount'} {agent.name}</button>
                         <button type="button" onClick={ops.onCancelDelete} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
@@ -892,6 +918,7 @@ export function AgentView({
                                 <ApprovalCard
                                     approval={approval}
                                     answering={answeringApproval ?? null}
+                                    refusal={approvalRefusal ?? null}
                                     onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                                     agentName={agent.name}
                                 />
@@ -948,6 +975,7 @@ export function AgentView({
                         a strip above them. Which tab holds which control is `core/agent-settings-view.ts`. */}
                     {active === 'settings' ? (() => {
                         const sections = settingsSections({
+                            name: agent.name, workspaceId: agent.workspaceId,
                             fidelity: agent.fidelity, provider: agent.provider, ops: ops !== undefined,
                             model: ops?.onSetModel !== undefined, tools: ops?.onSetPermissions !== undefined, autonomous: ops?.onSetAutoApprove !== undefined,
                             manageTabs: ops?.onSetManageTabs !== undefined, drivePages: ops?.onSetDrivePages !== undefined,
@@ -967,6 +995,7 @@ export function AgentView({
                         const showStrip = budget || budgetLimit !== null || headroom || policy || session?.mcpServers || note;
                         return (
                             <div data-agent-settings="" className="flex min-h-0 flex-1 flex-col text-xs">
+                                {isOsAgent(agent) ? <p data-os-agent-policy="" className="shrink-0 border-b border-[var(--border-1)] px-4 py-2 text-[var(--fg-3)]">{OS_AGENT_POLICY_NOTE}</p> : null}
                                 {/* BUDGET, a strip (the owner: no half-empty column): context, cost and turns, the limit, the MCP, headroom. */}
                                 {showStrip ? (
                                     <section data-rail="budget" data-settings-strip="" className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b border-[var(--border-1)] px-5 py-2 text-[11px] text-[var(--fg-3)]">
@@ -1036,11 +1065,12 @@ export function AgentView({
                                             {/* ── GENERAL: provider and model first (the owner's first ask), mode, run controls; Remove at the foot. */}
                                             {ops && has.has('provider') ? (
                                                 <div data-settings-row="provider-model" className="grid grid-cols-1 gap-3 border-b border-[var(--border-1)] pb-3 md:grid-cols-2">
-                                                    {/* PROVIDER: the CLI it runs on; changing it is Switch driver — identity, inbox and history stay. */}
+                                                    {/* PROVIDER: the CLI it runs on; changing it is Switch driver — identity, inbox and history stay, and
+                                                        the agent starts a NEW conversation there (a provider's conversation is its own). */}
                                                     <section data-rail="provider" data-agent-provider={agent.provider}>
                                                         <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
                                                         <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: p }))} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
-                                                        <p className="mt-1 text-[11px] text-[var(--fg-4)]">Its name, inbox and history stay; its next turn runs on the new provider.{outcomeFor('provider')}</p>
+                                                        <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its name, inbox and history stay; it starts a new conversation on the new provider.')}{outcomeFor('provider')}</p>
                                                     </section>
                                                     {/* MODEL: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}
                                                     {has.has('model') ? (() => {
@@ -1211,7 +1241,7 @@ export function AgentView({
                                                 <label data-settings-row="autonomous" className={rowClass} title="Each one is recorded. Genie keeps an engine’s data on every remove; deleting data is always yours. Creating an agent always asks you. Applies to its next action.">
                                                     <span className={labelClass}>Autonomous</span>
                                                     <span data-auto-approve={ops.autoApprove ? 'on' : 'off'}><Switch checked={ops.autoApprove === true} onCheckedChange={(checked) => { touch('autonomous'); ops.onSetAutoApprove?.(checked); }} aria-label={`${agent.name} is autonomous`} /></span>
-                                                    {help(`${agent.name} sets up services, processes, sites and terminals without asking you.`)}
+                                                    {help(`${agent.name} sets up services, processes, sites and terminals without asking you.${agent.provider === 'codex' ? ' Codex runs commands and edits files without asking, outside its sandbox.' : ''}`)}
                                                     {outcomeFor('autonomous')}
                                                 </label>
                                             ) : null}

@@ -37,7 +37,7 @@ import { TurnStop } from './TurnStop.js';
  */
 
 /** One message as the chat draws it (`core/chat-view.ts`'s `ChatMessage`, its optional parts optional). */
-export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting'>>;
+export type ChatThreadMessage = Pick<ChatMessage, 'id' | 'from' | 'text' | 'delivered'> & Partial<Pick<ChatMessage, 'who' | 'at' | 'read' | 'attachments' | 'reason' | 'resend' | 'mailId' | 'mail' | 'waiting' | 'queued' | 'queuedForProvider' | 'promptId' | 'draftProblem'>>;
 
 export interface ChatThread {
     agentId: string;
@@ -183,7 +183,10 @@ export interface ChatFlyoutProps {
     onOpenMail?: ((messageId: string) => void) | undefined;
     /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
     commands?: readonly ProviderCommand[] | null | undefined;
+    /** The option id in flight for THIS chat's parked approval (core/approval-answering.ts); `null` = none. */
     answeringApproval?: string | null | undefined;
+    /** The host's refusal of the last answer to THIS approval, in words, for the card. */
+    approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
@@ -239,7 +242,7 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
 }
 
 export function ChatFlyout({
-    thread, contextUsage = null, approval, commands, answeringApproval, onAnswerApproval,
+    thread, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
     onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth,
 }: ChatFlyoutProps) {
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
@@ -484,9 +487,10 @@ export function ChatFlyout({
                     if (who === 'thinking') {
                         return (
                             <details key={m.id} data-chat-message={m.id} data-who="thinking" className="max-w-[94%] text-[12px] text-[var(--fg-3)]">
-                                <summary className="flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
+                                <summary className="group flex cursor-pointer select-none items-center gap-1.5 font-mono text-[11px] hover:text-[var(--fg-2)]">
                                     <Icon name="sparkles" size="xs" />
-                                    <span>{m.from}’s thinking</span>
+                                    {/* Underlined on hover so it reads as something to open (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it"). */}
+                                    <span className="group-hover:underline">{m.from}’s thinking</span>
                                     {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
                                 </summary>
                                 <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
@@ -509,7 +513,7 @@ export function ChatFlyout({
                         <div key={m.id} data-chat-message={m.id} data-who="you" className="flex max-w-[86%] flex-col items-end gap-1 self-end">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]">you{stamp ? <> · {stamp}</> : null}</div>
                             {/* As you typed it (the owner, 2026-10-21): your newlines kept, a long word or URL broken rather than overflowing. */}
-                            <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
+                            <div data-chat-user-text="" className={`whitespace-pre-wrap break-words rounded-[10px] border px-2.5 py-2 text-[13px] leading-normal ${m.delivered || m.queued ? 'border-[var(--border-1)] bg-[var(--bg-2)]' : 'border-dashed border-[var(--danger)] bg-[var(--bg-2)]'}`}>{m.text}</div>
                             {m.attachments ? (
                                 <div data-chat-attachments={m.id} className="flex flex-wrap justify-end gap-1">
                                     {m.attachments.map((name) => (
@@ -528,10 +532,12 @@ export function ChatFlyout({
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}
-                            {m.delivered ? null : (
+                            {m.queued ? <span data-chat-queued={m.id} className="font-mono text-[11px] text-[var(--fg-3)]">{m.queuedForProvider ? 'Queued · waiting for the provider to resume' : 'Queued · waiting for the current turn to end'}</span> : null}
+                            {m.delivered || m.queued ? null : (
                                 <div data-chat-undelivered={m.id} className="flex flex-col items-end gap-1.5">
                                     {/* What is true NOW: an agent running again was not running when it was written — it is not "not running". */}
-                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
+                                    <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
+                                    {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
                                     <div className="flex items-center gap-1.5">
                                         {onDiscardDraft ? <button type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</button> : null}
                                         {m.reason ? null : m.resend === 'send'
@@ -569,6 +575,7 @@ export function ChatFlyout({
                     <ApprovalCard
                         approval={approval}
                         answering={answeringApproval ?? null}
+                        refusal={approvalRefusal ?? null}
                         onAnswer={(id, note) => onAnswerApproval?.(id, note)}
                         agentName={thread?.name}
                     />

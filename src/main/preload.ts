@@ -101,14 +101,12 @@ const bridge: PreloadBridge = {
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     prompt: (agentId, text, attachments) => ipcRenderer.invoke('genie:prompt', agentId, text, attachments) as Promise<{ ok: boolean; reason?: string }>,
+    resolvePrompt: (agentId, promptId, action) => ipcRenderer.invoke('genie:resolve-prompt', agentId, promptId, action) as never,
 
-    addAgent: (workspaceId) => {
-        void ipcRenderer.invoke('genie:add-agent', workspaceId);
-    },
+    addAgent: (workspaceId, input) => ipcRenderer.invoke('genie:add-agent', workspaceId, input) as Promise<{ ok: true; id: string } | { ok: false; reason: string }>,
 
-    answerApproval: (agentId, optionId, note) => {
-        void ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '');
-    },
+    // The host's reply comes back: `ok` ends the answer's flight, a refusal is said on the card (core/approval-answering.ts).
+    answerApproval: (agentId, optionId, note) => ipcRenderer.invoke('genie:answer-approval', agentId, optionId, note ?? '') as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     restartWithHandoff: (agentId, finishedId) =>
         ipcRenderer.invoke('genie:restart-with-handoff', agentId, finishedId) as Promise<{ ok: true } | { ok: false; reason: string }>,
@@ -156,7 +154,7 @@ const bridge: PreloadBridge = {
     agents: {
         restart: (agentId, kind) => ipcRenderer.invoke('genie:agent-restart', agentId, kind) as never,
         previewDelete: (agentId, outcome, alsoRemoveFrom) => ipcRenderer.invoke('genie:agent-preview-delete', agentId, outcome, [...alsoRemoveFrom]) as never,
-        delete: (agentId, outcome, alsoRemoveFrom) => ipcRenderer.invoke('genie:agent-delete', agentId, outcome, [...alsoRemoveFrom]) as never,
+        delete: (agentId, outcome, alsoRemoveFrom, handoff) => ipcRenderer.invoke('genie:agent-delete', agentId, outcome, [...alsoRemoveFrom], handoff === true) as never,
         switchDriver: (agentId, to) => ipcRenderer.invoke('genie:agent-switch-driver', agentId, to) as never,
         setBudget: (agentId, dailyLimitUsd) => ipcRenderer.invoke('genie:agent-set-budget', agentId, dailyLimitUsd) as never,
         setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,

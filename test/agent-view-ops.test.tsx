@@ -48,6 +48,26 @@ describe('the delete confirm card', () => {
         expect(html).toMatch(/>Cancel</);
         expect(render(ops({ deletePreview: { outcome: 'unmount', removes: [], keeps: [], external: [] } }))).toMatch(/>Unmount atlas</);
     });
+
+    it('a RUNNING agent is offered "Ask for a handoff first", ticked by default (Genie 1’s AgentDeleteModal); a stopped one is told why not', () => {
+        const live = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, plan: null } as unknown as Parameters<typeof AgentView>[0]['session'];
+        const plan = { outcome: 'delete' as const, removes: [], keeps: [], external: [] };
+        const html = render(ops({ deletePreview: plan }), live);
+        expect(html).toMatch(/<input type="checkbox" name="handoff" checked=""/);
+        expect(html).toMatch(/Ask for a handoff first/);
+        expect(html).toMatch(/survives even though its \.agents\/ files do not/);
+        expect(render(ops({ deletePreview: { ...plan, outcome: 'unmount' } }), live)).toMatch(/next run picks up where it left off/);
+        // Control: not running — no checkbox, and the reason instead of a mute greyed box.
+        const stopped = render(ops({ deletePreview: plan }));
+        expect(stopped).not.toMatch(/name="handoff"/);
+        expect(stopped).toMatch(/not running, so there is nothing to ask/);
+    });
+});
+
+describe('the provider rail', () => {
+    it('says a new provider starts a NEW conversation — the old one does not come along', () => {
+        expect(render(ops())).toMatch(/starts a new conversation on the new provider/);
+    });
 });
 
 describe('diagnosis, outcome, budget', () => {

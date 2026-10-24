@@ -37,7 +37,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - \`agentinbox\` to reach another agent. Never edit another agent's files to talk to it.
 - \`lists\` for your own checklist and for things only a person can do.
 - \`openFileForUser\` to put a file in front of the person.
-- \`plan\` to show your plan in your Active Plan column: the whole list each time, each step pending, in_progress or completed. Call it when you start work with more than one step, and again as each step starts or finishes.
+- \`plan\` to show your plan in your Active Plan column: the whole list each time, each step pending, in_progress or completed. Call it when you start work with more than one step, and again as each step starts or finishes. Genie keeps your latest plan across restarts and new conversations: when you start, call it without steps to read that plan back and pick up where you left off.
 - \`services\` for the workspace's databases, Redis, mail and other engines, and \`sites\` for its sites. Genie runs them; never run docker yourself.
 - \`processes\` for anything that must keep running — a queue worker, a watcher, a dev server — and for its log. Genie keeps it running and brings it back after a restart; never leave one running in a terminal or with nohup.
 - \`flows\` for scheduled or repeating work — a watcher that runs a check every 30 minutes and prompts an agent on what it finds, a nightly job. You make the flow; it is created disarmed and runs only once the person arms it in Genie's Flows tab.
@@ -93,6 +93,7 @@ Genie sets up, starts and stops the workspace's service engines and sites. Never
 
 - \`services\` with action \`catalog\` lists the engines and versions; \`list\` shows this workspace's engines and the shared ones with their live status; \`env\` shows the variables every process here gets, secrets masked.
 - \`services\` with action \`add\` (engine, version, scope) asks the person first, and they see the image Genie will pull. \`start\` and \`stop\` act at once. \`remove\` asks the person and always keeps the data.
+- \`services\` with action \`update\` (id) asks the person before pulling the existing image tag fresh and recreating its container. The approval names the affected workspaces, sites and processes; its name, data volumes, ports and credentials stay, and a stopped engine stays stopped.
 - A workspace's own engine is the one its variables come from, before any shared one. Postgres with pgvector is \`add\` with \`variant: "pgvector"\`; a custom image that is a Postgres (or MySQL, MariaDB, Redis, Mongo) is \`add\` with \`kind\`, and the workspace then gets DB_* from it. \`use\` (an engine's id) makes one engine the workspace's for its kind, and \`detach\` stops a shared one giving the workspace its variables while keeping its data; both ask the person.
 - \`sites\` with action \`add\` serves a folder at https://<name>.gen with the defaults the Hosting tab would use (the name is \`<folder>.<workspace>\` unless you give one); \`detect\` says what Genie would serve for a folder without doing anything; \`list\`, \`status\`, \`start\`, \`stop\`, \`restart\` and \`logs\` act at once; \`open\` shows the site to the person in Genie's browser; \`update\` and \`remove\` ask the person.
 - Terminals and site processes already have the service variables.

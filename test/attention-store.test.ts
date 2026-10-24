@@ -73,8 +73,16 @@ describe('imDone', () => {
         const finished = store.finished();
         expect(finished).toHaveLength(1);
         expect(finished[0]).toMatchObject({ agentId: agent, handoff: 'all done', seen: false });
+        // markSeen saves in the background. Wait for its completed write before reopening the store or removing this
+        // test's directory: CI run 39903987765 removed runtime/ while that write was still creating a temp file.
+        const flushed = new Promise<void>((resolve) => {
+            const off = store.onChange(() => { off(); resolve(); });
+        });
         store.markSeen(finished[0]!.id);
         expect(store.finished().filter((f) => !f.seen)).toHaveLength(0);
+        await flushed;
+        const saved = await AttentionStore.open(dir, inbox, now);
+        expect(saved.finished()).toMatchObject([{ id: finished[0]!.id, seen: true }]);
     });
 
     it("an agent's LAST handoff, for the workspace dashboard — read or not, its first line, with its time; none = null", async () => {

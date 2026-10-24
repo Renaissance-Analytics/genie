@@ -243,6 +243,8 @@ export interface ComposedServices {
     /** The PERSON's start / stop / remove of an engine: recorded (machine-local), so a restart keeps a stopped engine stopped. */
     startEngine(id: string): Promise<void>;
     stopEngine(id: string): Promise<void>;
+    /** Workspaces currently receiving this engine's env, plus their running sites and processes. */
+    engineDependents(id: string): readonly string[];
     /** `workspaceId` = who a delete-data acts for: refused while any OTHER workspace keeps data in it (core/service-tenancy.ts). */
     removeEngine(id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void>;
     /** The workspace's service connection kept current in each site repo's `.env` — refused where git would commit it. */
@@ -864,6 +866,23 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         engineReconcile,
         envFiles,
         engineStatuses: () => engineStatusesOf(enginePorts),
+        engineDependents: (id) => {
+            const i = engines.list().find((x) => x.id === id);
+            if (!i) throw new Error(`no service ${id}`);
+            const workspaceIds = new Set([
+                ...(input.workspaces?.() ?? []).map((w) => w.id),
+                ...(i.scope.kind === 'dedicated' ? [i.scope.workspaceId] : []),
+                ...Object.keys(i.slices ?? {}),
+                ...sites.list().map((x) => x.workspaceId),
+                ...supervisor.list().map((x) => x.workspaceId),
+            ]);
+            const using = new Set([...workspaceIds].filter((ws) => (i.engine === 'custom' && i.scope.kind === 'dedicated' && i.scope.workspaceId === ws) || engines.choices(ws).some((c) => c.chosen?.id === id)));
+            return [
+                ...[...using].map((ws) => `workspace ${ws}`),
+                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
+                ...supervisor.list().filter((x) => using.has(x.workspaceId) && ['running', 'restarting'].includes(x.state)).map((x) => `process ${x.name} (workspace ${x.workspaceId})`),
+            ];
+        },
         startEngine: async (id) => {
             // The person wants it running: no longer stopped by them, even if Docker refuses (the refusal is the answer).
             if (engineStopped.delete(id)) await saveEngineStopped();

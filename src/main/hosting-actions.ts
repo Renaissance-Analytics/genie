@@ -22,7 +22,7 @@ import type { CreateSiteInput, SiteInfo } from './site-manager.js';
  */
 
 /** What the actions need from the composition — the real one in Genie and in the tests. */
-export type HostingServices = Pick<ComposedServices, 'engines' | 'envelopeSites' | 'sites' | 'supervisor' | 'routes' | 'engineStatuses' | 'startEngine' | 'stopEngine' | 'removeEngine'>;
+export type HostingServices = Pick<ComposedServices, 'engines' | 'envelopeSites' | 'sites' | 'supervisor' | 'routes' | 'engineStatuses' | 'startEngine' | 'stopEngine' | 'removeEngine' | 'engineDependents'>;
 
 /** What the form defaults are derived from: the repo's top-level files plus one level of built dirs, and package.json scripts. */
 async function repoFacts(repoPath: string): Promise<{ files: string[]; packageScripts: Record<string, string> }> {
@@ -285,6 +285,19 @@ export function startService(s: HostingServices, id: string): Promise<void> {
 
 export function stopService(s: HostingServices, id: string): Promise<void> {
     return s.stopEngine(id);
+}
+
+/** Always previews the actual image. Consent to a download does not also confirm interrupting its dependents. */
+export async function updateService(s: HostingServices, id: string, options: { consent?: boolean; confirmed?: boolean; expectedImage?: string; approvedDependents?: readonly string[] } = {}) {
+    const preview = await s.engines.update(id, { consent: false });
+    if (preview.kind !== 'needs-consent') throw new Error('the engine did not return its update preview');
+    const dependents = s.engineDependents(id);
+    if (!options.consent || options.expectedImage !== preview.image || (dependents.length > 0 && (!options.confirmed || dependents.some((d) => !options.approvedDependents?.includes(d))))) return { ...preview, serviceId: id, dependents };
+    const updated = await s.engines.update(id, { consent: true, beforeStop: () => {
+        const now = s.engineDependents(id);
+        if (now.some((d) => !options.approvedDependents?.includes(d))) throw new Error('The engine’s dependents changed while its image was downloading; nothing was replaced. Review them and try again.');
+    } });
+    return updated.kind === 'needs-consent' ? { ...updated, serviceId: id, dependents } : updated;
 }
 
 /** `deleteData` acts for `workspaceId`, and is refused while any OTHER workspace keeps data in the engine (core/service-tenancy.ts). */

@@ -5,7 +5,7 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
@@ -23,8 +23,12 @@ import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
+import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
+import type { Approval } from '../core/approval.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
 import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
+import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
+import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
@@ -37,6 +41,7 @@ import type { GithubAsk } from './components/AgiRemoteChoice.js';
 import { GITHUB_ROUTE, type RepoListing } from '../core/github.js';
 import type { TynnLinkApi } from './components/TynnProjectLink.js';
 import { ImportedAgentsModal } from './components/ImportedAgents.js';
+import { NewAgentModal } from './components/NewAgentModal.js';
 import { importedAgentsOffer, type ImportedAgent } from '../core/agent-adoption.js';
 import { pickerStart } from '../core/add-workspace.js';
 import { PluginEditorsContext } from './plugin-editors-context.js';
@@ -56,7 +61,7 @@ import type { WorkspaceOpsProps } from './components/Workspace.js';
 import type { AddPreviewView } from './components/AddWorkspacePreview.js';
 import { addConfirmer } from './add-confirm.js';
 import type { TynnProjectsView } from './components/TynnProjectPicker.js';
-import { applyOutcome, type DeletePlan } from '../core/agent-ops.js';
+import { applyOutcome, switchOutcome, type DeletePlan } from '../core/agent-ops.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
@@ -350,6 +355,26 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
     }, [snapshot, settings]);
 }
 
+/**
+ * THE DRIFT WATCHER'S ALARM (core/toolchain-alerts.ts): the toolchain probe's statuses arrive with the feature data; a
+ * tool newly under its security floor raises the `ghsecurity` alert once — the sound and notification the person set
+ * for "a security alert" — the moment the probe reports it, not when Settings is next opened.
+ */
+function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null): void {
+    const prev = useRef<readonly ToolStatus[] | null>(null);
+    useEffect(() => {
+        if (tools === null) return;
+        for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
+            playAlertSound(alertSound(alert.kind, settings ?? {}));
+            if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+                const toast = toastFor(alert);
+                try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
+            }
+        }
+        prev.current = tools;
+    }, [tools, settings]);
+}
+
 export interface AppProps {
     /** Injected by tests and by the live check. The real app reads `window.genie`. */
     bridge?: GenieBridge | undefined;
@@ -379,7 +404,8 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const connected = remote.state?.connected === true;
     const bridge = connected ? remote.client!.bridge : undefined;
     const snapshot = useSnapshot(bridge);
-    const [answering, setAnswering] = useState<string | null>(null);
+    // The option id in flight (the phone shows one agent's one question at a time); ended by the host's reply, always.
+    const [inFlight, setInFlight] = useState<string | null>(null);
     const [note, setNote] = useState<string | null>(null);
     const dialed = useRef(false);
     const canDial = entry.pin !== null || remote.remembered.includes(entry.socketUrl);
@@ -436,7 +462,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
             locked={remote.state.locked}
             refusal={note ?? remote.state.lastRefusal}
             items={snapshot.deckItems}
-            answering={answering}
+            answering={inFlight}
             onAnswer={(item, optionId, answerNote) => {
                 setNote(null);
                 const route = deckAnswerRoute(item, optionId, answerNote ?? '');
@@ -451,12 +477,13 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                         void bridge!.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
                         return;
                     case 'provider':
-                        setAnswering(optionId);
-                        bridge!.answerApproval(route.agentId, optionId, route.note);
+                        // The host's reply ends the flight; its refusal is said in the shell (it used to be set and never cleared here too).
+                        setInFlight(optionId);
+                        void bridge!.answerApproval(route.agentId, optionId, route.note).then((r) => { if (!r.ok) setNote(refusalWords(r)); }, (error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
                         return;
                     case 'feature':
-                        setAnswering(optionId);
-                        void bridge!.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setAnswering(null));
+                        setInFlight(optionId);
+                        void bridge!.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
                         return;
                 }
             }}
@@ -530,6 +557,7 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
     useAlerts(snapshot, features.settings.values);
+    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;
@@ -595,6 +623,8 @@ function DesktopApp({ bridge }: AppProps) {
      * no screen; a list the host cannot read = no screen (the workspace is added; this must not hold it hostage).
      */
     const [cameWith, setCameWith] = useState<{ workspaceId: string; agents: readonly ImportedAgent[] } | null>(null);
+    /** The workspace whose New agent form is open, or `null`. */
+    const [newAgentFor, setNewAgentFor] = useState<string | null>(null);
     const offerAgentsRef = useRef<(id: string) => void>(() => {});
     offerAgentsRef.current = (id) => {
         const read = resolvedBridge?.workspaces.importedAgents;
@@ -887,11 +917,14 @@ function DesktopApp({ bridge }: AppProps) {
               onSetDrivePages: (on) => { void resolvedBridge.agents.setDrivePages(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetIssueWatch: (setting) => { void resolvedBridge.agents.setIssueWatch(agentId, setting).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },
-              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.noop ? `already running on ${r.to}` : `switched ${r.from} → ${r.to}; carried ${r.carries.join(', ')}. Start it when ready.`) : r.reason }))); },
+              // A switch starts a NEW conversation on the new provider; switchOutcome says so, and names a dropped model.
+              onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(detail?.agent.name ?? 'the agent', r) })); if (r.ok && !r.noop) setModelsAsked((n) => n + 1); }); },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
               onPreviewDelete: (outcome) => { void resolvedBridge.agents.previewDelete(agentId, outcome, []).then((r) => setOpsView((v) => (r.ok ? { ...v, deletePreview: r.plan } : { ...v, lastOutcome: r.reason }))); },
-              onConfirmDelete: (outcome, also) => {
-                  void resolvedBridge.agents.delete(agentId, outcome, also).then((r) => {
+              onConfirmDelete: (outcome, also, handoff) => {
+                  // The handoff wait is bounded (45 s) but not instant: say what is happening while it runs.
+                  if (handoff) setOpsView((v) => ({ ...v, lastOutcome: `asking ${detail?.agent.name ?? 'the agent'} for a handoff first — up to 45 s` }));
+                  void resolvedBridge.agents.delete(agentId, outcome, also, handoff).then((r) => {
                       if (r.ok) { setOpsView({ deletePreview: null, diagnosis: null, lastOutcome: null }); navigate(DEFAULT_ROUTE); }
                       else setOpsView((v) => ({ ...v, lastOutcome: r.reason }));
                   });
@@ -974,6 +1007,35 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
+
+    /**
+     * THE ANSWER IN FLIGHT — which agent's, for which approval — and the host's last refusal (`core/approval-answering.ts`).
+     * Every surface (the Agent view's card, the chat's card, the Deck's rows, the A/D keys) answers through
+     * `answerApproval`, and each card derives its OWN `answering` from this pair, so only the approval being answered
+     * refuses a second press. The flight ENDS on the host's reply: `ok` clears it; a refusal clears it AND is said on
+     * that approval's card in words.
+     *
+     * It used to be one window-wide `answering: string | null`, set on every path and cleared by nothing — the comment
+     * promised "cleared when the agent's detail changes", and no code did it — so the first approval answered in a window
+     * disabled every one after it, for the life of the window (the owner, 2026-10-22: "I have agents trying to do work
+     * and ask for approval from me but I can't approve anything because the UI is disabled"). And the host's `ok: false`
+     * went nowhere, so a refused press looked exactly like that dead button.
+     */
+    const [answering, setAnswering] = useState<ApprovalAnswering | null>(null);
+    const [approvalRefusal, setApprovalRefusal] = useState<ApprovalRefusal | null>(null);
+    const answerApproval = useCallback((agentId: string, optionId: string, note: string, approval: Approval | null) => {
+        const key = approvalKey(approval);
+        const flight: ApprovalAnswering = { agentId, key, optionId };
+        setAnswering(flight);
+        setApprovalRefusal(null);
+        const sent = resolvedBridge ? resolvedBridge.answerApproval(agentId, optionId, note) : Promise.resolve<{ ok: false; reason: string }>({ ok: false, reason: 'Genie is not connected' });
+        void sent.then(
+            (r) => { if (!r.ok) setApprovalRefusal({ agentId, key, reason: refusalWords(r) }); },
+            // Electron wraps a handler's throw as "Error invoking remote method '<channel>': Error: <reason>".
+            (error: unknown) => setApprovalRefusal({ agentId, key, reason: refusalWords({ ok: false, reason: (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']*': (?:Error: )?/, '') }) }),
+        ).finally(() => setAnswering((current) => (current === flight ? null : current)));
+    }, [resolvedBridge]);
+
     // The chat's keys (§4.4, `core/keys.ts`): A / D answer the approval parked in the chat — the letters follow the
     // composer. Never while typing. Esc does not close the docked chat.
     // The chat is always open (on its subject), so its keys work on every page — not only one whose route names `chat=`.
@@ -986,20 +1048,12 @@ function DesktopApp({ bridge }: AppProps) {
             const optionId = approvalChoice(chatApprovalHere, action);
             if (!optionId || !chatDetail) return;
             e.preventDefault();
-            setAnswering(optionId);
-            resolvedBridge?.answerApproval(chatDetail.agent.id, optionId);
+            answerApproval(chatDetail.agent.id, optionId, '', chatApprovalHere);
         };
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
-    }, [chatDetail, chatApprovalHere, resolvedBridge]);
+    }, [chatDetail, chatApprovalHere, answerApproval]);
 
-    /**
-     * The option id currently in flight, so the buttons refuse a second press.
-     *
-     * Cleared when the agent's detail changes — which is when the main process has pushed the
-     * answered state back. Clearing it on a timer would guess at when the provider replied.
-     */
-    const [answering, setAnswering] = useState<string | null>(null);
     /**
      * The last REFUSED form answer in Pending Questions, said beside that item's Answer button (the owner, 2026-10-14: "I
      * click the answer button but nothing happens" — a refusal that only reached the console was nothing happening).
@@ -1025,6 +1079,12 @@ function DesktopApp({ bridge }: AppProps) {
     // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
     // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
     const [drafts, setDrafts] = useState<readonly Draft[]>([]);
+    const [draftProblems, setDraftProblems] = useState<Readonly<Record<string, string>>>({});
+    const draftAction = (id: string, action: Promise<{ ok: boolean; reason?: string }>): void => {
+        const problem = (text?: string) => setDraftProblems((p) => { const next = { ...p }; if (text) next[id] = text; else delete next[id]; return next; });
+        void action.then((r) => problem(r.ok ? undefined : r.reason ?? 'The draft could not be sent. Try again.'),
+            (error: unknown) => problem(error instanceof Error ? error.message : String(error)));
+    };
     const [paletteOpen, setPaletteOpen] = useState(false);
     const send = (agentId: string, text: string, attachments: readonly Attachment[] = []): void => {
         // A Take Over window has no session to prompt: its mail goes to its inbox, which its TUI reads over MCP.
@@ -1040,10 +1100,21 @@ function DesktopApp({ bridge }: AppProps) {
         }
         void resolvedBridge?.prompt(agentId, text, attachments).then((r) => {
             if (!r.ok) keep(r.reason);
-        });
+        }).catch((error: unknown) => keep(error instanceof Error ? error.message : String(error)));
     };
     const restartAndSend = (draftId: string): void => {
         const draft = drafts.find((d) => d.id === draftId);
+        const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
+        if (queued && chatThread && resolvedBridge) {
+            const agentId = chatThread.agentId;
+            const send = () => resolvedBridge.resolvePrompt(agentId, queued.promptId!, 'send');
+            if (queued.resend === 'restart') {
+                const session = chatDetail?.agent.id === agentId ? chatDetail.session ?? null : null;
+                if (draftSendVia(session) === 'restart') draftAction(draftId, resolvedBridge.agents.restart(agentId, 'graceful').then((r) => r.ok ? send() : r));
+                else draftAction(draftId, Promise.resolve(resolvedBridge.openAgent(agentId)).then(send));
+            } else draftAction(draftId, send());
+            return;
+        }
         if (!draft || !resolvedBridge) return;
         const send = () => resolvedBridge.prompt(draft.agentId, draft.text, draft.attachments ?? []).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
         // A broken session restarts on its thread; an agent that is not running is STARTED (a graceful restart refuses
@@ -1058,10 +1129,18 @@ function DesktopApp({ bridge }: AppProps) {
     // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
     // thread reads every row of the subject's ledger.
     const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now)), [chatDetail, chatSubject, snapshot.agents]);
-    const chatThread: ChatThread | null = chatBase === null
+    const chatDrafts: ChatThread | null = chatBase === null
         ? null
         : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatDetail?.agent.id === chatBase.agentId && chatDetail.session?.running === true });
-    const discardDraft = (draftId: string): void => setDrafts((d) => d.filter((x) => x.id !== draftId));
+    const chatThread: ChatThread | null = chatDrafts === null || Object.keys(draftProblems).length === 0 ? chatDrafts : { ...chatDrafts, messages: chatDrafts.messages.map((m) => {
+        const problem = draftProblems[m.id];
+        return problem ? { ...m, draftProblem: problem } : m;
+    }) };
+    const discardDraft = (draftId: string): void => {
+        const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
+        if (queued && chatThread && resolvedBridge) draftAction(draftId, resolvedBridge.resolvePrompt(chatThread.agentId, queued.promptId!, 'discard'));
+        else setDrafts((d) => d.filter((x) => x.id !== draftId));
+    };
 
     // SAVED PROMPTS (Tynn #758): the library from Settings → Agents, sent from the Command Window or by a prompt's own
     // hotkey to the agent in front of the person — its chat if open, else the agent on screen, else Genie — and that chat
@@ -1227,10 +1306,8 @@ function DesktopApp({ bridge }: AppProps) {
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
             answeringApproval={answering}
-            onAnswerApproval={(id, optionId, note) => {
-                setAnswering(optionId);
-                resolvedBridge?.answerApproval(id, optionId, note ?? '');
-            }}
+            approvalRefusal={approvalRefusal}
+            onAnswerApproval={(id, optionId, note, approval) => answerApproval(id, optionId, note ?? '', approval ?? null)}
             onAnswerDeckForm={(item, selections, notes) => {
                 // The filled form goes to main as one feature action — labels and one note per question; the form shows
                 // no overall note. A refusal (a question with neither an option nor a note, a label that is not an
@@ -1267,8 +1344,8 @@ function DesktopApp({ bridge }: AppProps) {
                         });
                         return;
                     case 'provider':
-                        setAnswering(optionId);
-                        resolvedBridge?.answerApproval(route.agentId, optionId, route.note);
+                        // A Deck row holds no approval to compare: the flight is keyed on the agent (one parked at a time).
+                        answerApproval(route.agentId, optionId, route.note, null);
                         return;
                 }
             }}
@@ -1285,7 +1362,8 @@ function DesktopApp({ bridge }: AppProps) {
                 resolvedBridge?.openAgent(id);
                 navigate(`genie://agent/${id}?tab=stream`);
             }}
-            onAddAgent={(workspaceId) => resolvedBridge?.addAgent(workspaceId)}
+            // Every "+ Add agent" opens the New agent form (Genie 1's); nothing is created until it is filled in.
+            onAddAgent={(workspaceId) => setNewAgentFor(workspaceId)}
             onAddWorkspace={previewAdd}
             // The Genie browser window: this machine's sites, or — in a window driving a Tynn workstation — that workstation's.
             onOpenBrowser={resolvedBridge?.browserWindow ? () => { void resolvedBridge.browserWindow?.open(); } : undefined}
@@ -1410,6 +1488,17 @@ function DesktopApp({ bridge }: AppProps) {
             onClose={() => setWizardRead(null)}
             tynn={tynnLinkApi}
         />
+        {newAgentFor !== null && resolvedBridge ? (
+            <NewAgentModal
+                workspaceName={workspaceLabel(snapshot.workspaces, newAgentFor)}
+                onCreate={async (input) => {
+                    const r = await resolvedBridge.addAgent(newAgentFor, input);
+                    if (r.ok) navigate(`genie://agent/${r.id}?tab=settings`);
+                    return r.ok ? { ok: true as const } : r;
+                }}
+                onClose={() => setNewAgentFor(null)}
+            />
+        ) : null}
         {/* "IT CAME WITH AGENTS" (Add workspace parity item 6): over the workspace an add just opened. */}
         {resolvedBridge?.workspaces.adoptAgent ? (
             <ImportedAgentsModal

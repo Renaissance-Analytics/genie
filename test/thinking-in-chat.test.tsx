@@ -61,6 +61,12 @@ describe('the chat shows it collapsed', () => {
         expect(html).toMatch(/<details[^>]*data-who="thinking"[\s\S]*?<strong>lockfile<\/strong>/);
     });
 
+    it('the word "thinking" underlines on hover, so it reads as something to click (the owner, 2026-10-23: "I did not realize I could click the thinking row to expand it")', () => {
+        expect(html).toMatch(/<summary[^>]*\bgroup\b[^>]*>[\s\S]*?<span[^>]*group-hover:underline[^>]*>lark’s thinking<\/span>/);
+        // Control: the timestamp beside it does not underline.
+        expect(html).not.toMatch(/<span[^>]*group-hover:underline[^>]*>·/);
+    });
+
     it('CONTROL: a reply is not inside a disclosure', () => {
         const reply = renderToStaticMarkup(<ChatFlyout thread={{ ...base, messages: [{ id: 'r', who: 'agent', from: 'lark', text: 'Done.', delivered: true, at: null }] }} onSend={() => {}} onClose={() => {}} />);
         expect(reply).not.toContain('<details');

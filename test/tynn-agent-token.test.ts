@@ -21,6 +21,13 @@ import type { PtyOpened, PtyPort } from '../src/main/terminal-host.js';
  */
 
 const run = promisify(execFile);
+/**
+ * REAL GIT HAS ITS OWN BUDGET (genie#1113's Windows unit job, 2026-10-22: "a workspace not linked to Tynn" ran 5151 ms
+ * against vitest's 5 s default). Each test builds its workspace with a real `git init`/`add`/`commit`, boots the services
+ * and syncs every harness config, probing each written file with a real `git check-ignore` — and a process start costs
+ * far more on Windows. The other real-git suites carry the same kind of budget (envelope-fork-build, envelope-build).
+ */
+const REAL_GIT_MS = 120_000;
 const git = async (cwd: string, ...args: string[]) => (await run('git', args, { cwd })).stdout.trim();
 /** `git check-ignore -q`: exit 0 = ignored, exit 1 = not ignored. Anything else is a broken probe, and throws. */
 const ignored = async (cwd: string, path: string): Promise<boolean> => {
@@ -162,7 +169,7 @@ describe('a linked workspace, signed in, with no token yet', () => {
         expect(toml).toContain('url = "https://tynn.example/mcp/tynn"');
         expect(toml).toContain(`Authorization = "Bearer ${TOKEN}"`);
         expect(toml.match(/^\[mcp_servers\.genie\]$/gm)).toHaveLength(1);
-    });
+    }, REAL_GIT_MS);
 
     it('every file carrying the token is gitignored — and a tracked file is NOT (the probe can say no)', async () => {
         await linkedWorkspace();
@@ -175,7 +182,7 @@ describe('a linked workspace, signed in, with no token yet', () => {
         expect(await ignored(ws, 'README.md')).toBe(false);
         expect(await ignored(ws, 'project.json')).toBe(false);
         expect(await git(ws, 'status', '--porcelain', '--untracked-files=all')).not.toMatch(/mcp\.json|config\.toml/);
-    });
+    }, REAL_GIT_MS);
 
     it('the token is in no log, no sync result, no Settings report and not in project.json', async () => {
         await linkedWorkspace();
@@ -188,7 +195,7 @@ describe('a linked workspace, signed in, with no token yet', () => {
         expect(await readFile(join(ws, 'project.json'), 'utf8')).not.toContain(TOKEN);
         // Positive control: the same scan finds the token where it was written.
         expect(await readFile(join(ws, '.mcp.json'), 'utf8')).toContain(TOKEN);
-    });
+    }, REAL_GIT_MS);
 
     it('a plaintext REMOTE mcp_url is written as https (genie#201: the bearer token never goes in the clear); loopback stays', async () => {
         await linkedWorkspace();
@@ -199,7 +206,7 @@ describe('a linked workspace, signed in, with no token yet', () => {
         await linkedWorkspace();
         await (await boot(fakeTynn({ answer: { status: 200, body: mintBody('http://127.0.0.1:8000/mcp/tynn') } }).port)).syncConfig(ws);
         expect((await readJson('.mcp.json')).mcpServers.tynn.url).toBe('http://127.0.0.1:8000/mcp/tynn');
-    });
+    }, REAL_GIT_MS);
 });
 
 describe('it does not mint again needlessly (each mint is a new live token in Tynn)', () => {
@@ -214,7 +221,7 @@ describe('it does not mint again needlessly (each mint is a new live token in Ty
         expect(again.calls).toHaveLength(0);
         expect(tynnRow(results)).toMatchObject({ ok: true });
         expect((await readJson('.mcp.json')).mcpServers.tynn.headers.Authorization).toBe(`Bearer ${TOKEN}`);
-    });
+    }, REAL_GIT_MS);
 
     it('two syncs at once mint once', async () => {
         await linkedWorkspace();
@@ -226,7 +233,7 @@ describe('it does not mint again needlessly (each mint is a new live token in Ty
         open();
         await both;
         expect(slow.calls).toHaveLength(1);
-    });
+    }, REAL_GIT_MS);
 
     it('a workspace Genie 1 provisioned keeps its token: no mint, and Genie 1\'s Codex tynn block is replaced, not doubled', async () => {
         await linkedWorkspace();
@@ -243,7 +250,7 @@ describe('it does not mint again needlessly (each mint is a new live token in Ty
         expect(toml.match(/^\[mcp_servers\.tynn\]$/gm)).toHaveLength(1);
         expect(toml).not.toContain('# BEGIN GENIE MCP: tynn');
         expect(toml).toContain(`Authorization = "Bearer ${TOKEN}"`);
-    });
+    }, REAL_GIT_MS);
 
     it('with Claude Code\'s sync off, a token already in Cursor\'s config is reused, not minted again', async () => {
         await linkedWorkspace();
@@ -256,7 +263,7 @@ describe('it does not mint again needlessly (each mint is a new live token in Ty
         // Not vacuous: the reused token is carried to the harnesses that ARE on.
         expect(tynnRow(results)).toMatchObject({ ok: true });
         expect(await readFile(join(ws, '.codex', 'config.toml'), 'utf8')).toContain(`Authorization = "Bearer ${TOKEN}"`);
-    });
+    }, REAL_GIT_MS);
 
     it('with every harness sync off there is nowhere to put a token: none is minted, and it says so', async () => {
         await linkedWorkspace();
@@ -266,7 +273,7 @@ describe('it does not mint again needlessly (each mint is a new live token in Ty
         expect(tynn.calls).toHaveLength(0);
         expect(tynnRow(results)).toMatchObject({ ok: false });
         expect((tynnRow(results) as { error: string }).error).toMatch(/sync/i);
-    });
+    }, REAL_GIT_MS);
 });
 
 describe('when it cannot mint, it says so and writes nothing of Tynn\'s', () => {
@@ -285,7 +292,7 @@ describe('when it cannot mint, it says so and writes nothing of Tynn\'s', () => 
         expect((row as { error: string }).error).toMatch(/project-not-accessible/);
         await noTynnWritten();
         expect(JSON.stringify(s.integrations().agentFiles)).toMatch(/project-not-accessible/);
-    });
+    }, REAL_GIT_MS);
 
     it('Tynn unreachable: stated', async () => {
         await linkedWorkspace();
@@ -293,14 +300,14 @@ describe('when it cannot mint, it says so and writes nothing of Tynn\'s', () => 
         expect(row).toMatchObject({ ok: false });
         expect((row as { error: string }).error).toMatch(/ENOTFOUND/);
         await noTynnWritten();
-    });
+    }, REAL_GIT_MS);
 
     it('a 200 without a token (or url) writes nothing — never a broken entry', async () => {
         await linkedWorkspace();
         const row = tynnRow(await (await boot(fakeTynn({ answer: { status: 200, body: { ...mintBody(), token: '' } } }).port)).syncConfig(ws));
         expect(row).toMatchObject({ ok: false });
         await noTynnWritten();
-    });
+    }, REAL_GIT_MS);
 
     it('the token files cannot be gitignored: no token is minted at all', async () => {
         await linkedWorkspace();
@@ -309,7 +316,7 @@ describe('when it cannot mint, it says so and writes nothing of Tynn\'s', () => 
         expect(tynn.calls).toHaveLength(0);
         expect(row).toMatchObject({ ok: false });
         expect((row as { error: string }).error).toMatch(/gitignore/i);
-    });
+    }, REAL_GIT_MS);
 
     it('signed out of Tynn: nothing is asked, and the workspace says why its agents have no Tynn', async () => {
         await linkedWorkspace();
@@ -319,7 +326,7 @@ describe('when it cannot mint, it says so and writes nothing of Tynn\'s', () => 
         expect(row).toMatchObject({ ok: false });
         expect((row as { error: string }).error).toMatch(/sign in/i);
         await noTynnWritten();
-    });
+    }, REAL_GIT_MS);
 });
 
 describe('a workspace not linked to Tynn', () => {
@@ -330,5 +337,5 @@ describe('a workspace not linked to Tynn', () => {
         expect(tynn.calls).toHaveLength(0);
         expect(tynnRow(results)).toBeUndefined();
         expect((await readJson('.mcp.json')).mcpServers.tynn).toEqual({ url: 'https://mine.example/mcp' });
-    });
+    }, REAL_GIT_MS);
 });

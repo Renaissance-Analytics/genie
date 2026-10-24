@@ -148,10 +148,16 @@ async function main(): Promise<void> {
         const row = agentRowFor(record, live, () => Date.now());
         check(row.state === 'idle', '5. the Dashboard row reads idle, not working', row.state);
         check(row.fidelity === 'declared', '5b. and DECLARED — the §0.4 field', row.fidelity);
+        // Latest delivery has included the agent's own answer since 2026-10-19 (core/delivery.ts). The old null check
+        // failed against a real reply: verify that the dashboard names that recorded answer, without inventing peers.
+        const answer = message?.event.kind === 'message'
+            ? message.event.text.split('\n').map((line) => line.trim()).find((line) => line.length > 0)?.slice(0, 160)
+            : undefined;
+        check(row.collaborators === null, '5c. and invents no collaborators', `collaborators=${row.collaborators}`);
         check(
-            row.collaborators === null && row.delivery === null,
-            '5c. and claims nothing it was not told',
-            `collaborators=${row.collaborators} delivery=${row.delivery}`,
+            answer !== undefined && row.delivery?.kind === 'answer' && row.delivery.main === answer,
+            '5d. latest delivery is exactly the answer in the recorded protocol',
+            JSON.stringify(row.delivery),
         );
 
         // 6. Stop frees the slot. The previous build returned ok while leaving the provider
