@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { providerLaunchOptions } from '../src/main/session-host.js';
 
 /**
@@ -11,6 +11,8 @@ import { providerLaunchOptions } from '../src/main/session-host.js';
 
 const electron = { execPath: '/opt/Genie/genie', electron: true };
 const node = { execPath: '/usr/bin/node', electron: false };
+beforeEach(() => { vi.stubEnv('NPM_CONFIG_PREFIX', undefined); vi.stubEnv('PHP_INI_SCAN_DIR', undefined); });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('a configured script', () => {
     it('runs as the runtime with the script first; in Electron, as Node — the variable allowed through to it alone', () => {

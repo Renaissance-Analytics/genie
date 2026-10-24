@@ -156,7 +156,24 @@ export function providerLaunchOptions(
     serviceEnv: Readonly<Record<string, string>>,
     runtime: { readonly execPath: string; readonly electron: boolean },
 ): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
-    const service = serviceEnvDriverOptions(serviceEnv);
+    let service = serviceEnvDriverOptions(serviceEnv);
+    // Check and repair sets these beside PATH (already in the SDK's base allow-list). Keep only these explicit
+    // toolchain overrides, including for model-list probes; an ambient env passthrough would expose credentials.
+    const toolchain = ['NPM_CONFIG_PREFIX', 'PHP_INI_SCAN_DIR'].flatMap((name) => {
+        const value = process.env[name];
+        return value?.trim() ? [[name, value] as const] : [];
+    });
+    if (toolchain.length > 0) {
+        const parentEnv: Record<string, string | undefined> = { ...(service.parentEnv ?? process.env) };
+        const overridden = new Set(toolchain.map(([name]) => name));
+        for (const [key, value] of toolchain) {
+            // npx can supply lowercase npm_config_prefix. Both spellings can coexist on Linux, and Windows treats
+            // them as one name. Give the child exactly the host's canonical value, never a competing service value.
+            for (const name of Object.keys(parentEnv)) if (name.toUpperCase() === key) delete parentEnv[name];
+            parentEnv[key] = value;
+        }
+        service = { parentEnv, allowEnv: [...(service.allowEnv ?? []).filter((name) => !overridden.has(name.toUpperCase())), ...overridden] };
+    }
     if (!configured) return service;
     if (!SCRIPT.test(configured)) return { binary: configured, ...service };
     if (!runtime.electron) return { binary: runtime.execPath, binaryArgs: [configured], ...service };
