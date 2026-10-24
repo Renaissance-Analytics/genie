@@ -221,7 +221,12 @@ export interface TrustStorePort {
 
 export type CommandRun = (command: string, args: readonly string[]) => Promise<{ exitCode: number; stdout: string }>;
 
-/** SHA-1 thumbprints of every certificate in a PEM bundle (Linux's system bundles). */
+/**
+ * OS-store identifiers, matching X509Certificate.fingerprint and the Windows/macOS SHA-1 thumbprints.
+ * This read-only presence lookup controls the Trust prompt; it does not authenticate a peer or
+ * sign a certificate. x509.ts signs certificates with SHA-256. Keep existing store/adoption IDs
+ * compatible: changing this hash alone would make an already-trusted CA appear absent.
+ */
 export function pemThumbprints(bundle: string): string[] {
     const out: string[] = [];
     for (const m of bundle.matchAll(/-----BEGIN CERTIFICATE-----([\s\S]*?)-----END CERTIFICATE-----/g)) {
