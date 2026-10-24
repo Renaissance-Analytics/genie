@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyOutcome } from '../src/core/agent-ops.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -101,6 +101,9 @@ describe('the label: the provider’s name, and what an alias resolves to when i
 
 describe('which CLI is asked: the one an agent of that provider launches', () => {
     const runtime = { execPath: '/usr/bin/node', electron: false };
+    // This describes binary selection without toolchain overrides; managed values have their own SDK env tests.
+    beforeEach(() => { vi.stubEnv('NPM_CONFIG_PREFIX', undefined); vi.stubEnv('PHP_INI_SCAN_DIR', undefined); });
+    afterEach(() => vi.unstubAllEnvs());
 
     it('the same binary, binaryArgs, parentEnv and allowEnv as the agent’s driver (providerLaunchOptions), per provider', () => {
         for (const env of [{}, { GENIE2_CLAUDE_BINARY: '/opt/claude/bin/claude' }, { GENIE2_CLAUDE_BINARY: '/w/stub-claude.mjs' }]) {
