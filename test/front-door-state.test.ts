@@ -77,7 +77,7 @@ function fakePorts() {
     return { port, probes, holders };
 }
 
-const settle = () => new Promise<void>((r) => setTimeout(r, 40));
+const settle = () => services!.frontDoorSettled();
 
 let dir: string;
 let services: ComposedServices | null = null;
@@ -92,12 +92,15 @@ let elevated: Step[];
 let batches: string[][];
 /** What the elevated trust install does: installs into the store, is declined, fails (its own words), or "succeeds" without installing anything. */
 let install: 'installs' | 'declined' | 'fails' | 'exit-0-nothing-installed' = 'installs';
+let holdElevation: Promise<void> | null = null;
 let v1CaDirs: string[] = [];
 const CADDY = '/opt/genie/runtime/caddy';
+const CADDY_SAYS_HELD = 'Error: loading initial config: loading new config: http app module: start: listening on 127.0.0.1:443: listen tcp 127.0.0.1:443: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.\r\n';
 
 async function elevate(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> {
     batches.push(steps.map((s) => s.id));
     elevated.push(...steps.map((s) => s.step));
+    if (holdElevation) await holdElevation;
     if (install === 'declined' && steps.some((s) => s.id === 'trust')) return { ok: false, failed: null, error: 'the user declined' };
     if (hosts.state.denyElevated) return { ok: false, failed: null, error: 'Request dismissed' };
     for (const s of steps) {
@@ -137,6 +140,7 @@ beforeEach(async () => {
     elevated = [];
     batches = [];
     install = 'installs';
+    holdElevation = null;
     v1CaDirs = [];
 });
 
@@ -322,8 +326,6 @@ describe('the Caddyfile serves Genie’s leaf', () => {
 });
 
 describe('the front door’s ports (S8)', () => {
-    const CADDY_SAYS_HELD = 'Error: loading initial config: loading new config: http app module: start: listening on 127.0.0.1:443: listen tcp 127.0.0.1:443: bind: Only one usage of each socket address (protocol/network address/port) is normally permitted.\r\n';
-
     it(':443 held by another process → Hosting says so, by name; Caddy is never started (counted), so there is nothing to restart', async () => {
         ports.probes[443] = 'held';
         ports.holders[443] = 'nginx';
@@ -539,5 +541,92 @@ describe('Genie asks once, on the Deck', () => {
         expect(running(services).trusted).toBe(false);
         expect(genieItems(services)).toEqual([]);
         expect(await services.trustCertificate()).toEqual({ ok: true });
+    });
+});
+
+function gate() {
+    let release!: () => void;
+    const promise = new Promise<void>((resolve) => { release = resolve; });
+    return { promise, release: () => release() };
+}
+
+/** A real completion notification also drains each fault before the composition is torn down. */
+function frontDoorChange(s: ComposedServices, complete: () => boolean): Promise<void> {
+    return new Promise((resolve) => {
+        const check = () => { if (complete()) { off(); resolve(); } };
+        const off = s.onFrontDoorChange(check);
+        check();
+    });
+}
+
+/** The 100ms timer injects a slow port; it is not the completion condition used by the test. */
+async function throughSlowPort(held: ReturnType<typeof gate>, completed: Promise<void>, check: () => void) {
+    const completion = settle();
+    const release = setTimeout(held.release, 100);
+    try { await completion; check(); }
+    finally { clearTimeout(release); held.release(); await completed; }
+}
+
+describe('completion under a slow port', () => {
+    it('control: startup and an unblocked hosts write complete', async () => {
+        services = await compose();
+        site(services, 'control');
+        await settle();
+        expect(hosts.content()).toContain('127.0.0.1 control.gen');
+        expect(running(services).trusted).toBe(false);
+        expect(pty.caddy()).toHaveLength(1);
+    });
+
+    it('waits for a debounced hosts write whose port finishes after 100ms', async () => {
+        services = await compose();
+        await settle();
+        const held = gate();
+        const write = hosts.port.write;
+        hosts.port.write = async (next) => { await held.promise; await write(next); };
+        const completed = frontDoorChange(services, () => hosts.content().includes('127.0.0.1 slow.gen'));
+        site(services, 'slow');
+        await throughSlowPort(held, completed, () => expect(hosts.content()).toContain('127.0.0.1 slow.gen'));
+    });
+
+    it('waits for the startup trust-store answer after 100ms', async () => {
+        const held = gate();
+        store.port.has = async () => { await held.promise; return false; };
+        services = await compose();
+        const completed = frontDoorChange(services, () => running(services!).trusted === false);
+        await throughSlowPort(held, completed, () => expect(running(services!).trusted).toBe(false));
+    });
+
+    it('waits for startup port probes after 100ms', async () => {
+        const held = gate();
+        const probe = ports.port.probe;
+        ports.port.probe = async (port) => { await held.promise; return probe(port); };
+        services = await compose();
+        const completed = frontDoorChange(services, () => pty.caddy().length === 1);
+        await throughSlowPort(held, completed, () => expect(pty.caddy()).toHaveLength(1));
+    });
+
+    it('waits for the port holder lookup after a Caddy bind failure', async () => {
+        services = await compose();
+        await settle();
+        const held = gate();
+        ports.port.holder = async () => { await held.promise; return 'httpd'; };
+        const completed = frontDoorChange(services, () => {
+            const status = services!.externalFrontDoor;
+            return !status.running && status.blocked?.holder === 'httpd';
+        });
+        pty.emit(pty.caddy()[0]!.id, CADDY_SAYS_HELD);
+        await throughSlowPort(held, completed, () => expect(services!.externalFrontDoor).toMatchObject({ running: false, blocked: { holder: 'httpd' } }));
+    });
+
+    it('waits for an in-flight Trust elevation and its store readback', async () => {
+        services = await compose();
+        await settle();
+        const held = gate();
+        holdElevation = held.promise;
+        const completed = frontDoorChange(services, () => running(services!).trusted === true);
+        const trust = services.trustCertificate();
+        try { await throughSlowPort(held, completed, () => expect(running(services!).trusted).toBe(true)); }
+        finally { await trust; }
+        expect(batches).toEqual([['trust']]);
     });
 });

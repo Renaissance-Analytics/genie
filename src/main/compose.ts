@@ -287,6 +287,8 @@ export interface ComposedServices {
     readonly externalFrontDoor: FrontDoorStatus;
     /** Fires when the front door state changes (a hosts sync landed, the root got trusted). */
     onFrontDoorChange(listener: () => void): () => void;
+    /** Observe current controller and hosts work without requesting changes; does not acknowledge Caddy's --watch reload. */
+    frontDoorSettled(): Promise<void>;
     /** Sync the hosts block now — the person's "try again" after a declined prompt. */
     syncHosts(): Promise<HostsSyncResult>;
     /** The person's Try again on a front door whose port was held: asked again, and Caddy started when it is free. */
@@ -324,6 +326,7 @@ export interface ComposedServices {
 interface FrontDoorController {
     status(): FrontDoorStatus;
     onChange(listener: () => void): () => void;
+    settled(): Promise<void>;
     syncHosts(): Promise<HostsSyncResult>;
     /** Boot has loaded the workspaces' sites: the hosts file follows them from here, starting with one sync. */
     beginHosts(): void;
@@ -387,6 +390,7 @@ function startExternalFrontDoor(input: {
     const off = (reason: string): FrontDoorController => ({
         status: () => ({ running: false, reason }),
         onChange,
+        settled: async () => {},
         syncHosts: async () => { throw new Error(reason); },
         beginHosts: () => {},
         retry: async () => ({ running: false, reason }),
@@ -413,6 +417,15 @@ function startExternalFrontDoor(input: {
     /** A front-door port another process holds (or the OS refused): Caddy is down on purpose, with the reason. */
     let blocked: FrontDoorBlocked | null = null;
     let closed = false;
+    // Include state updates and notifications in each completion, not just the underlying OS request.
+    const pending = new Set<Promise<unknown>>();
+    let generation = 0;
+    const track = <T>(work: Promise<T>): Promise<T> => {
+        generation += 1;
+        const tracked: Promise<T> = work.finally(() => { pending.delete(tracked); });
+        pending.add(tracked);
+        return tracked;
+    };
     const render = () => {
         const routes = input.routes();
         let tls: FrontDoorTls | null = null;
@@ -505,29 +518,37 @@ function startExternalFrontDoor(input: {
         block(failed.port, null, failed.kind === 'held' ? heldReason(failed.port, null) : `the front door could not listen on :${failed.port} (${failed.words}); https://<name>.gen in external browsers is off — the in-app browser still works`);
         // Who: when the OS lists a listener on the port, that process holds it — whatever words the bind failed with
         // (Windows answers "forbidden", not "in use", for a port http.sys holds).
-        void input.ports.holder(failed.port).then((holder) => {
+        void track(input.ports.holder(failed.port).then((holder) => {
             if (holder !== null && blocked?.port === failed.port && blocked.holder === null) block(failed.port, holder, heldReason(failed.port, holder));
-        });
+        }));
     });
     const status = (): FrontDoorStatus =>
         blocked !== null
             ? { running: false, reason: blocked.reason, blocked: { port: blocked.port, holder: blocked.holder } }
             : { running: true, caddyfile, hostsPath: input.hostsPath, hosts: hosts.result, authority: { source: ca.source, thumbprint: ca.thumbprint }, trusted, trustError, certificateError };
-    void startCaddy();
-    void readTrust().then(notify);
+    void track(startCaddy());
+    void track(readTrust().then(notify));
     return {
         status,
         onChange,
+        settled: async () => {
+            for (;;) {
+                const started = generation;
+                await Promise.all([...pending]);
+                await hosts.settled();
+                if (pending.size === 0 && started === generation) return;
+            }
+        },
         syncHosts: () => hosts.flush(),
         beginHosts: () => hosts.begin(),
         retry: async () => {
-            if (supervisor.status(FRONT_DOOR_ID)?.state !== 'running') await startCaddy();
+            if (supervisor.status(FRONT_DOOR_ID)?.state !== 'running') await track(startCaddy());
             return status();
         },
         trust: () => {
             // One Trust at a time: the Deck's and Hosting's buttons pressed together raise ONE prompt. A hosts write that
             // is due rides in that same prompt (genie#604): trusting never costs two approvals.
-            trusting ??= (async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
+            trusting ??= track((async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
                 if (await readTrust()) { notify(); return { ok: true }; }
                 const trustStep: PrivilegedStep = { id: TRUST_STEP_ID, label: 'install Genie’s certificate into the trust store', step: trustInstallStep(input.platform, ca.certPath) };
                 let ran: readonly PrivilegedStep[] = [trustStep];
@@ -550,7 +571,7 @@ function startExternalFrontDoor(input: {
                 }
                 notify();
                 return { ok: true };
-            })().finally(() => { trusting = null; });
+            })().finally(() => { trusting = null; }));
             return trusting;
         },
         deferTrust: () => {
@@ -907,6 +928,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         },
         get externalFrontDoor() { return frontDoorCtl.status(); },
         onFrontDoorChange: frontDoorCtl.onChange,
+        frontDoorSettled: frontDoorCtl.settled,
         syncHosts: frontDoorCtl.syncHosts,
         retryFrontDoor: frontDoorCtl.retry,
         trustCertificate: frontDoorCtl.trust,
