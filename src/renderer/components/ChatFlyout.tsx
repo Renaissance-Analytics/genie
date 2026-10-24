@@ -6,6 +6,7 @@ import { fileLinkTarget, linkFileRefs } from '../../core/chat-file-links.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
+import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
 import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
@@ -289,11 +290,33 @@ export function ChatFlyout({
     // GROWS as the agent writes (beta.33 item 6), and keyed on the count alone its words were written below a chat that
     // did not move until the next message arrived.
     const followKey = chatFollowKey(thread?.agentId ?? null, thread?.messages ?? []);
-    useLayoutEffect(() => { followRef.current = true; }, [thread?.agentId]);
+    /**
+     * FOLLOWING LIVE = THE LAST 500 LINES (the owner, 2026-10-22; core/chat-window.ts). Only the messages holding the
+     * thread's last `lines` lines are drawn; the rest stays in memory. Earlier history pages in, another
+     * CHAT_LIVE_LINES at a time, from the control at the top (or by scrolling to the top), keeping the reader's place;
+     * back at the end, the window shrinks to the live 500 again.
+     */
+    const [lines, setLines] = useState(CHAT_LIVE_LINES);
+    const messages = thread?.messages ?? [];
+    const windowStart = chatWindowStart(messages, lines);
+    const shown = windowStart === 0 ? messages : messages.slice(windowStart);
+    /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
+    const anchorRef = useRef<number | null>(null);
+    const showEarlier = () => {
+        const el = scrollRef.current;
+        anchorRef.current = el ? el.scrollHeight - el.scrollTop : null;
+        followRef.current = false;
+        setLines((n) => n + CHAT_LIVE_LINES);
+    };
+    useLayoutEffect(() => { followRef.current = true; setLines(CHAT_LIVE_LINES); }, [thread?.agentId]);
     useLayoutEffect(() => {
         const el = scrollRef.current;
-        if (el && followRef.current) el.scrollTop = el.scrollHeight;
-    }, [followKey]);
+        if (!el) return;
+        if (anchorRef.current !== null) {
+            el.scrollTop = el.scrollHeight - anchorRef.current;
+            anchorRef.current = null;
+        } else if (followRef.current) el.scrollTop = el.scrollHeight;
+    }, [followKey, lines]);
     /**
      * An OBSERVED agent gets a different SHAPE of chat, not a disabled one.
      *
@@ -431,7 +454,14 @@ export function ChatFlyout({
             <div
                 ref={scrollRef}
                 data-chat-scroll=""
-                onScroll={(e) => { const el = e.currentTarget; followRef.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight); }}
+                onScroll={(e) => {
+                    const el = e.currentTarget;
+                    followRef.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
+                    // Back at the end: Following Live again, so only the live 500 lines stay in the DOM.
+                    if (followRef.current && lines > CHAT_LIVE_LINES) setLines(CHAT_LIVE_LINES);
+                    // At the top with history behind: the next page comes in.
+                    else if (el.scrollTop === 0 && windowStart > 0) showEarlier();
+                }}
                 className="min-h-0 flex-1 overflow-y-auto"
             >
             <div
@@ -469,7 +499,13 @@ export function ChatFlyout({
                         <div className="text-[13px] leading-normal text-[var(--fg-3)]">genie can reach any agent in any workspace. Name one with @, or pick a thread above.</div>
                     </div>
                 ) : null}
-                {thread?.messages.map((m) => {
+                {/* EARLIER HISTORY (core/chat-window.ts): how many messages are behind the window, and the page that brings them in. */}
+                {windowStart > 0 ? (
+                    <button type="button" data-chat-earlier={windowStart} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
+                        {windowStart.toLocaleString('en-US')} earlier {windowStart === 1 ? 'message' : 'messages'} · show more
+                    </button>
+                ) : null}
+                {shown.map((m) => {
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
                     const stamp = m.at !== null && m.at !== undefined ? <span data-chat-time={m.at} className="font-mono">{clock(m.at)}</span> : null;
                     // The agent's mail with another agent (the board): one mono line, the arrows icon — no bubble, no speaker.
