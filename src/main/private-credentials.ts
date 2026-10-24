@@ -90,6 +90,22 @@ export async function preparePrivateCredential(file: string): Promise<void> {
     }
 }
 
+/** Secure only the legacy FILE, never its shared parent, before moving into a private leaf. */
+export async function migratePrivateCredential(legacyFile: string, file: string): Promise<void> {
+    const legacy = { path: resolve(legacyFile), directory: false };
+    const destination = { path: resolve(file), directory: false };
+    try {
+        if (legacy.path === destination.path) throw new Error(REFUSED);
+        if (!await inspect(legacy)) return;
+        await restrict([legacy]);
+        await preparePrivateCredential(destination.path);
+        // Two existing stores are ambiguous. Preserve both and require explicit recovery.
+        if (await inspect(destination)) throw new Error(REFUSED);
+        // Atomic rename removes the old name only on success. Failures retain the restricted old file.
+        await rename(legacy.path, destination.path);
+    } catch { throw new Error(REFUSED); }
+}
+
 /** Encrypted JSON is staged exclusively inside its private parent and restricted before replacement. */
 export async function writePrivateCredential(file: string, text: string): Promise<void> {
     await preparePrivateCredential(file);

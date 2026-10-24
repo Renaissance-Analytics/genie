@@ -5,6 +5,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { preparePrivateCredential } from '../src/main/private-credentials.js';
+import { TynnAccount } from '../src/main/tynn-account.js';
+import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
+import { agentRecord, mintAgentId } from '../src/core/identity.js';
 
 const execute = promisify(execFile);
 const directories: string[] = [];
@@ -24,8 +27,49 @@ async function windows(script: string): Promise<string[]> {
 }
 const dataPath = (path: string) => `[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(path, 'utf16le').toString('base64')}'))`;
 const readAcl = (path: string, directory: boolean) => windows(`$a=[IO.${directory ? 'Directory' : 'File'}]::GetAccessControl((${dataPath(path)}));'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights}`);
+const readAclSet = (targets: readonly { path: string; directory: boolean }[]) => windows(`$i=0;foreach($t in @(${targets.map(target => `@{Path=(${dataPath(target.path)});Directory=$${target.directory}}`).join(',')})){'target='+$i;$a=if($t.Directory){[IO.Directory]::GetAccessControl($t.Path)}else{[IO.File]::GetAccessControl($t.Path)};'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights};$i++}`);
 
 describe.skipIf(process.platform !== 'win32')('native Windows private credential ACL', () => {
+    it('migrates the pairing file and restricts both vaults without changing the home or sibling ACL', async () => {
+        const home = await fixture(); const legacyFile = join(home, 'tynn.json');
+        const file = join(home, 'credentials', 'tynn.json'); const sibling = join(home, 'runtime-fixture');
+        await writeFile(sibling, 'unrelated runtime');
+        const shared = [{ path: home, directory: true }, { path: sibling, directory: false }];
+        const sharedBefore = await readAclSet(shared);
+        expect(sharedBefore.slice(0, sharedBefore.indexOf('target=1')).some(rule => rule.includes('|True|Allow|'))).toBe(true);
+        const token = `gpk_01ARZ3NDEKTSV4RRFFQ69G5FAV.${'a'.repeat(64)}`;
+        const scopes = ['discovery', 'projects', 'workstations', 'agents', 'agent-tokens', 'issue-watch', 'issues', 'inbox'].map(scope => `genie:${scope}`);
+        const original = JSON.stringify({ version: 1, state: 'signed-in', host: 'https://fixture.invalid', userId: 'fixture-user', scopes, tokenEnc: Buffer.from(`fixture:${token}`).toString('base64') });
+        await writeFile(legacyFile, original);
+        let requests = 0;
+        const cipher = { isAvailable: () => true, encrypt: (text: string) => Buffer.from(`fixture:${text}`), decrypt: (bytes: Buffer) => bytes.toString().slice('fixture:'.length) };
+        const ports = { file, legacyFile, cipher, host: () => 'https://fixture.invalid',
+            cookies: { clear: async () => {}, get: async () => null, set: async () => {} },
+            fetch: async (_url: string, init: { headers: Record<string, string> }) => {
+                requests++; expect(init.headers.Authorization).toBe(`Bearer ${token}`);
+                return { ok: true, status: 200, text: async () => JSON.stringify({ id: 'fixture-user', name: 'Fixture', email: 'fixture@example.invalid' }) };
+            },
+        };
+        const account = await TynnAccount.open(ports);
+        expect(await readAclSet(shared), 'pairing migration preserves shared home ACL').toEqual(sharedBefore);
+        expect(account.status().signedIn).toBe(true); expect(requests).toBe(1);
+        await expect(stat(legacyFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(await readFile(file, 'utf8')).toBe(original);
+        const identityDirectory = join(home, 'agent-credentials'); await mkdir(identityDirectory);
+        const identities = join(identityDirectory, 'agents.json'); await writeFile(identities, JSON.stringify({ version: 1, records: {} }));
+        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'fixture', name: 'fixture-agent', provider: 'codex', mode: 'automated', instructions: null });
+        const result = await tynnAgentIdentities({ file: identities, cipher }).ensure({ projectId: 'fixture-project', agent,
+            tynn: { status: () => ({ signedIn: true as const, host: 'https://fixture.invalid', user: { name: 'Fixture', email: 'fixture@example.invalid' } }), userId: () => 'fixture-user',
+                request: async () => { requests++; return { ok: false, status: 503, json: async () => ({}) }; } },
+        });
+        expect(result).toMatchObject({ status: 'failed', code: 'offline' }); expect(requests).toBe(2);
+        expect(await readAclSet(shared), 'identity vault preserves shared home ACL').toEqual(sharedBefore);
+        const [sid] = await windows('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
+        const exact = ['protected=True', `owner=${sid}`, `${sid}|False|Allow|FullControl`];
+        const privatePaths = [{ path: join(home, 'credentials'), directory: true }, { path: identityDirectory, directory: true }, { path: file, directory: false }, { path: identities, directory: false }];
+        expect(await readAclSet(privatePaths)).toEqual(privatePaths.flatMap((_path, index) => [`target=${index}`, ...exact]));
+    });
+
     it('removes explicit foreign grants from existing directories and files, including quoted Unicode paths', async () => {
         const root = await fixture(); const directory = join(root, "owner's $(unused) 日本");
         await mkdir(directory); const file = join(directory, 'credentials.json'); await writeFile(file, 'encrypted fixture');
