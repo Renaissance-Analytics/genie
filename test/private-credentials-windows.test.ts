@@ -30,6 +30,18 @@ const readAcl = (path: string, directory: boolean) => windows(`$a=[IO.${director
 const readAclSet = (targets: readonly { path: string; directory: boolean }[]) => windows(`$i=0;foreach($t in @(${targets.map(target => `@{Path=(${dataPath(target.path)});Directory=$${target.directory}}`).join(',')})){'target='+$i;$a=if($t.Directory){[IO.Directory]::GetAccessControl($t.Path)}else{[IO.File]::GetAccessControl($t.Path)};'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights};$i++}`);
 
 describe.skipIf(process.platform !== 'win32')('native Windows private credential ACL', () => {
+    it('refuses a directory containing unrelated siblings without changing any ACL', async () => {
+        const directory = await fixture(); const file = join(directory, 'credential.json'); const sibling = join(directory, 'runtime.dll');
+        await writeFile(file, 'encrypted fixture'); await writeFile(sibling, 'unrelated runtime');
+        const paths = [{ path: directory, directory: true }, { path: file, directory: false }, { path: sibling, directory: false }];
+        const before = await readAclSet(paths);
+        expect(before.slice(0, before.indexOf('target=1')).some(rule => rule.includes('|True|Allow|'))).toBe(true);
+        const error = await preparePrivateCredential(file).then(() => null, (caught: unknown) => caught);
+        expect(await readAclSet(paths), 'occupied directory ACL remains unchanged').toEqual(before);
+        expect(error).toBeInstanceOf(Error); expect((error as Error).message).toContain('unrelated entries');
+        expect(await readFile(sibling, 'utf8')).toBe('unrelated runtime');
+    });
+
     it('migrates the pairing file and restricts both vaults without changing the home or sibling ACL', async () => {
         const home = await fixture(); const legacyFile = join(home, 'tynn.json');
         const file = join(home, 'credentials', 'tynn.json'); const sibling = join(home, 'runtime-fixture');

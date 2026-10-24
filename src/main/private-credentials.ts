@@ -1,12 +1,26 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { chmod, lstat, mkdir, open, rename, rm, rmdir } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { chmod, lstat, mkdir, open, readdir, rename, rm, rmdir } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
 type Target = { path: string; directory: boolean };
+class SharedCredentialDirectoryError extends Error {
+    constructor() { super('Private Tynn credential directory contains unrelated entries; refusing to change its permissions.'); }
+}
+
+async function assertPrivateDirectory(directory: string, file: string): Promise<void> {
+    const normalize = (name: string) => process.platform === 'win32' ? name.toLowerCase() : name;
+    const own = normalize(basename(file));
+    const prefix = `${own}.`;
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const name = normalize(entry.name);
+        const temporary = name.startsWith(prefix) && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/i.test(name.slice(prefix.length));
+        if (!entry.isFile() || (name !== own && !temporary)) throw new SharedCredentialDirectoryError();
+    }
+}
 
 async function inspect(target: Target) {
     try {
@@ -82,11 +96,12 @@ export async function preparePrivateCredential(file: string): Promise<void> {
         if (!await inspect(directory)) throw new Error(REFUSED);
         const target = { path, directory: false };
         const existing = await inspect(target);
+        await assertPrivateDirectory(directory.path, path);
         await restrict(existing ? [directory, target] : [directory]);
-    } catch {
+    } catch (error) {
         // Only our new empty leaf may be removed. Existing data and parent directories are never deleted.
         if (created) await rmdir(directory.path).catch(() => {});
-        throw new Error(REFUSED);
+        throw error instanceof SharedCredentialDirectoryError ? error : new Error(REFUSED);
     }
 }
 
@@ -103,7 +118,7 @@ export async function migratePrivateCredential(legacyFile: string, file: string)
         if (await inspect(destination)) throw new Error(REFUSED);
         // Atomic rename removes the old name only on success. Failures retain the restricted old file.
         await rename(legacy.path, destination.path);
-    } catch { throw new Error(REFUSED); }
+    } catch (error) { throw error instanceof SharedCredentialDirectoryError ? error : new Error(REFUSED); }
 }
 
 /** Encrypted JSON is staged exclusively inside its private parent and restricted before replacement. */
