@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -63,6 +63,28 @@ function fixture() {
 }
 
 describe('one Tynn principal and encrypted key per Genie agent', () => {
+    it.skipIf(process.platform === 'win32')('credential permissions restrict an existing permissive vault directory', async () => {
+        const t = fixture(); await chmod(dir, 0o755);
+        expect(mcp(await t.ensure(t.open(), t.local()))).toBeTruthy();
+        expect((await stat(dir)).mode & 0o777).toBe(0o700);
+        expect((await stat(t.file)).mode & 0o777).toBe(0o600);
+    });
+
+    it.skipIf(process.platform === 'win32')('credential permissions restrict an existing key file before restoration', async () => {
+        const t = fixture(); const agent = t.local();
+        const first = await t.ensure(t.open(), agent); await chmod(t.file, 0o644);
+        expect(mcp(await t.ensure(t.open(), agent))).toEqual(mcp(first));
+        expect((await stat(t.file)).mode & 0o777).toBe(0o600);
+        expect(t.state.minted).toBe(1);
+    });
+
+    it.skipIf(process.platform === 'win32')('credential permissions refuse a symlinked key file before sending a request', async () => {
+        const t = fixture(); const agent = t.local(); await t.ensure(t.open(), agent);
+        const before = t.calls.length; await rename(t.file, `${t.file}.original`); await symlink(`${t.file}.original`, t.file);
+        expect(await t.ensure(t.open(), agent)).toMatchObject({ status: 'failed', code: 'storage' });
+        expect(t.state.minted).toBe(1); expect(t.calls).toHaveLength(before);
+    });
+
     it('serializes the project name namespace so concurrent case-colliding identities cannot overwrite each other', async () => {
         const t = fixture(); const vault = t.open(); const a = t.local(); const b = t.local('ATLAS');
         const results = await Promise.all([t.ensure(vault, a), t.ensure(vault, b)]);

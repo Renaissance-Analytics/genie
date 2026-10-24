@@ -1,10 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { isAcpProvider } from '../core/engine.js';
 import type { AgentRecord } from '../core/identity.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import type { TynnAgentToken, TynnSessionPort } from './tynn-agent-token.js';
+import { preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
 
 export interface AgentCredentialPorts {
     readonly file: string;
@@ -50,7 +49,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
 
     const load = (): Promise<Record<string, Stored>> => rows ??= (async () => {
         let text: string;
-        try { text = await readFile(ports.file, 'utf8'); }
+        try { await preparePrivateCredential(ports.file); text = await readFile(ports.file, 'utf8'); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be read.'); }
         try {
             const parsed = object(JSON.parse(text));
@@ -63,14 +62,10 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
     const save = (key: string, record: Stored): Promise<void> => {
         const run = async () => {
             const next = { ...await load(), [key]: record };
-            const temp = `${ports.file}.${randomUUID()}.tmp`;
             try {
-                await mkdir(dirname(ports.file), { recursive: true, mode: 0o700 });
-                await writeFile(temp, JSON.stringify({ version: 1, records: next }), { mode: 0o600 });
-                await rename(temp, ports.file);
+                await writePrivateCredential(ports.file, JSON.stringify({ version: 1, records: next }));
                 rows = Promise.resolve(next);
             } catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be saved. Review any pending key before trying again.'); }
-            finally { await rm(temp, { force: true }).catch(() => {}); }
         };
         const work = writes.then(run, run); writes = work.catch(() => {}); return work;
     };
