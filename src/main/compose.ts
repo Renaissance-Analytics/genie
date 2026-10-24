@@ -416,7 +416,13 @@ function startExternalFrontDoor(input: {
     let trusting: Promise<{ ok: true } | { ok: false; reason: string }> | null = null;
     /** A front-door port another process holds (or the OS refused): Caddy is down on purpose, with the reason. */
     let blocked: FrontDoorBlocked | null = null;
+    let failure: string | null = null;
     let closed = false;
+    const reportFailure = (error: unknown) => {
+        if (closed) return;
+        failure = `Genie could not complete its external front door check: ${message(error)}`;
+        notify();
+    };
     // Include state updates and notifications in each completion, not just the underlying OS request.
     const pending = new Set<Promise<unknown>>();
     let generation = 0;
@@ -474,7 +480,7 @@ function startExternalFrontDoor(input: {
         render();
         // Started again (by the person's Restart in Processes, or by Try again): whatever held the port is asked anew —
         // Caddy's own words below set it again if it still cannot bind.
-        if (status.id === FRONT_DOOR_ID && status.state === 'running' && blocked !== null) { blocked = null; notify(); }
+        if (status.id === FRONT_DOOR_ID && status.state === 'running' && (blocked !== null || failure !== null)) { blocked = null; failure = null; notify(); }
     });
     const spec = {
         id: FRONT_DOOR_ID,
@@ -497,11 +503,13 @@ function startExternalFrontDoor(input: {
             if ((await input.ports.probe(port)) !== 'held') continue;
             const holder = await input.ports.holder(port);
             if (closed) return;
+            failure = null;
             block(port, holder, heldReason(port, holder));
             return;
         }
         if (closed) return;
         blocked = null;
+        failure = null;
         output = '';
         supervisor.start(spec);
         notify();
@@ -520,13 +528,17 @@ function startExternalFrontDoor(input: {
         // (Windows answers "forbidden", not "in use", for a port http.sys holds).
         void track(input.ports.holder(failed.port).then((holder) => {
             if (holder !== null && blocked?.port === failed.port && blocked.holder === null) block(failed.port, holder, heldReason(failed.port, holder));
+        }).catch((error: unknown) => {
+            if (blocked?.port === failed.port && blocked.holder === null) reportFailure(error);
         }));
     });
     const status = (): FrontDoorStatus =>
-        blocked !== null
+        failure !== null
+            ? { running: false, reason: failure, ...(blocked !== null ? { blocked: { port: blocked.port, holder: blocked.holder } } : {}) }
+            : blocked !== null
             ? { running: false, reason: blocked.reason, blocked: { port: blocked.port, holder: blocked.holder } }
             : { running: true, caddyfile, hostsPath: input.hostsPath, hosts: hosts.result, authority: { source: ca.source, thumbprint: ca.thumbprint }, trusted, trustError, certificateError };
-    void track(startCaddy());
+    void track(startCaddy().catch(reportFailure));
     void track(readTrust().then(notify));
     return {
         status,
@@ -534,7 +546,7 @@ function startExternalFrontDoor(input: {
         settled: async () => {
             for (;;) {
                 const started = generation;
-                await Promise.all([...pending]);
+                await Promise.allSettled([...pending]);
                 await hosts.settled();
                 if (pending.size === 0 && started === generation) return;
             }
@@ -542,7 +554,9 @@ function startExternalFrontDoor(input: {
         syncHosts: () => hosts.flush(),
         beginHosts: () => hosts.begin(),
         retry: async () => {
-            if (supervisor.status(FRONT_DOOR_ID)?.state !== 'running') await track(startCaddy());
+            if (supervisor.status(FRONT_DOOR_ID)?.state !== 'running') {
+                await track(startCaddy().catch((error: unknown) => { reportFailure(error); throw error; }));
+            }
             return status();
         },
         trust: () => {
