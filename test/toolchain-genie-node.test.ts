@@ -17,14 +17,25 @@ import type { CommandRunner } from '../src/main/toolchain-prober.js';
 const HERD = 'C:\\Program Files\\nodejs';
 const ROAMING = 'C:\\Users\\me\\AppData\\Roaming\\npm';
 const GENIE = 'C:\\genie2-toolchain\\node-versions\\24.22.1';
+const NPM_GLOBAL = 'C:\\genie2-toolchain\\node-versions\\npm-global';
 
 let root: string;
 beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'genie2-genie-node-')); });
 afterEach(() => { rmSync(root, { recursive: true, force: true }); });
 
 /** A Windows machine: what is in each directory, the version each node.exe reports, and whether Genie's own npm runs. */
-function rig(opts: { path: string; genie?: { version: string; dir: string } | null; genieNpmRuns?: boolean; platform?: Platform; versions?: Record<string, string> }) {
-    const env = new Map<string, string>([['PATH', opts.path]]);
+/**
+ * `npm -v` THROUGH PATH, the way Node's own npm.cmd decides it — measured on the Windows test VM (2026-10-24: Genie's
+ * npm.cmd first on PATH, and `npm -v` answered 10.9.9, not its own 11.19.1). npm.cmd asks npm-prefix.js for the GLOBAL
+ * prefix and runs `<prefix>\node_modules\npm` when there is one, so an npm there wins over the npm beside the node.exe.
+ * The prefix comes from npm's config. On the VM it was an INHERITED `npm_config_prefix` (`npx` exports its config to
+ * everything it runs) pointing at the system Node's folder, which holds npm 10.9.9; it can equally come from a `.npmrc`
+ * `prefix=`. With none set, the zip's prefix is its own folder (probe: Genie first, no prefix → 11.19.1). The rig models
+ * a prefix set elsewhere (ROAMING) holding `globalNpm`; the owner's machine had 9.8.0 in Roaming.
+ */
+function rig(opts: { path: string; genie?: { version: string; dir: string } | null; genieNpmRuns?: boolean; platform?: Platform; versions?: Record<string, string>; globalNpm?: string | null; prefix?: string }) {
+    const env = new Map<string, string>([['PATH', opts.path], ...(opts.prefix ? [['NPM_CONFIG_PREFIX', opts.prefix] as [string, string]] : [])]);
+    const globalNpm = opts.globalNpm === undefined ? '9.8.0' : opts.globalNpm;
     const files: Record<string, string[]> = { [HERD]: ['node.exe', 'npm.cmd'], [ROAMING]: ['npm.cmd', 'codex.cmd'], [GENIE]: ['node.exe', 'npm.cmd'] };
     const versions: Record<string, string> = { [HERD]: '24.19.0', [GENIE]: '24.22.1', ...opts.versions };
     const calls: string[] = [];
@@ -34,6 +45,13 @@ function rig(opts: { path: string; genie?: { version: string; dir: string } | nu
             const name = args[args.length - 1]!;
             const found = (env.get('PATH') ?? '').split(';').filter(Boolean).flatMap((d) => (files[d] ?? []).filter((f) => f === `${name}.exe` || f === `${name}.cmd`).map((f) => `${d}\\${f}`));
             return found.length > 0 ? { stdout: found.join('\r\n'), exitCode: 0 } : { stdout: 'INFO: Could not find files for the given pattern(s).', exitCode: 1 };
+        }
+        if (binary === 'cmd.exe' && args[args.length - 1] === 'npm -v') {
+            const first = (env.get('PATH') ?? '').split(';').filter(Boolean).find((d) => (files[d] ?? []).includes('npm.cmd'));
+            if (!first) return { stdout: "'npm' is not recognized as an internal or external command", exitCode: 1 };
+            const prefix = env.get('NPM_CONFIG_PREFIX') ?? ROAMING;
+            if (prefix === ROAMING && globalNpm) return { stdout: globalNpm, exitCode: 0 };
+            return { stdout: first === GENIE ? '11.19.1' : '10.9.4', exitCode: 0 };
         }
         const dir = binary.slice(0, binary.lastIndexOf('\\'));
         if (binary.endsWith('node.exe') && args.some((a) => a.endsWith('npm-cli.js'))) return dir === GENIE && opts.genieNpmRuns === false ? { stdout: 'TypeError: Class extends value undefined', exitCode: 1 } : { stdout: '11.19.1', exitCode: 0 };
@@ -60,6 +78,9 @@ describe('Check and repair: the node Genie runs is Genie’s own', () => {
         expect(found).toEqual([{ kind: 'genie-node', problem: expect.stringContaining(`${HERD}\\node.exe`), result: { kind: 'repaired', detail: expect.stringContaining(GENIE) } }]);
         expect(found[0]!.kind === 'genie-node' && found[0]!.problem).toMatch(/npm.*Roaming/);
         expect(r.env.get('PATH')!.split(';')[0]).toBe(GENIE);
+        // Genie's own npm prefix, so a global npm in Roaming cannot take over Genie's npm.cmd (and `npm i -g` lands in Genie's).
+        expect(r.env.get('NPM_CONFIG_PREFIX')).toBe(NPM_GLOBAL);
+        expect(r.calls).toContain('cmd.exe /d /s /c npm -v');
         // Nobody's entry deleted: the shim directory (codex lives there) is still on PATH.
         expect(r.env.get('PATH')).toContain(ROAMING);
     });
@@ -70,13 +91,30 @@ describe('Check and repair: the node Genie runs is Genie’s own', () => {
         const fresh = new Map<string, string>([['PATH', `${HERD};C:\\Windows`]]);
         restoreToolchainEnv({ platform: 'win32', env: { get: (n) => fresh.get(n), set: (n, v) => { fresh.set(n, v); } }, fs: { ...nodeToolchainFs(), exists: (p) => p === GENIE || nodeToolchainFs().exists(p) }, dataDir: r.ports.dataDir });
         expect(fresh.get('PATH')!.split(';')[0]).toBe(GENIE);
+        expect(fresh.get('NPM_CONFIG_PREFIX')).toBe(NPM_GLOBAL);
     });
 
     it('CONTROL: Genie’s node and npm already first → no finding, PATH untouched — even with a NEWER Herd node later (no shadow tug-of-war)', async () => {
         const path = `${GENIE};${HERD};${ROAMING}`;
-        const r = rig({ path, versions: { [HERD]: '25.2.1' } });
+        const r = rig({ path, versions: { [HERD]: '25.2.1' }, prefix: NPM_GLOBAL });
         expect(await nodeFindings(r.ports)).toEqual([]);
         expect(r.env.get('PATH')).toBe(path);
+    });
+
+    it('Genie’s npm.cmd first on PATH, but a GLOBAL npm in Roaming answers `npm -v` (the VM’s 10.9.9) → found by its answer, repaired with Genie’s prefix', async () => {
+        const r = rig({ path: `${GENIE};${HERD};${ROAMING}` });
+        const found = await nodeFindings(r.ports);
+        expect(found).toEqual([{ kind: 'genie-node', problem: expect.stringMatching(/npm -v answers 9\.8\.0/), result: { kind: 'repaired', detail: expect.stringContaining(GENIE) } }]);
+        expect(r.env.get('NPM_CONFIG_PREFIX')).toBe(NPM_GLOBAL);
+    });
+
+    it('a prefix that still lets another npm answer is NOT called repaired', async () => {
+        // Judged by the measurement, not the step's word: here `npm -v` keeps answering the global npm whatever Genie sets.
+        const r = rig({ path: `${ROAMING};${HERD}` });
+        const real = r.ports.run;
+        r.ports = { ...r.ports, run: async (b, a) => (b === 'cmd.exe' ? { stdout: '9.8.0', exitCode: 0 } : real(b, a)) };
+        const found = await nodeFindings(r.ports);
+        expect(found[0]!.result).toEqual({ kind: 'unchanged', reason: expect.stringMatching(/npm -v answers 9\.8\.0/) });
     });
 
     it('Genie’s own npm does not run → said, and its node is NOT put first (a broken npm in front is worse)', async () => {

@@ -229,20 +229,32 @@ async function repairPhpCa(ports: ToolchainOpsPorts): Promise<FindingResult> {
     return { kind: 'repaired', detail: `${count} root certificates from this machine are in ${bundle}; the PHP Genie runs — sites' php-cgi included — reads it through ${ini}. Your php.ini is unchanged.` };
 }
 
-function remember(ports: Pick<ToolchainOpsPorts, 'platform' | 'fs' | 'dataDir'>, dirs: readonly string[]): void {
-    if (dirs.length === 0) return;
-    const { state } = toolchainPaths(ports.dataDir);
-    let prior: string[] = [];
+/** `toolchain-env.json`: the PATH order to replay, and Genie's npm prefix (see {@link preferGenieNode}). */
+interface ToolchainEnvState {
+    pathFirst: string[];
+    npmPrefix?: string;
+}
+
+function readState(ports: Pick<ToolchainOpsPorts, 'fs' | 'dataDir'>): ToolchainEnvState {
     try {
-        const parsed = JSON.parse(ports.fs.readText(state) ?? '{}') as { pathFirst?: unknown };
-        if (Array.isArray(parsed.pathFirst)) prior = parsed.pathFirst.filter((d): d is string => typeof d === 'string');
+        const parsed = JSON.parse(ports.fs.readText(toolchainPaths(ports.dataDir).state) ?? '{}') as { pathFirst?: unknown; npmPrefix?: unknown };
+        return {
+            pathFirst: Array.isArray(parsed.pathFirst) ? parsed.pathFirst.filter((d): d is string => typeof d === 'string') : [],
+            ...(typeof parsed.npmPrefix === 'string' ? { npmPrefix: parsed.npmPrefix } : {}),
+        };
     } catch {
-        prior = [];
+        return { pathFirst: [] };
     }
+}
+
+function remember(ports: Pick<ToolchainOpsPorts, 'platform' | 'fs' | 'dataDir'>, dirs: readonly string[], npmPrefix?: string): void {
+    if (dirs.length === 0 && npmPrefix === undefined) return;
+    const prior = readState(ports);
     // Replayed in order at the next launch: a directory repaired again moves to the end, so it ends up in front.
-    const pathFirst = [...prior.filter((d) => !dirs.some((n) => samePath(n, d, ports.platform))), ...dirs];
+    const pathFirst = [...prior.pathFirst.filter((d) => !dirs.some((n) => samePath(n, d, ports.platform))), ...dirs];
+    const prefix = npmPrefix ?? prior.npmPrefix;
     ports.fs.mkdirp(ports.dataDir);
-    ports.fs.writeText(state, `${JSON.stringify({ pathFirst }, null, 2)}\n`);
+    ports.fs.writeText(toolchainPaths(ports.dataDir).state, `${JSON.stringify({ pathFirst, ...(prefix !== undefined ? { npmPrefix: prefix } : {}) }, null, 2)}\n`);
 }
 
 /** T2: one "Check and repair". Only problems are findings; each carries its own measured result. */
@@ -328,11 +340,6 @@ async function checkGenieNode(ports: ToolchainOpsPorts): Promise<RepairFinding |
             result: { kind: 'unchanged', reason: `Install Node ${NODE_LTS_DEFAULT} in Toolchain → Node versions, then run Check and repair again` },
         };
     }
-    if (inDir(firstNode, genie.dir) && inDir(firstNpm, genie.dir)) return null;
-    const problem = `${[
-        inDir(firstNode, genie.dir) ? null : `node runs ${firstNode ?? 'from nowhere (none on PATH)'}`,
-        inDir(firstNpm, genie.dir) ? null : `npm runs ${firstNpm ?? 'from nowhere (none on PATH)'}`,
-    ].filter(Boolean).join(' and ')}, not Genie's Node ${genie.version}`;
     let npmSaid = '';
     let npmRuns = false;
     try {
@@ -342,22 +349,60 @@ async function checkGenieNode(ports: ToolchainOpsPorts): Promise<RepairFinding |
     } catch (error) {
         npmSaid = error instanceof Error ? error.message : String(error);
     }
+    const genieNpm = npmRuns ? lastLine(npmSaid) : null;
+    // `npm -v` as a command line runs it: npm.cmd hands over to the npm in its configured global prefix when there is one
+    // (measured on the Windows test VM: Genie's npm.cmd first, an inherited npm_config_prefix, and 10.9.9 answered), so
+    // where npm.cmd sits is not the whole answer.
+    const answer = await npmAnswer(ports);
+    const healthy = (node: string | null, npm: string | null, said: string | null) => inDir(node, genie.dir) && inDir(npm, genie.dir) && genieNpm !== null && said === genieNpm;
+    if (healthy(firstNode, firstNpm, answer)) return null;
+    const problem = `${[
+        inDir(firstNode, genie.dir) ? null : `node runs ${firstNode ?? 'from nowhere (none on PATH)'}`,
+        inDir(firstNpm, genie.dir) ? null : `npm runs ${firstNpm ?? 'from nowhere (none on PATH)'}`,
+        genieNpm !== null && answer !== genieNpm ? `npm -v answers ${answer ?? 'nothing'}` : null,
+    ].filter(Boolean).join(' and ') || 'Genie’s npm does not run'}, not Genie's Node ${genie.version}${genieNpm ? ` with npm ${genieNpm}` : ''}`;
     if (!npmRuns) {
         return { kind: 'genie-node', problem, result: { kind: 'unchanged', reason: `Genie's Node ${genie.version} is there, but its npm does not run${tail(npmSaid)}, so it was not put first; Remove and reinstall it in Toolchain → Node versions` } };
     }
     preferGenieNode(ports, genie.dir);
     const nodeNow = firstOf(await whereAll('node', ports), /\.exe$/i);
     const npmNow = firstOf(await whereAll('npm', ports), /\.(cmd|exe)$/i);
-    if (inDir(nodeNow, genie.dir) && inDir(npmNow, genie.dir)) {
-        return { kind: 'genie-node', problem, result: { kind: 'repaired', detail: `Genie now runs Node ${genie.version} and its own npm from ${genie.dir}. Your own PATH is unchanged; terminals and agents pick this up when Genie next starts them.` } };
+    const answerNow = await npmAnswer(ports);
+    if (healthy(nodeNow, npmNow, answerNow)) {
+        return { kind: 'genie-node', problem, result: { kind: 'repaired', detail: `Genie now runs Node ${genie.version} and its own npm ${genieNpm} from ${genie.dir}, with its own global prefix. Your own PATH and npm settings are unchanged; terminals and agents pick this up when Genie next starts them.` } };
     }
-    return { kind: 'genie-node', problem, result: { kind: 'unchanged', reason: `moved ${genie.dir} to the front, but node resolves to ${nodeNow ?? 'nothing'} and npm to ${npmNow ?? 'nothing'}` } };
+    return { kind: 'genie-node', problem, result: { kind: 'unchanged', reason: `moved ${genie.dir} to the front and set Genie's npm prefix, but node resolves to ${nodeNow ?? 'nothing'}, npm to ${npmNow ?? 'nothing'}, and npm -v answers ${answerNow ?? 'nothing'}` } };
 }
 
-/** Put Genie's Node directory at the front of what Genie runs NOW, and remember it for the next launch. */
+const lastLine = (text: string): string | null => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).pop() ?? null;
+
+/** What `npm -v` answers as a command line, through cmd.exe with Genie's PATH — the npm an agent actually gets. */
+async function npmAnswer(ports: ToolchainOpsPorts): Promise<string | null> {
+    try {
+        const r = await ports.run('cmd.exe', ['/d', '/s', '/c', 'npm -v']);
+        return r.exitCode === 0 ? lastLine(r.stdout) : null;
+    } catch {
+        return null;
+    }
+}
+
+/** Genie's global npm prefix for a Node directory: `npm-global` beside the versions (core/node-versions.ts nodeNpmGlobalDir). */
+function npmGlobalFor(dir: string, platform: Platform): string {
+    return `${dirOf(dir.replace(/[\\/]+$/, ''))}${platform === 'win32' ? '\\' : '/'}npm-global`;
+}
+
+/**
+ * Put Genie's Node directory at the front of what Genie runs NOW — its `npm-global` (where `npm i -g` puts commands)
+ * right behind it — and give Genie's processes that prefix (`NPM_CONFIG_PREFIX`), so Node's npm.cmd does not hand over to
+ * the npm in a prefix set elsewhere: an inherited `npm_config_prefix` (`npx` exports one to everything it runs), or a
+ * `.npmrc` `prefix=` such as `%APPDATA%\npm`. Remembered for the next launch. The person's own PATH and .npmrc are not
+ * written.
+ */
 export function preferGenieNode(ports: Pick<ToolchainOpsPorts, 'platform' | 'env' | 'fs' | 'dataDir'>, dir: string): void {
-    ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', dir, ports.platform));
-    remember(ports, [dir]);
+    const npmGlobal = npmGlobalFor(dir, ports.platform);
+    ports.env.set('PATH', pathWithFirst(pathWithFirst(ports.env.get('PATH') ?? '', npmGlobal, ports.platform), dir, ports.platform));
+    ports.env.set('NPM_CONFIG_PREFIX', npmGlobal);
+    remember(ports, [npmGlobal, dir], npmGlobal);
 }
 
 /**
@@ -366,18 +411,17 @@ export function preferGenieNode(ports: Pick<ToolchainOpsPorts, 'platform' | 'env
  * directory that no longer exists is skipped (the tool was uninstalled; its order is nothing to restore).
  */
 export function restoreToolchainEnv(ports: Pick<ToolchainOpsPorts, 'platform' | 'env' | 'fs' | 'dataDir'>): { pathFirst: string[]; phpIni: boolean } {
-    const { state, ini, bundle, confDir } = toolchainPaths(ports.dataDir);
+    const { ini, bundle, confDir } = toolchainPaths(ports.dataDir);
     const applied: string[] = [];
-    try {
-        const parsed = JSON.parse(ports.fs.readText(state) ?? '{}') as { pathFirst?: unknown };
-        for (const dir of Array.isArray(parsed.pathFirst) ? parsed.pathFirst : []) {
-            if (typeof dir !== 'string' || !ports.fs.exists(dir)) continue;
-            ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', dir, ports.platform));
-            applied.push(dir);
-        }
-    } catch {
-        // an unreadable state file restores nothing
+    const saved = readState(ports);
+    for (const dir of saved.pathFirst) {
+        if (!ports.fs.exists(dir)) continue;
+        ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', dir, ports.platform));
+        applied.push(dir);
     }
+    // Genie's npm prefix comes back with Genie's Node: only while a Node directory beside it was restored.
+    const prefix = saved.npmPrefix;
+    if (prefix !== undefined && applied.some((d) => sameDir(dirOf(d), dirOf(prefix)) && !sameDir(d, prefix))) ports.env.set('NPM_CONFIG_PREFIX', prefix);
     const phpIni = ports.fs.exists(ini) && ports.fs.exists(bundle);
     if (phpIni) ports.env.set('PHP_INI_SCAN_DIR', phpIniScanDir(ports.env.get('PHP_INI_SCAN_DIR'), confDir, ports.platform));
     return { pathFirst: applied, phpIni };
