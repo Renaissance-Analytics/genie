@@ -38,7 +38,7 @@ export type DefaultOutcome =
 
 /** The version each language's link points at, or `null` (no default: the system's own). */
 export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainDir' | 'fs'>): Record<DefaultLang, string | null> {
-    const out = { node: null, go: null, php: null, python: null, dotnet: null, rust: null, ruby: null } as Record<DefaultLang, string | null>;
+    const out = { node: null, go: null, php: null, python: null, dotnet: null, rust: null, ruby: null, java: null } as Record<DefaultLang, string | null>;
     for (const lang of DEFAULT_LANGS) {
         const target = ports.fs.readLink(currentLinkDir(ports.toolchainDir, lang));
         if (target === null) continue;
@@ -95,6 +95,11 @@ export function restoreDefaultsEnv(ports: Pick<DefaultsPorts, 'platform' | 'tool
     const dotnetLink = currentLinkDir(ports.toolchainDir, 'dotnet');
     if (defaults.dotnet !== null && ports.fs.exists(dotnetLink)) ports.env.set('DOTNET_ROOT', dotnetLink);
     else if (ports.env.get('DOTNET_ROOT') === dotnetLink) ports.env.set('DOTNET_ROOT', '');
+    // Java: Gradle, Maven and the IDEs find the JDK through JAVA_HOME — the same rule: set while Java has a default,
+    // cleared only when it is the one Genie set.
+    const javaLink = currentLinkDir(ports.toolchainDir, 'java');
+    if (defaults.java !== null && ports.fs.exists(javaLink)) ports.env.set('JAVA_HOME', javaLink);
+    else if (ports.env.get('JAVA_HOME') === javaLink) ports.env.set('JAVA_HOME', '');
     return entries;
 }
 

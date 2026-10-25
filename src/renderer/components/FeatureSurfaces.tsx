@@ -773,6 +773,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
             {tc?.rust ? <RustVersions rust={tc.rust} current={tc.defaults?.rust ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'rust' && r.version !== undefined)} /> : null}
             {tc?.ruby ? <RubyVersions ruby={tc.ruby} current={tc.defaults?.ruby ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'ruby' && r.version !== undefined)} /> : null}
+            {tc?.java ? <JavaVersions java={tc.java} current={tc.defaults?.java ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'java' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -964,6 +965,53 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
                     {addable.map((a) => (
                         <button key={a.version} type="button" data-go-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installGo', version: a.version, consent: true })}>
                             Go {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+/**
+ * GENIE'S OWN JAVA (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6d): the Temurin JDKs Genie manages, the java on
+ * PATH, and an Install per LTS line (its release for this OS) — or, on macOS, why not.
+ */
+function JavaVersions({ java, current = null, busy, onAction, refusals = [] }: { java: NonNullable<NonNullable<FeatureData['toolchain']>['java']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const addable = java.available.filter((a) => !a.installed);
+    return (
+        <section data-java-versions={java.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">Java (Temurin JDKs)</h3>
+            {current !== null ? (
+                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
+                    <span>`java` and `javac` are Java {current}, Genie's default.</span>
+                    <button type="button" data-use-system="java" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'java', version: null })}>Use the one on your PATH instead</button>
+                </p>
+            ) : null}
+            {refusals.map((r) => (
+                <p key={r.version} data-java-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <p data-java-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {java.system ? `The java on your PATH is ${java.system.version}.` : 'No java on your PATH.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {java.managed.map((m) => (
+                    <li key={m.version} data-java-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Java {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        <DefaultMark lang="java" version={m.version} current={current} busy={busy} onAction={onAction} />
+                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Java ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeJava', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {java.installRefused ? (
+                <p data-java-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{java.installRefused}.</p>
+            ) : addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install Eclipse Temurin from Adoptium (checked against its published sha256):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-java-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installJava', version: a.version, consent: true })}>
+                            Java {a.line} ({a.version})
                         </button>
                     ))}
                 </div>
@@ -1188,7 +1236,7 @@ function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonN
 }
 
 /** A managed version's default state: the Default mark on the chosen one, "Make default" on the others (plan TC3a). */
-function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust' | 'ruby'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust' | 'ruby' | 'java'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
     if (version === current) return <span data-is-default={`${lang}:${version}`} className="rounded-sm bg-[var(--primary)]/15 px-1.5 text-[11px] font-medium text-[var(--primary)]">Default</span>;
     return (
         <button type="button" data-make-default={`${lang}:${version}`} disabled={busy} className="text-[12px] text-[var(--fg-2)] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>
