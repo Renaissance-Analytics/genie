@@ -1055,7 +1055,7 @@ function RubyVersions({ ruby, current = null, busy, onAction, refusals = [] }: {
                 <p data-ruby-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{ruby.installRefused}.</p>
             ) : addable.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
-                    <span className="text-xs text-[var(--fg-3)]">Build from ruby-lang.org's source (checked against its published sha256):</span>
+                    <span className="text-xs text-[var(--fg-3)]">Install (ruby-lang.org's source on Linux, RubyInstaller on Windows; checked against the published sha256):</span>
                     {addable.map((a) => (
                         <button key={a.version} type="button" data-ruby-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRuby', version: a.version, consent: true })}>
                             Ruby {a.version}

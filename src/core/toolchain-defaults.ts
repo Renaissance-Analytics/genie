@@ -35,8 +35,8 @@ export function langManagedOn(lang: DefaultLang, platform: DefaultsPlatform): bo
     if (lang === 'php' || lang === 'python') return platform !== 'darwin';
     // Rust: Linux and macOS until the owner decides Windows (MSVC needs Visual Studio's linker; GNU does not).
     if (lang === 'rust') return platform !== 'win32';
-    // Ruby: Linux only (ruby-lang.org's source); Windows and macOS wait on the owner.
-    if (lang === 'ruby') return platform === 'linux';
+    // Ruby: Windows (RubyInstaller) and Linux (ruby-lang.org's source); macOS is not supported.
+    if (lang === 'ruby') return platform !== 'darwin';
     // Java (Temurin): Windows and Linux; macOS is not supported (the owner, 2026-10-25).
     if (lang === 'java') return platform !== 'darwin';
     return true;
@@ -65,8 +65,7 @@ export function defaultPathEntries(toolchainDir: string, platform: DefaultsPlatf
 
 /** Where Genie manages a language's versions, in the words of a refusal: `Windows and Linux`. */
 export function langManagedWhere(lang: DefaultLang): string {
-    if (lang === 'php' || lang === 'python' || lang === 'java') return 'Windows and Linux';
+    if (lang === 'php' || lang === 'python' || lang === 'java' || lang === 'ruby') return 'Windows and Linux';
     if (lang === 'rust') return 'Linux and macOS';
-    if (lang === 'ruby') return 'Linux';
     return 'every OS';
 }

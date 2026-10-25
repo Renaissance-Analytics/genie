@@ -136,17 +136,15 @@ describe('building one on Linux', () => {
     });
 });
 
-describe('Windows and macOS (the owner decides)', () => {
-    for (const platform of ['win32', 'darwin'] as const) {
-        it(`${platform}: refused by name, nothing fetched, nothing offered`, async () => {
-            const a = ports({ platform });
-            expect(await installRubyVersion(V, true, a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(platform === 'win32' ? /Windows/ : /macOS/) });
-            expect(a.fetchedUrls).toEqual([]);
-            const view = await listRubyVersions(a.p);
-            expect(view.available).toEqual([]);
-            expect(view.installRefused).toMatch(platform === 'win32' ? /Windows/ : /macOS/);
-        });
-    }
+describe('macOS (not supported; Windows is RubyInstaller: ruby-windows.test.ts)', () => {
+    it('darwin: refused by name, nothing fetched, nothing offered', async () => {
+        const a = ports({ platform: 'darwin' });
+        expect(await installRubyVersion(V, true, a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/macOS/) });
+        expect(a.fetchedUrls).toEqual([]);
+        const view = await listRubyVersions(a.p);
+        expect(view.available).toEqual([]);
+        expect(view.installRefused).toMatch(/macOS/);
+    });
 });
 
 describe('the list and removal on Linux', () => {

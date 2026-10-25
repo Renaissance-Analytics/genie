@@ -4,6 +4,9 @@
  * ruby-lang.org publishes source only, and every file's sha256 in `pub/ruby/index.txt` (tab-separated: name, url,
  * sha1, sha256, sha512). Genie builds the gzipped tarball on Linux (the owner's decision 2: no third-party builds). A
  * STATIC list of the supported lines: the newest of 4.0, 3.4 and 3.3 in that index on 2026-10-25.
+ *
+ * WINDOWS (TC6e; the owner's pick, 2026-10-25): RubyInstaller, which ruby-lang.org points Windows users to — its portable
+ * .7z per release (`RubyInstaller-<version>-1`), the SHA256 its own downloads page lists for exactly that file.
  */
 
 export type RubyPlatform = 'win32' | 'linux' | 'darwin';
@@ -65,4 +68,52 @@ export function parseRubyProof(output: string): { version: string; platform: str
 /** What RUBY_PLATFORM says for a source build here: `x86_64-linux`, `aarch64-linux`. */
 export function rubyPlatform(arch: RubyArch): string {
     return `${arch === 'x64' ? 'x86_64' : 'aarch64'}-linux`;
+}
+
+const RI_ARCH: Record<RubyArch, string> = { x64: 'x64', arm64: 'arm' };
+
+/** RubyInstaller's release tag for a recipe: `RubyInstaller-4.0.9-1` (the first package of that Ruby). */
+export function rubyInstallerTag(version: string): string {
+    return `RubyInstaller-${version}-1`;
+}
+
+/** Its portable archive: `rubyinstaller-4.0.9-1-x64.7z`. */
+export function rubyInstallerAsset(version: string, arch: RubyArch): string {
+    return `rubyinstaller-${version}-1-${RI_ARCH[arch]}.7z`;
+}
+
+/** The archive's one top folder: its name without `.7z`. */
+export function rubyInstallerTopFolder(version: string, arch: RubyArch): string {
+    return rubyInstallerAsset(version, arch).replace(/\.7z$/, '');
+}
+
+export function rubyInstallerUrl(version: string, arch: RubyArch): string {
+    return `https://github.com/oneclick/rubyinstaller2/releases/download/${rubyInstallerTag(version)}/${rubyInstallerAsset(version, arch)}`;
+}
+
+/**
+ * RubyInstaller's own downloads page: every file's link, then its own details with its SHA256 — the publisher's
+ * statement of the hash. Not GitHub's release API: measured, it answered the test VM 403 "API rate limit exceeded" (60
+ * calls an hour for everything behind one address), which a person behind a shared address would hit too.
+ */
+export const RUBYINSTALLER_DOWNLOADS = 'https://rubyinstaller.org/downloads/';
+
+/**
+ * The SHA256 the downloads page lists for exactly that file: the link whose href IS its url, and the SHA256 in that
+ * file's own details — read only up to the NEXT file's link, so a file listed without one is `null`, never its
+ * neighbour's (measured 2026-10-25: 3.3.13's arm build has no entry). Never guessed.
+ */
+export function rubyInstallerShaFromPage(html: string, version: string, arch: RubyArch): string | null {
+    const at = html.indexOf(`href="${rubyInstallerUrl(version, arch)}"`);
+    if (at < 0) return null;
+    const rest = html.slice(at + 1);
+    const next = rest.search(/class="downloadlink/);
+    const own = next < 0 ? rest : rest.slice(0, next);
+    const m = /SHA256:\s*<input[^>]*\bvalue="([0-9a-f]{64})"/i.exec(own);
+    return m ? m[1]!.toLowerCase() : null;
+}
+
+/** What RUBY_PLATFORM says for RubyInstaller's build here. */
+export function rubyWindowsPlatform(arch: RubyArch): string {
+    return arch === 'x64' ? 'x64-mingw-ucrt' : 'aarch64-mingw-ucrt';
 }
