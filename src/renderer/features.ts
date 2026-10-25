@@ -12,6 +12,7 @@ import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
 import type { GoVersionsView } from '../main/go-versions.js';
+import type { PythonVersionsView } from '../main/python-versions.js';
 import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
@@ -234,6 +235,8 @@ export interface ToolchainSection {
     readonly node?: NodeVersionsView;
     /** Genie's own Go versions, the PATH go, and what can be installed. */
     readonly go?: GoVersionsView;
+    /** Genie's own Python versions (Windows; TC4a), the PATH python, and what can be installed — or why not here. */
+    readonly python?: PythonVersionsView;
     /** Each language's default version (`null` = the system's own), read from Genie's `current/<lang>` links. */
     readonly defaults?: Readonly<Record<'node' | 'go' | 'php', string | null>>;
     /** The machine's own PATH: whether Genie's defaults are on it, where, and exactly what would change (plan TC3b). */
@@ -365,6 +368,9 @@ export type FeatureAction =
     /** Install one Genie-managed Go version (go.dev, checksum-verified). `consent` is the person's click. */
     | { kind: 'toolchain.installGo'; version: string; consent: boolean }
     | { kind: 'toolchain.removeGo'; version: string }
+    /** Install one Genie-managed Python version (python.org, checksum-verified). `consent` is the person's click. */
+    | { kind: 'toolchain.installPython'; version: string; consent: boolean }
+    | { kind: 'toolchain.removePython'; version: string }
     /** Make a managed version a language's default, or `null` for the system's own (plan TC3a). */
     | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php'; version: string | null }
     /** Put Genie's defaults on the machine's own PATH (`apply`, with `consent`), or take them off (Undo). */
@@ -445,5 +451,6 @@ export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): To
     if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installNode' || action.kind === 'toolchain.removeNode') return refusals.find((r) => r.tool === 'node' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installGo' || action.kind === 'toolchain.removeGo') return refusals.find((r) => r.tool === 'go' && r.version === action.version) ?? null;
+    if (action.kind === 'toolchain.installPython' || action.kind === 'toolchain.removePython') return refusals.find((r) => r.tool === 'python' && r.version === action.version) ?? null;
     return null;
 }
