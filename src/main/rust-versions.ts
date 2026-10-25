@@ -14,8 +14,10 @@ import type { CommandRunner } from './toolchain-prober.js';
  *   `<root>/<version>` → the staging home deleted → proven: that rustc names the version and this host, and cargo
  *   answers — or nothing of it is left.
  *
- * Windows waits on the owner: the MSVC toolchain cannot link on a clean Windows (it needs Visual Studio's linker), the
- * GNU one can (measured on the Windows test VM, 2026-10-25).
+ * WINDOWS: the GNU toolchain (the owner, q_7e642512) — measured, the MSVC one cannot link on a clean Windows (it needs
+ * Visual Studio's linker) and the GNU one carries its own, so no C compiler is asked for there. The homes reach rustup
+ * through the runner's `env` option — argv only, on every OS (Windows has no `env` command). Windows on ARM is not
+ * offered: it has not been measured.
  */
 
 export interface RustVersionsPorts {
@@ -46,18 +48,19 @@ export type RustInstallOutcome =
 
 export type RustRemoveOutcome = { readonly kind: 'refused'; readonly reason: string } | { readonly kind: 'removed'; readonly version: string };
 
-const NOT_HERE = "Genie does not install its own Rust on Windows yet: Rust's default (MSVC) toolchain needs Visual Studio's linker, which a clean Windows does not have, and how Genie handles that is the owner's decision; the rustc on your PATH is used";
+const NOT_ON_ARM_WINDOWS = "Genie does not install its own Rust on Windows on ARM yet (it has not been measured there); the rustc on your PATH is used";
 const NO_LINKER = "Rust needs a linker — the system's C compiler — and there is none here; install it first (Debian/Ubuntu: sudo apt install build-essential; Fedora: sudo dnf install gcc; Arch: sudo pacman -S base-devel; macOS: xcode-select --install) and install again";
 
 export function rustVersionsRoot(toolchainDataDir: string): string {
     return join(toolchainDataDir, 'rust-versions');
 }
 
-const rustcOf = (dir: string) => join(dir, 'bin', 'rustc');
+const exeOf = (platform: RustPlatform, name: string) => (platform === 'win32' ? `${name}.exe` : name);
+const rustcOf = (dir: string, platform: RustPlatform = 'linux') => join(dir, 'bin', exeOf(platform, 'rustc'));
 
 /** The versions Genie manages here — a full version directory whose bin/rustc is there. Newest first. */
-export function managedRust(ports: Pick<RustVersionsPorts, 'root' | 'fs'>): ManagedPhp[] {
-    return managedVersions(ports.fs.list(ports.root), (v) => ports.fs.exists(rustcOf(join(ports.root, v))), (v) => join(ports.root, v));
+export function managedRust(ports: Pick<RustVersionsPorts, 'root' | 'fs'> & { readonly platform?: RustPlatform }): ManagedPhp[] {
+    return managedVersions(ports.fs.list(ports.root), (v) => ports.fs.exists(rustcOf(join(ports.root, v), ports.platform)), (v) => join(ports.root, v));
 }
 
 export async function listRustVersions(ports: RustVersionsPorts): Promise<RustVersionsView> {
@@ -70,21 +73,24 @@ export async function listRustVersions(ports: RustVersionsPorts): Promise<RustVe
     } catch {
         // no rustc on PATH
     }
-    if (ports.platform === 'win32') return { managed, system, available: [], installRefused: NOT_HERE };
+    if (ports.platform === 'win32' && ports.arch === 'arm64') return { managed, system, available: [], installRefused: NOT_ON_ARM_WINDOWS };
     const have = new Set(managed.map((m) => m.version));
     return { managed, system, available: RUST_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) };
 }
 
 export async function installRustVersion(version: string, consent: boolean, ports: RustVersionsPorts): Promise<RustInstallOutcome> {
     if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; Rust ${version} was not installed` };
-    if (ports.platform === 'win32') return { kind: 'refused', reason: NOT_HERE };
+    if (ports.platform === 'win32' && ports.arch === 'arm64') return { kind: 'refused', reason: NOT_ON_ARM_WINDOWS };
     if (!RUST_RECIPES.some((r) => r.version === version)) return { kind: 'refused', reason: `Genie has no installer for Rust ${version}; this release installs ${RUST_RECIPES.map((r) => r.version).join(', ')}` };
     const dir = join(ports.root, version);
-    if (ports.fs.exists(rustcOf(dir))) return { kind: 'already-installed', version };
-    try {
-        if ((await ports.run('cc', ['--version'])).exitCode !== 0) return { kind: 'refused', reason: NO_LINKER };
-    } catch {
-        return { kind: 'refused', reason: NO_LINKER };
+    if (ports.fs.exists(rustcOf(dir, ports.platform))) return { kind: 'already-installed', version };
+    // The linker: the system's C compiler on Linux and macOS; the GNU toolchain carries its own on Windows.
+    if (ports.platform !== 'win32') {
+        try {
+            if ((await ports.run('cc', ['--version'])).exitCode !== 0) return { kind: 'refused', reason: NO_LINKER };
+        } catch {
+            return { kind: 'refused', reason: NO_LINKER };
+        }
     }
     const say = (step: string) => ports.progress?.(step);
     const label = `Rust ${version}`;
@@ -110,18 +116,19 @@ async function putInPlace(version: string, triple: string, init: Uint8Array, por
     const label = `Rust ${version}`;
     const staging = join(ports.root, `.staging-${version}`);
     const dir = join(ports.root, version);
-    const homes = [`RUSTUP_HOME=${join(staging, 'rustup')}`, `CARGO_HOME=${join(staging, 'cargo')}`];
+    const homes = { RUSTUP_HOME: join(staging, 'rustup'), CARGO_HOME: join(staging, 'cargo') };
+    const win = ports.platform === 'win32';
     const clean = () => {
         for (const p of [staging, dir]) {
             try { if (ports.fs.exists(p)) ports.fs.removeTree(p); } catch { /* the reason below is what matters */ }
         }
     };
     const fail = (reason: string): RustInstallOutcome => { clean(); return { kind: 'not-installed', reason: `${reason}. Nothing was installed` }; };
-    const step = async (what: string, bin: string, args: readonly string[]): Promise<string | null> => {
+    const step = async (what: string, bin: string, args: readonly string[], env?: Readonly<Record<string, string>>): Promise<string | null> => {
         say(`${label}: ${what}`);
         let r: { stdout: string; exitCode: number };
         try {
-            r = await ports.run(bin, args);
+            r = await ports.run(bin, args, env ? { env } : undefined);
         } catch (error) {
             return `${label} could not be installed — ${what} did not run: ${error instanceof Error ? error.message : String(error)}`;
         }
@@ -132,36 +139,38 @@ async function putInPlace(version: string, triple: string, init: Uint8Array, por
     try {
         if (ports.fs.exists(staging)) ports.fs.removeTree(staging);
         ports.fs.mkdirp(staging);
-        const initPath = join(staging, 'rustup-init');
+        const initPath = join(staging, exeOf(ports.platform, 'rustup-init'));
         ports.fs.writeBytes(initPath, init);
-        const steps: Array<[string, string, readonly string[]]> = [
-            ['making rustup-init runnable', 'chmod', ['+x', initPath]],
-            ['setting up rustup (in Genie\'s staging home)', 'env', [...homes, initPath, '-y', '--no-modify-path', '--default-toolchain', 'none', '--profile', 'minimal']],
-            [`downloading the ${version} toolchain (rustup verifies each part)`, 'env', [...homes, join(staging, 'cargo', 'bin', 'rustup'), 'toolchain', 'install', version, '--profile', 'minimal', '--no-self-update']],
+        const steps: Array<[string, string, readonly string[], Readonly<Record<string, string>> | undefined]> = [
+            ...(win ? [] : [['making rustup-init runnable', 'chmod', ['+x', initPath], undefined] as [string, string, readonly string[], undefined]]),
+            ['setting up rustup (in Genie\'s staging home)', initPath, ['-y', '--no-modify-path', '--default-toolchain', 'none', '--profile', 'minimal'], homes],
+            // FULLY QUALIFIED: a bare version installs for rustup's own default host, which is MSVC on Windows whichever
+            // rustup-init ran (measured on the Windows VM) — the GNU toolchain must be named.
+            [`downloading the ${version} toolchain (rustup verifies each part)`, join(staging, 'cargo', 'bin', exeOf(ports.platform, 'rustup')), ['toolchain', 'install', `${version}-${triple}`, '--profile', 'minimal', '--no-self-update'], homes],
         ];
-        for (const [what, bin, args] of steps) {
-            const problem = await step(what, bin, args);
+        for (const [what, bin, args, env] of steps) {
+            const problem = await step(what, bin, args, env);
             if (problem !== null) return fail(problem);
         }
         const toolchain = join(staging, 'rustup', 'toolchains', `${version}-${triple}`);
-        if (!ports.fs.exists(rustcOf(toolchain))) return fail(`rustup finished, but ${toolchain} has no bin/rustc — the toolchain did not lay out the way Genie expected`);
+        if (!ports.fs.exists(rustcOf(toolchain, ports.platform))) return fail(`rustup finished, but ${toolchain} has no bin/rustc — the toolchain did not lay out the way Genie expected`);
         ports.fs.rename(toolchain, dir);
         ports.fs.removeTree(staging);
 
         say(`${label}: checking that it runs`);
         let said = '';
         try {
-            said = (await ports.run(rustcOf(dir), ['-vV'])).stdout;
+            said = (await ports.run(rustcOf(dir, ports.platform), ['-vV'])).stdout;
         } catch (error) {
-            return fail(`${label} installed, but ${rustcOf(dir)} did not run: ${error instanceof Error ? error.message : String(error)}`);
+            return fail(`${label} installed, but ${rustcOf(dir, ports.platform)} did not run: ${error instanceof Error ? error.message : String(error)}`);
         }
         const got = parseRustcVersion(said);
-        if (!got) return fail(`${label} installed, but ${rustcOf(dir)} did not say a version: ${said.trim().slice(0, 200) || 'nothing'}`);
-        if (got.version !== version) return fail(`Rust ${version} was asked for, but ${rustcOf(dir)} reports ${got.version}`);
-        if (got.host !== triple) return fail(`Rust ${version} for ${triple} was asked for, but ${rustcOf(dir)} is for ${got.host}`);
+        if (!got) return fail(`${label} installed, but ${rustcOf(dir, ports.platform)} did not say a version: ${said.trim().slice(0, 200) || 'nothing'}`);
+        if (got.version !== version) return fail(`Rust ${version} was asked for, but ${rustcOf(dir, ports.platform)} reports ${got.version}`);
+        if (got.host !== triple) return fail(`Rust ${version} for ${triple} was asked for, but ${rustcOf(dir, ports.platform)} is for ${got.host}`);
         let cargo = '';
         try {
-            cargo = (await ports.run(join(dir, 'bin', 'cargo'), ['--version'])).stdout.trim();
+            cargo = (await ports.run(join(dir, 'bin', exeOf(ports.platform, 'cargo')), ['--version'])).stdout.trim();
         } catch (error) {
             return fail(`${label} installed, but its cargo did not run: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -172,7 +181,7 @@ async function putInPlace(version: string, triple: string, init: Uint8Array, por
     }
 }
 
-export function removeRustVersion(version: string, ports: Pick<RustVersionsPorts, 'root' | 'fs'>): RustRemoveOutcome {
+export function removeRustVersion(version: string, ports: Pick<RustVersionsPorts, 'root' | 'fs'> & { readonly platform?: RustPlatform }): RustRemoveOutcome {
     const target = managedRust(ports).find((m) => m.version === version);
     if (!target) return { kind: 'refused', reason: `Rust ${version} is not a version Genie manages here; Genie removes only what it installed` };
     try {
@@ -180,6 +189,6 @@ export function removeRustVersion(version: string, ports: Pick<RustVersionsPorts
     } catch (error) {
         return { kind: 'refused', reason: `Rust ${version} could not be removed: ${error instanceof Error ? error.message : String(error)}` };
     }
-    if (ports.fs.exists(rustcOf(target.dir))) return { kind: 'refused', reason: `Rust ${version} is still there after the delete (something running holds it); stop what uses it and try again` };
+    if (ports.fs.exists(rustcOf(target.dir, ports.platform))) return { kind: 'refused', reason: `Rust ${version} is still there after the delete (something running holds it); stop what uses it and try again` };
     return { kind: 'removed', version };
 }

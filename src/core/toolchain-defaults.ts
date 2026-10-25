@@ -29,12 +29,10 @@ export function currentLinkDir(toolchainDir: string, lang: DefaultLang): string 
 /**
  * Whether Genie manages that language's versions on this OS. PHP: Windows (windows.php.net's zip) and Linux (built
  * from php.net's source, TC5). Python: Windows (python.org's zip) and Linux (built from python.org's source, TC4b).
- * Neither on macOS yet. Rust: Linux and macOS (rustup's toolchain directory); Windows waits on the owner.
+ * Neither on macOS yet. Rust: every OS (rustup's toolchain directory; the GNU toolchain on Windows).
  */
 export function langManagedOn(lang: DefaultLang, platform: DefaultsPlatform): boolean {
     if (lang === 'php' || lang === 'python') return platform !== 'darwin';
-    // Rust: Linux and macOS until the owner decides Windows (MSVC needs Visual Studio's linker; GNU does not).
-    if (lang === 'rust') return platform !== 'win32';
     // Ruby: Windows (RubyInstaller) and Linux (ruby-lang.org's source); macOS is not supported.
     if (lang === 'ruby') return platform !== 'darwin';
     // Java (Temurin): Windows and Linux; macOS is not supported (the owner, 2026-10-25).
@@ -66,6 +64,5 @@ export function defaultPathEntries(toolchainDir: string, platform: DefaultsPlatf
 /** Where Genie manages a language's versions, in the words of a refusal: `Windows and Linux`. */
 export function langManagedWhere(lang: DefaultLang): string {
     if (lang === 'php' || lang === 'python' || lang === 'java' || lang === 'ruby') return 'Windows and Linux';
-    if (lang === 'rust') return 'Linux and macOS';
     return 'every OS';
 }

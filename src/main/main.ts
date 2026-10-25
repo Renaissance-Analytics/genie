@@ -780,7 +780,7 @@ const latestFor = latestIndex({ run: execFileRunner, fetchJson: async (url) => (
 let detectedPackageManager: Promise<PackageManager | null> | null = null;
 const packageManager = (): Promise<PackageManager | null> => (detectedPackageManager ??= detectPackageManager(process.platform as Platform, execFileRunner));
 /** Installs and updates take minutes (winget, a polkit prompt waiting on the person); the probe's 20 s would cut them off. */
-const longRunner: CommandRunner = (binary, args) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000 });
+const longRunner: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) });
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */

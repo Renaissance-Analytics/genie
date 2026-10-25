@@ -46,7 +46,7 @@ describe('where the defaults live', () => {
         // installs live (measured on the Windows VM, TC4a-2).
         expect(defaultPathEntries(TC, 'win32')).toEqual([
             join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'),
-            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'), join(TC, 'current', 'dotnet'), join(TC, 'current', 'ruby', 'bin'), join(TC, 'current', 'java', 'bin'),
+            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'), join(TC, 'current', 'dotnet'), join(TC, 'current', 'rust', 'bin'), join(TC, 'current', 'ruby', 'bin'), join(TC, 'current', 'java', 'bin'),
         ]);
         // PHP and Python are Genie-managed on Windows and Linux (built from source there: TC4b, TC5). PHP's source build
         // puts php and php-cgi at the version's top, as on Windows; Python's in bin/.
@@ -87,10 +87,6 @@ describe('choosing a default', () => {
         expect(setDefault('php', '8.4.27', m.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/PHP versions on Windows and Linux/) });
         expect(setDefault('python', '3.15.1', m.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Python versions on Windows and Linux/) });
         expect(m.ops).toEqual([]);
-        // Rust: Linux and macOS until the owner decides Windows (MSVC needs Visual Studio's linker; GNU does not).
-        const w = ports('win32', { rust: ['1.99.1'] });
-        expect(setDefault('rust', '1.99.1', w.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Rust versions on Linux and macOS/) });
-        expect(w.ops).toEqual([]);
         // Ruby: Windows (RubyInstaller) and Linux (ruby-lang.org's source); macOS is not supported.
         const r = ports('darwin', { ruby: ['4.0.9'] });
         expect(setDefault('ruby', '4.0.9', r.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Ruby versions on Windows and Linux/) });

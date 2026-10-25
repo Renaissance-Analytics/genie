@@ -16,6 +16,8 @@ import { probeTools, type CommandRunner, type LatestIndex } from './toolchain-pr
 export interface RunOptions {
     readonly timeoutMs?: number;
     readonly cwd?: string;
+    /** Added to the child's inherited environment for this call only (Genie's own is not changed). */
+    readonly env?: Readonly<Record<string, string>>;
 }
 
 const DEFAULT_TIMEOUT_MS = 20_000;
@@ -31,7 +33,7 @@ export const execFileRunner: (binary: string, args: readonly string[], options?:
         const child = execFile(
             binary,
             [...args],
-            { timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...(options.cwd ? { cwd: options.cwd } : {}), shell: false },
+            { timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.env ? { env: { ...process.env, ...options.env } } : {}), shell: false },
             (error, stdout, stderr) => {
                 if (error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
                     reject(Object.assign(new Error(`spawn ${binary} ENOENT`), { code: 'ENOENT' }));
