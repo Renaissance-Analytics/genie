@@ -38,7 +38,7 @@ export type DefaultOutcome =
 
 /** The version each language's link points at, or `null` (no default: the system's own). */
 export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainDir' | 'fs'>): Record<DefaultLang, string | null> {
-    const out = { node: null, go: null, php: null, python: null, dotnet: null, rust: null } as Record<DefaultLang, string | null>;
+    const out = { node: null, go: null, php: null, python: null, dotnet: null, rust: null, ruby: null } as Record<DefaultLang, string | null>;
     for (const lang of DEFAULT_LANGS) {
         const target = ports.fs.readLink(currentLinkDir(ports.toolchainDir, lang));
         if (target === null) continue;
