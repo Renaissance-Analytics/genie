@@ -86,6 +86,20 @@ export async function installPythonVersion(version: string, consent: boolean, po
             const sha = pythonShaFromIndex(index.body, version, ports.arch);
             return sha ? { ok: true, sha } : { ok: false, reason: `python.org's Windows index lists no sha256 for ${file}` };
         },
+        // `pip` as a COMMAND: the zip carries pip in site-packages but no Scripts\pip.exe, and ensurepip skips an
+        // installed pip. Reinstalling it from python.org's own bundled wheel — offline, no index — writes the stubs.
+        finish: async (dir) => {
+            const bin = binOf(dir);
+            let r: { stdout: string; exitCode: number };
+            try {
+                r = await ports.run(bin, ['-I', '-m', 'pip', 'install', '--no-index', '--find-links', join(dir, 'Lib', 'ensurepip', '_bundled'), '--force-reinstall', '--no-deps', '--disable-pip-version-check', '--no-warn-script-location', 'pip']);
+            } catch (error) {
+                return `Python ${version} unpacked, but pip could not be made a command: ${error instanceof Error ? error.message : String(error)}`;
+            }
+            if (r.exitCode !== 0) return `Python ${version} unpacked, but pip could not be made a command (exit ${r.exitCode}): ${r.stdout.trim().slice(0, 200)}`;
+            if (!ports.fs.exists(join(dir, 'Scripts', 'pip.exe'))) return `Python ${version} unpacked, but pip's install left no Scripts\\pip.exe`;
+            return null;
+        },
         prove: async (dir) => {
             const bin = binOf(dir);
             let said = '';

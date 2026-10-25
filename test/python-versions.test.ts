@@ -50,7 +50,7 @@ function fakeFs(initial: string[] = []) {
     return { fs, files, counts };
 }
 
-function ports(opts: { platform?: 'win32' | 'linux' | 'darwin'; arch?: 'x64' | 'arm64'; indexHash?: string; indexUrl?: string; pySays?: string; files?: string[] } = {}) {
+function ports(opts: { platform?: 'win32' | 'linux' | 'darwin'; arch?: 'x64' | 'arm64'; indexHash?: string; indexUrl?: string; pySays?: string; pipFails?: boolean; files?: string[] } = {}) {
     const platform = opts.platform ?? 'win32';
     const arch = opts.arch ?? 'x64';
     const disk = fakeFs(opts.files ?? []);
@@ -69,6 +69,12 @@ function ports(opts: { platform?: 'win32' | 'linux' | 'darwin'; arch?: 'x64' | '
             }
             // The PATH python (bare) first: on a fresh Windows that is the Store alias, which says no Python.
             if (bin === 'python') return { stdout: 'Python was not found; run without arguments to install from the Microsoft Store', exitCode: 9009 };
+            // pip from the BUNDLED wheel (offline): pip's own installer writes Scripts\pip.exe next to that python.
+            if (bin.endsWith('python.exe') && args.includes('--force-reinstall')) {
+                if (opts.pipFails) return { stdout: 'ERROR: Could not find a version that satisfies the requirement pip', exitCode: 1 };
+                disk.files.add(join(bin.slice(0, -'python.exe'.length), 'Scripts', 'pip.exe'));
+                return { stdout: 'Successfully installed pip-26.2.2', exitCode: 0 };
+            }
             if (bin.endsWith('python.exe')) return { stdout: `${opts.pySays ?? `${V} ${arch === 'x64' ? 'AMD64' : 'ARM64'} 26.0.1`}\n`, exitCode: 0 };
             return { stdout: '', exitCode: 0 };
         },
@@ -116,7 +122,8 @@ describe('installing one on Windows', () => {
             expect(a.disk.files.has(bin)).toBe(true);
             expect(a.disk.files.has(join(ROOT, V, 'Lib', 'venv', '__init__.py'))).toBe(true);
             // The proof runs ISOLATED (-I: no user site, no PYTHON* env) and imports what a person needs: ssl, venv, pip.
-            const proof = a.ran.find((c) => c.startsWith(`${bin} `));
+            // The proof — not the pip step, which the same python runs first (TC4a-2).
+            const proof = a.ran.find((c) => c.startsWith(`${bin} `) && c.includes(' -c '));
             expect(proof).toMatch(/^\S+ -I -c /);
             expect(proof).toMatch(/import .*ssl/);
             expect(proof).toMatch(/venv/);
@@ -124,6 +131,25 @@ describe('installing one on Windows', () => {
             expect([...a.disk.files].some((f) => f.includes('.staging-') || f.endsWith('.zip'))).toBe(false);
         });
     }
+
+    it('`pip` becomes a COMMAND: after the move, that python reinstalls pip from its own bundled wheel, offline', async () => {
+        const a = ports();
+        expect(await installPythonVersion(V, true, a.p)).toMatchObject({ kind: 'installed' });
+        const bin = join(ROOT, V, 'python.exe');
+        // Run by the FINAL directory's python — pip.exe bakes in the python that made it (measured: moved, it fails).
+        const pip = a.ran.find((c) => c.includes('--force-reinstall'));
+        expect(pip?.startsWith(`${bin} -I -m pip install `)).toBe(true);
+        expect(pip).toContain('--no-index');
+        expect(pip).toContain(`--find-links ${join(ROOT, V, 'Lib', 'ensurepip', '_bundled')}`);
+        expect(pip).not.toContain('.staging-');
+        expect(a.disk.files.has(join(ROOT, V, 'Scripts', 'pip.exe'))).toBe(true);
+    });
+
+    it('a pip step that fails is not an install — and nothing of it is left', async () => {
+        const a = ports({ pipFails: true });
+        expect(await installPythonVersion(V, true, a.p)).toMatchObject({ kind: 'not-installed', reason: expect.stringMatching(/pip/) });
+        expect([...a.disk.files].filter((f) => f.startsWith(ROOT))).toEqual([]);
+    });
 
     it('nothing without consent; an unknown version is refused by name', async () => {
         const a = ports();

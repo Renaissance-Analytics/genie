@@ -11,11 +11,11 @@ import { join } from 'node:path';
  * `node` directly goes through CreateProcess on Windows, which finds node.exe and never runs a .cmd.
  */
 
-export const DEFAULT_LANGS = ['node', 'go', 'php'] as const;
+export const DEFAULT_LANGS = ['node', 'go', 'php', 'python'] as const;
 export type DefaultLang = (typeof DEFAULT_LANGS)[number];
 export type DefaultsPlatform = 'win32' | 'linux' | 'darwin';
 
-export const LANG_LABEL: Record<DefaultLang, string> = { node: 'Node', go: 'Go', php: 'PHP' };
+export const LANG_LABEL: Record<DefaultLang, string> = { node: 'Node', go: 'Go', php: 'PHP', python: 'Python' };
 
 /** Where a language's Genie-managed versions live: `<toolchain>/<lang>-versions/<version>`. */
 export function versionDir(toolchainDir: string, lang: DefaultLang, version: string): string {
@@ -26,30 +26,30 @@ export function currentLinkDir(toolchainDir: string, lang: DefaultLang): string 
     return join(toolchainDir, 'current', lang);
 }
 
-/** Whether Genie manages that language's versions on this OS (PHP: Windows only, where windows.php.net builds them). */
+/**
+ * Whether Genie manages that language's versions on this OS. PHP: Windows only, where windows.php.net builds them.
+ * Python: Windows only for now — python.org's relocatable build is Windows-only; macOS and Linux are TC4b (from source).
+ */
 export function langManagedOn(lang: DefaultLang, platform: DefaultsPlatform): boolean {
-    return lang !== 'php' || platform === 'win32';
+    return (lang !== 'php' && lang !== 'python') || platform === 'win32';
 }
 
-/** Where the executables are inside a version's directory, by the official build's layout. */
-function binRel(lang: DefaultLang, platform: DefaultsPlatform): string | null {
-    if (lang === 'node') return platform === 'win32' ? null : 'bin';
-    if (lang === 'go') return 'bin';
-    return null; // php: php.exe at the top (Windows only)
+/** Where the executables are inside a version's directory, by the official build's layout ('' = its top). */
+function binRels(lang: DefaultLang, platform: DefaultsPlatform): readonly string[] {
+    if (lang === 'node') return [platform === 'win32' ? '' : 'bin'];
+    if (lang === 'go') return ['bin'];
+    // python.exe at the top, and Scripts\ — pip.exe and every console script pip installs (measured, TC4a-2).
+    if (lang === 'python') return ['', 'Scripts'];
+    return ['']; // php: php.exe at the top (Windows only)
+}
+
+/** One language's fixed PATH entries, in order. */
+export function langPathEntries(toolchainDir: string, lang: DefaultLang, platform: DefaultsPlatform): string[] {
+    const link = currentLinkDir(toolchainDir, lang);
+    return binRels(lang, platform).map((rel) => (rel === '' ? link : join(link, rel)));
 }
 
 /** The fixed PATH entries that reach each language's default, in order. */
 export function defaultPathEntries(toolchainDir: string, platform: DefaultsPlatform): string[] {
-    return DEFAULT_LANGS.filter((lang) => langManagedOn(lang, platform)).map((lang) => {
-        const rel = binRel(lang, platform);
-        const link = currentLinkDir(toolchainDir, lang);
-        return rel === null ? link : join(link, rel);
-    });
-}
-
-/** One language's entry (the same as in `defaultPathEntries`). */
-export function defaultPathEntry(toolchainDir: string, lang: DefaultLang, platform: DefaultsPlatform): string {
-    const rel = binRel(lang, platform);
-    const link = currentLinkDir(toolchainDir, lang);
-    return rel === null ? link : join(link, rel);
+    return DEFAULT_LANGS.filter((lang) => langManagedOn(lang, platform)).flatMap((lang) => langPathEntries(toolchainDir, lang, platform));
 }

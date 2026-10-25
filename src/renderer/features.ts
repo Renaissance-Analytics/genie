@@ -238,7 +238,7 @@ export interface ToolchainSection {
     /** Genie's own Python versions (Windows; TC4a), the PATH python, and what can be installed — or why not here. */
     readonly python?: PythonVersionsView;
     /** Each language's default version (`null` = the system's own), read from Genie's `current/<lang>` links. */
-    readonly defaults?: Readonly<Record<'node' | 'go' | 'php', string | null>>;
+    readonly defaults?: Readonly<Record<'node' | 'go' | 'php' | 'python', string | null>>;
     /** The machine's own PATH: whether Genie's defaults are on it, where, and exactly what would change (plan TC3b). */
     readonly machinePath?: { readonly applied: boolean; readonly where: readonly string[]; readonly entries: readonly string[]; readonly targets: readonly string[] };
 }
@@ -372,7 +372,7 @@ export type FeatureAction =
     | { kind: 'toolchain.installPython'; version: string; consent: boolean }
     | { kind: 'toolchain.removePython'; version: string }
     /** Make a managed version a language's default, or `null` for the system's own (plan TC3a). */
-    | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php'; version: string | null }
+    | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php' | 'python'; version: string | null }
     /** Put Genie's defaults on the machine's own PATH (`apply`, with `consent`), or take them off (Undo). */
     | { kind: 'toolchain.machinePath'; apply: boolean; consent?: boolean }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */

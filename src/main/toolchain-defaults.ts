@@ -1,6 +1,6 @@
 import { mkdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { DEFAULT_LANGS, LANG_LABEL, currentLinkDir, defaultPathEntry, langManagedOn, versionDir, type DefaultLang, type DefaultsPlatform } from '../core/toolchain-defaults.js';
+import { DEFAULT_LANGS, LANG_LABEL, currentLinkDir, langManagedOn, langPathEntries, versionDir, type DefaultLang, type DefaultsPlatform } from '../core/toolchain-defaults.js';
 import { pathWithFirst } from '../core/toolchain-repair.js';
 import type { EnvPort } from './toolchain-ops.js';
 
@@ -38,7 +38,7 @@ export type DefaultOutcome =
 
 /** The version each language's link points at, or `null` (no default: the system's own). */
 export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainDir' | 'fs'>): Record<DefaultLang, string | null> {
-    const out = { node: null, go: null, php: null } as Record<DefaultLang, string | null>;
+    const out = { node: null, go: null, php: null, python: null } as Record<DefaultLang, string | null>;
     for (const lang of DEFAULT_LANGS) {
         const target = ports.fs.readLink(currentLinkDir(ports.toolchainDir, lang));
         if (target === null) continue;
@@ -87,7 +87,7 @@ export function setDefault(lang: DefaultLang, version: string | null, ports: Def
 export function restoreDefaultsEnv(ports: Pick<DefaultsPorts, 'platform' | 'toolchainDir' | 'fs'> & { readonly env: EnvPort }): string[] {
     const defaults = listDefaults(ports);
     const entries = DEFAULT_LANGS.filter((lang) => defaults[lang] !== null && ports.fs.exists(currentLinkDir(ports.toolchainDir, lang)))
-        .map((lang) => defaultPathEntry(ports.toolchainDir, lang, ports.platform));
+        .flatMap((lang) => langPathEntries(ports.toolchainDir, lang, ports.platform));
     // Last first, so the first language ends up first.
     for (const entry of [...entries].reverse()) ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', entry, ports.platform));
     return entries;

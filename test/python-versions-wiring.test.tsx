@@ -28,6 +28,7 @@ let services: ComposedServices;
 let installs: Array<[string, boolean]>;
 let removals: string[];
 let managed: string[];
+let pyDefault: string | null;
 
 const view = (): PythonVersionsView => ({
     managed: managed.map((v) => ({ version: v, dir: `/data/genie2-toolchain/python-versions/${v}` })),
@@ -45,6 +46,10 @@ const ports = (): FeaturePorts => ({
             install: async (version, consent): Promise<PythonInstallOutcome> => { installs.push([version, consent]); managed = [version, ...managed]; return { kind: 'installed', version, dir: `/x/${version}` }; },
             remove: (version) => { removals.push(version); managed = managed.filter((v) => v !== version); return { kind: 'removed', version }; },
         },
+        defaults: {
+            list: () => ({ node: null, go: null, php: null, python: pyDefault }),
+            set: (lang, version) => { if (lang === 'python') pyDefault = version; return version === null ? { kind: 'cleared', lang } : { kind: 'set', lang, version }; },
+        },
     },
 });
 const scanned = (): FeatureState => ({ toolStatuses: [], knowledgeQuery: '', toolchainCheckedAt: 1 });
@@ -52,7 +57,7 @@ const scanned = (): FeatureState => ({ toolStatuses: [], knowledgeQuery: '', too
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-python-'));
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => [] });
-    installs = []; removals = []; managed = [];
+    installs = []; removals = []; managed = []; pyDefault = null;
 });
 
 afterEach(async () => {
@@ -88,6 +93,29 @@ describe('Python versions through the feature IPC', () => {
 
 const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<ToolchainSurface data={{ ...EMPTY_FEATURES, toolchain }} onAction={() => {}} onNavigate={() => {}} />);
 const base = { tools: [], checkedAt: 1 };
+
+describe("Python's default (TC4a-2)", () => {
+    it('Make default sets it; the DEFAULT version\'s Remove is refused and never reaches the remover', async () => {
+        managed = ['3.15.1', '3.14.9'];
+        const set = await handleFeatureAction(services, { kind: 'toolchain.setDefault', lang: 'python', version: '3.15.1' }, scanned(), ports());
+        expect(set.toolchain!.defaults!.python).toBe('3.15.1');
+        expect(set.toolchain!.result).toMatch(/Python 3[.]15[.]1 is now the default/);
+        const refused = await handleFeatureAction(services, { kind: 'toolchain.removePython', version: '3.15.1' }, scanned(), ports());
+        expect(removals).toEqual([]);
+        expect(refused.toolchain!.refusals).toEqual([{ tool: 'python', version: '3.15.1', reason: expect.stringMatching(/is the default/) }]);
+        await handleFeatureAction(services, { kind: 'toolchain.removePython', version: '3.14.9' }, scanned(), ports());
+        expect(removals).toEqual(['3.14.9']);
+    });
+
+    it('the surface marks the default, offers Make default on the others, and the system\'s', () => {
+        const html = render({ ...base, defaults: { node: null, go: null, php: null, python: '3.15.1' }, python: { managed: [{ version: '3.15.1', dir: '/p/3.15.1' }, { version: '3.14.9', dir: '/p/3.14.9' }], system: null, available: [] } });
+        expect(html).toMatch(/data-python-version="3[.]15[.]1"[^>]*data-default="true"/);
+        expect(html).toMatch(/data-python-version="3[.]14[.]9"[^>]*data-default="false"[^]*?data-make-default="python:3[.]14[.]9"/);
+        expect(html).not.toContain('data-make-default="python:3.15.1"');
+        expect(html).toMatch(/<button[^>]*disabled=""[^>]*title="Python 3[.]15[.]1 is the default[^"]*"[^>]*>Remove/);
+        expect(html).toContain('data-use-system="python"');
+    });
+});
 
 describe('Toolchain → Python versions', () => {
     it("Genie's versions with Remove, the PATH python, and an Install per version not here", () => {

@@ -114,7 +114,7 @@ import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './tool
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
 import { defaultPathEntries } from '../core/toolchain-defaults.js';
 import { goVersionsRoot, installGoVersion, listGoVersions, managedGo, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
-import { installPythonVersion, listPythonVersions, pythonVersionsRoot, removePythonVersion, type PythonVersionsPorts } from './python-versions.js';
+import { installPythonVersion, listPythonVersions, managedPython, pythonVersionsRoot, removePythonVersion, type PythonVersionsPorts } from './python-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -2510,7 +2510,7 @@ async function boot(): Promise<void> {
                 set: (lang, version) => {
                     const platform = process.platform as Platform;
                     const linkPorts = { platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(platform) };
-                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
+                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
                     const outcome = setDefault(lang, version, { ...linkPorts, managed });
                     if (outcome.kind !== 'refused') restoreDefaultsEnv({ ...linkPorts, env: processEnv });
                     return outcome;

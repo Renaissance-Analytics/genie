@@ -5,6 +5,8 @@
  *
  *   1. a tampered index (wrong sha256) is refused, and nothing of it is left;
  *   2. Install Python: installed; it names the version; a venv is made and pip installs a package into it;
+ *   2b. Python as the DEFAULT (TC4a-2): through the product's setDefault + restoreDefaultsEnv, `python` and `pip`
+ *       resolve BY NAME to Genie's copy (ahead of the Store alias), and a console script pip installs runs by name;
  *   3. nothing was registered: HKCU\Software\Python does not exist — with a POSITIVE CONTROL first, proving the same
  *      `reg query` sees a key that does exist;
  *   4. listed as managed; Remove deletes it and it is no longer listed.
@@ -18,7 +20,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PYTHON_RECIPES } from '../src/core/python-versions.js';
-import { installPythonVersion, listPythonVersions, removePythonVersion, type PythonVersionsPorts } from '../src/main/python-versions.js';
+import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
+import { installPythonVersion, listPythonVersions, managedPython, removePythonVersion, type PythonVersionsPorts } from '../src/main/python-versions.js';
 import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
@@ -66,6 +69,26 @@ async function main(): Promise<void> {
         execFileSync(vpy, ['-m', 'pip', 'install', '--no-input', '--disable-pip-version-check', 'six'], { encoding: 'utf8' });
         const six = execFileSync(vpy, ['-c', 'import six, sys; print(six.__version__, sys.base_prefix)'], { encoding: 'utf8' }).trim();
         check(six.endsWith(installed.dir), 'a venv is made from it, and pip installs into the venv', six);
+
+        console.log('2b. Python as the default');
+        const toolchainDir = join(base, 'genie2-toolchain');
+        const linkPorts = { platform, toolchainDir, fs: nodeLinkFs(platform) };
+        const set = setDefault('python', V, { ...linkPorts, managed: () => managedPython(ports).map((m) => m.version) });
+        check(set.kind === 'set', 'setDefault python', JSON.stringify(set));
+        const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+        const pathKey = Object.keys(childEnv).find((k) => k.toLowerCase() === 'path') ?? 'Path';
+        const applied = restoreDefaultsEnv({ ...linkPorts, env: { get: () => childEnv[pathKey], set: (_n, v) => { childEnv[pathKey] = v; } } });
+        check(applied.length === 2 && applied[1]!.endsWith('Scripts'), 'two entries first on the PATH: python, then Scripts', applied.join(' ; '));
+        const byName = (cmd: string) => execFileSync('cmd.exe', ['/d', '/c', cmd], { encoding: 'utf8', env: childEnv }).trim();
+        const wherePy = byName('where python').split(/\r?\n/)[0] ?? '';
+        check(wherePy.toLowerCase() === join(toolchainDir, 'current', 'python', 'python.exe').toLowerCase(), '`python` by name is current\\python', wherePy);
+        check(byName('python --version') === `Python ${V}`, '`python --version` names it', byName('python --version'));
+        const pipSays = byName('pip --version');
+        check(pipSays.startsWith('pip ') && pipSays.includes(installed.dir), '`pip` by name is that python\'s pip', pipSays);
+        byName('pip install --no-input --disable-pip-version-check --quiet pyflakes');
+        const flakes = byName('pyflakes --version');
+        check(flakes.includes(`Python ${V}`), 'a console script pip installs runs by name', flakes);
+        check(setDefault('python', null, { ...linkPorts, managed: () => [] }).kind === 'cleared', 'the default cleared (the link goes, the version stays)');
 
         console.log('3. nothing registered');
         const control = 'HKCU\\Software\\GenieAcceptanceControl';

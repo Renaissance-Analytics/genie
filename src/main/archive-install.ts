@@ -40,6 +40,11 @@ export interface ArchiveSpec {
     /** The archive's single top folder (`go`, `node-v24.22.1-win-x64`) — or `null` for a FLAT archive whose files are
      *  the install itself (python.org's Windows zips: python.exe at the top). */
     readonly topFolder: string | null;
+    /**
+     * Anything that must happen IN the final directory before the proof (`null` = done, else why not): Python's
+     * `Scripts\pip.exe` bakes in the python that made it, so it is made here, never in staging.
+     */
+    readonly finish?: (dir: string) => Promise<string | null>;
     /** Proves the moved directory runs: `null` = proven, else why not. */
     readonly prove: (dir: string) => Promise<string | null>;
 }
@@ -113,6 +118,11 @@ async function putInPlace(spec: ArchiveSpec, bytes: Uint8Array, ports: ArchiveIn
             ports.fs.removeTree(staging);
         }
 
+        if (spec.finish) {
+            say(`${label}: finishing the install`);
+            const unfinished = await spec.finish(dir);
+            if (unfinished !== null) return fail(unfinished);
+        }
         say(`${label}: checking that it runs`);
         const problem = await spec.prove(dir);
         if (problem !== null) return fail(problem);
