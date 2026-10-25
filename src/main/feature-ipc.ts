@@ -25,6 +25,7 @@ import type { InstallOutcome } from './toolchain-ops.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
 import type { DotnetInstallOutcome, DotnetRemoveOutcome, DotnetVersionsView } from './dotnet-versions.js';
+import type { RustInstallOutcome, RustRemoveOutcome, RustVersionsView } from './rust-versions.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
 import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
@@ -124,6 +125,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<DotnetInstallOutcome>;
             remove(version: string): Promise<DotnetRemoveOutcome>;
         };
+        /** Genie's own Rust (main/rust-versions.ts): rustup as the downloader, the toolchain directory kept; Linux and macOS. */
+        rust?: {
+            list(): Promise<RustVersionsView>;
+            install(version: string, consent: boolean): Promise<RustInstallOutcome>;
+            remove(version: string): RustRemoveOutcome;
+        };
         /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
         defaults?: {
             list(): Record<DefaultLang, string | null>;
@@ -194,6 +201,7 @@ export interface FeatureState {
     toolchainGo?: GoVersionsView | null;
     toolchainPython?: PythonVersionsView | null;
     toolchainDotnet?: DotnetVersionsView | null;
+    toolchainRust?: RustVersionsView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
     toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;
@@ -239,6 +247,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
         ...(state.toolchainPython ? { python: state.toolchainPython } : {}),
         ...(state.toolchainDotnet ? { dotnet: state.toolchainDotnet } : {}),
+        ...(state.toolchainRust ? { rust: state.toolchainRust } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
         ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
@@ -260,6 +269,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainGo: section?.go ?? null,
         toolchainPython: section?.python ?? null,
         toolchainDotnet: section?.dotnet ?? null,
+        toolchainRust: section?.rust ?? null,
         toolchainDefaults: section?.defaults ?? null,
         toolchainMachinePath: section?.machinePath ?? null,
     };
@@ -287,6 +297,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.go) next.toolchainGo = await tc.go.list();
     if (tc.python) next.toolchainPython = await tc.python.list();
     if (tc.dotnet) next.toolchainDotnet = await tc.dotnet.list();
+    if (tc.rust) next.toolchainRust = await tc.rust.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
@@ -961,6 +972,50 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'dotnet', outcome.reason, action.version);
             else next.toolchainResult = `.NET SDK ${outcome.version} was removed.`;
             next.toolchainDotnet = await tc.dotnet.list();
+            break;
+        }
+        case 'toolchain.installRust': {
+            clearRefusal(next, 'rust', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'rust', `Genie installs nothing without your go-ahead; Rust ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.rust) {
+                refuse(next, 'rust', 'no Rust version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.rust.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'rust', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Rust ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Rust ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Rust ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainRust = await tc.rust.list();
+            break;
+        }
+        case 'toolchain.removeRust': {
+            {
+                const current = ports.toolchain?.defaults?.list()['rust'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'rust', action.version);
+                    refuse(next, 'rust', `${LANG_LABEL['rust']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'rust', action.version);
+            if (!tc?.rust) {
+                refuse(next, 'rust', 'no Rust version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.rust.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'rust', outcome.reason, action.version);
+            else next.toolchainResult = `Rust ${outcome.version} was removed.`;
+            next.toolchainRust = await tc.rust.list();
             break;
         }
         case 'toolchain.machinePath': {

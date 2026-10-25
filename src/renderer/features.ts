@@ -14,6 +14,7 @@ import type { SiteInfo } from '../main/site-manager.js';
 import type { GoVersionsView } from '../main/go-versions.js';
 import type { PythonVersionsView } from '../main/python-versions.js';
 import type { DotnetVersionsView } from '../main/dotnet-versions.js';
+import type { RustVersionsView } from '../main/rust-versions.js';
 import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
@@ -240,8 +241,10 @@ export interface ToolchainSection {
     readonly python?: PythonVersionsView;
     /** Genie's own .NET SDKs (TC6a), the dotnet on PATH, and what can be installed. */
     readonly dotnet?: DotnetVersionsView;
+    /** Genie's own Rust versions (TC6b), the rustc on PATH, and what can be installed — or why not here. */
+    readonly rust?: RustVersionsView;
     /** Each language's default version (`null` = the system's own), read from Genie's `current/<lang>` links. */
-    readonly defaults?: Readonly<Record<'node' | 'go' | 'php' | 'python' | 'dotnet', string | null>>;
+    readonly defaults?: Readonly<Record<'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust', string | null>>;
     /** The machine's own PATH: whether Genie's defaults are on it, where, and exactly what would change (plan TC3b). */
     readonly machinePath?: { readonly applied: boolean; readonly where: readonly string[]; readonly entries: readonly string[]; readonly targets: readonly string[] };
 }
@@ -377,8 +380,11 @@ export type FeatureAction =
     /** Install one Genie-managed .NET SDK (Microsoft, sha512-verified). `consent` is the person's click. */
     | { kind: 'toolchain.installDotnet'; version: string; consent: boolean }
     | { kind: 'toolchain.removeDotnet'; version: string }
+    /** Install one Genie-managed Rust version (rustup as the downloader). `consent` is the person's click. */
+    | { kind: 'toolchain.installRust'; version: string; consent: boolean }
+    | { kind: 'toolchain.removeRust'; version: string }
     /** Make a managed version a language's default, or `null` for the system's own (plan TC3a). */
-    | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php' | 'python' | 'dotnet'; version: string | null }
+    | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust'; version: string | null }
     /** Put Genie's defaults on the machine's own PATH (`apply`, with `consent`), or take them off (Undo). */
     | { kind: 'toolchain.machinePath'; apply: boolean; consent?: boolean }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
@@ -459,5 +465,6 @@ export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): To
     if (action.kind === 'toolchain.installGo' || action.kind === 'toolchain.removeGo') return refusals.find((r) => r.tool === 'go' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installPython' || action.kind === 'toolchain.removePython') return refusals.find((r) => r.tool === 'python' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installDotnet' || action.kind === 'toolchain.removeDotnet') return refusals.find((r) => r.tool === 'dotnet' && r.version === action.version) ?? null;
+    if (action.kind === 'toolchain.installRust' || action.kind === 'toolchain.removeRust') return refusals.find((r) => r.tool === 'rust' && r.version === action.version) ?? null;
     return null;
 }

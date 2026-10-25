@@ -1,6 +1,6 @@
 import { mkdirSync, readlinkSync, rmdirSync, symlinkSync, unlinkSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { DEFAULT_LANGS, LANG_LABEL, currentLinkDir, langManagedOn, langPathEntries, versionDir, type DefaultLang, type DefaultsPlatform } from '../core/toolchain-defaults.js';
+import { DEFAULT_LANGS, LANG_LABEL, currentLinkDir, langManagedOn, langManagedWhere, langPathEntries, versionDir, type DefaultLang, type DefaultsPlatform } from '../core/toolchain-defaults.js';
 import { pathWithFirst } from '../core/toolchain-repair.js';
 import type { EnvPort } from './toolchain-ops.js';
 
@@ -38,7 +38,7 @@ export type DefaultOutcome =
 
 /** The version each language's link points at, or `null` (no default: the system's own). */
 export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainDir' | 'fs'>): Record<DefaultLang, string | null> {
-    const out = { node: null, go: null, php: null, python: null, dotnet: null } as Record<DefaultLang, string | null>;
+    const out = { node: null, go: null, php: null, python: null, dotnet: null, rust: null } as Record<DefaultLang, string | null>;
     for (const lang of DEFAULT_LANGS) {
         const target = ports.fs.readLink(currentLinkDir(ports.toolchainDir, lang));
         if (target === null) continue;
@@ -56,7 +56,7 @@ export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainD
  */
 export function setDefault(lang: DefaultLang, version: string | null, ports: DefaultsPorts): DefaultOutcome {
     const label = LANG_LABEL[lang];
-    if (!langManagedOn(lang, ports.platform)) return { kind: 'refused', reason: `Genie manages ${label} versions on Windows and Linux; here ${label} is the one on your PATH` };
+    if (!langManagedOn(lang, ports.platform)) return { kind: 'refused', reason: `Genie manages ${label} versions on ${langManagedWhere(lang)}; here ${label} is the one on your PATH` };
     const link = currentLinkDir(ports.toolchainDir, lang);
     if (version === null) {
         try {
