@@ -19,5 +19,7 @@ export function sessionHostPort(host: () => SessionHost | null): AgentOpsPorts['
         // A running agent's own models, and a switch with no restart (prism-acp 0.22).
         modelState: (id) => host()?.modelState(id) ?? null,
         switchModel: (id, model) => host()?.switchModel(id, model) ?? null,
+        // A parked shell question answered by a changed tool setting (genie#1188).
+        settleParked: (id, decision) => host()?.settleParked(id, decision) ?? false,
     };
 }

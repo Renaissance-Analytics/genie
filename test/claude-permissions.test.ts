@@ -24,8 +24,9 @@ describe('the permission mode Claude starts with', () => {
         expect(modeIn(argvFor('all'))).toBe('bypassPermissions');
     });
 
-    it('edits only when the agent is set so (positive control: a different mode, from the same path)', () => {
-        expect(modeIn(argvFor('edits'))).toBe('acceptEdits');
+    it('edits only starts the SAME way (genie#1188): its shell refusal is the permission hook, answered per call', () => {
+        expect(modeIn(argvFor('edits'))).toBe('bypassPermissions');
+        expect(argvFor('edits')).toEqual(argvFor('all'));
     });
 
     it('carries the cwd and the resume through unchanged', () => {

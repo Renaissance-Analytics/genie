@@ -856,6 +856,8 @@ async function boot(): Promise<void> {
     });
     host = new SessionHost({
         userData: genieHome(),
+        // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
+        currentRecord: (id) => registry?.find(id) ?? null,
         lifecycle: {
             spawned: (agentId, run, processes) => {
                 spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });

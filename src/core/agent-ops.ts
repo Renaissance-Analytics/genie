@@ -117,11 +117,12 @@ export function budgetDecision(input: { dailyLimitUsd: number | null; spentToday
 }
 
 /**
- * WHEN A SETTING THAT IS READ AT START TAKES EFFECT — the model, a Claude agent's tool setting. The owner, 2026-10-14:
- * "I had to restart you because I was not able to change your model … all settings UI for agents is not live".
+ * WHEN A SETTING THAT IS READ AT START TAKES EFFECT — the model, when the running session cannot switch it. The owner,
+ * 2026-10-14: "I had to restart you because I was not able to change your model … all settings UI for agents is not
+ * live". (A Claude agent's tool setting is no longer one of these: it is answered per shell call — `live`, genie#1188.)
  *
- * The provider reads both on its command line (`--model`, `--permission-mode`), so a running session takes them by
- * restarting ON THE SAME CONVERSATION. Genie does that itself, at the first moment it costs nothing:
+ * The provider reads it on its command line (`--model`), so a running session takes it by restarting ON THE SAME
+ * CONVERSATION. Genie does that itself, at the first moment it costs nothing:
  * - not running: the next start reads it — nothing to do;
  * - idle, nothing parked, no background task running: now;
  * - mid-turn, or a question parked on the person: when the turn ends — a restart would cut the turn or cancel the
@@ -139,7 +140,12 @@ export type ApplyWhen =
      * SWITCHED ON THE RUNNING SESSION, no restart (prism-acp 0.22 `setModel`; the model only). Claude's CLI switches at
      * once (`now`); Codex sends the model with its next turn (`next-turn`), so a turn already running ends on its own.
      */
-    | { readonly when: 'switched'; readonly timing: 'now' | 'next-turn' };
+    | { readonly when: 'switched'; readonly timing: 'now' | 'next-turn' }
+    /**
+     * LIVE, nothing restarts (genie#1188): a Claude agent's tool setting is answered per shell call by the permission
+     * hook, from the setting at that moment, so the next shell command follows the new one.
+     */
+    | { readonly when: 'live' };
 
 export function applyWhen(session: { running: boolean; turnState: string; pendingApproval: unknown; failure: unknown } | null, shellsRunning: number): ApplyWhen {
     if (session === null || !session.running) return { when: 'next-start' };
@@ -156,8 +162,19 @@ export function applyOutcome(agentName: string, what: string, apply: ApplyWhen):
         case 'after-turn': return `${what} — applies when ${agentName} finishes this turn (it restarts on the same conversation)`;
         case 'after-shells': return `${what} — applies when ${agentName}’s ${apply.shells === 1 ? 'background task ends' : `${apply.shells} background tasks end`}; restarting now would stop ${apply.shells === 1 ? 'it' : 'them'}`;
         case 'next-start': return `${what} — applies when ${agentName} next starts`;
+        case 'live': return `${what} — applies from ${agentName}’s next shell command, no restart`;
         case 'switched': return apply.timing === 'now'
             ? `${what} — switched now on the same conversation, no restart: ${agentName}’s next turn runs on it`
             : `${what} — applies from ${agentName}’s next turn, on the same conversation, no restart (a turn already running finishes on its model)`;
     }
+}
+
+/**
+ * A Claude agent's TOOL SETTING as the answer to one shell call (genie#1188), read at the moment the permission hook
+ * asks: all tools (and no setting) → allow, nobody asked; ask → park it for the person; edits only → refuse.
+ */
+export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined): 'allow' | 'deny' | 'ask' {
+    if (permissions === 'ask') return 'ask';
+    if (permissions === 'edits') return 'deny';
+    return 'allow';
 }

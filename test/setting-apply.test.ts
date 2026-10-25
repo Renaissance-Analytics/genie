@@ -82,7 +82,8 @@ describe('a model change reaches a running agent', () => {
 
     it('background tasks running: it waits for them (a restart would stop them), then applies', async () => {
         const f = fakes({ shells: 2 });
-        expect(await setPermissions(f.ports, 'agent_a', 'ask')).toMatchObject({ ok: true, apply: { when: 'after-shells', shells: 2 } });
+        // A model the host cannot switch in place is read at start (the tool setting no longer is: genie#1188).
+        expect(await setModel(f.ports, 'agent_a', 'opus')).toMatchObject({ ok: true, apply: { when: 'after-shells', shells: 2 } });
         f.applier.changed('agent_a' as AgentRecord['id']);
         await settle();
         expect(f.calls).toEqual([]);
@@ -90,6 +91,17 @@ describe('a model change reaches a running agent', () => {
         f.applier.changed('agent_a' as AgentRecord['id']);
         await settle();
         expect(f.calls).toEqual(['stop', 'start:sess-1']);
+    });
+
+    it('the TOOL SETTING restarts nothing, whatever the session is doing (genie#1188): it is answered per shell call', async () => {
+        for (const probe of [session(), session({ turnState: 'working' }), null]) {
+            const f = fakes({ probe, shells: 2 });
+            expect(await setPermissions(f.ports, 'agent_a', 'edits')).toMatchObject({ ok: true, apply: { when: 'live' } });
+            f.applier.changed('agent_a' as AgentRecord['id']);
+            await settle();
+            expect(f.calls).toEqual([]);
+            expect(f.applier.pending('agent_a' as AgentRecord['id'])).toBe(false);
+        }
     });
 
     it('not running: the next start reads it — nothing is started on its behalf', async () => {

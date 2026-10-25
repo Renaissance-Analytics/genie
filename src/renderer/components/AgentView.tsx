@@ -1222,7 +1222,7 @@ export function AgentView({
                                                         <option value="ask">ask me before shell commands</option>
                                                         <option value="edits">edits only — shell refused</option>
                                                     </select>
-                                                    {help(`A change applies at once while ${agent.name} is idle, or when its turn ends — it restarts on the same conversation.`)}
+                                                    {help(`A change applies from ${agent.name}’s next shell command — nothing restarts. A shell command already waiting on you is answered by the new setting.`)}
                                                     {outcomeFor('tools')}
                                                 </label>
                                             ) : null}

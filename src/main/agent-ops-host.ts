@@ -1,3 +1,4 @@
+import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
@@ -50,6 +51,8 @@ export interface AgentOpsPorts {
         modelState?(id: AgentRecord['id']): Promise<SessionModelState> | null;
         /** Switch the running agent's model, no restart (`SessionHost.switchModel`): `null` = not running, or it cannot. */
         switchModel?(id: AgentRecord['id'], model: string): Promise<void> | null;
+        /** Answer a parked shell question by the new tool setting (`SessionHost.settleParked`): `false` = none parked. */
+        settleParked?(id: AgentRecord['id'], decision: 'allow' | 'deny'): boolean;
     };
     /** Each provider's model list, asked of its CLI once and kept (core/provider-models.ts `ProviderModelCache`). */
     models?: { get(provider: string, options?: { refresh?: boolean }): Promise<ModelChoices> };
@@ -270,14 +273,21 @@ export async function setMode(ports: AgentOpsPorts, agentId: string, mode: Agent
 
 /**
  * What a CLAUDE agent may do: all tools, ask the person before shell commands, or edits only (shell refused).
- * Codex asks in the chat for each approval, so it has no such setting. Applies when the session next starts.
+ * Codex asks in the chat for each approval, so it has no such setting.
+ *
+ * LIVE, NOTHING RESTARTS (genie#1188): each shell call's question is answered from the setting at that moment
+ * (session-host `claudeOptionsFor`), so saving it is enough. A shell command already parked on the person is answered
+ * by the new setting at once — all tools → allowed, edits only → refused; ask leaves it waiting for the person.
  */
 export async function setPermissions(ports: AgentOpsPorts, agentId: string, permissions: AgentPermissions): Promise<{ ok: true; record: AgentRecord; apply: ApplyWhen } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (record.provider !== 'claude') return { ok: false, reason: `${record.name} runs on ${record.provider}; Codex asks in the chat for each approval, so it has no tool setting` };
     const updated = await ports.registry.setPermissions(record.id, permissions);
-    return updated ? { ok: true, record: updated, apply: ports.applyOnStart?.(record.id) ?? { when: 'next-start' } } : UNKNOWN;
+    if (!updated) return UNKNOWN;
+    const decision = permissionDecisionFor(permissions);
+    if (decision !== 'ask') ports.host?.settleParked?.(record.id, decision);
+    return { ok: true, record: updated, apply: { when: 'live' } };
 }
 
 /**

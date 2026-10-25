@@ -279,6 +279,13 @@ export interface AgentSessionOptions {
      */
     onStateChange?: () => void;
     /**
+     * HOW A PERMISSION REQUEST IS ANSWERED, decided per request (genie#1188): `ask` parks it for the person, as every
+     * request was before; `allow` and `deny` answer it at once, with the request's own option of that ACP kind
+     * (`allow_once` / `reject_once`) — never one guessed from a label. Read at the moment the provider asks, so a
+     * change to what decides it applies to the next request with nothing restarted. Absent = `ask`.
+     */
+    permissionDecision?: (request: PermissionRequestLike) => 'allow' | 'deny' | 'ask';
+    /**
      * The provider has identified its own conversation, once.
      *
      * Fired when `cliSessionId` first becomes known — the value a later resume is keyed on, and
@@ -460,7 +467,7 @@ export class AgentSession {
      * provider process waiting forever, and a resolver with no question is a decision nobody
      * made.
      */
-    #approval: { approval: Approval; resolve: (outcome: PermissionOutcomeLike) => void } | null = null;
+    #approval: { approval: Approval; resolve: (outcome: PermissionOutcomeLike) => void; request: PermissionRequestLike } | null = null;
 
     /** The agent's commands, skills, plugins and subagents, as its CLI last reported them (core/provider-commands.ts). */
     #extensions: ProviderExtensions | null = null;
@@ -654,6 +661,23 @@ export class AgentSession {
      * best. A refused answer leaves the approval parked, which is recoverable; "answered with
      * something meaningless" is not.
      */
+    /**
+     * Answer the parked request by a DECISION rather than a person's press (genie#1188: the tool setting changed while a
+     * shell command waited) — with the request's own option of that ACP kind, recorded like any answer. `false` =
+     * nothing parked.
+     */
+    settleApproval(decision: 'allow' | 'deny'): boolean {
+        const held = this.#approval;
+        if (!held) return false;
+        const outcome = answerFor(held.request, decision);
+        if (outcome.outcome === 'selected' && this.answerApproval(outcome.optionId)) return true;
+        this.#approval = null;
+        this.#parkedAt = null;
+        held.resolve({ outcome: 'cancelled' });
+        this.#options.onStateChange?.();
+        return true;
+    }
+
     answerApproval(optionId: string, note = ''): boolean {
         const held = this.#approval;
         if (!held) return false;
@@ -797,6 +821,9 @@ export class AgentSession {
                     new Promise<PermissionOutcomeLike>((resolve) => {
                         // Nobody will answer a stopped run's question: it is declined, and said once.
                         if (this.#ended) { this.#straggler(); resolve({ outcome: 'cancelled' }); return; }
+                        // Decided now, from the setting as it is now (genie#1188): allowed or refused at once, or parked.
+                        const decided = this.#options.permissionDecision?.(request) ?? 'ask';
+                        if (decided !== 'ask') { resolve(answerFor(request, decided)); return; }
                         const approval = approvalFrom(request);
 
                         // A request with no readable options cannot be answered by anybody.
@@ -811,7 +838,7 @@ export class AgentSession {
                         // One at a time. A second request while one is parked would orphan the
                         // first resolver — a provider waiting forever on a promise nobody holds.
                         this.#approval?.resolve({ outcome: 'cancelled' });
-                        this.#approval = { approval, resolve };
+                        this.#approval = { approval, resolve, request };
                         this.#parkedAt = this.#now();
                         this.#options.onStateChange?.();
                     }),
@@ -1589,4 +1616,21 @@ function persistable(event: StreamEvent, runId: string | undefined): JsonObject 
         // payload is survivable, losing the fact that the event happened is not.
         return { kind: event.kind, unserialisable: true, ...run } as JsonObject;
     }
+}
+
+/**
+ * A request answered by a decision: the option whose ACP `kind` is exactly `allow_once` or `reject_once` (matched as
+ * `approvalFrom` matches tone — on the protocol's kind, never a label). Allow with no allow_once offered is NOT allowed
+ * by some other option: it is refused. Refusal with no reject_once offered is a cancel, which the provider reads as no.
+ */
+function answerFor(request: PermissionRequestLike, decision: 'allow' | 'deny'): PermissionOutcomeLike {
+    const idOf = (kind: string): string | null => {
+        for (const raw of request.options) {
+            const id = raw['optionId'];
+            if (raw['kind'] === kind && typeof id === 'string' && id.length > 0) return id;
+        }
+        return null;
+    };
+    const chosen = (decision === 'allow' ? idOf('allow_once') : null) ?? idOf('reject_once');
+    return chosen ? { outcome: 'selected', optionId: chosen } : { outcome: 'cancelled' };
 }

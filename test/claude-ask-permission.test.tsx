@@ -31,18 +31,13 @@ describe('the options Claude starts with', () => {
         expect(o.permissionPrompts).toEqual({ tools: ['Bash', 'PowerShell'] });
     });
 
-    it('edits → acceptEdits and no prompts; all and absent → bypassPermissions and no prompts (positive control: ask has one)', () => {
-        const edits = claudeOptionsFor(record('edits'), '/w/tynn', null);
-        expect(edits.permissionMode).toBe('acceptEdits');
-        expect(promptKeys(edits)).toBe(0);
-        expect(Object.hasOwn(edits, 'permissionPrompts')).toBe(false);
-        for (const p of ['all', undefined] as const) {
+    it('edits, all and absent start the SAME way as ask (genie#1188): bypass + the shell hook, answered per call by the setting', () => {
+        for (const p of ['edits', 'all', undefined] as const) {
             const o = claudeOptionsFor(record(p), '/w/tynn', null);
             expect(o.permissionMode).toBe('bypassPermissions');
-            expect(promptKeys(o)).toBe(0);
-            expect(Object.hasOwn(o, 'permissionPrompts')).toBe(false);
+            expect(promptKeys(o)).toBe(1);
+            expect(o.permissionPrompts).toEqual({ tools: ['Bash', 'PowerShell'] });
         }
-        expect(promptKeys(claudeOptionsFor(record('ask'), '/w/tynn', null))).toBe(1);
     });
 
     it('is a ClaudeDriver option prism-acp accepts, and its argv carries --settings only when the driver supplies the file', () => {
