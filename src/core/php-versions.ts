@@ -17,9 +17,10 @@ import { join } from 'node:path';
  *   does today (installed and repaired by T1/T2); a pinned one runs a Genie-managed version, and only one.
  *
  * The pick-list is STATIC, as Genie 1's was ("a box that accepts any string is a box that mostly produces failed
- * downloads, and an index resolver is a network dependency in the middle of a settings page"). Windows only, as Genie
- * 1's was: "macOS/Linux ship no relocatable official build, so php has no recipe there; Genie says so rather than
- * offering a download that cannot work." There, the system PHP is detected and listed, and nothing is installed.
+ * downloads, and an index resolver is a network dependency in the middle of a settings page"). Genie 1's was Windows
+ * only ("macOS/Linux ship no relocatable official build"). Genie 2 BUILDS it on Linux from php.net's own source (plan
+ * TC5; the owner's decision 2: no third-party builds), the same versions, every extension Genie's php.ini enables
+ * compiled in. macOS has no recipe yet (no macOS test machine): the system PHP is detected and listed, nothing installed.
  */
 
 export type PhpPlatform = 'win32' | 'darwin' | 'linux';
@@ -143,8 +144,8 @@ export const PHP_VERSIONS_WHERE = 'Toolchain → PHP versions';
  */
 export function missingPinReason(pin: string, managed: readonly ManagedPhp[], platform: PhpPlatform): string {
     const choices = managed.map((m) => m.version);
-    if (platform !== 'win32' && choices.length === 0) {
-        return `this site is pinned to PHP ${pin}, and Genie installs PHP versions on Windows only — on this machine it serves the PHP on your PATH. Remove the pin to serve it with that PHP`;
+    if (platform === 'darwin' && choices.length === 0) {
+        return `this site is pinned to PHP ${pin}, and Genie does not install PHP versions on macOS yet — on this machine it serves the PHP on your PATH. Remove the pin to serve it with that PHP`;
     }
     return `this site is pinned to PHP ${pin}, which Genie does not manage on this machine. ${choices.length > 0 ? `Install it in ${PHP_VERSIONS_WHERE}, or pin the site to one Genie manages: ${choices.join(', ')}` : `Install it in ${PHP_VERSIONS_WHERE}, then start the site again`}`;
 }
@@ -181,7 +182,8 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
  * Laravel app (Genie 1 `phpIniContents`). The CA bundle is NOT here: it is the #284 ini in `PHP_INI_SCAN_DIR`, loaded
  * after this one, so Check and repair keeps working for every version at once.
  */
-export function phpIniContents(versionDir: string): string {
+export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win32'): string {
+    if (platform !== 'win32') return linuxIni(versionDir);
     return [
         '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
         `; Owned by Genie: ${versionDir}`,
@@ -217,9 +219,118 @@ export function phpIniContents(versionDir: string): string {
     ].join('\r\n');
 }
 
+/**
+ * A SOURCE-BUILT PHP's ini (TC5): every extension is compiled in, so there is no `extension=` line (a built-in loaded
+ * again warns "Module already loaded" on every start) and no extension_dir — the build knows its own, where opcache.so
+ * is. Opcache by name, without Windows' file cache (that answers a php-cgi.exe start-up failure Linux does not have).
+ */
+function linuxIni(versionDir: string): string {
+    return [
+        '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
+        `; Owned by Genie: ${versionDir}`,
+        '; Built by Genie from php.net\'s source: every extension Genie enables is compiled in.',
+        '',
+        '; $_ENV is populated from the process environment — what Laravel reads first for the service env Genie injects.',
+        'variables_order = "EGPCS"',
+        'memory_limit = 512M',
+        'max_execution_time = 120',
+        'upload_max_filesize = 64M',
+        'post_max_size = 64M',
+        'display_errors = On',
+        'error_reporting = E_ALL',
+        '',
+        'zend_extension=opcache',
+        'opcache.enable=1',
+        'opcache.enable_cli=0',
+        'opcache.validate_timestamps=1',
+        'opcache.revalidate_freq=0',
+        'opcache.memory_consumption=256',
+        'opcache.max_accelerated_files=50000',
+        '',
+    ].join('\n');
+}
+
 /** The opcache file cache's directory for a managed version — it must exist before php-cgi starts. */
 export function phpCacheDir(versionDir: string): string {
     return `${versionDir}\\opcache`;
+}
+
+/** php.net's gzipped source tarball: `php-8.4.27.tar.gz`. */
+export function phpSourceName(version: string): string {
+    return `php-${version}.tar.gz`;
+}
+
+export function phpSourceUrl(version: string): string {
+    return `https://www.php.net/distributions/${phpSourceName(version)}`;
+}
+
+/** php.net's release JSON for one version: its source files, each with its sha256. */
+export function phpReleaseJsonUrl(version: string): string {
+    return `https://www.php.net/releases/index.php?json&version=${version}`;
+}
+
+/** The sha256 php.net's release JSON gives for exactly that version's tar.gz, or `null` — never guessed. */
+export function phpSourceShaFromJson(json: string, version: string): string | null {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(json);
+    } catch {
+        return null;
+    }
+    const source = (parsed as { source?: unknown } | null)?.source;
+    if (!Array.isArray(source)) return null;
+    for (const s of source) {
+        const e = s as { filename?: unknown; sha256?: unknown };
+        if (e.filename !== phpSourceName(version)) continue;
+        return typeof e.sha256 === 'string' && /^[0-9a-f]{64}$/i.test(e.sha256) ? e.sha256.toLowerCase() : null;
+    }
+    return null;
+}
+
+/**
+ * The libraries php.net's configure needs for the extensions Genie enables, by their pkg-config names, with the package
+ * that provides each on the common distributions (measured present on omarchy-test, 2026-10-24). bz2 and gmp ship no
+ * pkg-config file everywhere: when they are missing, configure's own words say so.
+ */
+export const PHP_BUILD_LIBRARIES: ReadonlyArray<{ readonly pkg: string; readonly apt: string; readonly dnf: string; readonly pacman: string }> = [
+    { pkg: 'libxml-2.0', apt: 'libxml2-dev', dnf: 'libxml2-devel', pacman: 'libxml2' },
+    { pkg: 'sqlite3', apt: 'libsqlite3-dev', dnf: 'sqlite-devel', pacman: 'sqlite' },
+    { pkg: 'openssl', apt: 'libssl-dev', dnf: 'openssl-devel', pacman: 'openssl' },
+    { pkg: 'zlib', apt: 'zlib1g-dev', dnf: 'zlib-devel', pacman: 'zlib' },
+    { pkg: 'libcurl', apt: 'libcurl4-openssl-dev', dnf: 'libcurl-devel', pacman: 'curl' },
+    { pkg: 'oniguruma', apt: 'libonig-dev', dnf: 'oniguruma-devel', pacman: 'oniguruma' },
+    { pkg: 'libzip', apt: 'libzip-dev', dnf: 'libzip-devel', pacman: 'libzip' },
+    { pkg: 'icu-i18n', apt: 'libicu-dev', dnf: 'libicu-devel', pacman: 'icu' },
+    { pkg: 'libpng', apt: 'libpng-dev', dnf: 'libpng-devel', pacman: 'libpng' },
+    { pkg: 'libjpeg', apt: 'libjpeg-dev', dnf: 'libjpeg-turbo-devel', pacman: 'libjpeg-turbo' },
+    { pkg: 'freetype2', apt: 'libfreetype-dev', dnf: 'freetype-devel', pacman: 'freetype2' },
+    { pkg: 'libsodium', apt: 'libsodium-dev', dnf: 'libsodium-devel', pacman: 'libsodium' },
+    { pkg: 'libxslt', apt: 'libxslt1-dev', dnf: 'libxslt-devel', pacman: 'libxslt' },
+    { pkg: 'libpq', apt: 'libpq-dev', dnf: 'libpq-devel', pacman: 'postgresql-libs' },
+];
+
+/** What to tell the person about missing libraries: each one, and the package lines that bring them. */
+export function missingLibrariesAdvice(missing: readonly string[]): string {
+    const rows = PHP_BUILD_LIBRARIES.filter((l) => missing.includes(l.pkg));
+    const pkgs = (k: 'apt' | 'dnf' | 'pacman') => rows.map((r) => r[k]).join(' ');
+    return `Genie builds PHP from php.net's source here, and these libraries it needs are not on this machine: ${missing.join(', ')} — install them (Debian/Ubuntu: sudo apt install ${pkgs('apt')}; Fedora: sudo dnf install ${pkgs('dnf')}; Arch: sudo pacman -S ${pkgs('pacman')}) and install again`;
+}
+
+/**
+ * configure's flags: the binaries and php.ini at the version's TOP (`--bindir`, `--sbindir`), as on Windows, and every
+ * extension in PHP_INI_EXTENSIONS compiled in (mysqlnd, PHP's own MySQL driver, so no MySQL client library is needed).
+ * The man pages and data go under share/: PHP's defaults (`<prefix>/php/man`, `<prefix>/php`) are the very path of the
+ * `php` binary once bindir is the prefix — measured: `make install` failed after "Installing PHP CLI man page".
+ */
+export function phpConfigureArgs(dir: string): string[] {
+    return [
+        '-q', `--prefix=${dir}`, `--bindir=${dir}`, `--sbindir=${dir}`, `--mandir=${join(dir, 'share', 'man')}`, `--datadir=${join(dir, 'share')}`,
+        `--with-config-file-path=${dir}`, `--with-config-file-scan-dir=${dir}/conf.d`,
+        '--enable-cgi', '--enable-fpm', '--with-openssl', '--with-zlib', '--with-bz2', '--with-curl', '--enable-exif', '--enable-ftp',
+        '--enable-gd', '--with-jpeg', '--with-freetype', '--with-gettext', '--with-gmp', '--enable-intl', '--enable-mbstring',
+        '--with-mysqli=mysqlnd', '--with-pdo-mysql=mysqlnd', '--with-pdo-pgsql', '--with-pgsql', '--with-pdo-sqlite', '--with-sqlite3',
+        '--enable-soap', '--enable-sockets', '--with-sodium', '--with-xsl', '--with-zip', '--enable-bcmath', '--enable-pcntl',
+    ];
 }
 
 /**

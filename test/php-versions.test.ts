@@ -119,11 +119,11 @@ describe('parsing what windows.php.net publishes and what is on disk', () => {
         expect(view.installRefused).toBeUndefined();
     });
 
-    it('macOS/Linux: the system PHP is listed and nothing is offered for install, with the reason (Genie 1 had no recipe there)', async () => {
+    it('macOS: the system PHP is listed and nothing is offered for install, with the reason (Linux builds from source: php-source-build.test.ts)', async () => {
         const { ports } = winPorts({ systemPhp: '8.3.6' });
-        const view = await listPhpVersions({ ...ports, platform: 'linux' });
+        const view = await listPhpVersions({ ...ports, platform: 'darwin' });
         expect(view).toMatchObject({ managed: [], system: { version: '8.3.6' }, available: [] });
-        expect(view.installRefused).toMatch(/on Windows/);
+        expect(view.installRefused).toMatch(/macOS/);
     });
 });
 
