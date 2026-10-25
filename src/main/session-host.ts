@@ -1,3 +1,4 @@
+import { permissionDecisionFor } from '../core/agent-ops.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
 import { homedir } from 'node:os';
 import type { ListProviderModels } from '../core/provider-models.js';
@@ -73,6 +74,8 @@ export interface SessionLifecycle {
 
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
 export const HISTORY_LIMIT = 3000;
+
+export { permissionDecisionFor } from '../core/agent-ops.js';
 
 export function raisesApprovals(provider: string, permissions?: AgentPermissions): boolean | null {
     if (provider === 'claude') return permissions === 'ask' ? true : CLAUDE_DRIVER_CAPABILITIES.permissionRequests;
@@ -260,23 +263,25 @@ export function driverEvents(events: DriverEvents): {
 }
 
 /**
- * A Claude agent's driver options: its cwd, its resume, and what it may do without asking. With no permission mode
- * Claude Code refused every tool that needs approval — the owner's agent could not run git, artisan or its tests.
- * - `all` (the default) → `bypassPermissions`: every tool runs.
- * - `ask` → `bypassPermissions` PLUS prism-acp's `permissionPrompts` for `Bash`: every other tool (Genie's MCP tools
- *   included) runs, and a shell command waits for the person — `onRequestPermission`, the same request Codex raises,
- *   answered inline in the chat — and runs only on an explicit allow once. The hook's deny holds under bypass.
- * - `edits` → `acceptEdits`: file edits go through and shell is refused. No prompts.
- * The agent's chosen MODEL rides along (`--model`) when it has one; none = no key, and Claude Code picks its own default.
+ * A Claude agent's driver options: its cwd, its resume, and its model. With no permission mode Claude Code refused
+ * every tool that needs approval — the owner's agent could not run git, artisan or its tests.
+ *
+ * THE TOOL SETTING IS NOT ON THE COMMAND LINE (genie#1188; the owner, 2026-10-25: "I should not have to restart an
+ * agent when I change its permissions"). It used to be (`acceptEdits` for edits only, prompts for ask), so a change
+ * restarted the agent; prism-acp has no live permission-mode switch. Every Claude agent now starts the same way —
+ * `bypassPermissions`, with BOTH shell tools routed through prism-acp's `permissionPrompts` hook — and each shell call's
+ * question is answered from the agent's setting at that moment (`permissionDecisionFor`): all tools → allowed at once,
+ * nobody asked; ask → the person answers inline, as before; edits only → refused. The hook's deny holds under bypass
+ * (the mechanism `ask` has used since prism-acp 0.10). The agent's chosen MODEL rides along (`--model`).
  */
-export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions' | 'acceptEdits'; permissionPrompts?: { readonly tools: readonly string[] }; model?: string } {
+export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null): { cwd: string; resumeSessionId?: string; permissionMode: 'bypassPermissions'; permissionPrompts: { readonly tools: readonly string[] }; model?: string } {
     return {
         cwd,
         ...(resumeSessionId ? { resumeSessionId } : {}),
-        permissionMode: record.permissions === 'edits' ? 'acceptEdits' : 'bypassPermissions',
+        permissionMode: 'bypassPermissions',
         // BOTH shell tools: Bash, and PowerShell, which Claude Code also has on Windows — gating Bash alone would let a
-        // PowerShell command run unasked.
-        ...(record.permissions === 'ask' ? { permissionPrompts: { tools: ['Bash', 'PowerShell'] } } : {}),
+        // PowerShell command run unasked. Every setting: what the hook's question gets is decided per call.
+        permissionPrompts: { tools: ['Bash', 'PowerShell'] },
         ...(record.model ? { model: record.model } : {}),
     };
 }
@@ -475,6 +480,11 @@ export class SessionHost {
          */
         onThreadId?: (agentId: AgentId, threadId: string) => void;
         /**
+         * The agent's record AS IT IS NOW (the registry's), for what is decided per call rather than at start — a Claude
+         * agent's tool setting (genie#1188). Absent = the record the session started with.
+         */
+        currentRecord?: (agentId: AgentId) => AgentRecord | null;
+        /**
          * The MCP servers an agent's session starts with — Genie's own, carrying that agent's caller key. Late-bound:
          * the MCP server starts after the host. Absent = none.
          */
@@ -534,12 +544,14 @@ export class SessionHost {
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
         this.#lifecycle = options.lifecycle;
         this.#onThreadId = options.onThreadId;
+        this.#currentRecord = options.currentRecord;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
         this.#gate = options.rateLimit?.gate ?? new RateLimitGate();
         this.#schedule = options.rateLimit?.schedule ?? ((ms, fn) => { const t = setTimeout(fn, Math.max(0, ms)); t.unref?.(); return () => clearTimeout(t); });
     }
 
+    readonly #currentRecord: ((agentId: AgentId) => AgentRecord | null) | undefined;
     readonly #gate: RateLimitGate;
     readonly #schedule: (ms: number, fn: () => void) => () => void;
     #wakeCancel: (() => void) | null = null;
@@ -789,6 +801,8 @@ export class SessionHost {
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
+            // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
+            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions) } : {}),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -950,6 +964,17 @@ export class SessionHost {
         if (!entry.session.answerApproval(optionId, note)) return { ok: false, reason: NOTHING_PARKED };
         this.#emit(agentId);
         return { ok: true };
+    }
+
+    /**
+     * Answer a parked approval by a DECISION (genie#1188: the tool setting changed while a shell command waited). `false`
+     * = not running, or nothing parked.
+     */
+    settleParked(agentId: AgentId, decision: 'allow' | 'deny'): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.settleApproval(decision)) return false;
+        this.#emit(agentId);
+        return true;
     }
 
     /** A message that must reach the agent, now or when its turn ends (AgentSession.deliver); false = no session. */

@@ -72,8 +72,9 @@ describe('the control', () => {
         expect(html).toContain('data-permissions="edits"');
         expect(html).toMatch(/<option value="all"[^>]*>all tools<\/option>/);
         expect(html).toMatch(/<option value="edits" selected=""[^>]*>edits only — shell refused<\/option>/);
-        expect(html).toMatch(/applies at once while .* is idle, or when its turn ends/);
-        expect(html).not.toMatch(/applies when .*next starts/);
+        // Live (genie#1188): from the next shell command, nothing restarts — and never 'when it next starts'.
+        expect(html).toMatch(/applies from atlas’s next shell command — nothing restarts/);
+        expect(html).not.toMatch(/restarts on the same conversation|applies when .*next starts/);
     });
 
     it('a Codex agent has no such control (positive control: the same ops on a Claude agent draw it)', () => {

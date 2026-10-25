@@ -89,7 +89,8 @@ describe('the host carries them to the snapshot', () => {
     afterEach(async () => { host.stopAll(); await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
 
     it('parkedAt and failure.at come from the host clock', () => {
-        const r = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
+        // A Claude agent that PARKS is one set to ask: all tools is answered at once, never parked (genie#1188).
+        const r = { ...agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' }), permissions: 'ask' as const };
         host.start(r, dir);
         now += 42_000;
         void events.onRequestPermission?.({ toolCall: { title: 'rm -rf build' }, options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }] });
