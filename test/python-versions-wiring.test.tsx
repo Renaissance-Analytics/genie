@@ -47,7 +47,7 @@ const ports = (): FeaturePorts => ({
             remove: (version) => { removals.push(version); managed = managed.filter((v) => v !== version); return { kind: 'removed', version }; },
         },
         defaults: {
-            list: () => ({ node: null, go: null, php: null, python: pyDefault }),
+            list: () => ({ node: null, go: null, php: null, python: pyDefault, dotnet: null }),
             set: (lang, version) => { if (lang === 'python') pyDefault = version; return version === null ? { kind: 'cleared', lang } : { kind: 'set', lang, version }; },
         },
     },
@@ -108,7 +108,7 @@ describe("Python's default (TC4a-2)", () => {
     });
 
     it('the surface marks the default, offers Make default on the others, and the system\'s', () => {
-        const html = render({ ...base, defaults: { node: null, go: null, php: null, python: '3.15.1' }, python: { managed: [{ version: '3.15.1', dir: '/p/3.15.1' }, { version: '3.14.9', dir: '/p/3.14.9' }], system: null, available: [] } });
+        const html = render({ ...base, defaults: { node: null, go: null, php: null, python: '3.15.1', dotnet: null }, python: { managed: [{ version: '3.15.1', dir: '/p/3.15.1' }, { version: '3.14.9', dir: '/p/3.14.9' }], system: null, available: [] } });
         expect(html).toMatch(/data-python-version="3[.]15[.]1"[^>]*data-default="true"/);
         expect(html).toMatch(/data-python-version="3[.]14[.]9"[^>]*data-default="false"[^]*?data-make-default="python:3[.]14[.]9"/);
         expect(html).not.toContain('data-make-default="python:3.15.1"');

@@ -11,11 +11,11 @@ import { join } from 'node:path';
  * `node` directly goes through CreateProcess on Windows, which finds node.exe and never runs a .cmd.
  */
 
-export const DEFAULT_LANGS = ['node', 'go', 'php', 'python'] as const;
+export const DEFAULT_LANGS = ['node', 'go', 'php', 'python', 'dotnet'] as const;
 export type DefaultLang = (typeof DEFAULT_LANGS)[number];
 export type DefaultsPlatform = 'win32' | 'linux' | 'darwin';
 
-export const LANG_LABEL: Record<DefaultLang, string> = { node: 'Node', go: 'Go', php: 'PHP', python: 'Python' };
+export const LANG_LABEL: Record<DefaultLang, string> = { node: 'Node', go: 'Go', php: 'PHP', python: 'Python', dotnet: '.NET' };
 
 /** Where a language's Genie-managed versions live: `<toolchain>/<lang>-versions/<version>`. */
 export function versionDir(toolchainDir: string, lang: DefaultLang, version: string): string {
@@ -43,7 +43,7 @@ function binRels(lang: DefaultLang, platform: DefaultsPlatform): readonly string
     // Windows: python.exe at the top, and Scripts\ — pip.exe and every console script pip installs (measured, TC4a-2).
     // Linux: a source build's bin/ (python, pip and the scripts pip installs).
     if (lang === 'python') return platform === 'win32' ? ['', 'Scripts'] : ['bin'];
-    return ['']; // php: php(.exe) and php-cgi at the top — the Linux build puts its bindir there too
+    return ['']; // php: php(.exe) and php-cgi at the top — the Linux build puts its bindir there too; dotnet: at the archive's top
 }
 
 /** One language's fixed PATH entries, in order. */
