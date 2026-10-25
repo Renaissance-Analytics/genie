@@ -1,7 +1,8 @@
 import { join } from 'node:path';
-import { PYTHON_MACHINE, PYTHON_PROOF_ARGS, PYTHON_RECIPES, PYTHON_WIN_INDEX, parsePythonProof, parsePythonVersion, pythonArchiveName, pythonDownloadUrl, pythonShaFromIndex, type PythonArch } from '../core/python-versions.js';
+import { PYTHON_MODULES_CHECK_ARGS, PYTHON_PROOF_ARGS, PYTHON_RECIPES, PYTHON_WIN_INDEX, missingModulesAdvice, parseMissingModules, parsePythonProof, parsePythonVersion, pythonArchiveName, pythonDownloadUrl, pythonMachine, pythonReleaseFilesUrl, pythonShaFromIndex, pythonSourceName, pythonSourceShaFromApi, pythonSourceUrl, type PythonArch } from '../core/python-versions.js';
 import { managedVersions, type ManagedPhp } from '../core/php-versions.js';
 import { installArchive } from './archive-install.js';
+import { buildFromSource } from './source-build.js';
 import type { Fetched, PhpVersionsFs } from './php-versions.js';
 import type { CommandRunner } from './toolchain-prober.js';
 
@@ -22,6 +23,8 @@ export interface PythonVersionsPorts {
     readonly fetchBytes: (url: string) => Promise<Fetched<Uint8Array>>;
     readonly fetchText: (url: string) => Promise<Fetched<string>>;
     readonly progress?: (step: string | null) => void;
+    /** How many compile jobs a source build runs at once (Linux). */
+    readonly cpus?: number;
 }
 
 export interface PythonVersionsView {
@@ -41,18 +44,20 @@ export type PythonInstallOutcome =
 
 export type PythonRemoveOutcome = { readonly kind: 'refused'; readonly reason: string } | { readonly kind: 'removed'; readonly version: string };
 
-const NOT_HERE = "Genie installs its own Python on Windows from python.org's builds; on macOS and Linux python.org publishes source only, and building it is not in this release yet";
+const NOT_HERE = "Genie does not install its own Python on macOS yet: python.org's source build needs an OpenSSL Apple does not ship, and Genie has not been proven on a Mac; the python3 on your PATH is used";
+const NO_BUILD_TOOLS = 'Genie builds Python from python.org\'s source here, which needs a C compiler and make — install them first (Debian/Ubuntu: sudo apt install build-essential; Fedora: sudo dnf install gcc make; Arch: sudo pacman -S base-devel) and install again';
 
 /** Where the managed versions live, under Genie 2's toolchain directory. */
 export function pythonVersionsRoot(toolchainDataDir: string): string {
     return join(toolchainDataDir, 'python-versions');
 }
 
-const binOf = (dir: string) => join(dir, 'python.exe');
+/** Where a version's python is: Windows python.exe at the top; a source build bin/python3 (`make install`'s name). */
+const binOf = (dir: string, platform: PythonVersionsPorts['platform'] = 'win32') => (platform === 'win32' ? join(dir, 'python.exe') : join(dir, 'bin', 'python3'));
 
-/** The versions Genie manages here — a full version directory whose python.exe is there. Newest first. */
-export function managedPython(ports: Pick<PythonVersionsPorts, 'root' | 'fs'>): ManagedPhp[] {
-    return managedVersions(ports.fs.list(ports.root), (v) => ports.fs.exists(binOf(join(ports.root, v))), (v) => join(ports.root, v));
+/** The versions Genie manages here — a full version directory whose python is there. Newest first. */
+export function managedPython(ports: Pick<PythonVersionsPorts, 'root' | 'fs'> & { readonly platform?: PythonVersionsPorts['platform'] }): ManagedPhp[] {
+    return managedVersions(ports.fs.list(ports.root), (v) => ports.fs.exists(binOf(join(ports.root, v), ports.platform)), (v) => join(ports.root, v));
 }
 
 export async function listPythonVersions(ports: PythonVersionsPorts): Promise<PythonVersionsView> {
@@ -66,18 +71,20 @@ export async function listPythonVersions(ports: PythonVersionsPorts): Promise<Py
         // no python on PATH
     }
     const have = new Set(managed.map((m) => m.version));
-    if (ports.platform !== 'win32') return { managed, system, available: [], installRefused: NOT_HERE };
+    if (ports.platform === 'darwin') return { managed, system, available: [], installRefused: NOT_HERE };
     return { managed, system, available: PYTHON_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) };
 }
 
 /** INSTALL ONE VERSION — only on the person's click; through the shared installer, proven by that python. */
 export async function installPythonVersion(version: string, consent: boolean, ports: PythonVersionsPorts): Promise<PythonInstallOutcome> {
     if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; Python ${version} was not installed` };
-    if (ports.platform !== 'win32') return { kind: 'refused', reason: NOT_HERE };
-    if (!PYTHON_RECIPES.some((r) => r.version === version)) return { kind: 'refused', reason: `Genie has no installer for Python ${version}; this release installs ${PYTHON_RECIPES.map((r) => r.version).join(', ')}` };
-    if (ports.fs.exists(binOf(join(ports.root, version)))) return { kind: 'already-installed', version };
+    if (ports.platform === 'darwin') return { kind: 'refused', reason: NOT_HERE };
+    const recipe = PYTHON_RECIPES.find((r) => r.version === version);
+    if (!recipe) return { kind: 'refused', reason: `Genie has no installer for Python ${version}; this release installs ${PYTHON_RECIPES.map((r) => r.version).join(', ')}` };
+    if (ports.fs.exists(binOf(join(ports.root, version), ports.platform))) return { kind: 'already-installed', version };
+    if (ports.platform === 'linux') return buildPythonOnLinux(version, recipe.release, ports);
     const file = pythonArchiveName(version, ports.arch);
-    const machine = PYTHON_MACHINE[ports.arch];
+    const machine = pythonMachine('win32', ports.arch);
     return installArchive({
         label: `Python ${version}`, version, file, url: pythonDownloadUrl(version, ports.arch), publisher: 'python.org', topFolder: null,
         expectedSha: async () => {
@@ -117,8 +124,75 @@ export async function installPythonVersion(version: string, consent: boolean, po
     }, ports);
 }
 
+/**
+ * LINUX: python.org's source, built into its final directory (TC4b). Pre-flight first — no compiler or no make is said
+ * before a byte is downloaded; a module left out for want of headers is NAMED with its package, and nothing is kept.
+ */
+async function buildPythonOnLinux(version: string, release: number, ports: PythonVersionsPorts): Promise<PythonInstallOutcome> {
+    for (const tool of ['cc', 'make']) {
+        try {
+            if ((await ports.run(tool, ['--version'])).exitCode !== 0) return { kind: 'refused', reason: NO_BUILD_TOOLS };
+        } catch {
+            return { kind: 'refused', reason: NO_BUILD_TOOLS };
+        }
+    }
+    const file = pythonSourceName(version);
+    const machine = pythonMachine('linux', ports.arch);
+    const python = (dir: string) => join(dir, 'bin', 'python');
+    return buildFromSource({
+        label: `Python ${version}`, version, file, url: pythonSourceUrl(version), publisher: 'python.org', srcFolder: `Python-${version}`,
+        expectedSha: async () => {
+            const url = pythonReleaseFilesUrl(release);
+            const listed = await ports.fetchText(url);
+            if (!listed.ok) return { ok: false, reason: `python.org's release files (${url}) could not be read (${listed.error})` };
+            const sha = pythonSourceShaFromApi(listed.body, version);
+            return sha ? { ok: true, sha } : { ok: false, reason: `python.org's release files list no sha256 for ${file}` };
+        },
+        // argv only: `env -C` enters the source directory without a shell; -q and -s keep stdout for the errors.
+        steps: (src, dir) => [
+            { say: 'configuring', bin: 'env', args: ['-C', src, './configure', '-q', `--prefix=${dir}`, '--with-ensurepip=install', '--disable-test-modules'] },
+            { say: 'compiling (a few minutes)', bin: 'make', args: ['-s', '-C', src, `-j${Math.max(1, ports.cpus ?? 1)}`] },
+            { say: 'installing', bin: 'make', args: ['-s', '-C', src, 'install'] },
+        ],
+        // `make install` names them python3 and pip3; `python` and `pip` are what a person types.
+        finish: async (dir) => {
+            for (const [name, target] of [['python', 'python3'], ['pip', 'pip3']] as const) {
+                try {
+                    const r = await ports.run('ln', ['-s', target, join(dir, 'bin', name)]);
+                    if (r.exitCode !== 0) return `Python ${version} built, but bin/${name} could not be linked to ${target}: ${r.stdout.trim().slice(0, 200)}`;
+                } catch (error) {
+                    return `Python ${version} built, but bin/${name} could not be linked to ${target}: ${error instanceof Error ? error.message : String(error)}`;
+                }
+            }
+            return null;
+        },
+        prove: async (dir) => {
+            const bin = python(dir);
+            let missing: string[] | null = null;
+            try {
+                missing = parseMissingModules((await ports.run(bin, PYTHON_MODULES_CHECK_ARGS)).stdout);
+            } catch (error) {
+                return `Python ${version} built, but ${bin} did not run: ${error instanceof Error ? error.message : String(error)}`;
+            }
+            if (missing === null) return `Python ${version} built, but ${bin} did not say which modules it has`;
+            if (missing.length > 0) return `Python ${version} built, but ${missingModulesAdvice(missing)}`;
+            let said = '';
+            try {
+                said = (await ports.run(bin, PYTHON_PROOF_ARGS)).stdout.trim();
+            } catch (error) {
+                return `Python ${version} built, but ${bin} did not run: ${error instanceof Error ? error.message : String(error)}`;
+            }
+            const got = parsePythonProof(said);
+            if (!got) return `Python ${version} built, but ${bin} could not import ssl, venv and pip: ${said.slice(0, 200) || 'it said nothing'}`;
+            if (got.version !== version) return `Python ${version} was asked for, but ${bin} reports ${got.version}`;
+            if (got.machine !== machine) return `Python ${version} for ${machine} was asked for, but ${bin} reports ${got.machine}`;
+            return null;
+        },
+    }, ports);
+}
+
 /** REMOVE a managed version — refused for anything Genie did not install. */
-export function removePythonVersion(version: string, ports: Pick<PythonVersionsPorts, 'root' | 'fs'>): PythonRemoveOutcome {
+export function removePythonVersion(version: string, ports: Pick<PythonVersionsPorts, 'root' | 'fs'> & { readonly platform?: PythonVersionsPorts['platform'] }): PythonRemoveOutcome {
     const target = managedPython(ports).find((m) => m.version === version);
     if (!target) return { kind: 'refused', reason: `Python ${version} is not a version Genie manages here; Genie removes only what it installed` };
     try {
@@ -126,6 +200,6 @@ export function removePythonVersion(version: string, ports: Pick<PythonVersionsP
     } catch (error) {
         return { kind: 'refused', reason: `Python ${version} could not be removed: ${error instanceof Error ? error.message : String(error)}` };
     }
-    if (ports.fs.exists(binOf(target.dir))) return { kind: 'refused', reason: `Python ${version} is still there after the delete (something running holds it); stop what uses it and try again` };
+    if (ports.fs.exists(binOf(target.dir, ports.platform))) return { kind: 'refused', reason: `Python ${version} is still there after the delete (something running holds it); stop what uses it and try again` };
     return { kind: 'removed', version };
 }

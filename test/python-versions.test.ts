@@ -181,17 +181,15 @@ describe('installing one on Windows', () => {
     });
 });
 
-describe('macOS and Linux (TC4b builds from source)', () => {
-    for (const platform of ['linux', 'darwin'] as const) {
-        it(`${platform}: install is refused by name and nothing is fetched; the list offers nothing to install`, async () => {
-            const a = ports({ platform });
-            expect(await installPythonVersion(V, true, a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Windows/) });
-            expect(a.fetched()).toBe(0);
-            const view = await listPythonVersions(a.p);
-            expect(view.available).toEqual([]);
-            expect(view.installRefused).toMatch(/Windows/);
-        });
-    }
+describe('macOS (no build Genie can prove yet; Linux builds from source: python-source-build.test.ts)', () => {
+    it('darwin: install is refused by name and nothing is fetched; the list offers nothing to install', async () => {
+        const a = ports({ platform: 'darwin' });
+        expect(await installPythonVersion(V, true, a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/macOS/) });
+        expect(a.fetched()).toBe(0);
+        const view = await listPythonVersions(a.p);
+        expect(view.available).toEqual([]);
+        expect(view.installRefused).toMatch(/macOS/);
+    });
 });
 
 describe('the list and removal', () => {
