@@ -14,7 +14,11 @@ import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, lat
  * measured AFTER — the core's honest-repair rule, applied.
  */
 
-export type CommandRunner = (binary: string, args: readonly string[]) => Promise<{ stdout: string; exitCode: number }>;
+/**
+ * Run a binary with argv (never a shell). `options.env` is added to the child's inherited environment for that call only
+ * (rustup's homes, TC6b-2) — Genie's own environment is not changed.
+ */
+export type CommandRunner = (binary: string, args: readonly string[], options?: { readonly env?: Readonly<Record<string, string>> }) => Promise<{ stdout: string; exitCode: number }>;
 export type LatestIndex = (tool: string) => Promise<{ version: string; source: string } | null>;
 
 /** The version one tool reports here, or `null` (absent, broken, or silent). Windows `.cmd` shims go through `cmd.exe`. */

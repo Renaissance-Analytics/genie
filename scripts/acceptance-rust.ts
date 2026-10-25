@@ -25,7 +25,7 @@ import { execFileRunner } from '../src/main/toolchain-runner.js';
 
 const results: boolean[] = [];
 const check = (ok: boolean, label: string, detail = '') => { results.push(ok); console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`); };
-const run = async (bin: string, args: readonly string[]) => { const r = await execFileRunner(bin, args, { timeoutMs: 30 * 60_000 }); return { stdout: r.stdout, exitCode: r.exitCode }; };
+const run = async (bin: string, args: readonly string[], options?: { readonly env?: Readonly<Record<string, string>> }) => { const r = await execFileRunner(bin, args, { timeoutMs: 30 * 60_000, ...(options?.env ? { env: options.env } : {}) }); return { stdout: r.stdout, exitCode: r.exitCode }; };
 const shellFiles = () => ['.profile', '.bashrc', '.bash_profile', '.zshrc', '.zprofile'].map((f) => join(homedir(), f)).map((f) => (existsSync(f) ? createHash('sha256').update(readFileSync(f)).digest('hex') : '-')).join(',');
 
 async function main(): Promise<void> {

@@ -22,7 +22,8 @@ export function rustTriple(platform: RustPlatform, arch: RustArch): string {
     const cpu = arch === 'x64' ? 'x86_64' : 'aarch64';
     if (platform === 'linux') return `${cpu}-unknown-linux-gnu`;
     if (platform === 'darwin') return `${cpu}-apple-darwin`;
-    return `${cpu}-pc-windows-msvc`;
+    // Windows: the GNU toolchain (the owner, q_7e642512) — it links on a clean Windows; MSVC needs Visual Studio's linker.
+    return `${cpu}-pc-windows-gnu`;
 }
 
 export function rustupInitUrl(triple: string): string {
