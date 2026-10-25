@@ -26,6 +26,7 @@ import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-ver
 import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
 import type { DotnetInstallOutcome, DotnetRemoveOutcome, DotnetVersionsView } from './dotnet-versions.js';
 import type { RustInstallOutcome, RustRemoveOutcome, RustVersionsView } from './rust-versions.js';
+import type { RubyInstallOutcome, RubyRemoveOutcome, RubyVersionsView } from './ruby-versions.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
 import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
@@ -131,6 +132,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<RustInstallOutcome>;
             remove(version: string): RustRemoveOutcome;
         };
+        /** Genie's own Ruby (main/ruby-versions.ts): built from ruby-lang.org's source on Linux. */
+        ruby?: {
+            list(): Promise<RubyVersionsView>;
+            install(version: string, consent: boolean): Promise<RubyInstallOutcome>;
+            remove(version: string): RubyRemoveOutcome;
+        };
         /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
         defaults?: {
             list(): Record<DefaultLang, string | null>;
@@ -202,6 +209,7 @@ export interface FeatureState {
     toolchainPython?: PythonVersionsView | null;
     toolchainDotnet?: DotnetVersionsView | null;
     toolchainRust?: RustVersionsView | null;
+    toolchainRuby?: RubyVersionsView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
     toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;
@@ -248,6 +256,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainPython ? { python: state.toolchainPython } : {}),
         ...(state.toolchainDotnet ? { dotnet: state.toolchainDotnet } : {}),
         ...(state.toolchainRust ? { rust: state.toolchainRust } : {}),
+        ...(state.toolchainRuby ? { ruby: state.toolchainRuby } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
         ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
@@ -270,6 +279,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainPython: section?.python ?? null,
         toolchainDotnet: section?.dotnet ?? null,
         toolchainRust: section?.rust ?? null,
+        toolchainRuby: section?.ruby ?? null,
         toolchainDefaults: section?.defaults ?? null,
         toolchainMachinePath: section?.machinePath ?? null,
     };
@@ -298,6 +308,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.python) next.toolchainPython = await tc.python.list();
     if (tc.dotnet) next.toolchainDotnet = await tc.dotnet.list();
     if (tc.rust) next.toolchainRust = await tc.rust.list();
+    if (tc.ruby) next.toolchainRuby = await tc.ruby.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
@@ -1016,6 +1027,50 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'rust', outcome.reason, action.version);
             else next.toolchainResult = `Rust ${outcome.version} was removed.`;
             next.toolchainRust = await tc.rust.list();
+            break;
+        }
+        case 'toolchain.installRuby': {
+            clearRefusal(next, 'ruby', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'ruby', `Genie installs nothing without your go-ahead; Ruby ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.ruby) {
+                refuse(next, 'ruby', 'no Ruby version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.ruby.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'ruby', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Ruby ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Ruby ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Ruby ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainRuby = await tc.ruby.list();
+            break;
+        }
+        case 'toolchain.removeRuby': {
+            {
+                const current = ports.toolchain?.defaults?.list()['ruby'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'ruby', action.version);
+                    refuse(next, 'ruby', `${LANG_LABEL['ruby']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'ruby', action.version);
+            if (!tc?.ruby) {
+                refuse(next, 'ruby', 'no Ruby version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.ruby.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'ruby', outcome.reason, action.version);
+            else next.toolchainResult = `Ruby ${outcome.version} was removed.`;
+            next.toolchainRuby = await tc.ruby.list();
             break;
         }
         case 'toolchain.machinePath': {

@@ -11,11 +11,11 @@ import { join } from 'node:path';
  * `node` directly goes through CreateProcess on Windows, which finds node.exe and never runs a .cmd.
  */
 
-export const DEFAULT_LANGS = ['node', 'go', 'php', 'python', 'dotnet', 'rust'] as const;
+export const DEFAULT_LANGS = ['node', 'go', 'php', 'python', 'dotnet', 'rust', 'ruby'] as const;
 export type DefaultLang = (typeof DEFAULT_LANGS)[number];
 export type DefaultsPlatform = 'win32' | 'linux' | 'darwin';
 
-export const LANG_LABEL: Record<DefaultLang, string> = { node: 'Node', go: 'Go', php: 'PHP', python: 'Python', dotnet: '.NET', rust: 'Rust' };
+export const LANG_LABEL: Record<DefaultLang, string> = { node: 'Node', go: 'Go', php: 'PHP', python: 'Python', dotnet: '.NET', rust: 'Rust', ruby: 'Ruby' };
 
 /** Where a language's Genie-managed versions live: `<toolchain>/<lang>-versions/<version>`. */
 export function versionDir(toolchainDir: string, lang: DefaultLang, version: string): string {
@@ -35,13 +35,15 @@ export function langManagedOn(lang: DefaultLang, platform: DefaultsPlatform): bo
     if (lang === 'php' || lang === 'python') return platform !== 'darwin';
     // Rust: Linux and macOS until the owner decides Windows (MSVC needs Visual Studio's linker; GNU does not).
     if (lang === 'rust') return platform !== 'win32';
+    // Ruby: Linux only (ruby-lang.org's source); Windows and macOS wait on the owner.
+    if (lang === 'ruby') return platform === 'linux';
     return true;
 }
 
 /** Where the executables are inside a version's directory, by the official build's layout ('' = its top). */
 function binRels(lang: DefaultLang, platform: DefaultsPlatform): readonly string[] {
     if (lang === 'node') return [platform === 'win32' ? '' : 'bin'];
-    if (lang === 'go' || lang === 'rust') return ['bin'];
+    if (lang === 'go' || lang === 'rust' || lang === 'ruby') return ['bin'];
     // Windows: python.exe at the top, and Scripts\ — pip.exe and every console script pip installs (measured, TC4a-2).
     // Linux: a source build's bin/ (python, pip and the scripts pip installs).
     if (lang === 'python') return platform === 'win32' ? ['', 'Scripts'] : ['bin'];
@@ -63,5 +65,6 @@ export function defaultPathEntries(toolchainDir: string, platform: DefaultsPlatf
 export function langManagedWhere(lang: DefaultLang): string {
     if (lang === 'php' || lang === 'python') return 'Windows and Linux';
     if (lang === 'rust') return 'Linux and macOS';
+    if (lang === 'ruby') return 'Linux';
     return 'every OS';
 }
