@@ -765,9 +765,9 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             {rowless.map((r) => (
                 <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
             ))}
-            {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
-            {tc?.node ? <NodeVersions node={tc.node} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
-            {tc?.go ? <GoVersions go={tc.go} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
+            {tc?.php ? <PhpVersions php={tc.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
+            {tc?.node ? <NodeVersions node={tc.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
+            {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -827,11 +827,17 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
  * button says why before it is pressed), the PATH PHP an unpinned site runs, and the versions this release can install —
  * each Install is the person's consent. Where Genie installs none (macOS/Linux) it says so instead of offering a button.
  */
-function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { php: NonNullable<NonNullable<FeatureData['toolchain']>['php']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = php.available.filter((a) => !a.installed);
     return (
         <section data-php-versions={php.managed.length} className="border-b border-[var(--border-1)]">
             <h3 className="px-5 pt-3 text-sm font-medium">PHP versions</h3>
+            {current !== null ? (
+                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
+                    <span>`php` is PHP {current}, Genie's default.</span>
+                    <button type="button" data-use-system="php" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'php', version: null })}>Use the one on your PATH instead</button>
+                </p>
+            ) : null}
             {refusals.map((r) => (
                 <p key={r.version} data-php-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
@@ -842,12 +848,13 @@ function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<
             {php.system?.advisory ? <p data-php-system-advisory="" className="px-5 py-1 text-xs text-[var(--danger)]">{php.system.advisory}</p> : null}
             <ul className="divide-y divide-[var(--border-1)]">
                 {php.managed.map((m) => (
-                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                    <li key={m.version} data-php-version={m.version} data-php-used={m.usedBy.length} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">PHP {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         {m.usedBy.length > 0 ? <span className="text-xs text-[var(--fg-2)]">pinned by {m.usedBy.join(', ')}</span> : null}
                         {m.advisory ? <span data-php-advisory={m.version} className="basis-full text-xs text-[var(--danger)]">{m.advisory}</span> : null}
-                        <button type="button" disabled={busy || m.usedBy.length > 0} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</button>
+                        <DefaultMark lang="php" version={m.version} current={current} busy={busy} onAction={onAction} />
+                        <button type="button" disabled={busy || m.usedBy.length > 0 || m.version === current} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : m.version === current ? `PHP ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</button>
                     </li>
                 ))}
             </ul>
@@ -872,11 +879,17 @@ function PhpVersions({ php, busy, onAction, refusals = [] }: { php: NonNullable<
  * PATH, and an Install per version this release offers — each Install is the person's consent. Where Genie installs none
  * it says so instead of offering a button.
  */
-function NodeVersions({ node, busy, onAction, refusals = [] }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function NodeVersions({ node, current = null, busy, onAction, refusals = [] }: { node: NonNullable<NonNullable<FeatureData['toolchain']>['node']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = node.available.filter((a) => !a.installed);
     return (
         <section data-node-versions={node.managed.length} className="border-b border-[var(--border-1)]">
             <h3 className="px-5 pt-3 text-sm font-medium">Node versions</h3>
+            {current !== null ? (
+                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
+                    <span>`node` is Node {current}, Genie's default.</span>
+                    <button type="button" data-use-system="node" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'node', version: null })}>Use the one on your PATH instead</button>
+                </p>
+            ) : null}
             {refusals.map((r) => (
                 <p key={r.version} data-node-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
@@ -885,10 +898,11 @@ function NodeVersions({ node, busy, onAction, refusals = [] }: { node: NonNullab
             </p>
             <ul className="divide-y divide-[var(--border-1)]">
                 {node.managed.map((m) => (
-                    <li key={m.version} data-node-version={m.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                    <li key={m.version} data-node-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">Node {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <button type="button" disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</button>
+                        <DefaultMark lang="node" version={m.version} current={current} busy={busy} onAction={onAction} />
+                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Node ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</button>
                     </li>
                 ))}
             </ul>
@@ -912,11 +926,17 @@ function NodeVersions({ node, busy, onAction, refusals = [] }: { node: NonNullab
  * GENIE'S OWN GO (plan `.ai/plans/genie-2-toolchain-rest.md`, TC2a): the versions Genie manages, the go on PATH, and an
  * Install per supported line — each Install is the person's consent. go.dev builds every OS, so there is no refusal row.
  */
-function GoVersions({ go, busy, onAction, refusals = [] }: { go: NonNullable<NonNullable<FeatureData['toolchain']>['go']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go: NonNullable<NonNullable<FeatureData['toolchain']>['go']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
     const addable = go.available.filter((a) => !a.installed);
     return (
         <section data-go-versions={go.managed.length} className="border-b border-[var(--border-1)]">
             <h3 className="px-5 pt-3 text-sm font-medium">Go versions</h3>
+            {current !== null ? (
+                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
+                    <span>`go` is Go {current}, Genie's default.</span>
+                    <button type="button" data-use-system="go" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'go', version: null })}>Use the one on your PATH instead</button>
+                </p>
+            ) : null}
             {refusals.map((r) => (
                 <p key={r.version} data-go-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
             ))}
@@ -925,10 +945,11 @@ function GoVersions({ go, busy, onAction, refusals = [] }: { go: NonNullable<Non
             </p>
             <ul className="divide-y divide-[var(--border-1)]">
                 {go.managed.map((m) => (
-                    <li key={m.version} data-go-version={m.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                    <li key={m.version} data-go-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
                         <span className="font-medium">Go {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
-                        <button type="button" disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeGo', version: m.version })}>Remove</button>
+                        <DefaultMark lang="go" version={m.version} current={current} busy={busy} onAction={onAction} />
+                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Go ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeGo', version: m.version })}>Remove</button>
                     </li>
                 ))}
             </ul>
@@ -943,6 +964,16 @@ function GoVersions({ go, busy, onAction, refusals = [] }: { go: NonNullable<Non
                 </div>
             ) : null}
         </section>
+    );
+}
+
+/** A managed version's default state: the Default mark on the chosen one, "Make default" on the others (plan TC3a). */
+function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    if (version === current) return <span data-is-default={`${lang}:${version}`} className="rounded-sm bg-[var(--primary)]/15 px-1.5 text-[11px] font-medium text-[var(--primary)]">Default</span>;
+    return (
+        <button type="button" data-make-default={`${lang}:${version}`} disabled={busy} className="text-[12px] text-[var(--fg-2)] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>
+            Make default
+        </button>
     );
 }
 

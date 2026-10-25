@@ -23,6 +23,8 @@ import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
+import type { DefaultOutcome } from './toolchain-defaults.js';
+import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
 import type { ComposedServices } from './compose.js';
@@ -107,6 +109,11 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<GoInstallOutcome>;
             remove(version: string): GoRemoveOutcome;
         };
+        /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
+        defaults?: {
+            list(): Record<DefaultLang, string | null>;
+            set(lang: DefaultLang, version: string | null): DefaultOutcome;
+        };
     };
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
@@ -164,6 +171,7 @@ export interface FeatureState {
     toolchainPhp?: PhpVersionsView | null;
     toolchainNode?: NodeVersionsView | null;
     toolchainGo?: GoVersionsView | null;
+    toolchainDefaults?: Record<DefaultLang, string | null> | null;
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
@@ -205,6 +213,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
         ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
         ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
+        ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
     };
 }
 
@@ -222,6 +231,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainPhp: section?.php ?? null,
         toolchainNode: section?.node ?? null,
         toolchainGo: section?.go ?? null,
+        toolchainDefaults: section?.defaults ?? null,
     };
 }
 
@@ -237,6 +247,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.php) next.toolchainPhp = await tc.php.list(pins);
     if (tc.node) next.toolchainNode = await tc.node.list();
     if (tc.go) next.toolchainGo = await tc.go.list();
+    if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     const tools = await tc.probe();
     next.toolStatuses = tools;
     next.toolchainCheckedAt = tc.now();
@@ -712,6 +723,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'toolchain.removePhp': {
+            {
+                const current = ports.toolchain?.defaults?.list()['php'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'php', action.version);
+                    refuse(next, 'php', `${LANG_LABEL['php']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
             const tc = ports.toolchain;
             clearRefusal(next, 'php', action.version);
             if (!tc?.php) {
@@ -751,6 +770,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'toolchain.removeNode': {
+            {
+                const current = ports.toolchain?.defaults?.list()['node'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'node', action.version);
+                    refuse(next, 'node', `${LANG_LABEL['node']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
             const tc = ports.toolchain;
             clearRefusal(next, 'node', action.version);
             if (!tc?.node) {
@@ -787,6 +814,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'toolchain.removeGo': {
+            {
+                const current = ports.toolchain?.defaults?.list()['go'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'go', action.version);
+                    refuse(next, 'go', `${LANG_LABEL['go']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
             const tc = ports.toolchain;
             clearRefusal(next, 'go', action.version);
             if (!tc?.go) {
@@ -797,6 +832,23 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'go', outcome.reason, action.version);
             else next.toolchainResult = `Go ${outcome.version} was removed.`;
             next.toolchainGo = await tc.go.list();
+            break;
+        }
+        case 'toolchain.setDefault': {
+            const tc = ports.toolchain;
+            const lang = action.lang;
+            const label = LANG_LABEL[lang];
+            clearRefusal(next, `${lang}-default`);
+            if (!tc?.defaults) {
+                refuse(next, `${lang}-default`, `no default switch is wired into this Genie; ${label}'s default was not changed`);
+                break;
+            }
+            const outcome = tc.defaults.set(lang, action.version);
+            if (outcome.kind === 'refused') refuse(next, `${lang}-default`, outcome.reason);
+            else next.toolchainResult = outcome.kind === 'set'
+                ? `${label} ${outcome.version} is now the default — what \`${lang}\` means for Genie's terminals, processes and agents.`
+                : `${label}'s default is the one on your PATH again.`;
+            next.toolchainDefaults = tc.defaults.list();
             break;
         }
         case 'toolchain.repair': {
