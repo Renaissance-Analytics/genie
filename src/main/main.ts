@@ -2400,7 +2400,7 @@ async function boot(): Promise<void> {
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
         now: Date.now,
         // Genie's own Node, newest first (main/node-versions.ts): Check and repair makes it the node and npm Genie runs.
-        genieNode: () => managedNode({ root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
+        genieNode: () => managedNode({ platform: process.platform as NodeVersionsPorts['platform'], root: nodeVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() })[0] ?? null,
     });
     const phpVersionsPorts = (): PhpVersionsPorts => ({
         ...phpVersionsBase(),
@@ -2416,6 +2416,7 @@ async function boot(): Promise<void> {
     });
     const nodeVersionsPorts = (): NodeVersionsPorts => ({
         platform: process.platform as NodeVersionsPorts['platform'],
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
         root: nodeVersionsRoot(toolchainDataDir()),
         fs: nodePhpVersionsFs(),
         run: longRunner,
@@ -2470,7 +2471,9 @@ async function boot(): Promise<void> {
                 // has its own install path".
                 install: async (version, consent) => {
                     const outcome = await installNodeVersion(version, consent, nodeVersionsPorts());
-                    if (outcome.kind === 'installed') preferGenieNode(toolchainOps(), outcome.dir);
+                    // Windows' build keeps node at the top of its folder. Elsewhere it is bin/, and which Node is the default
+                    // there is the shims row (TC3, plan .ai/plans/genie-2-toolchain-rest.md), not a PATH-first here.
+                    if (outcome.kind === 'installed' && process.platform === 'win32') preferGenieNode(toolchainOps(), outcome.dir);
                     return outcome;
                 },
                 remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
