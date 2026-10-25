@@ -116,6 +116,7 @@ import { defaultPathEntries } from '../core/toolchain-defaults.js';
 import { goVersionsRoot, installGoVersion, listGoVersions, managedGo, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
 import { installPythonVersion, listPythonVersions, managedPython, pythonVersionsRoot, removePythonVersion, type PythonVersionsPorts } from './python-versions.js';
 import { dotnetVersionsRoot, installDotnetVersion, listDotnetVersions, managedDotnet, removeDotnetVersion, type DotnetVersionsPorts } from './dotnet-versions.js';
+import { installRustVersion, listRustVersions, managedRust, removeRustVersion, rustVersionsRoot, type RustVersionsPorts } from './rust-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -2463,6 +2464,16 @@ async function boot(): Promise<void> {
         fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
+    const rustVersionsPorts = (): RustVersionsPorts => ({
+        platform: process.platform as RustVersionsPorts['platform'],
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+        root: rustVersionsRoot(toolchainDataDir()),
+        fs: nodePhpVersionsFs(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
@@ -2523,7 +2534,7 @@ async function boot(): Promise<void> {
                 set: (lang, version) => {
                     const platform = process.platform as Platform;
                     const linkPorts = { platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(platform) };
-                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : l === 'dotnet' ? managedDotnet(dotnetVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
+                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : l === 'dotnet' ? managedDotnet(dotnetVersionsPorts()) : l === 'rust' ? managedRust(rustVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
                     const outcome = setDefault(lang, version, { ...linkPorts, managed });
                     if (outcome.kind !== 'refused') restoreDefaultsEnv({ ...linkPorts, env: processEnv });
                     return outcome;
@@ -2546,6 +2557,12 @@ async function boot(): Promise<void> {
                 list: () => listDotnetVersions(dotnetVersionsPorts()),
                 install: (version, consent) => installDotnetVersion(version, consent, dotnetVersionsPorts()),
                 remove: (version) => removeDotnetVersion(version, dotnetVersionsPorts()),
+            },
+            // Genie's own Rust (main/rust-versions.ts) — same busy line.
+            rust: {
+                list: () => listRustVersions(rustVersionsPorts()),
+                install: (version, consent) => installRustVersion(version, consent, rustVersionsPorts()),
+                remove: (version) => removeRustVersion(version, rustVersionsPorts()),
             },
         },
     };

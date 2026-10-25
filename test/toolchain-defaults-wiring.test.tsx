@@ -49,7 +49,7 @@ const scanned = (): FeatureState => ({ toolStatuses: [], knowledgeQuery: '', too
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-feature-ipc-defaults-'));
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => [] });
-    defaults = { node: null, go: '1.27.3', php: null, python: null, dotnet: null };
+    defaults = { node: null, go: '1.27.3', php: null, python: null, dotnet: null, rust: null };
     sets = []; removals = [];
 });
 
@@ -61,7 +61,7 @@ afterEach(async () => {
 describe('defaults through the feature IPC', () => {
     it('a scan carries the defaults; Make default sets one; Use the system’s clears it', async () => {
         const snap = await handleFeatureAction(services, { kind: 'toolchain.check', force: true }, scanned(), ports());
-        expect(snap.toolchain!.defaults).toEqual({ node: null, go: '1.27.3', php: null, python: null, dotnet: null });
+        expect(snap.toolchain!.defaults).toEqual({ node: null, go: '1.27.3', php: null, python: null, dotnet: null, rust: null });
         const set = await handleFeatureAction(services, { kind: 'toolchain.setDefault', lang: 'go', version: '1.26.10' }, scanned(), ports());
         expect(sets).toEqual([['go', '1.26.10']]);
         expect(set.toolchain!.defaults!.go).toBe('1.26.10');
@@ -83,7 +83,7 @@ const render = (toolchain: FeatureData['toolchain']) => renderToStaticMarkup(<To
 
 describe('Toolchain → Go versions shows the default', () => {
     it('the default version is marked (and its Remove disabled with the reason); the others offer Make default; the system’s is offered', () => {
-        const html = render({ tools: [], checkedAt: 1, defaults: { node: null, go: '1.27.3', php: null, python: null, dotnet: null }, go: { managed: [{ version: '1.27.3', dir: '/g/1.27.3' }, { version: '1.26.10', dir: '/g/1.26.10' }], system: { version: '1.22.2' }, available: [] } });
+        const html = render({ tools: [], checkedAt: 1, defaults: { node: null, go: '1.27.3', php: null, python: null, dotnet: null, rust: null }, go: { managed: [{ version: '1.27.3', dir: '/g/1.27.3' }, { version: '1.26.10', dir: '/g/1.26.10' }], system: { version: '1.22.2' }, available: [] } });
         expect(html).toMatch(/data-go-version="1\.27\.3"[^>]*data-default="true"/);
         expect(html).toMatch(/data-go-version="1\.26\.10"[^>]*data-default="false"[^]*?data-make-default="go:1\.26\.10"/);
         expect(html).not.toContain('data-make-default="go:1.27.3"');
@@ -92,7 +92,7 @@ describe('Toolchain → Go versions shows the default', () => {
     });
 
     it('CONTROL: no default → nothing marked, every version offers Make default, no "use the system’s" button', () => {
-        const html = render({ tools: [], checkedAt: 1, defaults: { node: null, go: null, php: null, python: null, dotnet: null }, go: { managed: [{ version: '1.27.3', dir: '/g/1.27.3' }], system: null, available: [] } });
+        const html = render({ tools: [], checkedAt: 1, defaults: { node: null, go: null, php: null, python: null, dotnet: null, rust: null }, go: { managed: [{ version: '1.27.3', dir: '/g/1.27.3' }], system: null, available: [] } });
         expect(html).toContain('data-make-default="go:1.27.3"');
         expect(html).not.toContain('data-use-system="go"');
     });
