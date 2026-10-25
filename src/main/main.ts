@@ -118,6 +118,7 @@ import { installPythonVersion, listPythonVersions, managedPython, pythonVersions
 import { dotnetVersionsRoot, installDotnetVersion, listDotnetVersions, managedDotnet, removeDotnetVersion, type DotnetVersionsPorts } from './dotnet-versions.js';
 import { installRustVersion, listRustVersions, managedRust, removeRustVersion, rustVersionsRoot, type RustVersionsPorts } from './rust-versions.js';
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
+import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -2486,6 +2487,16 @@ async function boot(): Promise<void> {
         fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
+    const javaVersionsPorts = (): JavaVersionsPorts => ({
+        platform: process.platform as JavaVersionsPorts['platform'],
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+        root: javaVersionsRoot(toolchainDataDir()),
+        fs: nodePhpVersionsFs(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
@@ -2546,7 +2557,7 @@ async function boot(): Promise<void> {
                 set: (lang, version) => {
                     const platform = process.platform as Platform;
                     const linkPorts = { platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(platform) };
-                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : l === 'dotnet' ? managedDotnet(dotnetVersionsPorts()) : l === 'rust' ? managedRust(rustVersionsPorts()) : l === 'ruby' ? managedRuby(rubyVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
+                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : l === 'dotnet' ? managedDotnet(dotnetVersionsPorts()) : l === 'rust' ? managedRust(rustVersionsPorts()) : l === 'ruby' ? managedRuby(rubyVersionsPorts()) : l === 'java' ? managedJava(javaVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
                     const outcome = setDefault(lang, version, { ...linkPorts, managed });
                     if (outcome.kind !== 'refused') restoreDefaultsEnv({ ...linkPorts, env: processEnv });
                     return outcome;
@@ -2581,6 +2592,12 @@ async function boot(): Promise<void> {
                 list: () => listRubyVersions(rubyVersionsPorts()),
                 install: (version, consent) => installRubyVersion(version, consent, rubyVersionsPorts()),
                 remove: (version) => removeRubyVersion(version, rubyVersionsPorts()),
+            },
+            // Genie's own Java (main/java-versions.ts; Temurin) — same busy line. Windows and Linux.
+            java: {
+                list: () => listJavaVersions(javaVersionsPorts()),
+                install: (version, consent) => installJavaVersion(version, consent, javaVersionsPorts()),
+                remove: (version) => removeJavaVersion(version, javaVersionsPorts()),
             },
         },
     };

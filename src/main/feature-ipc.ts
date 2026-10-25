@@ -27,6 +27,7 @@ import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } fr
 import type { DotnetInstallOutcome, DotnetRemoveOutcome, DotnetVersionsView } from './dotnet-versions.js';
 import type { RustInstallOutcome, RustRemoveOutcome, RustVersionsView } from './rust-versions.js';
 import type { RubyInstallOutcome, RubyRemoveOutcome, RubyVersionsView } from './ruby-versions.js';
+import type { JavaInstallOutcome, JavaRemoveOutcome, JavaVersionsView } from './java-versions.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
 import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
@@ -138,6 +139,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<RubyInstallOutcome>;
             remove(version: string): RubyRemoveOutcome;
         };
+        /** Genie's own Java (main/java-versions.ts): Temurin JDKs, sha256-verified; Windows and Linux. */
+        java?: {
+            list(): Promise<JavaVersionsView>;
+            install(version: string, consent: boolean): Promise<JavaInstallOutcome>;
+            remove(version: string): JavaRemoveOutcome;
+        };
         /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
         defaults?: {
             list(): Record<DefaultLang, string | null>;
@@ -210,6 +217,7 @@ export interface FeatureState {
     toolchainDotnet?: DotnetVersionsView | null;
     toolchainRust?: RustVersionsView | null;
     toolchainRuby?: RubyVersionsView | null;
+    toolchainJava?: JavaVersionsView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
     toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;
@@ -257,6 +265,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainDotnet ? { dotnet: state.toolchainDotnet } : {}),
         ...(state.toolchainRust ? { rust: state.toolchainRust } : {}),
         ...(state.toolchainRuby ? { ruby: state.toolchainRuby } : {}),
+        ...(state.toolchainJava ? { java: state.toolchainJava } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
         ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
@@ -280,6 +289,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainDotnet: section?.dotnet ?? null,
         toolchainRust: section?.rust ?? null,
         toolchainRuby: section?.ruby ?? null,
+        toolchainJava: section?.java ?? null,
         toolchainDefaults: section?.defaults ?? null,
         toolchainMachinePath: section?.machinePath ?? null,
     };
@@ -309,6 +319,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.dotnet) next.toolchainDotnet = await tc.dotnet.list();
     if (tc.rust) next.toolchainRust = await tc.rust.list();
     if (tc.ruby) next.toolchainRuby = await tc.ruby.list();
+    if (tc.java) next.toolchainJava = await tc.java.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
@@ -1071,6 +1082,50 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'ruby', outcome.reason, action.version);
             else next.toolchainResult = `Ruby ${outcome.version} was removed.`;
             next.toolchainRuby = await tc.ruby.list();
+            break;
+        }
+        case 'toolchain.installJava': {
+            clearRefusal(next, 'java', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'java', `Genie installs nothing without your go-ahead; Java ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.java) {
+                refuse(next, 'java', 'no Java version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.java.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'java', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Java ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Java ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Java ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainJava = await tc.java.list();
+            break;
+        }
+        case 'toolchain.removeJava': {
+            {
+                const current = ports.toolchain?.defaults?.list()['java'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'java', action.version);
+                    refuse(next, 'java', `${LANG_LABEL['java']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'java', action.version);
+            if (!tc?.java) {
+                refuse(next, 'java', 'no Java version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.java.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'java', outcome.reason, action.version);
+            else next.toolchainResult = `Java ${outcome.version} was removed.`;
+            next.toolchainJava = await tc.java.list();
             break;
         }
         case 'toolchain.machinePath': {
