@@ -765,6 +765,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             {rowless.map((r) => (
                 <p key={r.tool} data-tool-refusal={r.tool} className="px-5 py-2 text-sm text-[var(--danger)]">{r.reason}</p>
             ))}
+            {tc?.machinePath ? <MachinePathCard mp={tc.machinePath} busy={busy !== null} onAction={onAction} refusal={refusals.find((r) => r.tool === 'machine-path')?.reason ?? null} /> : null}
             {tc?.php ? <PhpVersions php={tc.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
             {tc?.node ? <NodeVersions node={tc.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
@@ -963,6 +964,34 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
                     ))}
                 </div>
             ) : null}
+        </section>
+    );
+}
+
+/**
+ * YOUR TERMINALS (plan TC3b; the owner's decision 3): Genie's defaults on the machine's own PATH, once, with consent.
+ * Before anything changes it says EXACTLY what would — the entries, and where — and after, where it is, with Undo.
+ */
+function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonNullable<FeatureData['toolchain']>['machinePath']>; busy: boolean; onAction: SurfaceProps['onAction']; refusal: string | null }) {
+    return (
+        <section data-machine-path={mp.applied ? 'on' : 'off'} className="border-b border-[var(--border-1)] px-5 py-3 text-sm">
+            <h3 className="text-sm font-medium">Your terminals</h3>
+            {refusal ? <p className="py-1 text-xs text-[var(--danger)]">{refusal}</p> : null}
+            {mp.applied ? (
+                <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-[var(--fg-3)]">
+                    <span>Terminals outside Genie use Genie's defaults too (set in {mp.where.join(', ')}).</span>
+                    <button type="button" data-machine-path-undo="" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: false })}>Undo</button>
+                </div>
+            ) : (
+                <div className="flex flex-col gap-1 pt-1 text-xs text-[var(--fg-3)]">
+                    <span>Genie's defaults apply to Genie's own terminals, processes and agents. To use them in every terminal, Genie adds these to the front of your PATH, once:</span>
+                    <ul className="font-mono">{mp.entries.map((e) => <li key={e}>{e}</li>)}</ul>
+                    <span>in {mp.targets.join(', ')}. Nothing else changes, and Undo puts it back exactly.</span>
+                    <button type="button" data-machine-path-apply="" disabled={busy} className="self-start rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px] text-[var(--fg-1)]" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: true, consent: true })}>
+                        Use Genie's defaults in every terminal
+                    </button>
+                </div>
+            )}
         </section>
     );
 }

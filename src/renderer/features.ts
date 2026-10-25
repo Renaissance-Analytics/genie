@@ -236,6 +236,8 @@ export interface ToolchainSection {
     readonly go?: GoVersionsView;
     /** Each language's default version (`null` = the system's own), read from Genie's `current/<lang>` links. */
     readonly defaults?: Readonly<Record<'node' | 'go' | 'php', string | null>>;
+    /** The machine's own PATH: whether Genie's defaults are on it, where, and exactly what would change (plan TC3b). */
+    readonly machinePath?: { readonly applied: boolean; readonly where: readonly string[]; readonly entries: readonly string[]; readonly targets: readonly string[] };
 }
 
 export interface FeatureData {
@@ -365,6 +367,8 @@ export type FeatureAction =
     | { kind: 'toolchain.removeGo'; version: string }
     /** Make a managed version a language's default, or `null` for the system's own (plan TC3a). */
     | { kind: 'toolchain.setDefault'; lang: 'node' | 'go' | 'php'; version: string | null }
+    /** Put Genie's defaults on the machine's own PATH (`apply`, with `consent`), or take them off (Undo). */
+    | { kind: 'toolchain.machinePath'; apply: boolean; consent?: boolean }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent. */
     | { kind: 'deck.answer'; item: DeckItem; optionId: string; note?: string }
