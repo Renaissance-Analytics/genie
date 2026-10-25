@@ -23,6 +23,7 @@ import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
+import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
 import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
@@ -110,6 +111,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<GoInstallOutcome>;
             remove(version: string): GoRemoveOutcome;
         };
+        /** Genie's own Python (main/python-versions.ts): python.org's Windows zips, checksum-verified; elsewhere refused (TC4b). */
+        python?: {
+            list(): Promise<PythonVersionsView>;
+            install(version: string, consent: boolean): Promise<PythonInstallOutcome>;
+            remove(version: string): PythonRemoveOutcome;
+        };
         /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
         defaults?: {
             list(): Record<DefaultLang, string | null>;
@@ -178,6 +185,7 @@ export interface FeatureState {
     toolchainPhp?: PhpVersionsView | null;
     toolchainNode?: NodeVersionsView | null;
     toolchainGo?: GoVersionsView | null;
+    toolchainPython?: PythonVersionsView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
     toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;
@@ -221,6 +229,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
         ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
         ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
+        ...(state.toolchainPython ? { python: state.toolchainPython } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
         ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
@@ -240,6 +249,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainPhp: section?.php ?? null,
         toolchainNode: section?.node ?? null,
         toolchainGo: section?.go ?? null,
+        toolchainPython: section?.python ?? null,
         toolchainDefaults: section?.defaults ?? null,
         toolchainMachinePath: section?.machinePath ?? null,
     };
@@ -265,6 +275,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.php) next.toolchainPhp = await tc.php.list(pins);
     if (tc.node) next.toolchainNode = await tc.node.list();
     if (tc.go) next.toolchainGo = await tc.go.list();
+    if (tc.python) next.toolchainPython = await tc.python.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
@@ -851,6 +862,42 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'go', outcome.reason, action.version);
             else next.toolchainResult = `Go ${outcome.version} was removed.`;
             next.toolchainGo = await tc.go.list();
+            break;
+        }
+        case 'toolchain.installPython': {
+            clearRefusal(next, 'python', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'python', `Genie installs nothing without your go-ahead; Python ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.python) {
+                refuse(next, 'python', 'no Python version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.python.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'python', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Python ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Python ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Python ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainPython = await tc.python.list();
+            break;
+        }
+        case 'toolchain.removePython': {
+            const tc = ports.toolchain;
+            clearRefusal(next, 'python', action.version);
+            if (!tc?.python) {
+                refuse(next, 'python', 'no Python version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.python.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'python', outcome.reason, action.version);
+            else next.toolchainResult = `Python ${outcome.version} was removed.`;
+            next.toolchainPython = await tc.python.list();
             break;
         }
         case 'toolchain.machinePath': {

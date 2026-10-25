@@ -114,6 +114,7 @@ import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './tool
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
 import { defaultPathEntries } from '../core/toolchain-defaults.js';
 import { goVersionsRoot, installGoVersion, listGoVersions, managedGo, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
+import { installPythonVersion, listPythonVersions, pythonVersionsRoot, removePythonVersion, type PythonVersionsPorts } from './python-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -2439,6 +2440,16 @@ async function boot(): Promise<void> {
         fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
+    const pythonVersionsPorts = (): PythonVersionsPorts => ({
+        platform: process.platform as PythonVersionsPorts['platform'],
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+        root: pythonVersionsRoot(toolchainDataDir()),
+        fs: nodePhpVersionsFs(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
@@ -2510,6 +2521,12 @@ async function boot(): Promise<void> {
                 list: () => listGoVersions(goVersionsPorts()),
                 install: (version, consent) => installGoVersion(version, consent, goVersionsPorts()),
                 remove: (version) => removeGoVersion(version, goVersionsPorts()),
+            },
+            // Genie's own Python (main/python-versions.ts) — same busy line. Windows now; macOS/Linux are TC4b.
+            python: {
+                list: () => listPythonVersions(pythonVersionsPorts()),
+                install: (version, consent) => installPythonVersion(version, consent, pythonVersionsPorts()),
+                remove: (version) => removePythonVersion(version, pythonVersionsPorts()),
             },
         },
     };

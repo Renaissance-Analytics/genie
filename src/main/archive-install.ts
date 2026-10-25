@@ -37,8 +37,9 @@ export interface ArchiveSpec {
     readonly publisher: string;
     /** The published sha256 for `file`, read from the publisher — or why it could not be. */
     readonly expectedSha: () => Promise<{ ok: true; sha: string } | { ok: false; reason: string }>;
-    /** The archive's single top folder (`go`, `node-v24.22.1-win-x64`). */
-    readonly topFolder: string;
+    /** The archive's single top folder (`go`, `node-v24.22.1-win-x64`) — or `null` for a FLAT archive whose files are
+     *  the install itself (python.org's Windows zips: python.exe at the top). */
+    readonly topFolder: string | null;
     /** Proves the moved directory runs: `null` = proven, else why not. */
     readonly prove: (dir: string) => Promise<string | null>;
 }
@@ -101,11 +102,16 @@ async function putInPlace(spec: ArchiveSpec, bytes: Uint8Array, ports: ArchiveIn
             return fail(`${file} could not be unpacked: ${error instanceof Error ? error.message : String(error)}`);
         }
         if (unpacked.exitCode !== 0) return fail(`${file} could not be unpacked (exit ${unpacked.exitCode})${unpacked.stdout.trim() ? `: ${unpacked.stdout.trim().slice(0, 300)}` : ''}`);
-        const top = join(staging, spec.topFolder);
-        if (!ports.fs.exists(top)) return fail(`${file} unpacked, but ${spec.topFolder} is not in it — the archive did not lay out the way Genie expected`);
         ports.fs.removeTree(archivePath);
-        ports.fs.rename(top, dir);
-        ports.fs.removeTree(staging);
+        if (spec.topFolder === null) {
+            // A flat archive: the staging directory IS the install. What it must contain is the proof's to judge.
+            ports.fs.rename(staging, dir);
+        } else {
+            const top = join(staging, spec.topFolder);
+            if (!ports.fs.exists(top)) return fail(`${file} unpacked, but ${spec.topFolder} is not in it — the archive did not lay out the way Genie expected`);
+            ports.fs.rename(top, dir);
+            ports.fs.removeTree(staging);
+        }
 
         say(`${label}: checking that it runs`);
         const problem = await spec.prove(dir);

@@ -769,6 +769,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             {tc?.php ? <PhpVersions php={tc.php} current={tc.defaults?.php ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
             {tc?.node ? <NodeVersions node={tc.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
+            {tc?.python ? <PythonVersions python={tc.python} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -960,6 +961,47 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
                     {addable.map((a) => (
                         <button key={a.version} type="button" data-go-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installGo', version: a.version, consent: true })}>
                             Go {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+/**
+ * GENIE'S OWN PYTHON (plan `.ai/plans/genie-2-toolchain-rest.md`, TC4a): the versions Genie manages, the python on PATH,
+ * and an Install per supported line on Windows — each Install is the person's consent. Where python.org publishes no
+ * build Genie can install (macOS, Linux until TC4b), it says so instead of offering buttons.
+ */
+function PythonVersions({ python, busy, onAction, refusals = [] }: { python: NonNullable<NonNullable<FeatureData['toolchain']>['python']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const addable = python.available.filter((a) => !a.installed);
+    return (
+        <section data-python-versions={python.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">Python versions</h3>
+            {refusals.map((r) => (
+                <p key={r.version} data-python-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <p data-python-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {python.system ? `The python on your PATH is ${python.system.version}.` : 'No python on your PATH.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {python.managed.map((m) => (
+                    <li key={m.version} data-python-version={m.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Python {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        <button type="button" disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePython', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {python.installRefused ? (
+                <p data-python-install-refused="" className="px-5 py-2 text-xs text-[var(--fg-3)]">{python.installRefused}.</p>
+            ) : addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install from python.org (checked against its published sha256):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-python-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPython', version: a.version, consent: true })}>
+                            Python {a.version}
                         </button>
                     ))}
                 </div>
