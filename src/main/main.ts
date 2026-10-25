@@ -110,6 +110,7 @@ import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { goVersionsRoot, installGoVersion, listGoVersions, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
@@ -2422,6 +2423,16 @@ async function boot(): Promise<void> {
         fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
+    const goVersionsPorts = (): GoVersionsPorts => ({
+        platform: process.platform as GoVersionsPorts['platform'],
+        arch: process.arch === 'arm64' ? 'arm64' : 'x64',
+        root: goVersionsRoot(toolchainDataDir()),
+        fs: nodePhpVersionsFs(),
+        run: longRunner,
+        fetchBytes: httpFetch.bytes,
+        fetchText: httpFetch.text,
+        progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
+    });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser,
@@ -2463,6 +2474,12 @@ async function boot(): Promise<void> {
                     return outcome;
                 },
                 remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
+            },
+            // Genie's own Go (main/go-versions.ts) — same busy line. Which Go is the DEFAULT on PATH is TC3 (the shims).
+            go: {
+                list: () => listGoVersions(goVersionsPorts()),
+                install: (version, consent) => installGoVersion(version, consent, goVersionsPorts()),
+                remove: (version) => removeGoVersion(version, goVersionsPorts()),
             },
         },
     };

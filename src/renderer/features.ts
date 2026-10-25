@@ -11,6 +11,7 @@ import type { MemoryClass, Scope } from '../main/knowledge-store.js';
 import type { Hit } from '../main/knowledge-store.js';
 import type { FlowRecord } from '../main/flow-store.js';
 import type { SiteInfo } from '../main/site-manager.js';
+import type { GoVersionsView } from '../main/go-versions.js';
 import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
@@ -231,6 +232,8 @@ export interface ToolchainSection {
     readonly php?: PhpVersionsView;
     /** Genie's own Node versions, the PATH node, and what can be installed. */
     readonly node?: NodeVersionsView;
+    /** Genie's own Go versions, the PATH go, and what can be installed. */
+    readonly go?: GoVersionsView;
 }
 
 export interface FeatureData {
@@ -355,6 +358,9 @@ export type FeatureAction =
     /** Install one Genie-managed Node version (nodejs.org, checksum-verified). `consent` is the person's click. */
     | { kind: 'toolchain.installNode'; version: string; consent: boolean }
     | { kind: 'toolchain.removeNode'; version: string }
+    /** Install one Genie-managed Go version (go.dev, checksum-verified). `consent` is the person's click. */
+    | { kind: 'toolchain.installGo'; version: string; consent: boolean }
+    | { kind: 'toolchain.removeGo'; version: string }
     /** An inline answer on a Deck item (the Deck resolves; core/deck-resolve.ts says what it means). */
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the asking agent. */
     | { kind: 'deck.answer'; item: DeckItem; optionId: string; note?: string }
@@ -430,5 +436,6 @@ export function toolchainRefusalOf(action: FeatureAction, data: FeatureData): To
     if (action.kind === 'toolchain.update' || action.kind === 'toolchain.install') return refusals.find((r) => r.tool === action.tool && r.version === undefined) ?? null;
     if (action.kind === 'toolchain.installPhp' || action.kind === 'toolchain.removePhp') return refusals.find((r) => r.tool === 'php' && r.version === action.version) ?? null;
     if (action.kind === 'toolchain.installNode' || action.kind === 'toolchain.removeNode') return refusals.find((r) => r.tool === 'node' && r.version === action.version) ?? null;
+    if (action.kind === 'toolchain.installGo' || action.kind === 'toolchain.removeGo') return refusals.find((r) => r.tool === 'go' && r.version === action.version) ?? null;
     return null;
 }
