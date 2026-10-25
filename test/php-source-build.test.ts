@@ -85,10 +85,15 @@ describe('what Genie builds', () => {
     });
 
     it("Linux's php.ini: no extension= lines (they are compiled in) and opcache by name; Windows' is unchanged", () => {
-        const ini = phpIniContents(DIR, 'linux');
+        // A Linux directory as it is on Linux: a fixture built with `join` has backslashes on a Windows runner, which
+        // would be the fixture's, not Genie's (unit (windows) on main, 2026-10-25). What must not appear is a backslash
+        // GENIE writes — Windows' `\ext` / `\opcache`.
+        const linuxDir = '/data/genie2-toolchain/php-versions/8.4.27';
+        const ini = phpIniContents(linuxDir, 'linux');
         expect(ini).not.toMatch(/^extension=/m);
         expect(ini).not.toMatch(/extension_dir/);
         expect(ini).toMatch(/^zend_extension=opcache$/m);
+        expect(ini).toContain(`; Owned by Genie: ${linuxDir}`);
         expect(ini).not.toContain('\\');
         expect(phpIniContents('C:\\g\\8.4.27')).toMatch(/^extension=curl$/m);
     });
