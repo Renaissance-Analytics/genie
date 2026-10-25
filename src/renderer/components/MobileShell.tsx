@@ -2,7 +2,7 @@ import { Icon, Input } from '@particle-academy/react-fancy';
 import type { FormEvent } from 'react';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
-import { limitWords } from '../../core/limit-words.js';
+import { limitTitle, limitWords } from '../../core/limit-words.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { DeckItem } from '../../core/deck.js';
 import { ledgerRow } from '../../core/stream-view.js';
@@ -159,7 +159,7 @@ function AgentsSection({ rows, onOpen, workspaces }: MobileAgentsSection & Named
                                         </span>
                                         <span className="flex items-baseline gap-2 text-xs">
                                             <span className={`font-medium ${TONE[status.tone]}`}>{status.word}</span>
-                                            {status.detail ? <span className="truncate text-[var(--fg-3)]">{status.detail}</span> : null}
+                                            {status.detail ? <span className="truncate text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
                                         </span>
                                     </button>
                                 </li>
@@ -246,7 +246,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
             {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
             {held ? (
                 <div data-mobile-limit className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-xs">
-                    <span className="text-[var(--warning)]">Paused · {held}</span>
+                    <span className="text-[var(--warning)]" {...(limitTitle(detail.session?.limit) ? { title: limitTitle(detail.session?.limit)! } : {})}>Paused · {held}</span>
                     <button type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</button>
                 </div>
             ) : null}

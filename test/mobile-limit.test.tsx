@@ -25,13 +25,13 @@ describe('the phone’s agent page, held by the rate limit', () => {
     it('says it is paused and until when, with Resume now', () => {
         const html = render(detail({ state: 'paused', resumeAtMs: RESUMES }));
         expect(html).toContain('data-mobile-limit');
-        expect(html).toMatch(/rate limit · resumes \d\d:\d\d/);
+        expect(html).toMatch(/title="Resumes [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4} at \d{1,2}:\d\d [AP]M"[^>]*>Paused · rate limit · resumes \d{1,2}:\d\d [AP]M</);
         expect(html).toMatch(/data-action="resume-limit"[^>]*>Resume now</);
     });
 
     it('on the no-reset backoff: the next try; needing the person: says so (COUNTED: one Resume now each)', () => {
         const retrying = render(detail({ state: 'retrying', nextTryAtMs: RESUMES, attempt: 1, message: null }));
-        expect(retrying).toMatch(/rate limit · next try \d\d:\d\d/);
+        expect(retrying).toMatch(/rate limit · next try \d{1,2}:\d\d [AP]M/);
         expect(retrying.match(/data-action="resume-limit"/g)).toHaveLength(1);
         const needs = render(detail({ state: 'needs-person', message: 'Add credits to continue' }));
         expect(needs).toMatch(/needs you: Add credits to continue/);

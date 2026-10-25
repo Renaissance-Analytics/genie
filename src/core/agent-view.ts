@@ -1,3 +1,5 @@
+import { clockAmPm } from './clock-words.js';
+import { limitTitle } from './limit-words.js';
 import type { Fidelity } from './dashboard-view.js';
 import { observedState, type TakeOverProbe } from './observed.js';
 import type { AgentTab } from './route.js';
@@ -48,6 +50,8 @@ export interface StatePill {
     /** `m:ss` while a turn is running. `null` when there is nothing to count. */
     elapsed: string | null;
     tone: 'ok' | 'warn' | 'bad' | 'muted';
+    /** The hover: the full date and time a rate-limit hold resumes (the owner, 2026-10-25). Absent = no hover. */
+    title?: string;
 }
 
 function clock(from: number, now: number): string {
@@ -109,8 +113,8 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
     // HELD FOR THE PROVIDER'S LIMIT (Tynn #794): until when, and the time left — or that it needs the person, with no
     // timer when no reset is known. Never Broken: the limit is the provider's, and Genie resumes on its own.
     const limit = session.limit;
-    if (limit && limit.state === 'paused') return { word: `Paused · rate limit · resumes ${hhmm(limit.resumeAtMs)}`, elapsed: limitCountdown(limit.resumeAtMs, now()), tone: 'warn' };
-    if (limit && limit.state === 'retrying') return { word: `Paused · rate limit · next try ${hhmm(limit.nextTryAtMs)}`, elapsed: limitCountdown(limit.nextTryAtMs, now()), tone: 'warn' };
+    if (limit && limit.state === 'paused') return { word: `Paused · rate limit · resumes ${clockAmPm(limit.resumeAtMs)}`, elapsed: limitCountdown(limit.resumeAtMs, now()), tone: 'warn', title: limitTitle(limit)! };
+    if (limit && limit.state === 'retrying') return { word: `Paused · rate limit · next try ${clockAmPm(limit.nextTryAtMs)}`, elapsed: limitCountdown(limit.nextTryAtMs, now()), tone: 'warn', title: limitTitle(limit)! };
     if (limit && limit.state === 'needs-person') return { word: `Paused · rate limit · needs you${limit.message ? `: ${limit.message}` : ''}`, elapsed: null, tone: 'warn' };
     // SIGNED OUT of its provider (the owner, 2026-10-18): what to do, never Broken — the header's `Log in` fixes it.
     if (session.accountPaused) return { word: `Account paused · ${session.accountPaused.words}`, elapsed: null, tone: 'bad' };

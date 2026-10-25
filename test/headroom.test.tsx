@@ -6,7 +6,7 @@ import type { TimedEvent } from '../src/core/stream-view.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
 
 /**
- * THE HEADROOM ROW (the board's rail: `Claude Max · 38% of 5h window · resets 16:00`; the dashboard design's
+ * THE HEADROOM ROW (the board's rail: `Claude Max · 38% of 5h window · resets 4:00 PM`; the dashboard design's
  * `5-hour · 38% left`). prism-acp attaches the provider's rate-limit detail to a `notice` under
  * `_meta["particle.academy/rate_limit"]` — Claude as `windows` keyed `five_hour` / `seven_day` with `utilization`
  * (a fraction, which can pass 1 in overage) and the binding `rateLimitType`; codex as `primary` / `secondary` with
@@ -43,9 +43,9 @@ describe('the row', () => {
     });
 
     it('reads the board\'s line, the plan first when the provider named it', () => {
-        expect(headroomLine(headroomOf([t('c', read(claude))])!)).toBe('38% of 5h window left · resets 16:00');
-        expect(headroomLine(headroomOf([t('a', read(codex))])!)).toBe('pro · 60% of 5h window left · resets 18:30');
-        expect(headroomLine({ plan: null, window: '5h', leftPct: 0, resetsAtMs: at(16, 0), over: true })).toBe('over the 5h window · resets 16:00');
+        expect(headroomLine(headroomOf([t('c', read(claude))])!)).toBe('38% of 5h window left · resets 4:00 PM');
+        expect(headroomLine(headroomOf([t('a', read(codex))])!)).toBe('pro · 60% of 5h window left · resets 6:30 PM');
+        expect(headroomLine({ plan: null, window: '5h', leftPct: 0, resetsAtMs: at(16, 0), over: true })).toBe('over the 5h window · resets 4:00 PM');
     });
 });
 
@@ -58,7 +58,7 @@ describe('the rail', () => {
 
     it('shows the headroom before the first turn, under Budget; with no reading there is no row (positive control)', () => {
         const html = render([{ id: 'n', event: toStreamEvent(notice(claude))!, at: 1 }]);
-        expect(html).toMatch(/data-rail="budget"[\s\S]*data-rail-headroom[^>]*>38% of 5h window left · resets 16:00</);
+        expect(html).toMatch(/data-rail="budget"[\s\S]*data-rail-headroom[^>]*title="Resets [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4} at 4:00 PM"[^>]*>38% of 5h window left · resets 4:00 PM</);
         expect(render([])).not.toContain('data-rail-headroom');
     });
 });

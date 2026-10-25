@@ -57,7 +57,7 @@ describe('the notices that stay', () => {
     it('a rate-limit notice reads as its headroom line', () => {
         const at = new Date(2026, 9, 18, 11, 0).getTime();
         const row = ledgerRow(t('n', { kind: 'notice', level: 'warning', message: 'Rate limit: seven_day window at 61% used, resets 2026-10-18T11:00:00.000Z', headroom: { plan: null, window: '7d', leftPct: 39, resetsAtMs: at, over: false } }));
-        expect(row.main).toBe('39% of 7d window left · resets 11:00');
+        expect(row.main).toBe('39% of 7d window left · resets 11:00 AM');
     });
 });
 

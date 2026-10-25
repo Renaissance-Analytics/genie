@@ -1,9 +1,5 @@
+import { clockAmPm, fullDateTime } from './clock-words.js';
 import type { GateView } from './rate-limit-gate.js';
-
-/** `14:31`, in the viewer's locale. */
-function hhmm(at: number): string {
-    return new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
-}
 
 /**
  * ONE WORDING FOR A HELD LOGIN, wherever an agent is shown (Tynn #794): the Dashboard row, the chat's context line, the
@@ -14,12 +10,23 @@ export function limitWords(limit: GateView | null | undefined): string | null {
     if (!limit) return null;
     switch (limit.state) {
         case 'paused':
-            return `rate limit · resumes ${hhmm(limit.resumeAtMs)}`;
+            return `rate limit · resumes ${clockAmPm(limit.resumeAtMs)}`;
         case 'retrying':
-            return `rate limit · next try ${hhmm(limit.nextTryAtMs)}`;
+            return `rate limit · next try ${clockAmPm(limit.nextTryAtMs)}`;
         case 'needs-person':
             return limit.message ? `rate limit · needs you: ${limit.message}` : 'rate limit · needs you';
         default:
             return null;
     }
+}
+
+/**
+ * The HOVER for that wording: the full date and time it resumes, or the next try (the owner, 2026-10-25). `null` when
+ * there is no time to show — needing the person, open, nothing reported.
+ */
+export function limitTitle(limit: GateView | null | undefined): string | null {
+    if (!limit) return null;
+    if (limit.state === 'paused') return `Resumes ${fullDateTime(limit.resumeAtMs)}`;
+    if (limit.state === 'retrying') return `Next try ${fullDateTime(limit.nextTryAtMs)}`;
+    return null;
 }
