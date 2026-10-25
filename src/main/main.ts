@@ -111,6 +111,8 @@ import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.j
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
+import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
+import { defaultPathEntries } from '../core/toolchain-defaults.js';
 import { goVersionsRoot, installGoVersion, listGoVersions, managedGo, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
 import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
@@ -2481,6 +2483,16 @@ async function boot(): Promise<void> {
                 },
                 remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
             },
+            // The machine's own PATH (the owner's decision 3): the fixed `current` entries, once, with consent.
+            machinePath: (() => {
+                const mpPorts = (): MachinePathPorts => ({ platform: process.platform as Platform, home: homedir(), entries: defaultPathEntries(toolchainDataDir(), process.platform as Platform), fs: nodeMachinePathFs(), run: longRunner });
+                const targets = (): string[] => process.platform === 'win32' ? ['the user PATH (HKCU\\Environment)'] : ['.profile', '.bash_profile', '.bashrc', '.zprofile', '.zshrc'].filter((f, i) => i === 0 || nodeMachinePathFs().exists(join(homedir(), f))).map((f) => join(homedir(), f));
+                return {
+                    status: async () => ({ ...(await machinePathStatus(mpPorts())), entries: mpPorts().entries, targets: targets() }),
+                    apply: (consent: boolean) => applyMachinePath(consent, mpPorts()),
+                    remove: () => removeMachinePath(mpPorts()),
+                };
+            })(),
             // Each language's default: the `current/<lang>` link, applied to Genie's PATH at once (and at every launch).
             defaults: {
                 list: () => listDefaults({ platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform) }),

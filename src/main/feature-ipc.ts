@@ -24,6 +24,7 @@ import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
+import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
@@ -114,6 +115,12 @@ export interface FeaturePorts {
             list(): Record<DefaultLang, string | null>;
             set(lang: DefaultLang, version: string | null): DefaultOutcome;
         };
+        /** The machine's own PATH (main/machine-path.ts): the `current` entries, once, with consent; Undo restores it exactly. */
+        machinePath?: {
+            status(): Promise<MachinePathStatus>;
+            apply(consent: boolean): Promise<MachinePathOutcome>;
+            remove(): Promise<MachinePathOutcome>;
+        };
     };
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
@@ -172,6 +179,7 @@ export interface FeatureState {
     toolchainNode?: NodeVersionsView | null;
     toolchainGo?: GoVersionsView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
+    toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
@@ -214,6 +222,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
         ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
+        ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
 }
 
@@ -232,7 +241,16 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainNode: section?.node ?? null,
         toolchainGo: section?.go ?? null,
         toolchainDefaults: section?.defaults ?? null,
+        toolchainMachinePath: section?.machinePath ?? null,
     };
+}
+
+/** What the machine-PATH card shows: whether it is applied, where, and exactly what would change. */
+export interface MachinePathStatus {
+    readonly applied: boolean;
+    readonly where: readonly string[];
+    readonly entries: readonly string[];
+    readonly targets: readonly string[];
 }
 
 type ToolchainPort = NonNullable<FeaturePorts['toolchain']>;
@@ -248,6 +266,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.node) next.toolchainNode = await tc.node.list();
     if (tc.go) next.toolchainGo = await tc.go.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
+    if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
     next.toolStatuses = tools;
     next.toolchainCheckedAt = tc.now();
@@ -832,6 +851,21 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'go', outcome.reason, action.version);
             else next.toolchainResult = `Go ${outcome.version} was removed.`;
             next.toolchainGo = await tc.go.list();
+            break;
+        }
+        case 'toolchain.machinePath': {
+            const tc = ports.toolchain;
+            clearRefusal(next, 'machine-path');
+            if (!tc?.machinePath) {
+                refuse(next, 'machine-path', 'no machine-PATH switch is wired into this Genie; nothing was changed');
+                break;
+            }
+            const outcome = action.apply ? await tc.machinePath.apply(action.consent === true) : await tc.machinePath.remove();
+            if (outcome.kind === 'refused' || outcome.kind === 'not-applied') refuse(next, 'machine-path', outcome.reason);
+            else next.toolchainResult = outcome.kind === 'applied'
+                ? `Genie's defaults are on your PATH (${outcome.where.join(', ')}): terminals outside Genie use them once they are opened again.`
+                : `Genie's defaults are off your PATH again (${outcome.where.join(', ') || 'nothing to remove'}); it is as it was.`;
+            next.toolchainMachinePath = await tc.machinePath.status();
             break;
         }
         case 'toolchain.setDefault': {
