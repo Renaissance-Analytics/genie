@@ -112,7 +112,9 @@ describe('building one on Linux', () => {
             expect(steps[3]).toBe(`make -s -C ${src} install`);
             expect(steps.slice(4, 6)).toEqual([`ln -s python3 ${join(DIR, 'bin', 'python')}`, `ln -s pip3 ${join(DIR, 'bin', 'pip')}`]);
             // The modules check and the proof run the LINK, so `python` itself is proven.
-            expect(steps[6]).toMatch(new RegExp(`^${join(DIR, 'bin', 'python').replace(/[.]/g, '[.]')} -I -c .*find_spec`));
+            // Every regex character in the path escaped — on a Windows runner the joined path has backslashes, and an
+            // unescaped `\d` in `\data` would be a digit class (unit (windows) on main, 2026-10-25).
+            expect(steps[6]).toMatch(new RegExp(`^${join(DIR, 'bin', 'python').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} -I -c .*find_spec`));
             expect(steps[7]).toMatch(/ -I -c import sys, platform, ssl, venv, pip/);
             expect(a.disk.files.has(join(DIR, 'bin', 'python'))).toBe(true);
             expect(a.leftovers().filter((f) => f.includes('.staging-') || f.endsWith('.tgz'))).toEqual([]);
