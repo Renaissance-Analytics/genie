@@ -32,7 +32,7 @@ function fakeLinks(dirs: string[] = []) {
 
 const env = (path: string) => { const m = new Map([['PATH', path]]); return { get: (n: string) => m.get(n), set: (n: string, v: string) => { m.set(n, v); }, map: m }; };
 
-function ports(platform: 'win32' | 'linux', managed: Record<string, string[]>, dirs: string[] = []) {
+function ports(platform: 'win32' | 'linux' | 'darwin', managed: Record<string, string[]>, dirs: string[] = []) {
     const links = fakeLinks(dirs);
     const p: DefaultsPorts = { platform, toolchainDir: TC, fs: links.fs, managed: (lang) => managed[lang] ?? [] };
     return { p, ...links };
@@ -48,8 +48,9 @@ describe('where the defaults live', () => {
             join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'),
             join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'),
         ]);
-        // PHP and Python versions are Genie-managed on Windows only (Python elsewhere is TC4b); no link to put on PATH.
-        expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin')]);
+        // PHP is Genie-managed on Windows only; Python on Windows and Linux (built from source, TC4b: bin/).
+        expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'python', 'bin')]);
+        expect(defaultPathEntries(TC, 'darwin')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin')]);
     });
 });
 
@@ -78,11 +79,21 @@ describe('choosing a default', () => {
         expect(a.links.has(join(TC, 'current', 'node'))).toBe(false);
     });
 
-    it('PHP and Python have no default off Windows (Genie manages them on Windows only, for now) — said, not attempted', () => {
-        const a = ports('linux', { php: ['8.4.27'], python: ['3.15.1'] });
+    it('PHP has no default off Windows; Python none on macOS — said, not attempted', () => {
+        const a = ports('linux', { php: ['8.4.27'] });
         expect(setDefault('php', '8.4.27', a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Windows/) });
-        expect(setDefault('python', '3.15.1', a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Python versions on Windows only/) });
         expect(a.ops).toEqual([]);
+        const m = ports('darwin', { python: ['3.15.1'] });
+        expect(setDefault('python', '3.15.1', m.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Python versions on Windows and Linux/) });
+        expect(m.ops).toEqual([]);
+    });
+
+    it('Python on Linux: current/python links to the built version, and current/python/bin goes first', () => {
+        const a = ports('linux', { python: ['3.15.1'] }, [join(TC, 'python-versions', '3.15.1')]);
+        expect(setDefault('python', '3.15.1', a.p)).toEqual({ kind: 'set', lang: 'python', version: '3.15.1' });
+        const e = env('/usr/bin');
+        expect(restoreDefaultsEnv({ ...a.p, env: e })).toEqual([join(TC, 'current', 'python', 'bin')]);
+        expect(e.map.get('PATH')).toBe(`${join(TC, 'current', 'python', 'bin')}:/usr/bin`);
     });
 });
 

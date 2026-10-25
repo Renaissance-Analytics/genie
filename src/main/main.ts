@@ -29,7 +29,7 @@ import { realFancyTermPort } from './fancy-term-port.js';
 import { TerminalHost } from './terminal-host.js';
 import { TakeOverHost } from './take-over-host.js';
 import { FilesWindows } from './files-windows.js';
-import { homedir, hostname } from 'node:os';
+import { availableParallelism, homedir, hostname } from 'node:os';
 import { basename, dirname, join, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { asAgentId, asAgentRef, type AgentId, type AgentRecord } from '../core/identity.js';
@@ -2446,6 +2446,7 @@ async function boot(): Promise<void> {
         root: pythonVersionsRoot(toolchainDataDir()),
         fs: nodePhpVersionsFs(),
         run: longRunner,
+        cpus: availableParallelism(),
         fetchBytes: httpFetch.bytes,
         fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },

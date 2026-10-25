@@ -11,13 +11,15 @@
  *      `reg query` sees a key that does exist;
  *   4. listed as managed; Remove deletes it and it is no longer listed.
  *
- * On macOS/Linux it checks the other contract: install is refused by name and nothing is downloaded.
+ * On LINUX (TC4b) it builds python.org's source for real: a tampered sha256 refused with nothing left; the build
+ * installed and proven; `python` and `pip` (the links) answer; a venv + pip install; as the DEFAULT, `python`, `pip`
+ * and a console script pip installs resolve BY NAME through current/python/bin; removed. On macOS: refused by name.
  *
  * Usage (in the VM, from the repo): npx tsx scripts/acceptance-python.ts
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PYTHON_RECIPES } from '../src/core/python-versions.js';
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
@@ -38,17 +40,56 @@ async function main(): Promise<void> {
     const platform = process.platform as PythonVersionsPorts['platform'];
     let downloads = 0;
     const ports: PythonVersionsPorts = {
-        platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run,
+        platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run, cpus: availableParallelism(),
         fetchBytes: async (u) => { downloads += 1; return httpFetch.bytes(u); }, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = PYTHON_RECIPES[0]!.version;
 
-    if (platform !== 'win32') {
-        console.log(`${platform}: Python is TC4b (from source) — refused by name until then`);
+    if (platform === 'darwin') {
+        console.log('macOS: refused by name until it can be proven on a Mac');
         const r = await installPythonVersion(V, true, ports);
-        check(r.kind === 'refused' && /Windows/.test(r.reason), 'install refused by name', r.kind === 'refused' ? r.reason : r.kind);
+        check(r.kind === 'refused' && /macOS/.test(r.reason), 'install refused by name', r.kind === 'refused' ? r.reason : r.kind);
         check(downloads === 0, 'nothing was downloaded', String(downloads));
         check((await listPythonVersions(ports)).available.length === 0, 'nothing is offered');
+    } else if (platform === 'linux') {
+        console.log("1. a tampered release-files API");
+        const tampered = await installPythonVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256_sum":\s*"[0-9a-f]{64}"/g, `"sha256_sum":"${'f'.repeat(64)}"`) } : r; } });
+        check(tampered.kind === 'not-installed' && /does not match the sha256 python\.org publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : tampered.kind);
+        check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
+
+        console.log(`2. Build Python ${V} from python.org's source`);
+        const t0 = Date.now();
+        const installed = await installPythonVersion(V, true, ports);
+        check(installed.kind === 'installed', `built and installed in ${Math.round((Date.now() - t0) / 1000)} s`, installed.kind === 'installed' ? installed.dir : JSON.stringify(installed));
+        if (installed.kind !== 'installed') return;
+        const bin = join(installed.dir, 'bin');
+        check(execFileSync(join(bin, 'python'), ['--version'], { encoding: 'utf8' }).trim() === `Python ${V}`, '`bin/python` (the link) names it');
+        check(execFileSync(join(bin, 'pip'), ['--version'], { encoding: 'utf8' }).includes(installed.dir), '`bin/pip` (the link) is its pip');
+        check(nodePhpVersionsFs().list(root).every((e) => !e.startsWith('.')), 'no staging or tarball left', nodePhpVersionsFs().list(root).join(', '));
+        const venv = join(mkdtempSync(join(tmpdir(), 'genie-python-venv-')), 'venv');
+        execFileSync(join(bin, 'python'), ['-m', 'venv', venv]);
+        execFileSync(join(venv, 'bin', 'pip'), ['install', '-q', '--disable-pip-version-check', 'six']);
+        const six = execFileSync(join(venv, 'bin', 'python'), ['-c', 'import six, sys; print(six.__version__, sys.base_prefix)'], { encoding: 'utf8' }).trim();
+        check(six.endsWith(installed.dir), 'a venv is made from it, and pip installs into the venv', six);
+
+        console.log('2b. Python as the default');
+        const toolchainDir = join(base, 'genie2-toolchain');
+        const linkPorts = { platform, toolchainDir, fs: nodeLinkFs(platform) };
+        check(setDefault('python', V, { ...linkPorts, managed: () => managedPython(ports).map((m) => m.version) }).kind === 'set', 'setDefault python');
+        const childEnv: Record<string, string> = { ...(process.env as Record<string, string>) };
+        const applied = restoreDefaultsEnv({ ...linkPorts, env: { get: () => childEnv.PATH, set: (_n, v) => { childEnv.PATH = v; } } });
+        check(applied.length === 1 && applied[0] === join(toolchainDir, 'current', 'python', 'bin'), 'current/python/bin first on the PATH', applied.join(' ; '));
+        const byName = (cmd: string, ...args: string[]) => execFileSync(cmd, args, { encoding: 'utf8', env: childEnv }).trim();
+        check(byName('sh', '-c', 'command -v python') === join(toolchainDir, 'current', 'python', 'bin', 'python'), '`python` by name is current/python/bin/python', byName('sh', '-c', 'command -v python'));
+        check(byName('sh', '-c', 'python --version') === `Python ${V}`, '`python --version` names it');
+        check(byName('sh', '-c', 'pip --version').includes(installed.dir), '`pip` by name is its pip');
+        byName('sh', '-c', 'pip install -q --disable-pip-version-check pyflakes');
+        check(byName('sh', '-c', 'pyflakes --version').includes(`Python ${V}`), 'a console script pip installs runs by name');
+        check(setDefault('python', null, { ...linkPorts, managed: () => [] }).kind === 'cleared', 'the default cleared');
+
+        console.log('3. list and Remove');
+        check((await listPythonVersions(ports)).managed.some((m) => m.version === V), 'listed as managed');
+        check(removePythonVersion(V, ports).kind === 'removed' && !(await listPythonVersions(ports)).managed.some((m) => m.version === V), 'removed, and no longer listed');
     } else {
         console.log('1. a tampered index');
         const tampered = await installPythonVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/"sha256":\s*"[0-9a-f]{64}"/g, `"sha256": "${'f'.repeat(64)}"`) } : r; } });
