@@ -24,6 +24,7 @@ import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
 import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { PythonInstallOutcome, PythonRemoveOutcome, PythonVersionsView } from './python-versions.js';
+import type { DotnetInstallOutcome, DotnetRemoveOutcome, DotnetVersionsView } from './dotnet-versions.js';
 import type { DefaultOutcome } from './toolchain-defaults.js';
 import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
@@ -117,6 +118,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<PythonInstallOutcome>;
             remove(version: string): PythonRemoveOutcome;
         };
+        /** Genie's own .NET SDKs (main/dotnet-versions.ts): Microsoft's archives, sha512-verified, every OS. */
+        dotnet?: {
+            list(): Promise<DotnetVersionsView>;
+            install(version: string, consent: boolean): Promise<DotnetInstallOutcome>;
+            remove(version: string): Promise<DotnetRemoveOutcome>;
+        };
         /** Each language's default (main/toolchain-defaults.ts): read from the `current/<lang>` links; set repoints one. */
         defaults?: {
             list(): Record<DefaultLang, string | null>;
@@ -186,6 +193,7 @@ export interface FeatureState {
     toolchainNode?: NodeVersionsView | null;
     toolchainGo?: GoVersionsView | null;
     toolchainPython?: PythonVersionsView | null;
+    toolchainDotnet?: DotnetVersionsView | null;
     toolchainDefaults?: Record<DefaultLang, string | null> | null;
     toolchainMachinePath?: MachinePathStatus | null;
     siteAdding?: SiteAdding | null;
@@ -230,6 +238,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
         ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
         ...(state.toolchainPython ? { python: state.toolchainPython } : {}),
+        ...(state.toolchainDotnet ? { dotnet: state.toolchainDotnet } : {}),
         ...(state.toolchainDefaults ? { defaults: state.toolchainDefaults } : {}),
         ...(state.toolchainMachinePath ? { machinePath: state.toolchainMachinePath } : {}),
     };
@@ -250,6 +259,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainNode: section?.node ?? null,
         toolchainGo: section?.go ?? null,
         toolchainPython: section?.python ?? null,
+        toolchainDotnet: section?.dotnet ?? null,
         toolchainDefaults: section?.defaults ?? null,
         toolchainMachinePath: section?.machinePath ?? null,
     };
@@ -276,6 +286,7 @@ async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: read
     if (tc.node) next.toolchainNode = await tc.node.list();
     if (tc.go) next.toolchainGo = await tc.go.list();
     if (tc.python) next.toolchainPython = await tc.python.list();
+    if (tc.dotnet) next.toolchainDotnet = await tc.dotnet.list();
     if (tc.defaults) next.toolchainDefaults = tc.defaults.list();
     if (tc.machinePath) next.toolchainMachinePath = await tc.machinePath.status();
     const tools = await tc.probe();
@@ -906,6 +917,50 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'python', outcome.reason, action.version);
             else next.toolchainResult = `Python ${outcome.version} was removed.`;
             next.toolchainPython = await tc.python.list();
+            break;
+        }
+        case 'toolchain.installDotnet': {
+            clearRefusal(next, 'dotnet', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'dotnet', `Genie installs nothing without your go-ahead; .NET SDK ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.dotnet) {
+                refuse(next, 'dotnet', 'no .NET version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.dotnet.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'dotnet', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `.NET SDK ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `.NET SDK ${outcome.version} was already installed; nothing was downloaded.`
+                    : `.NET SDK ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainDotnet = await tc.dotnet.list();
+            break;
+        }
+        case 'toolchain.removeDotnet': {
+            {
+                const current = ports.toolchain?.defaults?.list()['dotnet'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'dotnet', action.version);
+                    refuse(next, 'dotnet', `${LANG_LABEL['dotnet']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
+            const tc = ports.toolchain;
+            clearRefusal(next, 'dotnet', action.version);
+            if (!tc?.dotnet) {
+                refuse(next, 'dotnet', 'no .NET version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = await tc.dotnet.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'dotnet', outcome.reason, action.version);
+            else next.toolchainResult = `.NET SDK ${outcome.version} was removed.`;
+            next.toolchainDotnet = await tc.dotnet.list();
             break;
         }
         case 'toolchain.machinePath': {

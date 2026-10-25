@@ -38,7 +38,7 @@ export type DefaultOutcome =
 
 /** The version each language's link points at, or `null` (no default: the system's own). */
 export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainDir' | 'fs'>): Record<DefaultLang, string | null> {
-    const out = { node: null, go: null, php: null, python: null } as Record<DefaultLang, string | null>;
+    const out = { node: null, go: null, php: null, python: null, dotnet: null } as Record<DefaultLang, string | null>;
     for (const lang of DEFAULT_LANGS) {
         const target = ports.fs.readLink(currentLinkDir(ports.toolchainDir, lang));
         if (target === null) continue;
@@ -90,6 +90,11 @@ export function restoreDefaultsEnv(ports: Pick<DefaultsPorts, 'platform' | 'tool
         .flatMap((lang) => langPathEntries(ports.toolchainDir, lang, ports.platform));
     // Last first, so the first language ends up first.
     for (const entry of [...entries].reverse()) ports.env.set('PATH', pathWithFirst(ports.env.get('PATH') ?? '', entry, ports.platform));
+    // .NET: a published app finds its runtime through DOTNET_ROOT (else the machine-wide install, which Genie's is not).
+    // Set while .NET has a default; cleared only when it is the one Genie set — a person's own DOTNET_ROOT is theirs.
+    const dotnetLink = currentLinkDir(ports.toolchainDir, 'dotnet');
+    if (defaults.dotnet !== null && ports.fs.exists(dotnetLink)) ports.env.set('DOTNET_ROOT', dotnetLink);
+    else if (ports.env.get('DOTNET_ROOT') === dotnetLink) ports.env.set('DOTNET_ROOT', '');
     return entries;
 }
 

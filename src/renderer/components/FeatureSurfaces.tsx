@@ -770,6 +770,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             {tc?.node ? <NodeVersions node={tc.node} current={tc.defaults?.node ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
             {tc?.go ? <GoVersions go={tc.go} current={tc.defaults?.go ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
             {tc?.python ? <PythonVersions python={tc.python} current={tc.defaults?.python ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'python' && r.version !== undefined)} /> : null}
+            {tc?.dotnet ? <DotnetVersions dotnet={tc.dotnet} current={tc.defaults?.dotnet ?? null} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'dotnet' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -970,6 +971,51 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
 }
 
 /**
+ * GENIE'S OWN .NET (plan `.ai/plans/genie-2-toolchain-rest.md`, TC6a): the SDKs Genie manages, the dotnet on PATH, and an
+ * Install per supported line — each Install is the person's consent. Microsoft builds every OS, so there is no refusal row.
+ */
+function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] }: { dotnet: NonNullable<NonNullable<FeatureData['toolchain']>['dotnet']>; current?: string | null; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const addable = dotnet.available.filter((a) => !a.installed);
+    return (
+        <section data-dotnet-versions={dotnet.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">.NET SDKs</h3>
+            {current !== null ? (
+                <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
+                    <span>`dotnet` is .NET SDK {current}, Genie's default.</span>
+                    <button type="button" data-use-system="dotnet" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'dotnet', version: null })}>Use the one on your PATH instead</button>
+                </p>
+            ) : null}
+            {refusals.map((r) => (
+                <p key={r.version} data-dotnet-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <p data-dotnet-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {dotnet.system ? `The dotnet on your PATH is ${dotnet.system.version}.` : 'No dotnet on your PATH.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {dotnet.managed.map((m) => (
+                    <li key={m.version} data-dotnet-version={m.version} data-default={m.version === current ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">.NET SDK {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        <DefaultMark lang="dotnet" version={m.version} current={current} busy={busy} onAction={onAction} />
+                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `.NET SDK ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeDotnet', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install from Microsoft (checked against its published sha512):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-dotnet-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installDotnet', version: a.version, consent: true })}>
+                            .NET SDK {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+/**
  * GENIE'S OWN PYTHON (plan `.ai/plans/genie-2-toolchain-rest.md`, TC4a): the versions Genie manages, the python on PATH,
  * and an Install per supported line on Windows — each Install is the person's consent. Where python.org publishes no
  * build Genie can install (macOS, Linux until TC4b), it says so instead of offering buttons.
@@ -1046,7 +1092,7 @@ function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonN
 }
 
 /** A managed version's default state: the Default mark on the chosen one, "Make default" on the others (plan TC3a). */
-function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php' | 'python'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php' | 'python' | 'dotnet'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
     if (version === current) return <span data-is-default={`${lang}:${version}`} className="rounded-sm bg-[var(--primary)]/15 px-1.5 text-[11px] font-medium text-[var(--primary)]">Default</span>;
     return (
         <button type="button" data-make-default={`${lang}:${version}`} disabled={busy} className="text-[12px] text-[var(--fg-2)] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>

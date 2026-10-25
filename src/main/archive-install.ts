@@ -35,6 +35,8 @@ export interface ArchiveSpec {
     readonly url: string;
     /** Who publishes the checksum, for the refusal's words: `go.dev`. */
     readonly publisher: string;
+    /** The hash the publisher publishes — sha256 unless said (Microsoft publishes sha512). */
+    readonly hash?: 'sha256' | 'sha512';
     /** The published sha256 for `file`, read from the publisher — or why it could not be. */
     readonly expectedSha: () => Promise<{ ok: true; sha: string } | { ok: false; reason: string }>;
     /** The archive's single top folder (`go`, `node-v24.22.1-win-x64`) — or `null` for a FLAT archive whose files are
@@ -67,11 +69,12 @@ export async function installArchive(spec: ArchiveSpec, ports: ArchiveInstallPor
         if (!got.ok) return notInstalled(`${file} could not be downloaded from ${spec.url} (${got.error})`);
 
         // THE CHECKSUM, before a byte is written.
-        say(`${label}: checking ${file} against the sha256 ${spec.publisher} publishes`);
+        const algorithm = spec.hash ?? 'sha256';
+        say(`${label}: checking ${file} against the ${algorithm} ${spec.publisher} publishes`);
         const expected = await spec.expectedSha();
         if (!expected.ok) return notInstalled(`${expected.reason}, so ${file} was not trusted`);
-        const actual = createHash('sha256').update(got.body).digest('hex');
-        if (actual !== expected.sha) return notInstalled(`${file} does not match the sha256 ${spec.publisher} publishes (expected ${expected.sha}, got ${actual}); it was discarded unopened`);
+        const actual = createHash(algorithm).update(got.body).digest('hex');
+        if (actual !== expected.sha) return notInstalled(`${file} does not match the ${algorithm} ${spec.publisher} publishes (expected ${expected.sha}, got ${actual}); it was discarded unopened`);
 
         return await putInPlace(spec, got.body, ports, say);
     } finally {

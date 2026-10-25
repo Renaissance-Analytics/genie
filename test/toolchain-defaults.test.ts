@@ -40,18 +40,19 @@ function ports(platform: 'win32' | 'linux' | 'darwin', managed: Record<string, s
 
 describe('where the defaults live', () => {
     it('one link per language, and the fixed PATH entries that reach each one’s executables, per OS', () => {
-        expect(DEFAULT_LANGS).toEqual(['node', 'go', 'php', 'python']);
+        expect(DEFAULT_LANGS).toEqual(['node', 'go', 'php', 'python', 'dotnet']);
         expect(currentLinkDir(TC, 'node')).toBe(join(TC, 'current', 'node'));
         // Python on Windows needs TWO: python.exe at the top, and Scripts\ — where pip.exe and every console script pip
         // installs live (measured on the Windows VM, TC4a-2).
         expect(defaultPathEntries(TC, 'win32')).toEqual([
             join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'),
-            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'),
+            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'), join(TC, 'current', 'dotnet'),
         ]);
         // PHP and Python are Genie-managed on Windows and Linux (built from source there: TC4b, TC5). PHP's source build
         // puts php and php-cgi at the version's top, as on Windows; Python's in bin/.
-        expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'), join(TC, 'current', 'python', 'bin')]);
-        expect(defaultPathEntries(TC, 'darwin')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin')]);
+        expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'), join(TC, 'current', 'python', 'bin'), join(TC, 'current', 'dotnet')]);
+        // .NET: dotnet at the archive's top on every OS (Microsoft's own archives).
+        expect(defaultPathEntries(TC, 'darwin')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'dotnet')]);
     });
 });
 
@@ -60,7 +61,7 @@ describe('choosing a default', () => {
         const a = ports('linux', { go: ['1.27.3', '1.26.10'] }, [join(TC, 'go-versions', '1.27.3'), join(TC, 'go-versions', '1.26.10')]);
         expect(setDefault('go', '1.27.3', a.p)).toEqual({ kind: 'set', lang: 'go', version: '1.27.3' });
         expect(a.links.get(join(TC, 'current', 'go'))).toBe(join(TC, 'go-versions', '1.27.3'));
-        expect(listDefaults(a.p)).toEqual({ node: null, go: '1.27.3', php: null, python: null });
+        expect(listDefaults(a.p)).toEqual({ node: null, go: '1.27.3', php: null, python: null, dotnet: null });
     });
 
     it('switching repoints the one link (old link removed, new one made) — the PATH entry never changes', () => {
@@ -116,6 +117,22 @@ describe('what Genie’s children get', () => {
         const want = [join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts')];
         expect(restoreDefaultsEnv({ ...a.p, env: e })).toEqual(want);
         expect(e.map.get('PATH')).toBe(`${want.join(';')};C:/Windows/system32;${alias}`);
+    });
+
+    it(".NET's default also sets DOTNET_ROOT (a published app finds its runtime there); cleared, Genie's DOTNET_ROOT goes", () => {
+        const a = ports('linux', { dotnet: ['10.0.402'] }, [join(TC, 'dotnet-versions', '10.0.402')]);
+        setDefault('dotnet', '10.0.402', a.p);
+        const e = env('/usr/bin');
+        expect(restoreDefaultsEnv({ ...a.p, env: e })).toEqual([join(TC, 'current', 'dotnet')]);
+        expect(e.map.get('DOTNET_ROOT')).toBe(join(TC, 'current', 'dotnet'));
+        setDefault('dotnet', null, a.p);
+        restoreDefaultsEnv({ ...a.p, env: e });
+        expect(e.map.get('DOTNET_ROOT') ?? '').toBe('');
+        // A person's own DOTNET_ROOT is theirs: Genie clears only the one it set.
+        const own = env('/usr/bin');
+        own.set('DOTNET_ROOT', '/opt/dotnet');
+        restoreDefaultsEnv({ ...a.p, env: own });
+        expect(own.map.get('DOTNET_ROOT')).toBe('/opt/dotnet');
     });
 
     it('CONTROL: no defaults chosen → the PATH is untouched', () => {
