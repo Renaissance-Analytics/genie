@@ -56,7 +56,7 @@ export function listDefaults(ports: Pick<DefaultsPorts, 'platform' | 'toolchainD
  */
 export function setDefault(lang: DefaultLang, version: string | null, ports: DefaultsPorts): DefaultOutcome {
     const label = LANG_LABEL[lang];
-    if (!langManagedOn(lang, ports.platform)) return { kind: 'refused', reason: `Genie manages ${label} versions on ${lang === 'php' ? 'Windows only' : 'Windows and Linux'}; here ${label} is the one on your PATH` };
+    if (!langManagedOn(lang, ports.platform)) return { kind: 'refused', reason: `Genie manages ${label} versions on Windows and Linux; here ${label} is the one on your PATH` };
     const link = currentLinkDir(ports.toolchainDir, lang);
     if (version === null) {
         try {

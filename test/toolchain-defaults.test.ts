@@ -48,8 +48,9 @@ describe('where the defaults live', () => {
             join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'),
             join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'),
         ]);
-        // PHP is Genie-managed on Windows only; Python on Windows and Linux (built from source, TC4b: bin/).
-        expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'python', 'bin')]);
+        // PHP and Python are Genie-managed on Windows and Linux (built from source there: TC4b, TC5). PHP's source build
+        // puts php and php-cgi at the version's top, as on Windows; Python's in bin/.
+        expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'), join(TC, 'current', 'python', 'bin')]);
         expect(defaultPathEntries(TC, 'darwin')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin')]);
     });
 });
@@ -79,11 +80,9 @@ describe('choosing a default', () => {
         expect(a.links.has(join(TC, 'current', 'node'))).toBe(false);
     });
 
-    it('PHP has no default off Windows; Python none on macOS — said, not attempted', () => {
-        const a = ports('linux', { php: ['8.4.27'] });
-        expect(setDefault('php', '8.4.27', a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Windows/) });
-        expect(a.ops).toEqual([]);
-        const m = ports('darwin', { python: ['3.15.1'] });
+    it('PHP and Python have no default on macOS — said, not attempted', () => {
+        const m = ports('darwin', { php: ['8.4.27'], python: ['3.15.1'] });
+        expect(setDefault('php', '8.4.27', m.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/PHP versions on Windows and Linux/) });
         expect(setDefault('python', '3.15.1', m.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Python versions on Windows and Linux/) });
         expect(m.ops).toEqual([]);
     });

@@ -2413,6 +2413,7 @@ async function boot(): Promise<void> {
         run: longRunner,
         fetchBytes: httpFetch.bytes,
         fetchText: httpFetch.text,
+        cpus: availableParallelism(),
         // The VC++ runtime through T1's own consented install (winget); the click on Install PHP is the consent.
         ensureVcRuntime: async () => {
             const r = await installTool('vcredist', true, toolchainOps());

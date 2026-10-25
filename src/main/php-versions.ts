@@ -9,8 +9,15 @@ import {
     managedVersions,
     missingPinReason,
     moduleProblem,
+    PHP_BUILD_LIBRARIES,
+    missingLibrariesAdvice,
     parsePhpBanner,
     parseSha256Sums,
+    phpConfigureArgs,
+    phpReleaseJsonUrl,
+    phpSourceName,
+    phpSourceShaFromJson,
+    phpSourceUrl,
     phpCgiName,
     phpDownloadSources,
     phpCacheDir,
@@ -22,6 +29,7 @@ import {
     type ManagedPhp,
     type PhpPlatform,
 } from '../core/php-versions.js';
+import { buildFromSource } from './source-build.js';
 import type { CommandRunner } from './toolchain-prober.js';
 
 /**
@@ -65,6 +73,8 @@ export interface PhpVersionsPorts {
      */
     readonly ensureVcRuntime?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
     readonly progress?: (step: string | null) => void;
+    /** How many compile jobs a source build runs at once (Linux). */
+    readonly cpus?: number;
 }
 
 export interface PhpVersionsView {
@@ -95,7 +105,8 @@ export interface SitePin {
     readonly pin: string;
 }
 
-const NOT_HERE = 'Genie installs PHP versions on Windows, where windows.php.net publishes official builds; macOS and Linux have no relocatable official build, so Genie serves the PHP on your PATH there';
+const NOT_HERE = "Genie does not install PHP versions on macOS yet (it has not been proven on a Mac), so it serves the PHP on your PATH there";
+const NO_BUILD_TOOLS = "Genie builds PHP from php.net's source here, which needs a C compiler, make and pkg-config — install them first (Debian/Ubuntu: sudo apt install build-essential pkg-config; Fedora: sudo dnf install gcc make pkgconf; Arch: sudo pacman -S base-devel) and install again";
 
 /** Where the managed versions live, under Genie 2's toolchain directory. */
 export function phpVersionsRoot(toolchainDataDir: string): string {
@@ -180,8 +191,8 @@ export function refreshManagedIni(pin: string | undefined, ports: PhpCgiPorts): 
     if (!PHP_VERSION.test(pin)) return;
     const found = pickPinned(managedPhp(ports), pin);
     if (!found) return;
-    ports.fs.writeText(join(found.dir, 'php.ini'), phpIniContents(found.dir));
-    ports.fs.mkdirp(phpCacheDir(found.dir));
+    ports.fs.writeText(join(found.dir, 'php.ini'), phpIniContents(found.dir, ports.platform));
+    if (ports.platform === 'win32') ports.fs.mkdirp(phpCacheDir(found.dir));
 }
 
 /** The advisory words as an optional field — present only for a version under its floor (core/php-advisories.ts). */
@@ -204,8 +215,8 @@ export async function listPhpVersions(ports: PhpVersionsPorts, pins: readonly Si
     return {
         managed: managed.map((m) => ({ ...m, usedBy: sitesOn(m.version, pins, managed), ...withAdvisory(m.version) })),
         system,
-        available: ports.platform === 'win32' ? PHP_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) : [],
-        ...(ports.platform === 'win32' ? {} : { installRefused: NOT_HERE }),
+        available: ports.platform !== 'darwin' ? PHP_RECIPES.map((r) => ({ version: r.version, installed: have.has(r.version) })) : [],
+        ...(ports.platform !== 'darwin' ? {} : { installRefused: NOT_HERE }),
     };
 }
 
@@ -220,7 +231,7 @@ const psQuote = (s: string) => `'${s.replace(/'/g, "''")}'`;
  */
 export async function installPhpVersion(version: string, consent: boolean, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
     if (consent !== true) return { kind: 'refused', reason: `Genie installs nothing without your go-ahead; PHP ${version} was not installed` };
-    if (ports.platform !== 'win32') return { kind: 'refused', reason: NOT_HERE };
+    if (ports.platform === 'darwin') return { kind: 'refused', reason: NOT_HERE };
     // THE FLOOR FIRST (PHP2Shell, 2026-10-22): a version under it is refused by name — the CVEs and the release to take
     // instead — before the recipe list is consulted and before a byte is fetched. "Genie has no installer for 8.4.24"
     // would be true and would hide the reason there is none.
@@ -229,7 +240,8 @@ export async function installPhpVersion(version: string, consent: boolean, ports
     const recipe = PHP_RECIPES.find((r) => r.version === version);
     if (!recipe) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; this release installs ${PHP_RECIPES.map((r) => r.version).join(', ')}` };
     const dir = join(ports.root, version);
-    if (ports.fs.exists(join(dir, 'php-cgi.exe'))) return { kind: 'already-installed', version };
+    if (ports.fs.exists(join(dir, phpCgiName(ports.platform)))) return { kind: 'already-installed', version };
+    if (ports.platform === 'linux') return buildPhpOnLinux(version, ports);
     const file = phpZipName(recipe);
     const say = (step: string) => ports.progress?.(step);
     try {
@@ -325,6 +337,73 @@ async function putInPlace(a: { version: string; file: string; dir: string; zip: 
     } catch (error) {
         return fail(`PHP ${version} could not be put in place: ${error instanceof Error ? error.message : String(error)}`);
     }
+}
+
+/**
+ * LINUX: php.net's source, built into its own directory (TC5). Pre-flight first — the build tools, then every library
+ * that has a pkg-config file, ALL missing ones named with their packages before a byte is downloaded. The proof is the
+ * Windows one: php-cgi's banner (this version, NTS) and `php -m` listing every extension Genie's ini needs.
+ */
+async function buildPhpOnLinux(version: string, ports: PhpVersionsPorts): Promise<PhpInstallOutcome> {
+    for (const tool of ['cc', 'make', 'pkg-config']) {
+        try {
+            if ((await ports.run(tool, ['--version'])).exitCode !== 0) return { kind: 'refused', reason: NO_BUILD_TOOLS };
+        } catch {
+            return { kind: 'refused', reason: NO_BUILD_TOOLS };
+        }
+    }
+    const missing: string[] = [];
+    for (const lib of PHP_BUILD_LIBRARIES) {
+        try {
+            if ((await ports.run('pkg-config', ['--exists', lib.pkg])).exitCode !== 0) missing.push(lib.pkg);
+        } catch {
+            missing.push(lib.pkg);
+        }
+    }
+    if (missing.length > 0) return { kind: 'refused', reason: missingLibrariesAdvice(missing) };
+    const file = phpSourceName(version);
+    return buildFromSource({
+        label: `PHP ${version}`, version, file, url: phpSourceUrl(version), publisher: 'php.net', srcFolder: `php-${version}`,
+        expectedSha: async () => {
+            const url = phpReleaseJsonUrl(version);
+            const listed = await ports.fetchText(url);
+            if (!listed.ok) return { ok: false, reason: `php.net's release list (${url}) could not be read (${listed.error})` };
+            const sha = phpSourceShaFromJson(listed.body, version);
+            return sha ? { ok: true, sha } : { ok: false, reason: `php.net's release list gives no sha256 for ${file}` };
+        },
+        steps: (src, dir) => [
+            { say: 'configuring', bin: 'env', args: ['-C', src, './configure', ...phpConfigureArgs(dir)] },
+            { say: 'compiling (a few minutes)', bin: 'make', args: ['-s', '-C', src, `-j${Math.max(1, ports.cpus ?? 1)}`] },
+            { say: 'installing', bin: 'make', args: ['-s', '-C', src, 'install'] },
+        ],
+        finish: async (dir) => {
+            ports.fs.writeText(join(dir, 'php.ini'), phpIniContents(dir, 'linux'));
+            return null;
+        },
+        prove: async (dir) => {
+            const ini = join(dir, 'php.ini');
+            let banner: ReturnType<typeof parsePhpBanner> = null;
+            let said = '';
+            try {
+                const r = await ports.run(join(dir, 'php-cgi'), ['-c', ini, '-v']);
+                said = r.stdout.trim();
+                banner = parsePhpBanner(r.stdout);
+            } catch (error) {
+                said = error instanceof Error ? error.message : String(error);
+            }
+            if (!banner) return `PHP ${version} built, but ${join(dir, 'php-cgi')} did not run${said ? `: ${said.slice(0, 300)}` : ''}`;
+            if (banner.version !== version) return `PHP ${version} was asked for, but the binary reports ${banner.version}`;
+            if (banner.threadSafe !== false) return `PHP ${version} ${banner.threadSafe ? 'is a thread-safe build' : 'did not say it is an NTS build'}, and Genie's php-cgi runs the NTS build`;
+            let modules = '';
+            try {
+                modules = (await ports.run(join(dir, 'php'), ['-c', ini, '-m'])).stdout;
+            } catch (error) {
+                return `PHP ${version} could not list its extensions: ${error instanceof Error ? error.message : String(error)}`;
+            }
+            const problem = moduleProblem(modules);
+            return problem ? `PHP ${version} built, but ${problem}` : null;
+        },
+    }, { platform: 'linux', root: ports.root, fs: ports.fs, run: ports.run, fetchBytes: ports.fetchBytes, ...(ports.progress ? { progress: ports.progress } : {}) });
 }
 
 /** REMOVE a managed version — refused, naming them, while any site is pinned to it; refused for anything Genie did not install. */

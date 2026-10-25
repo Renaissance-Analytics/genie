@@ -27,12 +27,12 @@ export function currentLinkDir(toolchainDir: string, lang: DefaultLang): string 
 }
 
 /**
- * Whether Genie manages that language's versions on this OS. PHP: Windows only, where windows.php.net builds them.
- * Python: Windows (python.org's zip) and Linux (built from python.org's source, TC4b); not macOS yet.
+ * Whether Genie manages that language's versions on this OS. PHP: Windows (windows.php.net's zip) and Linux (built
+ * from php.net's source, TC5). Python: Windows (python.org's zip) and Linux (built from python.org's source, TC4b).
+ * Neither on macOS yet.
  */
 export function langManagedOn(lang: DefaultLang, platform: DefaultsPlatform): boolean {
-    if (lang === 'php') return platform === 'win32';
-    if (lang === 'python') return platform !== 'darwin';
+    if (lang === 'php' || lang === 'python') return platform !== 'darwin';
     return true;
 }
 
@@ -43,7 +43,7 @@ function binRels(lang: DefaultLang, platform: DefaultsPlatform): readonly string
     // Windows: python.exe at the top, and Scripts\ — pip.exe and every console script pip installs (measured, TC4a-2).
     // Linux: a source build's bin/ (python, pip and the scripts pip installs).
     if (lang === 'python') return platform === 'win32' ? ['', 'Scripts'] : ['bin'];
-    return ['']; // php: php.exe at the top (Windows only)
+    return ['']; // php: php(.exe) and php-cgi at the top — the Linux build puts its bindir there too
 }
 
 /** One language's fixed PATH entries, in order. */
