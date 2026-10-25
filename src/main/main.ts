@@ -2484,6 +2484,8 @@ async function boot(): Promise<void> {
         root: rubyVersionsRoot(toolchainDataDir()),
         fs: nodePhpVersionsFs(),
         run: longRunner,
+        // Windows' own tar.exe, by full path: it reads RubyInstaller's .7z; Git's tar on PATH does not.
+        windowsTar: join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'tar.exe'),
         cpus: availableParallelism(),
         fetchBytes: httpFetch.bytes,
         fetchText: httpFetch.text,

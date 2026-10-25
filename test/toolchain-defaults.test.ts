@@ -46,7 +46,7 @@ describe('where the defaults live', () => {
         // installs live (measured on the Windows VM, TC4a-2).
         expect(defaultPathEntries(TC, 'win32')).toEqual([
             join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'),
-            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'), join(TC, 'current', 'dotnet'), join(TC, 'current', 'java', 'bin'),
+            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'), join(TC, 'current', 'dotnet'), join(TC, 'current', 'ruby', 'bin'), join(TC, 'current', 'java', 'bin'),
         ]);
         // PHP and Python are Genie-managed on Windows and Linux (built from source there: TC4b, TC5). PHP's source build
         // puts php and php-cgi at the version's top, as on Windows; Python's in bin/.
@@ -91,9 +91,9 @@ describe('choosing a default', () => {
         const w = ports('win32', { rust: ['1.99.1'] });
         expect(setDefault('rust', '1.99.1', w.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Rust versions on Linux and macOS/) });
         expect(w.ops).toEqual([]);
-        // Ruby: Linux only, built from ruby-lang.org's source (Windows and macOS wait on the owner).
+        // Ruby: Windows (RubyInstaller) and Linux (ruby-lang.org's source); macOS is not supported.
         const r = ports('darwin', { ruby: ['4.0.9'] });
-        expect(setDefault('ruby', '4.0.9', r.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Ruby versions on Linux/) });
+        expect(setDefault('ruby', '4.0.9', r.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Ruby versions on Windows and Linux/) });
         expect(r.ops).toEqual([]);
         // Java (Temurin): Windows and Linux; macOS is not supported (the owner, 2026-10-25).
         const j = ports('darwin', { java: ['25.0.5+8'] });

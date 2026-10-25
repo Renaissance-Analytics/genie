@@ -24,6 +24,11 @@ export interface ArchiveInstallPorts {
     readonly run: CommandRunner;
     readonly fetchBytes: (url: string) => Promise<Fetched<Uint8Array>>;
     readonly progress?: (step: string | null) => void;
+    /**
+     * Windows' OWN tar.exe (System32 — bsdtar), by full path, for a .7z: measured, it unpacks RubyInstaller's .7z; Git's
+     * tar, which can come first on PATH, cannot. Absent = a .7z is refused.
+     */
+    readonly windowsTar?: string;
 }
 
 export interface ArchiveSpec {
@@ -98,9 +103,12 @@ async function putInPlace(spec: ArchiveSpec, bytes: Uint8Array, ports: ArchiveIn
         ports.fs.mkdirp(staging);
         ports.fs.writeBytes(archivePath, bytes);
         say(`${label}: unpacking`);
-        // argv, never a shell. Windows: PowerShell's Expand-Archive for a .zip (what the PHP and Node managers use);
-        // macOS and Linux: tar for a .tar.gz.
-        const [bin, args] = ports.platform === 'win32'
+        // argv, never a shell. Windows: PowerShell's Expand-Archive for a .zip (what the PHP and Node managers use), and
+        // Windows' own tar.exe for a .7z; macOS and Linux: tar for a .tar.gz.
+        if (file.endsWith('.7z') && !ports.windowsTar) return fail(`${file} is a .7z, and no tar.exe that reads one was given`);
+        const [bin, args] = file.endsWith('.7z')
+            ? [ports.windowsTar!, ['-xf', archivePath, '-C', staging]] as const
+            : ports.platform === 'win32'
             ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath ${psQuote(archivePath)} -DestinationPath ${psQuote(staging)} -Force`]] as const
             : ['tar', ['-xzf', archivePath, '-C', staging]] as const;
         let unpacked: { stdout: string; exitCode: number };
