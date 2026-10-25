@@ -241,7 +241,7 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
 
             <div className="flex min-w-0 items-center gap-1.5">
                 <span className={`shrink-0 font-medium ${STATUS_TONE[status.tone]}`}>{status.word}</span>
-                {status.detail ? <span className="truncate text-xs text-[var(--fg-3)]">{status.detail}</span> : null}
+                {status.detail ? <span className="truncate text-xs text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
             </div>
 
             <div className="flex min-w-0 items-center gap-2">

@@ -1,5 +1,5 @@
 import type { AccountPause } from './account-pause.js';
-import { limitWords } from './limit-words.js';
+import { limitTitle, limitWords } from './limit-words.js';
 import type { GateView } from './rate-limit-gate.js';
 import type { CommsLink } from './comms.js';
 /**
@@ -127,6 +127,8 @@ export interface StatusCell {
     /** The detail beside it: a duration, the question, the failure reason. */
     detail: string | null;
     tone: 'ok' | 'warn' | 'bad' | 'muted';
+    /** The hover on the detail: the full date and time a rate-limit hold resumes. Absent = no hover. */
+    title?: string;
 }
 
 /**
@@ -142,7 +144,7 @@ export function statusOf(row: AgentRow): StatusCell {
     }
     // HELD FOR ITS PROVIDER'S LIMIT (Tynn #794): Paused, with until when — a waiting question still comes first.
     const held = row.state === 'waiting' ? null : limitWords(row.limit);
-    if (held) return { word: 'Paused', detail: held, tone: 'warn' };
+    if (held) { const title = limitTitle(row.limit); return { word: 'Paused', detail: held, tone: 'warn', ...(title ? { title } : {}) }; }
     // SIGNED OUT of its provider (the owner, 2026-10-18): what to do; the Agent view, the chat and the tray offer `Log in`.
     // ACCOUNT PAUSED by the provider (the owner, 2026-10-21): the account, not the agent; a waiting question still first.
     if (row.accountPaused && row.state !== 'waiting') return { word: 'Account paused', detail: row.accountPaused.words, tone: 'bad' };

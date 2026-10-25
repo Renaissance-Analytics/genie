@@ -13,7 +13,8 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  * backoff, or that it needs the person — never a guessed time.
  */
 const NOW = Date.UTC(2026, 9, 17, 3, 0, 0);
-const hhmm = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+const hhmm = (at: number) => new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(/\u202f/g, ' ');
+const full = (at: number) => new Date(at).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' }).replace(/\u202f/g, ' ');
 const paused = { state: 'paused' as const, window: 'five_hour', resetsAtMs: NOW + 60_000, resumeAtMs: NOW + 180_000, message: null };
 
 describe('one wording', () => {
@@ -34,7 +35,7 @@ describe('the Dashboard row', () => {
         commsAgeSeconds: null, links: null, contextUsed: null, contextSize: null, ...over,
     } as AgentRow);
     it('a held agent reads Paused with the wording, warn; a waiting one still reads Waiting (CONTROL); open is Idle (CONTROL)', () => {
-        expect(statusOf(row({ limit: paused }))).toEqual({ word: 'Paused', detail: limitWords(paused), tone: 'warn' });
+        expect(statusOf(row({ limit: paused }))).toEqual({ word: 'Paused', detail: limitWords(paused), tone: 'warn', title: `Resumes ${full(NOW + 180_000)}` });
         expect(statusOf(row({ state: 'waiting', ask: 'Run it?', limit: paused })).word).toBe('Waiting on you');
         expect(statusOf(row({ limit: { state: 'open' } })).word).toBe('Idle');
     });
@@ -48,7 +49,7 @@ describe('the Dashboard row', () => {
 describe('the chat', () => {
     it('the context line says Paused with the wording; a parked question still wins (CONTROL)', () => {
         const detail = (over: Partial<LiveSession>) => ({ agent: { fidelity: 'declared', provider: 'claude' }, session: { running: true, turnState: 'idle', pendingApproval: null, failure: null, plan: null, ...over }, rows: [] }) as never;
-        expect(chatContext(detail({ limit: paused }))).toEqual({ text: `Paused · ${limitWords(paused)}`, tone: 'warn' });
+        expect(chatContext(detail({ limit: paused }))).toEqual({ text: `Paused · ${limitWords(paused)}`, tone: 'warn', title: `Resumes ${full(NOW + 180_000)}` });
         expect(chatContext(detail({ limit: paused, pendingApproval: { question: 'Run?' } as never })).text).toBe('Parked · waiting on you');
     });
 

@@ -1,3 +1,4 @@
+import { clockAmPm, fullDateTime } from './clock-words.js';
 import type { StreamEvent } from './stream-event.js';
 import type { TimedEvent } from './stream-view.js';
 
@@ -72,10 +73,14 @@ export function headroomOf(rows: readonly TimedEvent[]): Headroom | null {
     return null;
 }
 
-const hhmm = (ms: number) => { const d = new Date(ms); return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
 
-/** `pro · 60% of 5h window left · resets 18:30`; spent past the allowance: `over the 5h window · resets 16:00`. */
+/** `pro · 60% of 5h window left · resets 6:30 PM`; spent past the allowance: `over the 5h window · resets 4:00 PM`. */
 export function headroomLine(h: Headroom): string {
     const share = h.over ? `over the ${h.window} window` : `${h.leftPct}% of ${h.window} window left`;
-    return `${h.plan ? `${h.plan} · ` : ''}${share} · resets ${hhmm(h.resetsAtMs)}`;
+    return `${h.plan ? `${h.plan} · ` : ''}${share} · resets ${clockAmPm(h.resetsAtMs)}`;
+}
+
+/** The hover on that line: the full date and time the window resets. */
+export function headroomTitle(h: Headroom): string {
+    return `Resets ${fullDateTime(h.resetsAtMs)}`;
 }

@@ -13,13 +13,14 @@ const live = (over: Partial<LiveSession> = {}): LiveSession => ({
     mcpServers: [], contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, links: null, plan: null,
     ...over,
 } as LiveSession);
-const hhmm = (at: number) => new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false });
+const hhmm = (at: number) => new Date(at).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).replace(/\u202f/g, ' ');
+const full = (at: number) => new Date(at).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' }).replace(/\u202f/g, ' ');
 
 describe('the pill while the login is held', () => {
-    it('paused: "Paused · rate limit · resumes HH:MM" with the time LEFT counting down', () => {
+    it('paused: "Paused · rate limit · resumes h:mm AM/PM" with the time LEFT counting down', () => {
         const resumeAtMs = NOW + 38 * 60_000 + 12_000;
         const pill = statePill(live({ limit: { state: 'paused', window: 'five_hour', resetsAtMs: resumeAtMs - 120_000, resumeAtMs, message: null } }), () => NOW, { turns: 4 });
-        expect(pill).toEqual({ word: `Paused · rate limit · resumes ${hhmm(resumeAtMs)}`, elapsed: '38:12', tone: 'warn' });
+        expect(pill).toEqual({ word: `Paused · rate limit · resumes ${hhmm(resumeAtMs)}`, elapsed: '38:12', tone: 'warn', title: `Resumes ${full(resumeAtMs)}` });
     });
 
     it('over an hour: h:mm:ss', () => {
@@ -30,7 +31,7 @@ describe('the pill while the login is held', () => {
     it('retrying on the backoff (no reset known): says it is a try, and when', () => {
         const next = NOW + 15 * 60_000;
         expect(statePill(live({ limit: { state: 'retrying', nextTryAtMs: next, attempt: 1, message: 'weekly limit' } }), () => NOW, { turns: 4 }))
-            .toEqual({ word: `Paused · rate limit · next try ${hhmm(next)}`, elapsed: '15:00', tone: 'warn' });
+            .toEqual({ word: `Paused · rate limit · next try ${hhmm(next)}`, elapsed: '15:00', tone: 'warn', title: `Next try ${full(next)}` });
     });
 
     it('needs the person: no timer — never an invented one', () => {

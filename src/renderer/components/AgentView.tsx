@@ -1,6 +1,6 @@
 import { activityRows } from '../../core/stream-view.js';
 import { providerLogin } from '../../core/provider-login.js';
-import { headroomLine, headroomOf } from '../../core/headroom.js';
+import { headroomLine, headroomTitle, headroomOf } from '../../core/headroom.js';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import { activityBars, outputHistogram, outputTotalLabel, activityLedger, lastOutputLabel, type TakeOverProbe } from '../../core/observed.js';
 import { contextNote, diffHeader, headerActions, personaView, planSteps, processEnded, railMode, railSummary, tabNote } from '../../core/agent-view.js';
@@ -556,7 +556,7 @@ export function AgentView({
                 <span data-provider-chip={agent.provider} className="shrink-0 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]">{agent.provider} · {agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
                 <span className="min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
-                <span data-pill={pill.word} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
+                <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
                     <span className="size-1.5 rounded-full bg-current" />
                     {pill.word}
                     {/* A clock only while a turn runs. On an idle agent it counts up forever
@@ -1023,7 +1023,7 @@ export function AgentView({
                                             </span>
                                         ) : null}
                                         {headroom ? (
-                                            <span data-rail-headroom className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom)}</span>
+                                            <span data-rail-headroom title={headroomTitle(headroom)} className={`font-mono ${headroom.over || headroom.leftPct < 10 ? 'text-[var(--warning)]' : ''}`}>{headroomLine(headroom)}</span>
                                         ) : null}
                                         {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
                                         {session?.mcpServers ? (
