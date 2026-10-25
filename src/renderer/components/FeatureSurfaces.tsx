@@ -767,6 +767,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             ))}
             {tc?.php ? <PhpVersions php={tc.php} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'php' && r.version !== undefined)} /> : null}
             {tc?.node ? <NodeVersions node={tc.node} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'node' && r.version !== undefined)} /> : null}
+            {tc?.go ? <GoVersions go={tc.go} busy={busy !== null} onAction={onAction} refusals={refusals.filter((r) => r.tool === 'go' && r.version !== undefined)} /> : null}
             {tc === null ? (
                 <Skeletons rows={6} />
             ) : (
@@ -899,6 +900,44 @@ function NodeVersions({ node, busy, onAction, refusals = [] }: { node: NonNullab
                     {addable.map((a) => (
                         <button key={a.version} type="button" data-node-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installNode', version: a.version, consent: true })}>
                             Node {a.version}
+                        </button>
+                    ))}
+                </div>
+            ) : null}
+        </section>
+    );
+}
+
+/**
+ * GENIE'S OWN GO (plan `.ai/plans/genie-2-toolchain-rest.md`, TC2a): the versions Genie manages, the go on PATH, and an
+ * Install per supported line — each Install is the person's consent. go.dev builds every OS, so there is no refusal row.
+ */
+function GoVersions({ go, busy, onAction, refusals = [] }: { go: NonNullable<NonNullable<FeatureData['toolchain']>['go']>; busy: boolean; onAction: SurfaceProps['onAction']; refusals?: readonly ToolchainRefusal[] }) {
+    const addable = go.available.filter((a) => !a.installed);
+    return (
+        <section data-go-versions={go.managed.length} className="border-b border-[var(--border-1)]">
+            <h3 className="px-5 pt-3 text-sm font-medium">Go versions</h3>
+            {refusals.map((r) => (
+                <p key={r.version} data-go-refusal={r.version} className="px-5 py-1 text-xs text-[var(--danger)]">{r.reason}</p>
+            ))}
+            <p data-go-system="" className="px-5 py-1 text-xs text-[var(--fg-3)]">
+                {go.system ? `The go on your PATH is ${go.system.version}.` : 'No go on your PATH.'}
+            </p>
+            <ul className="divide-y divide-[var(--border-1)]">
+                {go.managed.map((m) => (
+                    <li key={m.version} data-go-version={m.version} className="flex flex-wrap items-center gap-3 px-5 py-2 text-sm">
+                        <span className="font-medium">Go {m.version}</span>
+                        <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
+                        <button type="button" disabled={busy} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeGo', version: m.version })}>Remove</button>
+                    </li>
+                ))}
+            </ul>
+            {addable.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
+                    <span className="text-xs text-[var(--fg-3)]">Install from go.dev (checked against its published sha256):</span>
+                    {addable.map((a) => (
+                        <button key={a.version} type="button" data-go-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installGo', version: a.version, consent: true })}>
+                            Go {a.version}
                         </button>
                     ))}
                 </div>

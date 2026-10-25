@@ -22,6 +22,7 @@ import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
 import { updateRisk, type ToolchainActivity } from '../core/toolchain-risk.js';
 import type { InstallOutcome } from './toolchain-ops.js';
+import type { GoInstallOutcome, GoRemoveOutcome, GoVersionsView } from './go-versions.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
 import type { ComposedServices } from './compose.js';
@@ -100,6 +101,12 @@ export interface FeaturePorts {
             install(version: string, consent: boolean): Promise<NodeInstallOutcome>;
             remove(version: string): NodeRemoveOutcome;
         };
+        /** Genie's own Go (main/go-versions.ts): go.dev archives, checksum-verified, every OS. */
+        go?: {
+            list(): Promise<GoVersionsView>;
+            install(version: string, consent: boolean): Promise<GoInstallOutcome>;
+            remove(version: string): GoRemoveOutcome;
+        };
     };
     /** Genie's browser, for a site row's Open — the pane `browser.navigate` shows, and the agents' `sites open` uses. */
     readonly openInBrowser?: OpenInBrowser;
@@ -156,6 +163,7 @@ export interface FeatureState {
     toolchainRefusals?: readonly ToolchainRefusal[] | null;
     toolchainPhp?: PhpVersionsView | null;
     toolchainNode?: NodeVersionsView | null;
+    toolchainGo?: GoVersionsView | null;
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
@@ -196,6 +204,7 @@ export function toolchainSection(state: FeatureState): ToolchainSection | null {
         ...(state.toolchainRefusals && state.toolchainRefusals.length > 0 ? { refusals: state.toolchainRefusals } : {}),
         ...(state.toolchainPhp ? { php: state.toolchainPhp } : {}),
         ...(state.toolchainNode ? { node: state.toolchainNode } : {}),
+        ...(state.toolchainGo ? { go: state.toolchainGo } : {}),
     };
 }
 
@@ -212,6 +221,7 @@ export function toolchainStateFrom(section: ToolchainSection | null): Partial<Fe
         toolchainRefusals: section?.refusals ?? null,
         toolchainPhp: section?.php ?? null,
         toolchainNode: section?.node ?? null,
+        toolchainGo: section?.go ?? null,
     };
 }
 
@@ -226,6 +236,7 @@ export function sitePins(services: Pick<ComposedServices, 'sites'>): SitePin[] {
 async function rescanToolchain(next: FeatureState, tc: ToolchainPort, pins: readonly SitePin[] = []): Promise<void> {
     if (tc.php) next.toolchainPhp = await tc.php.list(pins);
     if (tc.node) next.toolchainNode = await tc.node.list();
+    if (tc.go) next.toolchainGo = await tc.go.list();
     const tools = await tc.probe();
     next.toolStatuses = tools;
     next.toolchainCheckedAt = tc.now();
@@ -750,6 +761,42 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (outcome.kind === 'refused') refuse(next, 'node', outcome.reason, action.version);
             else next.toolchainResult = `Node ${outcome.version} was removed.`;
             next.toolchainNode = await tc.node.list();
+            break;
+        }
+        case 'toolchain.installGo': {
+            clearRefusal(next, 'go', action.version);
+            // Consent first: no consent, nothing is downloaded.
+            if (action.consent !== true) {
+                refuse(next, 'go', `Genie installs nothing without your go-ahead; Go ${action.version} was not installed`, action.version);
+                break;
+            }
+            const tc = ports.toolchain;
+            if (!tc?.go) {
+                refuse(next, 'go', 'no Go version manager is wired into this Genie; nothing was installed', action.version);
+                break;
+            }
+            const outcome = await tc.go.install(action.version, true);
+            if (outcome.kind === 'refused' || outcome.kind === 'not-installed') refuse(next, 'go', outcome.reason, action.version);
+            if (outcome.kind !== 'refused') {
+                next.toolchainResult =
+                    outcome.kind === 'installed' ? `Go ${outcome.version} is installed in Genie's toolchain.`
+                    : outcome.kind === 'already-installed' ? `Go ${outcome.version} was already installed; nothing was downloaded.`
+                    : `Go ${action.version} was not installed: ${outcome.reason}.`;
+            }
+            next.toolchainGo = await tc.go.list();
+            break;
+        }
+        case 'toolchain.removeGo': {
+            const tc = ports.toolchain;
+            clearRefusal(next, 'go', action.version);
+            if (!tc?.go) {
+                refuse(next, 'go', 'no Go version manager is wired into this Genie; nothing was removed', action.version);
+                break;
+            }
+            const outcome = tc.go.remove(action.version);
+            if (outcome.kind === 'refused') refuse(next, 'go', outcome.reason, action.version);
+            else next.toolchainResult = `Go ${outcome.version} was removed.`;
+            next.toolchainGo = await tc.go.list();
             break;
         }
         case 'toolchain.repair': {
