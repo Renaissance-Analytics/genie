@@ -888,6 +888,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'toolchain.removePython': {
+            {
+                const current = ports.toolchain?.defaults?.list()['python'] ?? null;
+                if (current !== null && current === action.version) {
+                    clearRefusal(next, 'python', action.version);
+                    refuse(next, 'python', `${LANG_LABEL['python']} ${action.version} is the default; make another version the default (or use the system's) first, then remove it`, action.version);
+                    break;
+                }
+            }
             const tc = ports.toolchain;
             clearRefusal(next, 'python', action.version);
             if (!tc?.python) {

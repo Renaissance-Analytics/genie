@@ -40,10 +40,15 @@ function ports(platform: 'win32' | 'linux', managed: Record<string, string[]>, d
 
 describe('where the defaults live', () => {
     it('one link per language, and the fixed PATH entries that reach each one’s executables, per OS', () => {
-        expect(DEFAULT_LANGS).toEqual(['node', 'go', 'php']);
+        expect(DEFAULT_LANGS).toEqual(['node', 'go', 'php', 'python']);
         expect(currentLinkDir(TC, 'node')).toBe(join(TC, 'current', 'node'));
-        expect(defaultPathEntries(TC, 'win32')).toEqual([join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php')]);
-        // PHP versions are Genie-managed on Windows only; elsewhere there is no php link to put on PATH.
+        // Python on Windows needs TWO: python.exe at the top, and Scripts\ — where pip.exe and every console script pip
+        // installs live (measured on the Windows VM, TC4a-2).
+        expect(defaultPathEntries(TC, 'win32')).toEqual([
+            join(TC, 'current', 'node'), join(TC, 'current', 'go', 'bin'), join(TC, 'current', 'php'),
+            join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts'),
+        ]);
+        // PHP and Python versions are Genie-managed on Windows only (Python elsewhere is TC4b); no link to put on PATH.
         expect(defaultPathEntries(TC, 'linux')).toEqual([join(TC, 'current', 'node', 'bin'), join(TC, 'current', 'go', 'bin')]);
     });
 });
@@ -53,7 +58,7 @@ describe('choosing a default', () => {
         const a = ports('linux', { go: ['1.27.3', '1.26.10'] }, [join(TC, 'go-versions', '1.27.3'), join(TC, 'go-versions', '1.26.10')]);
         expect(setDefault('go', '1.27.3', a.p)).toEqual({ kind: 'set', lang: 'go', version: '1.27.3' });
         expect(a.links.get(join(TC, 'current', 'go'))).toBe(join(TC, 'go-versions', '1.27.3'));
-        expect(listDefaults(a.p)).toEqual({ node: null, go: '1.27.3', php: null });
+        expect(listDefaults(a.p)).toEqual({ node: null, go: '1.27.3', php: null, python: null });
     });
 
     it('switching repoints the one link (old link removed, new one made) — the PATH entry never changes', () => {
@@ -73,9 +78,10 @@ describe('choosing a default', () => {
         expect(a.links.has(join(TC, 'current', 'node'))).toBe(false);
     });
 
-    it('PHP has no default off Windows (Genie manages PHP versions on Windows only) — said, not attempted', () => {
-        const a = ports('linux', { php: ['8.4.27'] });
+    it('PHP and Python have no default off Windows (Genie manages them on Windows only, for now) — said, not attempted', () => {
+        const a = ports('linux', { php: ['8.4.27'], python: ['3.15.1'] });
         expect(setDefault('php', '8.4.27', a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Windows/) });
+        expect(setDefault('python', '3.15.1', a.p)).toMatchObject({ kind: 'refused', reason: expect.stringMatching(/Python versions on Windows only/) });
         expect(a.ops).toEqual([]);
     });
 });
@@ -90,6 +96,16 @@ describe('what Genie’s children get', () => {
         // Twice is the same PATH (no duplicate entries); a cleared default is taken off.
         restoreDefaultsEnv({ ...a.p, env: e });
         expect(e.map.get('PATH')).toBe(`${join(TC, 'current', 'go', 'bin')}:/usr/local/bin:/usr/bin`);
+    });
+
+    it('a Python default puts BOTH its entries first, python before Scripts, ahead of the Store alias', () => {
+        const a = ports('win32', { python: ['3.15.1'] }, [join(TC, 'python-versions', '3.15.1')]);
+        expect(setDefault('python', '3.15.1', a.p)).toEqual({ kind: 'set', lang: 'python', version: '3.15.1' });
+        const alias = 'C:/Users/me/AppData/Local/Microsoft/WindowsApps';
+        const e = env(`C:/Windows/system32;${alias}`);
+        const want = [join(TC, 'current', 'python'), join(TC, 'current', 'python', 'Scripts')];
+        expect(restoreDefaultsEnv({ ...a.p, env: e })).toEqual(want);
+        expect(e.map.get('PATH')).toBe(`${want.join(';')};C:/Windows/system32;${alias}`);
     });
 
     it('CONTROL: no defaults chosen → the PATH is untouched', () => {
