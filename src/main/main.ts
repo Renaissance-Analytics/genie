@@ -110,9 +110,10 @@ import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
-import { goVersionsRoot, installGoVersion, listGoVersions, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
+import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
+import { goVersionsRoot, installGoVersion, listGoVersions, managedGo, removeGoVersion, type GoVersionsPorts } from './go-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
-import { httpFetch, installPhpVersion, listPhpVersions, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { osPidAlive } from './process-supervisor.js';
@@ -799,6 +800,8 @@ async function boot(): Promise<void> {
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
+    // Each language's chosen default goes first for everything Genie starts (main/toolchain-defaults.ts, plan TC3a).
+    restoreDefaultsEnv({ platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform), env: processEnv });
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
     const store = new Store(genieHome());
     // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
@@ -2478,7 +2481,19 @@ async function boot(): Promise<void> {
                 },
                 remove: (version) => removeNodeVersion(version, nodeVersionsPorts()),
             },
-            // Genie's own Go (main/go-versions.ts) — same busy line. Which Go is the DEFAULT on PATH is TC3 (the shims).
+            // Each language's default: the `current/<lang>` link, applied to Genie's PATH at once (and at every launch).
+            defaults: {
+                list: () => listDefaults({ platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform) }),
+                set: (lang, version) => {
+                    const platform = process.platform as Platform;
+                    const linkPorts = { platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(platform) };
+                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
+                    const outcome = setDefault(lang, version, { ...linkPorts, managed });
+                    if (outcome.kind !== 'refused') restoreDefaultsEnv({ ...linkPorts, env: processEnv });
+                    return outcome;
+                },
+            },
+            // Genie's own Go (main/go-versions.ts) — same busy line. Its default is `defaults` above.
             go: {
                 list: () => listGoVersions(goVersionsPorts()),
                 install: (version, consent) => installGoVersion(version, consent, goVersionsPorts()),
