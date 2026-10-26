@@ -9,6 +9,7 @@ import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
+import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
 import { RATE_LIMIT_META } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
@@ -308,6 +309,8 @@ export interface AgentSessionOptions {
      * `message` is the notice's own words, when it had any.
      */
     onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
+    /** Each MCP server's state as the provider reports it (prism-acp 0.27.0, genie#1202): what a missing server is told by. */
+    onMcpServers?: (reports: readonly McpServerReport[]) => void;
     /**
      * A turn the provider ended on its rate limit with NO reading before it (Tynn #791): the gate has no reset to wait
      * for and holds the login on its stated backoff. `reason` is the provider's own.
@@ -1422,6 +1425,11 @@ export class AgentSession {
         // THE PROVIDER'S RATE LIMIT (Tynn #793), read before anything awaits: the gate is told every reading, and a
         // non-allowed one in a running turn marks that turn as ended by the limit if it then ends in error.
         const meta = update['_meta'];
+        // THE MCP SERVERS IT CAME UP WITH (genie#1202): reported before anything awaits, like the limit below.
+        if (typeof meta === 'object' && meta !== null) {
+            const servers = mcpReportsFromMeta(meta as Record<string, unknown>);
+            if (servers !== null && servers.length > 0) this.#options.onMcpServers?.(servers);
+        }
         if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
             const readings = limitReadingsFromMeta((meta as Record<string, unknown>)[RATE_LIMIT_META]);
             if (readings.length > 0) {
