@@ -10,6 +10,7 @@ import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
+import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
@@ -572,8 +573,16 @@ function DesktopApp({ bridge }: AppProps) {
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;
+    // ...and the row's emoji (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action, on that agent's row for a moment.
+    const [rowEmoji, setRowEmoji] = useState<Readonly<Record<string, string>>>({});
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
+        const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
+        if (emoji && action.agentId) {
+            const id = action.agentId;
+            setRowEmoji((prev) => ({ ...prev, [id]: emoji }));
+            setTimeout(() => setRowEmoji((prev) => { if (prev[id] !== emoji) return prev; const next = { ...prev }; delete next[id]; return next; }), ROW_EMOJI_MS);
+        }
     }), [resolvedBridge]);
     const featureAct = (action: FeatureAction, what: string) => {
         void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
@@ -1269,6 +1278,7 @@ function DesktopApp({ bridge }: AppProps) {
         <PluginEditorsContext.Provider value={pluginEditors}>
         <PanelHostContext.Provider value={panelHost}>
         <Shell
+            rowEmoji={rowEmoji}
             route={route}
             address={shownAddress}
             snapshot={snapshot}

@@ -156,6 +156,7 @@ import { staticServer } from './static-page.js';
 import { uploadSender } from './uploads.js';
 import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gitShowHead, gitTreeStatus } from './git-ports.js';
 import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
+import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
@@ -2182,7 +2183,7 @@ async function boot(): Promise<void> {
         const resolveCaller = (terminalId: string) => takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
         const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
         // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
-        const registrations = allGenieTools(genieToolDeps({
+        const registrations = withActionSignal(allGenieTools(genieToolDeps({
             // agentinbox list: whether each peer is running, read-only — never started by asking (core/liveness.ts).
             liveness: (id) => livenessOf(host?.probe(id as AgentId) ?? null, host?.rowsFor(id as AgentId).at(-1)?.at ?? null),
             inbox: composed.inbox,
@@ -2257,7 +2258,7 @@ async function boot(): Promise<void> {
                     label: `${input.manifest.id}.${input.tool.name}`,
                 }),
             },
-        }));
+        })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
         // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
         // wrote into workspaces stay valid after a restart.
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));

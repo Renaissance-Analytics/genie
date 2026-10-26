@@ -86,6 +86,8 @@ export interface ShellProps {
     /** What the title bar shows: the ADDRESS (genie://{workstation}/{workspace-slug}/{tab}, core/address.ts); the route when absent. */
     address?: string | undefined;
     snapshot: GenieSnapshot;
+    /** What each agent just did with Genie, for its Dashboard row (genie#1209). */
+    rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the host's folder picker and the manifest write. Absent = the registry door. */
@@ -266,6 +268,7 @@ export function Shell({
     route,
     address,
     snapshot,
+    rowEmoji,
     workspaceFaults,
     onLocateRepo,
     servable,
@@ -516,6 +519,7 @@ export function Shell({
                      */}
                     {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
                         <Dashboard
+                            rowEmoji={rowEmoji}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}
