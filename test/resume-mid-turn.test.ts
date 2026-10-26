@@ -18,10 +18,10 @@ import { Store } from '../src/main/store.js';
  * seconds apart, the interrupted first.
  */
 describe('who was mid-turn', () => {
-    it('is the working agents only — counted, idle / failed / stopped / unknown excluded', () => {
+    it('is the agents with a turn in flight only (`inTurn`) — counted; no turn, or unknown, excluded (genie#1248)', () => {
         const agents = [
-            { id: 'a', turnState: 'working' }, { id: 'b', turnState: 'idle' }, { id: 'c', turnState: 'working' },
-            { id: 'd', turnState: 'failed' }, { id: 'e', turnState: 'stopped' }, { id: 'f', turnState: 'unknown' }, { id: 'g', turnState: null },
+            { id: 'a', inTurn: true }, { id: 'b', inTurn: false }, { id: 'c', inTurn: true },
+            { id: 'd', inTurn: undefined }, { id: 'e', inTurn: null },
         ] as const;
         expect(midTurnAgents(agents)).toEqual(['a', 'c']);
     });

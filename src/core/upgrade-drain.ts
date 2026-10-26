@@ -15,9 +15,15 @@ export const RESUME_AFTER_RESTART =
     'Genie has started again and resumed this conversation. Continue the work you were doing, from where you left off. ' +
     'Check the state of anything you were changing before you carry on — the cancelled step may not have finished.';
 
-/** The agents in the MIDDLE OF A TURN: `working`, and only that. Idle, failed, stopped and unknown are not. */
-export function midTurnAgents(agents: readonly { id: string; turnState: string | null | undefined }[]): string[] {
-    return agents.filter((a) => a.turnState === 'working').map((a) => a.id);
+/**
+ * The agents in the MIDDLE OF A TURN: a turn in flight by Genie's own record (`AgentSession.inTurn` — a prompt went in, or
+ * the agent began a turn itself, and its end has not come). Not `turnState: 'working'`: a session that was only STARTED
+ * reads `working` until a turn of its own ends, so every agent the boot relaunch started and nobody spoke to was recorded
+ * as interrupted at the next quit and told to continue a turn it never had (genie#1248: 6 agents at 02:48 and 7 at 19:27
+ * on 2026-10-26). Restart asks the same question the same way (genie#1238). Unknown (`null`/absent) is not mid-turn.
+ */
+export function midTurnAgents(agents: readonly { id: string; inTurn: boolean | null | undefined }[]): string[] {
+    return agents.filter((a) => a.inTurn === true).map((a) => a.id);
 }
 
 /**
