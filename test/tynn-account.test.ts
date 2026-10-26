@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chmod, mkdir, rename, stat, symlink } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, stat, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { TynnAccount, type TynnAccountPorts } from '../src/main/tynn-account.js';
 
@@ -216,21 +216,74 @@ describe('TynnAccount.request — every call uses the scoped bearer', () => {
     });
 
     /*
-     * A 404 NEVER SIGNS GENIE OUT (genie#1234, the owner 2026-10-26: "Genie must work off grid"). Tynn answers a failed
-     * auth as Not Found (2026-10-19), but so does a deploy in progress or a routing fault — and forgetting the saved
-     * credential on one of those signed Genie out for good and broke every Tynn-linked agent. Only a 401/419 is a definite
-     * revocation. A 404 is asked about at /me, kept, and the next answer from Tynn decides.
+     * A 404 FROM /me IS "NOT AUTHORIZED" — AND MAYBE A DEPLOY (genie#1234; the owner on PR #1236). Tynn answers EVERY
+     * unauthorized request with 404 by design, so bots get nothing but 400/404, and that will not change. A deploy or a
+     * routing fault answers 404 too, and nothing tells the two apart. So a 404 shows SIGNED OUT now, KEEPS the saved
+     * credential, and asks again on the backoff: a passing 404 heals itself with no new sign-in; a real revocation stays
+     * signed out until the person pairs again, and the new pairing replaces the credential.
      */
-    it('Tynn answering 404 (its failed-auth answer, or a deploy): Genie asks /me and KEEPS the saved credential (genie#1234)', async () => {
-        const t = fakeTynn({ authFail: 404 });
-        const account = await TynnAccount.open(t.ports);
+    function retries() {
+        const timers: Array<{ ms: number; fn: () => void; live: boolean }> = [];
+        return {
+            timers,
+            schedule: (ms: number, fn: () => void) => { const x = { ms, fn, live: true }; timers.push(x); return () => { x.live = false; }; },
+            async fire() { const x = timers.find((y) => y.live); if (!x) return false; x.live = false; x.fn(); for (let i = 0; i < 4; i++) await new Promise((r) => setTimeout(r, 0)); return true; },
+        };
+    }
+
+    it('a 404 at /me after a 404 elsewhere: signed out NOW, the credential kept, a re-check scheduled (genie#1234)', async () => {
+        const t = fakeTynn({ authFail: 404 }); const s = retries();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
         await account.signIn(CODE);
+        const changes: boolean[] = [];
+        account.onChange(() => changes.push(account.status().signedIn));
         t.endSession();
         expect((await account.request('/api/v1/projects', { method: 'GET' })).status).toBe(404);
         expect(t.calls.at(-1)).toMatchObject({ method: 'GET', path: '/api/v1/me' });
+        expect(account.status(), 'the UI shows signed out').toEqual({ signedIn: false });
+        expect(changes).toEqual([false]);
+        expect(account.savedUserId(), 'the credential is kept').toBe('7');
+        expect(JSON.parse(await readFile(t.ports.file, 'utf8')), 'and kept on disk').toMatchObject({ state: 'signed-in', tokenEnc: expect.any(String) });
+        expect(s.timers.filter((x) => x.live).map((x) => x.ms), 'the backoff re-check is scheduled').toEqual([30_000]);
+    });
+
+    it('then Tynn answers 200 for the same account: signed in again by the re-check, with no new pairing (genie#1234)', async () => {
+        const t = fakeTynn({ authFail: 404 }); const s = retries();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        await account.signIn(CODE);
+        t.endSession();
+        await account.request('/api/v1/projects', { method: 'GET' });
+        const changes: boolean[] = [];
+        account.onChange(() => changes.push(account.status().signedIn));
         t.reviveSession();
-        expect((await account.recheck()).signedIn, 'Tynn answering again signs back in with no new pairing').toBe(true);
+        expect(await s.fire()).toBe(true);
+        expect(account.status()).toMatchObject({ signedIn: true, user: { name: 'Ada' } });
+        expect(changes, 'announced, so agents without Tynn recover').toEqual([true]);
+        expect(t.calls.filter((c) => c.headers.Authorization === undefined), 'no new pairing exchange').toHaveLength(1);
         expect((await TynnAccount.open(t.ports)).status().signedIn, 'and the next launch restores it').toBe(true);
+    });
+
+    it('a 404 at /me that stays: the backoff still stops after its four tries, never a poll (genie#1234)', async () => {
+        const t = fakeTynn({ authFail: 404 }); const s = retries();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        await account.signIn(CODE);
+        t.endSession();
+        await account.request('/api/v1/projects', { method: 'GET' });
+        let fired = 0; while (await s.fire()) { if (++fired > 10) break; }
+        expect(s.timers.map((x) => x.ms)).toEqual([30_000, 120_000, 600_000, 1_800_000]);
+        expect(account.savedUserId()).toBe('7');
+    });
+
+    it('CONTROL: a 200 path leaves the account alone — signed in, no /me, nothing scheduled', async () => {
+        const t = fakeTynn({ authFail: 404 }); const s = retries();
+        const account = await TynnAccount.open({ ...t.ports, schedule: s.schedule });
+        await account.signIn(CODE);
+        const changes: boolean[] = [];
+        account.onChange(() => changes.push(account.status().signedIn));
+        expect((await account.request('/api/v1/projects', { method: 'GET' })).status).toBe(200);
+        expect(t.calls.at(-1)).toMatchObject({ path: '/api/v1/projects' });
+        expect(account.status().signedIn).toBe(true);
+        expect(changes).toEqual([]); expect(s.timers).toEqual([]);
     });
 
     it.each([404, 500, 503])('a %s from /me at launch keeps the saved credential (genie#1234)', async (status) => {
