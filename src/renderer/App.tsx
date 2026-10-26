@@ -598,7 +598,10 @@ function DesktopApp({ bridge }: AppProps) {
     });
     // ALWAYS a chat, and the VIEW decides whose (the owner, 2026-10-19): an agent's tab → that agent; a workspace → its
     // default agent; anything else → genie (core/chat-scope.ts chatSubjectFor).
-    const chatSubject = chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? []);
+    // The agent picked on the Dashboard (genie#1209): the window's, never the address's; gone once the Dashboard is left.
+    const [dashboardChat, setDashboardChat] = useState<string | null>(null);
+    useEffect(() => { if (parsed.surface !== 'dashboard') setDashboardChat(null); }, [parsed.surface]);
+    const chatSubject = chatSubjectFor(parsed, snapshot.agents, snapshot.workspaces ?? [], dashboardChat);
     // The chat SUBJECT's detail — never the route's `chat=` alone (the owner, 2026-10-19, three times: "THE CHAT DOES NOT
     // EVER CLOSE"). The subject is permanent (the route's, else the agent the view says); loading only for `chat=` left
     // every page reached without it showing an empty chat, which reads as a closed one. The flyout's transcript is derived
@@ -1369,6 +1372,7 @@ function DesktopApp({ bridge }: AppProps) {
                 const next = route.replace(/[?&]chat=[^&]*/, '').replace(/[?&]pin=[^&]*/, '');
                 navigate(next);
             }}
+            onChatAgent={(id) => setDashboardChat(id)}
             onOpenAgent={(id) => {
                 // Start or reattach, THEN navigate. Reattach is the main process's job and is
                 // idempotent, so arriving at an agent that is already running is not a second
