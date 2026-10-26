@@ -25,6 +25,9 @@ const ELECTRON = resolve(process.platform === 'win32' ? 'node_modules/electron/d
 const RUNTIMES: { name: string; execPath: string; electron: boolean }[] = [
     { name: 'node', execPath: process.execPath, electron: false },
     ...(existsSync(ELECTRON) ? [{ name: 'electron-as-node', execPath: ELECTRON, electron: true }] : []),
+    // The INSTALLED app's own binary (genie#871's acceptance: "in the Windows VM on the installed app"), when a run names
+    // it — the packaged Genie.exe, with whatever fuses its build set, not the node_modules copy.
+    ...(process.env.GENIE_INSTALLED_EXE && existsSync(process.env.GENIE_INSTALLED_EXE) ? [{ name: 'installed-genie', execPath: process.env.GENIE_INSTALLED_EXE, electron: true }] : []),
 ];
 
 let dir: string;
