@@ -211,7 +211,8 @@ describe("Genie 1's background processes, imported once at boot", () => {
 
         writeV1(v1File, rows);
         const seeing = await open();
-        expect(seeing.kept()).toHaveLength(8);
+        // The 8 processes kept running; the scheduled spec comes over as a scheduled task beside them (genie#1204).
+        expect(seeing.kept().filter((p) => p.schedule === undefined)).toHaveLength(8);
         expect(onDisk().v1Import).toMatchObject({ sawV1: true, imported: 8 });
     });
 
