@@ -14,7 +14,7 @@ export interface GenieBrowserChromeProps {
     /** The last address the person typed that was refused, in the rule's words; `null` when none. */
     readonly refusal: string | null;
     readonly onNavigate: (address: string) => void;
-    /** A site chip: the active tab goes there (a tab is opened when there is none). */
+    /** A site chip: that site's own tab is shown, as the person left it — or a new tab opens on it (genie#1196). */
     readonly onOpen: (address: string) => void;
     readonly onActivate: (id: string) => void;
     readonly onClose: (id: string) => void;

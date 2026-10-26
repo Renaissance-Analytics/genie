@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('genieBrowser', {
     state: () => ipcRenderer.invoke('browser-window:state'),
     navigate: (address: string) => ipcRenderer.invoke('browser-window:navigate', address),
     open: (address: string) => ipcRenderer.invoke('browser-window:open', address),
+    showSite: (address: string) => ipcRenderer.invoke('browser-window:show-site', address),
     newTab: () => ipcRenderer.invoke('browser-window:new-tab'),
     activate: (id: string) => ipcRenderer.invoke('browser-window:activate', id),
     close: (id: string) => ipcRenderer.invoke('browser-window:close', id),
