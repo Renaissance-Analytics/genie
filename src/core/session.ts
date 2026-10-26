@@ -92,6 +92,12 @@ export interface SessionDriver {
      * without it the choice applies by a restart on the same conversation, as before.
      */
     setModel?(modelId: string): Promise<void>;
+    /**
+     * READ THE PROVIDER'S RATE LIMITS NOW, WITH NO TURN — prism-acp 0.26.0's `CodexDriver.readRateLimits()` (genie#1195).
+     * The reading arrives through the same `_meta` path as the start-up read (`onRateLimit`); it never rejects — a failed
+     * read is reported on the session. Optional: Claude's driver has none (its limits come with its own events).
+     */
+    readRateLimits?(): Promise<void>;
 }
 
 /** A turn's outcome, as `prism-acp` reports it. */
@@ -1287,6 +1293,17 @@ export class AgentSession {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive || typeof driver.modelState !== 'function') return null;
         return driver.modelState();
+    }
+
+    /** Ask the running provider to read its rate limits, or `null` when nothing is running or it cannot (`SessionDriver.readRateLimits`). */
+    get canReadRateLimits(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.readRateLimits === 'function';
+    }
+
+    readRateLimits(): Promise<void> | null {
+        const driver = this.#driver;
+        if (!driver || this.#exited || !this.#alive || typeof driver.readRateLimits !== 'function') return null;
+        return driver.readRateLimits();
     }
 
     /** Switch the running session's model, or `null` when nothing is running or the driver cannot (`SessionDriver.setModel`). */
