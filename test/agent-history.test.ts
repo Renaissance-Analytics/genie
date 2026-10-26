@@ -51,6 +51,10 @@ describe('an agent’s history', () => {
         first.host.start(record, dir);
         first.host.prompt(record.id, 'first question', 'you');
         first.end();
+        // Every write landed (the `finished` row included — a quit waits for the same), the way the restart test
+        // below waits: waiting only for the message row let the restart read a history without its `finished` row
+        // (PR #1223's CI, run 40293295382).
+        await first.host.settled();
         // Written to the thread — the record a restart reads. Waited for HERE, so the restart below reads a finished
         // record (the writes are asynchronous; a stopped agent writes nothing more, so its history is read once).
         await vi.waitFor(async () => expect(said((await readHistory(openDurableStore(sessionsDir(dir)), record.id)).rows.map((r, i) => ({ id: String(i), ...r })))).toEqual(['first question']), { timeout: 3000 });
