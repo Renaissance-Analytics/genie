@@ -28,7 +28,6 @@ function fakes() {
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${cwd}`); return { ok: true }; },
             stop: (id) => { calls.push(`stop:${id}`); return true; },
-            ended: async () => null,
             cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
             resumeLimit: (provider) => { calls.push(`resume-limit:${provider}`); },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
@@ -115,7 +114,7 @@ describe('invoke', () => {
         expect(await api.invoke('answerApproval', ['agent_a', 'deny', 'not that file'])).toEqual({ ok: true });
         expect(await api.invoke('addAgent', ['tynn', { name: 'scout', purpose: 'Triage', provider: 'codex' }])).toEqual({ ok: true, id: 'agent_new' });
         expect(await api.invoke('restartWithHandoff', ['agent_a', 'fin_1'])).toEqual({ ok: true });
-        expect(f.calls).toEqual(['start:agent_a:/w/tynn', 'stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn:scout:codex', 'stop:agent_a', 'start:agent_a:/w/tynn', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
+        expect(f.calls).toEqual(['start:agent_a:/w/tynn', 'stop:agent_a', 'prompt:agent_a:hi', 'approve:agent_a:allow', 'approve:agent_a:deny:not that file', 'register:tynn:scout:codex', 'agent-restart:agent_a:graceful', expect.stringMatching(/^prompt:agent_a:You are restarting/), 'seen:fin_1']);
         expect(api.workspaceOfAgent('agent_a')).toBe('tynn');
         expect(api.workspaceOfAgent('nope')).toBeNull();
     });

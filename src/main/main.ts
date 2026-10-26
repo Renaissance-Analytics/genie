@@ -1217,9 +1217,10 @@ async function boot(): Promise<void> {
             cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
         });
         if (asleep) return { ok: false, reason: asleep };
-        // Start or REATTACH. Starting one that is already running returns the same session
-        // rather than a second — two provider processes answering as one agent is how a user
-        // ends up with something they cannot stop.
+        // OPENING an agent (navigating to it): start or REATTACH. Starting one that is already running returns the same
+        // session rather than a second — two provider processes answering as one agent is how a user ends up with
+        // something they cannot stop. A Broken one is left as it is, to be read: no control in the window calls this to
+        // start an agent any more — Start and Restart are the one restart (genie#1238, `agent-restart`).
         return host.start(record, cwdFor(record));
     });
 
@@ -1345,6 +1346,11 @@ async function boot(): Promise<void> {
         providerInstalled: (provider) => providerBinary(provider as AgentRecord['provider']) !== null,
         signedIn: () => true,
         applyOnStart: (id) => settingApplier!.requested(id),
+        // Start is the restart now (genie#1238): what Start always obeyed — an asleep workspace, the agent cap — it obeys.
+        startRefusal: (record) => startRefusal(workspaceOps, record, {
+            running: registry!.agentsOf(record.workspaceId).filter((a) => host?.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
+        }),
     };
     // Background tasks die with the process: a setting waits for the agent's to end (the Shells tab's own count).
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
@@ -1448,9 +1454,10 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
-        // Stop → start → the handoff as the first prompt → seen. The order and the refusals live in
+        // The one restart (genie#1238) → the handoff as the next prompt → seen. The order and the refusals live in
         // restart-with-handoff.ts; this is the thin call.
-        const r = await restartWithHandoff(host, services.attention, record, cwdFor(record), finishedId);
+        const live = host;
+        const r = await restartWithHandoff({ restart: (id) => restartAgent(agentOps, id, 'graceful'), prompt: (id, text, by) => live.prompt(id, text, by) }, services.attention, record, finishedId);
         registry?.touch();
         return r;
     });
@@ -2006,8 +2013,6 @@ async function boot(): Promise<void> {
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
-                // "Restart with this" over a remote host waits for the old run to end, as the local one does.
-                ended: (id) => host!.ended(id),
                 cancel: (id) => host!.cancel(id),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
                 prompt: (id, text, by) => host!.prompt(id, text, by),
@@ -2421,7 +2426,9 @@ async function boot(): Promise<void> {
                 const record = registry?.find(agentId as AgentId);
                 if (!record || !host) return;
                 host.start(record, cwdFor(record));
-                if (resume) host.prompt(record.id, RESUME_AFTER_RESTART, 'genie');
+                // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
+                // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
+                if (resume && !host.prompt(record.id, RESUME_AFTER_RESTART, 'genie')) void host.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
             }, at);
         }
     });

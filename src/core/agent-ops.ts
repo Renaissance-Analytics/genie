@@ -1,10 +1,10 @@
 /**
  * AGENT OPERATIONS (§6.2) — the pure half.
  *
- * - RESTART is two named operations. GRACEFUL resumes the same thread and REFUSES when it cannot
- *   — a graceful restart that quietly started a new conversation is an agent that forgot
- *   everything while the user believes it remembers. FRESH discards the conversation on purpose,
- *   and is the only operation offered for a wedged agent.
+ * - RESTART is one action (genie#1238): it keeps the conversation, and a Broken, stopped or
+ *   never-started agent is STARTED by it. A restart never quietly starts a new conversation for an
+ *   agent that has one — an agent that forgot everything while the user believes it remembers.
+ *   RESTART FRESH discards the conversation on purpose.
  * - DELETE is two named outcomes: UNMOUNT keeps every `.agents/*` file and forgets the record;
  *   DELETE removes the folder too. Linked systems are LISTED and kept unless the same prompt opts
  *   in by name — a deletion that reached into Tynn because a checkbox defaulted on is not a
@@ -18,18 +18,34 @@
 
 const RESUMABLE = /^[A-Za-z0-9._:-]{1,200}$/;
 
+/**
+ * `graceful` is RESTART — THE ONE ACTION every Restart and Start control calls (genie#1238). It keeps the conversation
+ * whenever there is one, and works from every state: a Broken agent is started again on its thread (it used to be refused
+ * "only a fresh restart reaches a wedged agent" — the one state the Broken Restart buttons were drawn in), and an agent
+ * with no conversation yet starts its first (it used to be refused; there is nothing to forget). `resume: null` = a first
+ * conversation. A thread id Genie will not hand to the provider is still refused. `fresh` drops the conversation on purpose.
+ */
+/**
+ * WHAT AN AGENT IS TOLD WHEN A RESTART CUT ITS TURN (genie#1238). Genie 1 told every relaunched agent that it had been
+ * restarted and to pick up where it left off (v0.7.0-beta.342 main/agents/relaunch-prompt.ts:68-101). Genie 2 resumes the
+ * conversation itself, so an agent that was idle is not prompted — nothing was cut off, and a prompt would start a turn
+ * nobody asked for — but one that was MID-TURN had that turn cancelled by the Restart and is told, as a relaunch after a
+ * quit tells it (core/upgrade-drain.ts RESUME_AFTER_RESTART).
+ */
+export const RESUME_AFTER_USER_RESTART =
+    'You were restarted (Restart in Genie) while you were in the middle of a turn, so that turn was cancelled. ' +
+    'Genie has resumed this conversation. Continue the work you were doing, from where you left off. ' +
+    'Check the state of anything you were changing before you carry on — the cancelled step may not have finished.';
+
 export type RestartPlan =
-    | { ok: true; kind: 'graceful'; resume: string }
+    | { ok: true; kind: 'graceful'; resume: string | null }
     | { ok: true; kind: 'fresh'; resume: null; discards: string | null }
     | { ok: false; reason: string };
 
-export function restartPlan(kind: 'graceful' | 'fresh', agent: { threadId: string | null; wedged: boolean }): RestartPlan {
+export function restartPlan(kind: 'graceful' | 'fresh', agent: { threadId: string | null }): RestartPlan {
     if (kind === 'fresh') return { ok: true, kind: 'fresh', resume: null, discards: agent.threadId };
-    if (agent.wedged) return { ok: false, reason: 'this agent is not answering; only a fresh restart reaches a wedged agent' };
-    if (agent.threadId === null) {
-        return { ok: false, reason: 'this agent has no conversation to resume; a graceful restart would silently start a new chat — use a fresh restart if that is what you want' };
-    }
-    if (!RESUMABLE.test(agent.threadId)) return { ok: false, reason: 'the stored thread id is not one Genie will hand to the provider; use a fresh restart' };
+    if (agent.threadId === null) return { ok: true, kind: 'graceful', resume: null };
+    if (!RESUMABLE.test(agent.threadId)) return { ok: false, reason: 'the stored thread id is not one Genie will hand to the provider; use Restart fresh' };
     return { ok: true, kind: 'graceful', resume: agent.threadId };
 }
 
@@ -128,8 +144,8 @@ export function budgetDecision(input: { dailyLimitUsd: number | null; spentToday
  * - mid-turn, or a question parked on the person: when the turn ends — a restart would cut the turn or cancel the
  *   question being answered;
  * - background tasks running: when they end — they die with the process, and nobody asked for that;
- * - failed: not by itself — a graceful restart refuses a wedged agent, and a fresh one would throw the conversation
- *   away; the next start (the person's restart) reads it.
+ * - failed: not by itself — a Broken agent is the person's to restart (they see why it broke first); that Restart
+ *   reads it.
  */
 export type ApplyWhen =
     | { readonly when: 'next-start' }

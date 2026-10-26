@@ -51,8 +51,8 @@ describe('statePill — the board’s words', () => {
 });
 
 describe('headerActions — the board’s action set by state', () => {
-    it('Stop this turn while a turn runs that can be stopped; Restart only when broken; Open terminal only when broken; Take over and Chat always', () => {
-        expect(headerActions(session({ cancelTurn: true }), 'declared')).toEqual({ stop: true, restart: false, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: false, takeOver: true, chat: true });
+    it('Stop this turn while a turn runs that can be stopped; Restart while it has a session, running or broken (genie#1238), Start when not; Open terminal only when broken; Take over and Chat always', () => {
+        expect(headerActions(session({ cancelTurn: true }), 'declared')).toEqual({ stop: true, restart: true, openTerminal: false, resumeLimit: false, login: false, retryAccount: false, designLogin: false, start: false, takeOver: true, chat: true });
         // A driver that cannot stop a turn (or an unknown one) gets NO turn Stop: the old one ended the agent instead.
         expect(headerActions(session({ cancelTurn: false }), 'declared').stop).toBe(false);
         expect(headerActions(session(), 'declared').stop).toBe(false);

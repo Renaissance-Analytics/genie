@@ -35,8 +35,10 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; shells?
             stop: () => { calls.push('stop'); return true; },
             ended: async () => null,
             probe: () => probe,
+            deliverOwed: async () => 0,
         },
         cwdFor: () => '/w/tynn',
+        startRefusal: () => null,
     } as unknown as AgentOpsPorts;
     const applier = new SettingApplier(ports, () => shells);
     ports.applyOnStart = (id) => applier.requested(id);

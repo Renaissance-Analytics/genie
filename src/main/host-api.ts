@@ -33,7 +33,9 @@ export interface HostApiDeps {
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
-    host: RestartPorts & {
+    host: Pick<RestartPorts, 'prompt'> & {
+        start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
+        stop(agentId: AgentRecord['id']): boolean;
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
@@ -107,7 +109,8 @@ export interface HostApiDeps {
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
     };
     agentOps: {
-        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
+        /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
+        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' | 'fresh'; discarded?: string | null } | { ok: false; reason: string }>;
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         /** `handoff`: ask a running agent for a handoff first (bounded wait); see agent-ops-host `deleteAgent`. */
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
@@ -199,7 +202,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'restartWithHandoff': {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
-                return restartWithHandoff(deps.host, deps.attention, r, deps.cwdFor(r), str(args[1]));
+                // The one restart (genie#1238), then the note.
+                return restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
             }
             case 'agents.restart':
                 return deps.agentOps.restart(str(args[0]), args[1] === 'fresh' ? 'fresh' : 'graceful');

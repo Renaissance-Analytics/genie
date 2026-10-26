@@ -73,7 +73,9 @@ describe('General', () => {
 
     it('the run controls are the operations menu’s own buttons', () => {
         const html = panel(render('general'));
-        for (const id of ['stop-agent', 'restart-graceful', 'restart-fresh', 'diagnose']) expect(html).toContain(`data-run-action="${id}"`);
+        for (const id of ['stop-agent', 'restart-fresh', 'diagnose']) expect(html).toContain(`data-run-action="${id}"`);
+        // Restart itself is the header's — one per surface (genie#1238).
+        expect(html).not.toContain('data-run-action="restart-graceful"');
     });
 
     it('a separated Remove area LAST: Unmount from Genie… (files stay) and Delete… (files removed), the menu’s ids', () => {

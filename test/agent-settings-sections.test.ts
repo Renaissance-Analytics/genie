@@ -84,11 +84,11 @@ describe('issueWatchGroups — the thirteen boxes in three short groups', () => 
 });
 
 describe('runControls — the operations menu’s run items, on General', () => {
-    it('restart (both), diagnose — and Stop agent while it runs; never switch or delete (those have their own controls)', () => {
-        expect(runControls({ provider: 'claude', fidelity: 'declared' }, false).map((i) => i.id)).toEqual(['restart-graceful', 'restart-fresh', 'diagnose']);
-        expect(runControls({ provider: 'claude', fidelity: 'declared' }, true).map((i) => i.id)).toEqual(['stop-agent', 'restart-graceful', 'restart-fresh', 'diagnose']);
+    it('Restart fresh, diagnose — and Stop agent while it runs; never Restart itself (the header’s, genie#1238), switch or delete (those have their own controls)', () => {
+        expect(runControls({ provider: 'claude', fidelity: 'declared' }, false).map((i) => i.id)).toEqual(['restart-fresh', 'diagnose']);
+        expect(runControls({ provider: 'claude', fidelity: 'declared' }, true).map((i) => i.id)).toEqual(['stop-agent', 'restart-fresh', 'diagnose']);
         // The labels are the menu's own — no new names.
-        expect(runControls({ provider: 'claude', fidelity: 'declared' }, false)[0]!.label).toBe('Restart gracefully');
+        expect(runControls({ provider: 'claude', fidelity: 'declared' }, false)[0]!.label).toBe('Restart fresh');
     });
     it('an observed agent: none', () => {
         expect(runControls({ provider: 'claude', fidelity: 'observed' }, true)).toEqual([]);

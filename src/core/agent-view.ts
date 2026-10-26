@@ -162,7 +162,10 @@ export function turnStopOffered(session: LiveSession | null | undefined): boolea
 export interface HeaderActions {
     /** `Stop this turn` (see `turnStopOffered`): the turn ends, the agent keeps running. Never ends the session. */
     stop: boolean;
-    /** Only when broken (the board): the graceful restart that resumes the same thread. */
+    /**
+     * `Restart` — THE one restart (genie#1238) — whenever the agent has a session: running, idle or Broken. It used to be
+     * drawn ONLY when Broken, where the restart it called always refused; a running agent's restart hid in the ⋯ menu.
+     */
     restart: boolean;
     /** In the error state: the Take Over window is the terminal. */
     openTerminal: boolean;
@@ -174,7 +177,7 @@ export interface HeaderActions {
     retryAccount: boolean;
     /** A tool was refused for want of `/design-login` (#1081): `Log in to Claude Design` opens it in a window of its own. */
     designLogin: boolean;
-    /** A declared agent that is not running, and not broken (broken has its restart): start it. */
+    /** A declared agent with no live session (stopped, its run ended, never started): `Start` — the same one restart. */
     start: boolean;
     takeOver: boolean;
     chat: boolean;
@@ -183,13 +186,15 @@ export interface HeaderActions {
 /** The board's header actions by state. An observed agent is not managed: nothing to stop or restart. */
 export function headerActions(session: LiveSession | null, fidelity: Fidelity): HeaderActions {
     const managed = fidelity === 'declared' && session !== null;
-    const broken = managed && session.failure !== null;
+    const broken = managed && (session.failure !== null || session.turnState === 'failed');
     const start = fidelity === 'declared' && !broken && (session === null || !session.running);
+    // One of the two, never both: Restart while it has a session that is up or Broken, Start when it has none.
+    const restart = fidelity === 'declared' && !start;
     const held = managed && session.limit !== undefined && session.limit.state !== 'open';
     const login = managed && session.signedOut === true;
     const retryAccount = managed && session.accountPaused != null;
     const designLogin = managed && session.designLogin === true;
-    return { stop: managed && turnStopOffered(session), restart: broken, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, start, takeOver: true, chat: true };
+    return { stop: managed && turnStopOffered(session), restart, openTerminal: broken, resumeLimit: held, login, retryAccount, designLogin, start, takeOver: true, chat: true };
 }
 
 export interface PlanPanel {

@@ -90,7 +90,8 @@ export function issueWatchGroups(kinds: typeof IW_EVENT_KINDS = IW_EVENT_KINDS):
     return (['Opened', 'Changed', 'Activity'] as const).map((label) => ({ label, kinds: kinds.filter((k) => groupOf(k.kind) === label) }));
 }
 
-const RUN_IDS = new Set(['stop-agent', 'restart-graceful', 'restart-fresh', 'diagnose']);
+// Restart itself is the header's, one per surface (genie#1238); Run keeps the other run operations.
+const RUN_IDS = new Set(['stop-agent', 'restart-fresh', 'diagnose']);
 const REMOVE_IDS = new Set(['delete-unmount', 'delete-delete']);
 
 /** The run controls on General: the operations menu's own stop/restart/diagnose items (same ids, same labels). */

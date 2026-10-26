@@ -7,7 +7,8 @@ import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentV
 
 /**
  * THE PROCESS-ENDED BLOCK IN THE RIGHT COLUMN (the board's error state): heading, the engine's words in mono, the
- * last tool call, `Restart and resume` as the primary action and `Copy log` beside it. Only when the session failed.
+ * last tool call, `Open terminal` and `Copy log`. Only when the session failed. Its Restart is the header's: one per view
+ * (genie#1238 — it was a second, "Restart and resume", that called the same refused restart).
  */
 const agent = { id: 'a1', name: 'sable', provider: 'codex', fidelity: 'declared' as const, cwd: '/w/tynn', instructions: null };
 const t = (id: string, event: StreamEvent): TimedEvent => ({ id, event, at: 1_000 });
@@ -18,13 +19,13 @@ const rows: TimedEvent[] = [
 const failed: LiveSession = { running: false, turnState: 'failed', startedAt: 1, pendingApproval: null, failure: { reason: 'codex: acp: transport closed (EOF)', fixes: ['restart'] }, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as LiveSession;
 const working: LiveSession = { ...failed, running: true, turnState: 'working', failure: null } as LiveSession;
 const log = ['PHP Fatal error: Allowed memory size exhausted', '[worker 6] killed'];
-// The operations the block's primary action needs: `Restart and resume` is the graceful restart.
+// The operations: the header's Restart is the graceful restart.
 const ops: AgentOpsProps = { mode: 'manual', accessScope: 'self', budgetUsd: null, deletePreview: null, diagnosis: null, lastOutcome: null, onRestart: () => {}, onSwitchDriver: () => {}, onDiagnose: () => {}, onPreviewDelete: () => {}, onConfirmDelete: () => {}, onCancelDelete: () => {}, onSetMode: () => {}, onSetAccessScope: () => {}, onSetBudget: () => {} };
 const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
     renderToStaticMarkup(<AgentView agent={agent} session={failed} rows={rows} tab="stream" lanes={null} at={null} selectedId={null} turns={9} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} log={log} ops={ops} {...props} />);
 
 describe('the process-ended block', () => {
-    it('heading, the engine’s words, the last tool, Restart and resume, Copy log', () => {
+    it('heading, the engine’s words, the last tool, Copy log — and the view’s ONE Restart is the header’s (genie#1238)', () => {
         const html = render();
         expect(html).toContain('data-rail="process-ended"');
         expect(html).toContain('Process ended');
@@ -32,7 +33,8 @@ describe('the process-ended block', () => {
         expect(html).toMatch(/data-process-log[^>]*>[^<]*PHP Fatal error: Allowed memory size exhausted/);
         expect(html).toContain('[worker 6] killed');
         expect(html).toMatch(/data-last-tool[^>]*>[^<]*Bash/);
-        expect(html).toContain('data-action="restart-resume"');
+        expect(html).not.toContain('data-action="restart-resume"');
+        expect(html.split('data-action="restart"').length - 1).toBe(1);
         expect(html).toContain('data-action="copy-log"');
     });
 

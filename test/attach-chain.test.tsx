@@ -17,7 +17,7 @@ import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyo
  * and dropped the file: every hop — flyout, IPC, host, session, driver — carried text only. Here each hop is held
  * to carrying them: the IPC payload is validated whole, the session hands the driver the content blocks and records
  * the file names on your message, the thread shows them, and a refused message is KEPT with its files and the
- * host's reason (no "Restart and send" — restarting would not change the reason).
+ * host's reason (no Restart — restarting would not change the reason).
  */
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
@@ -81,8 +81,8 @@ describe('the thread', () => {
         expect(html).toMatch(/data-chat-attachments="m1"[\s\S]*?shot\.png/);
         expect(html).toMatch(/data-chat-attachments="d1"[\s\S]*?data\.bin/);
         expect(html).toContain('Not delivered. data.bin is neither an image nor a text file');
-        // Restart and send: only on the draft the agent being stopped explains (positive control: d2 has it).
-        expect(html.match(/data-action="restart-and-send"/g)).toHaveLength(1);
+        // Restart: only on the draft the agent being stopped explains (positive control: d2 has it).
+        expect(html.match(/data-action="restart"/g)).toHaveLength(1);
         expect(html).toMatch(/data-draft="d2"/);
     });
 });

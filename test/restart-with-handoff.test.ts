@@ -6,10 +6,11 @@ import { handoffPrompt, restartWithHandoff, type RestartPorts } from '../src/mai
 
 /**
  * "RESTART WITH THIS" (§4.5 Since-you-looked) — a finished agent is started again and its own
- * handoff note is its first prompt, so the next run picks up where the last one stopped. Stop first
- * (a running one is not reattached — this is a RESTART), start, prompt, and only then mark the
- * finish seen; a start the host refuses or a prompt the session does not take leaves the item on
- * the Deck with the refusal said. The main process's handler is a thin call into this.
+ * handoff note is its next prompt, so the next run picks up where the last one stopped. The restart
+ * is THE ONE RESTART (genie#1238: `restartAgent(…, 'graceful')`, which waits for the old run, starts
+ * from every state and delivers what is owed); then the prompt, and only then the finish is marked
+ * seen. A restart that is refused or a prompt the session does not take leaves the item on the Deck
+ * with the refusal said. The main process's handler is a thin call into this.
  */
 
 const record: AgentRecord = { id: 'agent_a', workspaceId: 'tynn', provider: 'claude', name: 'atlas', instructions: null, threadId: null, createdAt: 't', lastUsedAt: 't', mode: 'manual', accessScope: 'workspace' } as unknown as AgentRecord;
@@ -19,9 +20,7 @@ function ports(over: Partial<RestartPorts> = {}) {
     const calls: string[] = [];
     const seen: string[] = [];
     const p: RestartPorts = {
-        stop: (id) => { calls.push(`stop:${id}`); return true; },
-        ended: async (id) => { calls.push(`ended:${id}`); return null; },
-        start: (r) => { calls.push(`start:${r.id}`); return { ok: true }; },
+        restart: async (id) => { calls.push(`restart:${id}`); return { ok: true }; },
         prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
         ...over,
     };
@@ -36,41 +35,41 @@ describe('the handoff prompt', () => {
 });
 
 describe('restartWithHandoff', () => {
-    it('stops, starts, prompts with the handoff, then marks the finish seen — in that order', async () => {
+    it('restarts through the one restart, prompts with the handoff, then marks the finish seen — in that order', async () => {
         const f = ports();
-        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: true });
-        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a', `prompt:agent_a:${handoffPrompt(fin.handoff!)}`]);
+        expect(await restartWithHandoff(f.p, f.attention, record, 'fin_1')).toEqual({ ok: true });
+        expect(f.calls).toEqual(['restart:agent_a', `prompt:agent_a:${handoffPrompt(fin.handoff!)}`]);
         expect(f.seen).toEqual(['fin_1']);
     });
 
     it('a finish that is not this agent’s, or has no handoff, is refused before anything is touched', async () => {
         const f = ports();
-        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_other')).toEqual({ ok: false, reason: 'no handoff fin_other for atlas' });
-        expect(await restartWithHandoff(f.p, { finished: () => [{ ...fin, handoff: null }], markSeen: f.attention.markSeen }, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
+        expect(await restartWithHandoff(f.p, f.attention, record, 'fin_other')).toEqual({ ok: false, reason: 'no handoff fin_other for atlas' });
+        expect(await restartWithHandoff(f.p, { finished: () => [{ ...fin, handoff: null }], markSeen: f.attention.markSeen }, record, 'fin_1')).toEqual({ ok: false, reason: 'no handoff fin_1 for atlas' });
         expect(f.calls).toEqual([]);
         expect(f.seen).toEqual([]);
     });
 
-    it('a start the host refuses is reported with the host’s reason and the finish stays on the Deck', async () => {
-        const f = ports({ start: () => ({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' }) });
-        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' });
-        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a']);
+    it('a restart that is refused is reported with its reason and the finish stays on the Deck', async () => {
+        const f = ports({ restart: async () => ({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' }) });
+        expect(await restartWithHandoff(f.p, f.attention, record, 'fin_1')).toEqual({ ok: false, reason: 'Genie cannot run a "kimi" agent. It stays registered and idle.' });
+        expect(f.calls).toEqual([]);
         expect(f.seen).toEqual([]);
     });
 
     it('a prompt the session does not take is reported and the finish stays on the Deck', async () => {
         const f = ports({ prompt: () => false });
-        expect(await restartWithHandoff(f.p, f.attention, record, '/w/tynn', 'fin_1')).toEqual({ ok: false, reason: 'atlas started but did not take the handoff prompt' });
+        expect(await restartWithHandoff(f.p, f.attention, record, 'fin_1')).toEqual({ ok: false, reason: 'atlas started but did not take the handoff prompt' });
         expect(f.seen).toEqual([]);
     });
 });
 
 describe('the bridge', () => {
-    it('restartWithHandoff is one channel, named in preload and answered in main', () => {
+    it('restartWithHandoff is one channel, named in preload and answered in main — through the one restart', () => {
         const preload = readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8');
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         expect(preload.match(/'genie:restart-with-handoff'/g) ?? []).toHaveLength(1);
         expect(main.match(/'genie:restart-with-handoff'/g) ?? []).toHaveLength(1);
-        expect(main).toContain('restartWithHandoff(');
+        expect(main).toMatch(/restartWithHandoff\(\{ restart: \(id\) => restartAgent\(agentOps, id, 'graceful'\)/);
     });
 });

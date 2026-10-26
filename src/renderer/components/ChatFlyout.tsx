@@ -197,7 +197,10 @@ export interface ChatFlyoutProps {
     onSend: (text: string, attachments?: readonly Attachment[]) => void;
     /** Absent = no close button (the doctor window: the chat is the page, not a panel). */
     onClose?: (() => void) | undefined;
-    /** `Restart <agent> and send` on an undelivered draft (§4.4): restart the agent, then send that text. */
+    /**
+     * An undelivered draft's action (§4.4), by its id: `Send now` while the agent runs, else the chat's ONE `Restart`
+     * (genie#1238) — the agent is restarted and every undelivered message to it is sent, in order.
+     */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** Put an undelivered draft away, unsent (the owner, 2026-10-20: it was "stuck on my screen"). */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
@@ -304,6 +307,9 @@ export function ChatFlyout({
     const messages = thread?.messages ?? [];
     const windowStart = chatWindowStart(messages, lines);
     const shown = windowStart === 0 ? messages : messages.slice(windowStart);
+    // ONE RESTART IN THE CHAT (genie#1238): on the latest message waiting for one — the restart sends every undelivered
+    // message, in order, so a Restart on each was the same button many times over.
+    const restartOn = [...messages].reverse().find((m) => (m.who ?? (m.from === 'you' ? 'you' : 'agent')) === 'you' && !m.delivered && !m.queued && !m.reason && m.resend !== 'send')?.id ?? null;
     /** The scroll height before a page of history was added: the reader stays on the message they were reading. */
     const anchorRef = useRef<number | null>(null);
     const showEarlier = () => {
@@ -587,7 +593,9 @@ export function ChatFlyout({
                                         {onDiscardDraft ? <button type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</button> : null}
                                         {m.reason ? null : m.resend === 'send'
                                             ? <button type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</button>
-                                            : <button type="button" data-action="restart-and-send" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart {thread?.name ?? 'the agent'} and send</button>}
+                                            : m.id === restartOn
+                                                ? <button type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</button>
+                                                : null}
                                     </div>
                                 </div>
                             )}

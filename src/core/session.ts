@@ -548,6 +548,15 @@ export class AgentSession {
      * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
      * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
      */
+    /**
+     * A TURN IN FLIGHT, by Genie's own record (a prompt went in and its end has not come) — not `turnState: 'working'`,
+     * which a session that is still STARTING reads as too. What a Restart asks before it tells the agent its turn was
+     * cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
+     */
+    get inTurn(): boolean {
+        return this.#inTurn;
+    }
+
     get promptable(): boolean {
         return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
     }
@@ -769,6 +778,20 @@ export class AgentSession {
 
     hasQueuedPrompt(id: string): boolean {
         return this.#afterTurn.some((p) => p.id === id);
+    }
+
+    /**
+     * A PROMPT AN EARLIER RUN OWES, handed to this one (genie#1238: Restart delivers what is owed). It keeps its own id and
+     * its message row — already in the record — so the chat shows it once, where it was written, and its delivery row
+     * (`sent`, or `undelivered` again if this run breaks before it goes) settles THAT message. Sent in queue order once the
+     * run can take a turn: at once, at `ready`, or when the current turn ends. Already waiting here: nothing is added.
+     */
+    redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+        if (!this.running) throw new Error('session is not running');
+        if (this.hasQueuedPrompt(id)) return;
+        this.#afterTurn.push({ id, text, by, sent, context });
+        this.#changed();
+        this.#flushAfterTurn();
     }
 
     discardPrompt(id: string): void {

@@ -6,9 +6,9 @@ import type { LiveSession } from '../src/core/roster.js';
 import { deleteAgent, diagnose, previewDelete, restartAgent, setBudget, switchDriver, type AgentOpsPorts } from '../src/main/agent-ops-host.js';
 
 /**
- * AGENT OPERATIONS IN THE APP (§6.2) — the main-process half over the pure plans. Restart is two
- * named operations (graceful resumes the SAME thread and refuses when it cannot; fresh clears the
- * thread first); delete is previewed with its plan BEFORE it acts and the cross-system opt-in is in
+ * AGENT OPERATIONS IN THE APP (§6.2) — the main-process half over the pure plans. Restart (graceful)
+ * resumes the SAME thread from every state and delivers what is owed (genie#1238); fresh clears the
+ * thread; delete is previewed with its plan BEFORE it acts and the cross-system opt-in is in
  * the same call; switch driver reads the persona's `tuis:`; a budget is set and immediately judged
  * (unenforceable when the provider reports no cost); diagnose names a cause and a fitting repair.
  */
@@ -42,7 +42,9 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
             stop: (id) => { calls.push(`stop:${id}`); return true; },
             ended: async (id) => { calls.push(`ended:${id}`); return null; },
             probe: () => over.probe ?? null,
+            deliverOwed: async (id) => { calls.push(`deliverOwed:${id}`); return 0; },
         },
+        startRefusal: () => null,
         ...(over.models ? { models: { get: async (provider: string) => over.models![provider] ?? { ok: false, provider, reason: 'no list' } } } : {}),
         cwdFor: () => '/w/tynn',
         workspacePathFor: () => '/w/tynn',
@@ -68,17 +70,18 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
 }
 
 describe('restart', () => {
-    it('graceful: stops and starts with the SAME thread; refused when there is no thread or the agent is wedged — never a silent new chat', async () => {
+    it('graceful (Restart, genie#1238): stops and starts with the SAME thread, then delivers what is owed — a never-started and a wedged agent too', async () => {
         const f = fakes();
         expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
-        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:sess-1:/w/tynn']);
+        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:sess-1:/w/tynn', 'deliverOwed:agent_a']);
 
         const none = fakes({ record: record({ threadId: null }) });
-        expect(await restartAgent(none.ports, 'agent_a', 'graceful')).toMatchObject({ ok: false, reason: expect.stringMatching(/no conversation to resume/) });
-        expect(none.calls).toEqual([]);
+        expect(await restartAgent(none.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(none.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:null:/w/tynn', 'deliverOwed:agent_a']);
 
         const wedged = fakes({ probe: { running: true, turnState: 'failed', startedAt: 1, pendingApproval: null, failure: { reason: 'crashed', fixes: [] } } as unknown as LiveSession });
-        expect(await restartAgent(wedged.ports, 'agent_a', 'graceful')).toMatchObject({ ok: false, reason: expect.stringMatching(/only a fresh restart/) });
+        expect(await restartAgent(wedged.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        expect(wedged.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'start:agent_a:sess-1:/w/tynn', 'deliverOwed:agent_a']);
     });
 
     it('fresh: starts with no thread, then clears the stored one — only once the start went ahead; works on a wedged agent; an unknown agent is refused', async () => {

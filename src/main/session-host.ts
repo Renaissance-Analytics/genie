@@ -1111,6 +1111,78 @@ export class SessionHost {
     }
 
     /**
+     * A PROMPT FOR AN AGENT WITH NO SESSION TO TAKE IT, KEPT AS OWED (genie#1238): the resume prompt after a relaunch whose
+     * start was refused (its previous run still ending, its folder gone) used to be dropped — `prompt` answered false and
+     * nothing was written. It is recorded in the agent's thread as a message not delivered, so the chat shows it and the
+     * next Restart delivers it (`deliverOwed`). Serialised with the other draft actions.
+     */
+    recordOwed(agentId: AgentId, text: string, by: string | null): Promise<void> {
+        const record = async (): Promise<void> => {
+            const id = randomUUID();
+            const run = randomUUID();
+            // The rows a session writes for a prompt it queued and could not deliver (`promptRow`, `#leaveQueuedAsDrafts`).
+            const yours = by === null || by === 'you';
+            await openAgentThread(this.#store(), agentId).record([
+                { kind: 'message', speaker: yours ? 'you' : 'peer', peerName: yours ? null : by, text, pending: { id, content: null }, [RUN_FIELD]: run },
+                { kind: 'prompt_delivery', id, status: 'undelivered', [RUN_FIELD]: run },
+            ]);
+            this.#histories.delete(agentId);
+            this.#emit(agentId);
+        };
+        const result = this.#promptActions.then(record, record);
+        this.#promptActions = result.catch(() => undefined);
+        return result;
+    }
+
+    /**
+     * WHAT A RESTART OWES (genie#1238; the owner's beta.45 agents went Broken with the resume prompt for their interrupted
+     * turn recorded `undelivered`, and Restart never sent it). Every prompt in this agent's record that was never
+     * delivered — queued by a run that ended, or left `undelivered` when it broke — is handed to the run now in the map, in
+     * the order written, keeping its id (`AgentSession.redeliver`), so its delivery row settles that message and nothing is
+     * owed twice: one already waiting in this run is skipped, one sent or discarded is not owed. Serialised with the chat's
+     * Send/Discard (`resolvePrompt`), so a draft is never both resent and sent. Resolves to how many were handed over; 0
+     * when the agent has no running session.
+     */
+    deliverOwed(agentId: AgentId, then?: { text: string; by: string }): Promise<number> {
+        const deliver = async (): Promise<number> => {
+            await this.settled();
+            const entry = this.#running.get(agentId);
+            if (!entry || !entry.session.running) return 0;
+            // `then` (the word to carry on after a Restart cut a turn) goes AFTER what was owed: it is queued last.
+            const after = (): void => {
+                if (!then || this.#running.get(agentId) !== entry || !entry.session.running) return;
+                try { entry.session.deliver(then.text, then.by); this.#emit(agentId); } catch { /* the run ended under us */ }
+            };
+            const { rows } = await readHistory(this.#store(), agentId);
+            // The run may have been stopped or replaced while the record was read: deliver only into the one asked for.
+            if (this.#running.get(agentId) !== entry || !entry.session.running) return 0;
+            const states = promptDeliveries(rows);
+            let handed = 0;
+            for (const { event: e } of rows) {
+                if (e.kind !== 'message' || !e.pending) continue;
+                const status = states.get(e.pending.id);
+                if (status !== 'queued' && status !== 'undelivered') continue;
+                if (entry.session.hasQueuedPrompt(e.pending.id)) continue;
+                try {
+                    entry.session.redeliver(e.pending.id, e.text, e.speaker === 'you' ? 'you' : e.peerName,
+                        e.pending.content ? { content: e.pending.content, attachments: e.attachments ?? [] } : null,
+                        e.mail ? { mail: e.mail } : {});
+                    handed += 1;
+                } catch {
+                    // The run ended under us: what was not handed over stays owed for the next Restart.
+                    break;
+                }
+            }
+            if (handed > 0) this.#emit(agentId);
+            after();
+            return handed;
+        };
+        const result = this.#promptActions.then(deliver, deliver);
+        this.#promptActions = result.catch(() => undefined);
+        return result;
+    }
+
+    /**
      * The agent's RUN when its session can take a turn now (`AgentSession.promptable`), else `null` — not running,
      * still starting, mid-turn, waiting on a person, broken. What the inbox push asks before it sends a notice.
      */
@@ -1368,6 +1440,7 @@ export class SessionHost {
             designLogin: entry.session.designLogin,
             running: session.running,
             turnState: session.turnState,
+            inTurn: session.inTurn,
             startedAt,
             mcpServers: mcp,
             /*

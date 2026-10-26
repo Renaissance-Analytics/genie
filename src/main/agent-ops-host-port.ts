@@ -21,5 +21,7 @@ export function sessionHostPort(host: () => SessionHost | null): AgentOpsPorts['
         switchModel: (id, model) => host()?.switchModel(id, model) ?? null,
         // A parked shell question answered by a changed tool setting (genie#1188).
         settleParked: (id, decision) => host()?.settleParked(id, decision) ?? false,
+        // What a restart owes the new run (genie#1238): the undelivered resume prompt and drafts, in order, once.
+        deliverOwed: (id, then) => host()!.deliverOwed(id, then),
     };
 }
