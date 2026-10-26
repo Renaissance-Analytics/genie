@@ -99,6 +99,11 @@ export type Route =
     | ({ surface: 'takeover'; terminalId: string; login?: string } & Common)
     /** The file panel in its own window (§4.3): one workspace's panel, no chrome. `genie://files/<workspaceId>`. */
     | ({ surface: 'files'; workspaceId: string } & Common)
+    /**
+     * THE FLOW EDITOR in its own window (genie#1204, Genie 1's genie#505): one flow on fancy-flow's canvas.
+     * `genie://flow/<flowId>`, or `genie://flow/new?workspace=<id>` for a new one. No chrome.
+     */
+    | ({ surface: 'flow'; flowId: string | null; workspaceId: string | null } & Common)
     /** The feature surfaces (§4.0's title-bar icons and the rest of §6): one route each. */
     | ({ surface: PlainFeature } & Common)
     | ({ surface: 'hosting'; tab?: HostingTab } & Common)
@@ -182,6 +187,12 @@ export function parseRoute(input: string): Route {
             // No chat and no pin: a TUI window has no chat to open. `login` names a provider's login window (its notice).
             const login = params.get('login');
             return { surface: 'takeover', terminalId: tail, chat: null, pin: null, ...(login ? { login } : {}) };
+        }
+        case 'flow': {
+            // No id is not a window; `new` is a new flow, in the workspace the link names.
+            if (!tail) return dashboard('workspace', common);
+            if (tail === 'new') return { surface: 'flow', flowId: null, workspaceId: params.get('workspace') || null, chat: null, pin: null };
+            return { surface: 'flow', flowId: decodeURIComponent(tail), workspaceId: null, chat: null, pin: null };
         }
         case 'files': {
             // The popped-out panel (§4.3): no id is not a window; no modifiers either.
@@ -274,6 +285,9 @@ export function formatRoute(route: Route): string {
             break;
         case 'files':
             break;
+        case 'flow':
+            if (route.flowId === null && route.workspaceId) params.set('workspace', route.workspaceId);
+            break;
         case 'deck':
             if (route.item) params.set('item', route.item);
             break;
@@ -288,6 +302,7 @@ export function formatRoute(route: Route): string {
         : route.surface === 'workspace' ? `workspace/${route.workspaceId}`
         : route.surface === 'takeover' ? `takeover/${route.terminalId}`
         : route.surface === 'files' ? `files/${route.workspaceId}`
+        : route.surface === 'flow' ? `flow/${route.flowId === null ? 'new' : encodeURIComponent(route.flowId)}`
         : route.surface === 'settings' && route.section !== null ? `settings/${route.section}`
         : route.surface;
 

@@ -62,7 +62,7 @@ describe('saving from the canvas', () => {
         const bad = canvas([n('t', 'schedule_trigger', { cron: 'every day' }), n('s', 'genie/terminal_run', { workspace: 'tynn' }, 240), n('a', 'genie/agent_prompt', { agent: 'ghost', prompt: 'hi' }, 480)], [{ id: 'e1', source: 't', target: 's' }, { id: 'e2', source: 's', target: 'a' }]);
         const data = await handleFeatureAction(services, { kind: 'flows.saveGraph', workspaceId: 'tynn', name: 'broken', document: bad }, undefined, ports);
         expect(data.flows!.saved).toMatchObject({ ok: false });
-        const problems = (data.flows!.saved as { problems: Array<{ nodeId?: string; message: string }> }).problems;
+        const problems = (data.flows!.saved as unknown as { problems: Array<{ nodeId?: string; message: string }> }).problems;
         expect(problems).toEqual(expect.arrayContaining([
             { nodeId: 't', message: expect.stringMatching(/"every day" is not a schedule/) },
             { nodeId: 's', message: expect.stringMatching(/command/i) },

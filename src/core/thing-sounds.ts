@@ -46,6 +46,7 @@ export class ThingSounds {
 }
 
 /** A flow's run as it ended: it ran or it failed — it finished. A run held back never ran. */
-export function flowRunSound(run: { readonly outcome: 'ran' | 'failed' | 'held' }): ThingKind | null {
-    return run.outcome === 'held' ? null : 'flowdone';
+export function flowRunSound(run: { readonly outcome: 'ran' | 'failed' | 'held' | 'stopped' }): ThingKind | null {
+    // A run stopped by a quit is recorded at the next launch (genie#1204): nothing just finished, so nothing sounds.
+    return run.outcome === 'held' || run.outcome === 'stopped' ? null : 'flowdone';
 }

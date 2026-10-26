@@ -2,9 +2,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { HostPathPickerContext, PathBrowse, relativeInside, type PickHostPath } from '../src/renderer/components/HostPathPicker.js';
-import { AddFlowForm, AddSiteForm } from '../src/renderer/components/AddForms.js';
-import { flowFormDefaults } from '../src/core/forms.js';
-import { flowDocument } from '../src/core/flow-form.js';
+import { AddSiteForm } from '../src/renderer/components/AddForms.js';
 
 /**
  * EVERY FILE AND FOLDER INPUT READS THE HOST, PART 3 (Tynn #835): the typed folder fields — a repo's path, a process's
@@ -46,11 +44,7 @@ describe('PathBrowse', () => {
 });
 
 describe('the forms offer Browse', () => {
-    it('a flow command’s folder, relative to the workspace', () => {
-        const html = withPicker(createElement(AddFlowForm, { defaults: { ...flowFormDefaults({ workspaceId: 'tynn' }), document: flowDocument({ workspaceId: 'tynn', cron: '0 * * * *', step: { kind: 'command', command: 'php artisan inspire', folder: '' } as never }) }, problems: [], onSubmit: () => {}, onCancel: () => {}, root: '/w/tynn' }));
-        expect(html).toContain('data-action="browse-path"');
-    });
-
+    // A flow command's folder is a field of the Run a command node on the canvas since genie#1204 (no form to browse from).
     it('a site’s root, relative to its repo', () => {
         const html = withPicker(createElement(AddSiteForm, { defaults: { name: 'app', mode: 'static', command: '', hostPort: null, root: 'dist', spa: false, phpVersion: null, hint: '' } as never, existingHosts: [], problems: [], onSubmit: () => {}, onCancel: () => {}, root: '/w/tynn/repos/app' }));
         expect(html).toContain('data-action="browse-path"');

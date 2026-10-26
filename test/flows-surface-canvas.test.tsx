@@ -44,7 +44,7 @@ describe('a flow row', () => {
         expect(summary).toContain('On a schedule (*/30 * * * *)');
         expect(summary.indexOf('runs the command')).toBeLessThan(summary.indexOf('Branch'));
         expect(summary.indexOf('Branch')).toBeLessThan(summary.indexOf('prompts atlas@tynn'));
-        expect(html).toContain('4 steps');
+        expect(html).toContain('3 steps');
     });
 
     it('opens on the canvas from its name and from Open; the form is gone', () => {

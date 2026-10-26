@@ -1,6 +1,7 @@
-import { getNodeKind, registerNodeKind, type FlowGraph, type NodeKindDefinition } from '@particle-academy/fancy-flow/engine';
+import type { FlowGraph } from '@particle-academy/fancy-flow/engine';
 import { importWorkflow } from '@particle-academy/fancy-flow/schema';
 import { shellTemplatesInFileFlow } from '../core/file-trigger.js';
+import { ensureGenieKinds, GENIE_NODE_KINDS, structuralProblems } from '../core/flow-canvas.js';
 import { canonicalFlowDocument, type FlowDocument } from '../core/flow-form.js';
 
 /**
@@ -28,93 +29,9 @@ import { canonicalFlowDocument, type FlowDocument } from '../core/flow-form.js';
  * Genie's own kinds, a required field that is only whitespace counts as blank and is refused too (`blankRequired`).
  */
 
-export const GENIE_NODE_KINDS: readonly NodeKindDefinition[] = [
-    {
-        name: 'genie/agent_prompt',
-        category: 'ai',
-        label: 'Prompt an agent',
-        description: 'Send a prompt to a Genie agent and wait for its reply.',
-        icon: '🧞',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'reply' }],
-        configSchema: [
-            { type: 'text', key: 'agent', label: 'Agent', placeholder: 'atlas@tynn-ai', required: true, description: 'An inbox address: name@workspace (a bare name when it is unique).' },
-            { type: 'textarea', key: 'prompt', label: 'Prompt', required: true, description: 'Templates like {{in.text}} resolve into the node’s inputs.' },
-        ],
-    },
-    {
-        name: 'genie/terminal_run',
-        category: 'io',
-        label: 'Run a command',
-        description: 'Run a command in a workspace and read its exit code and output.',
-        icon: '⌨',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'result' }],
-        configSchema: [
-            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
-            { type: 'text', key: 'command', label: 'Command', required: true },
-            { type: 'text', key: 'cwd', label: 'Working directory', description: 'Relative to the workspace; empty = the workspace root.' },
-            { type: 'switch', key: 'allowFailure', label: 'Continue on a non-zero exit', default: false },
-        ],
-    },
-    {
-        name: 'genie/knowledge_add',
-        category: 'data',
-        label: 'Add knowledge',
-        description: 'Write a node into Genie’s knowledge graph.',
-        icon: '🧠',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'node' }],
-        configSchema: [
-            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
-            { type: 'text', key: 'title', label: 'Title', required: true },
-            { type: 'textarea', key: 'body', label: 'Body' },
-            { type: 'select', key: 'class', label: 'Class', options: [{ value: 'knowledge', label: 'knowledge' }, { value: 'episodic', label: 'episodic' }, { value: 'procedural', label: 'procedural' }, { value: 'profile', label: 'profile' }], default: 'knowledge' },
-            { type: 'text', key: 'tags', label: 'Tags', description: 'Comma-separated.' },
-        ],
-    },
-    // genie#1204 item 5 — Genie 1's "a file was added" trigger. Its output is the file (core/file-trigger.ts
-    // FileAddedProps): {{in.path}}, {{in.relPath}}, {{in.name}}, {{in.extension}}, {{in.sizeBytes}}.
-    {
-        name: 'genie/file_added',
-        category: 'trigger',
-        label: 'A file is added',
-        description: 'Starts the flow when a file lands in a workspace (not in .git, node_modules or vendor).',
-        icon: '📄',
-        inputs: [],
-        outputs: [{ id: 'out', label: 'file' }],
-        configSchema: [
-            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
-            { type: 'text', key: 'folder', label: 'Folder', description: 'Relative to the workspace; empty = anywhere in it.' },
-            { type: 'text', key: 'extensions', label: 'Extensions', description: 'Comma-separated, e.g. png, jpg; empty = any.' },
-            { type: 'number', key: 'minSizeBytes', label: 'Minimum size (bytes)', min: 0, description: 'Inclusive; empty = any size.' },
-        ],
-    },
-    {
-        name: 'genie/file_move',
-        category: 'io',
-        label: 'Move a file',
-        description: 'Move a file into a folder of the same workspace. No shell; never overwrites (name (2).ext).',
-        icon: '📦',
-        inputs: [{ id: 'in' }],
-        outputs: [{ id: 'out', label: 'moved' }],
-        configSchema: [
-            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
-            { type: 'text', key: 'from', label: 'File', required: true, default: '{{in.path}}', description: 'Usually {{in.path}}: the file the trigger saw.' },
-            { type: 'text', key: 'to', label: 'Into folder', required: true, placeholder: '.untracked', description: 'Relative to the workspace.' },
-        ],
-    },
-];
-
-/**
- * Put Genie's kinds in fancy-flow's registry. Idempotent: a kind already registered under its name is left alone,
- * so every caller may call it and the registry still holds exactly one definition per kind.
- */
-export function ensureGenieKinds(): void {
-    for (const kind of GENIE_NODE_KINDS) {
-        if (getNodeKind(kind.name)?.name !== kind.name) registerNodeKind(kind);
-    }
-}
+// Genie's kinds and the canvas's rules live in core/flow-canvas.ts (renderer-safe): the editor window registers the same
+// definitions before its canvas mounts, and checks against the same rules the store and the runner use here.
+export { GENIE_NODE_KINDS, ensureGenieKinds } from '../core/flow-canvas.js';
 
 export type FlowImport = { readonly ok: true; readonly document: FlowDocument; readonly graph: FlowGraph } | { readonly ok: false; readonly problems: readonly string[] };
 
@@ -137,6 +54,9 @@ export function importFlowDocument(document: unknown): FlowImport {
     }
     const blank = blankRequired(result.graph);
     if (blank.length > 0) return { ok: false, problems: blank };
+    // What the engine cannot see (genie#1204): a kind Genie's runner does not execute, a Wait it cannot honour, a loop.
+    const structural = structuralProblems(doc);
+    if (structural.length > 0) return { ok: false, problems: structural.map((p) => (p.nodeId !== undefined ? `node ${p.nodeId}: ${p.message}` : p.message)) };
     // A file name can be `$(curl …).png` or `a; rm -rf ~`: in a flow a file starts, no command templates a value.
     const shell = shellTemplatesInFileFlow({ nodes: result.graph.nodes.map((n) => { const d = (n.data ?? {}) as { kind?: unknown; config?: Record<string, unknown> }; return { id: n.id, kind: typeof d.kind === 'string' ? d.kind : '', config: d.config }; }) });
     if (shell.length > 0) {

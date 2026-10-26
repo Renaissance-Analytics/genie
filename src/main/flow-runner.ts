@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { runFlow } from '@particle-academy/fancy-flow/engine';
+import { canonicalKind, type NodeOutcome } from '../core/flow-canvas.js';
 import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts } from './flow-executors.js';
@@ -40,10 +41,19 @@ export interface FlowRunnerDeps {
     readonly now?: () => number;
 }
 
+/**
+ * What a run tells its watcher AS IT GOES (genie#1204): every node's outcome so far — so the scheduler can keep the run
+ * in flight on disk (a quit mid-run is recorded, never lost) and the canvas can draw it — and each Log node's line.
+ */
+export interface RunObserver {
+    readonly nodes?: (outcomes: Record<string, NodeOutcome>) => void;
+    readonly log?: (nodeId: string, line: string) => void;
+}
+
 /** The scheduler's `run`: one run of a flow, answering its outcome. Never throws. */
-export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null) => Promise<RunResult> {
+export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver) => Promise<RunResult> {
     const now = deps.now ?? Date.now;
-    return async (flow, trigger) => {
+    return async (flow, trigger, observer) => {
         if (deps.asleep(flow.workspaceId)) {
             return { outcome: 'held', reason: `its workspace ${flow.workspaceId} is hibernated; nothing runs there until it is woken` };
         }
@@ -66,6 +76,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             runCommand: (workspaceId, command, cwd) => watch(base.runCommand(workspaceId, command, cwd)),
             addKnowledge: (input) => watch(base.addKnowledge(input)),
             ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
+            ...(base.sleep ? { sleep: base.sleep } : {}),
         };
         const firedAt = new Date(now()).toISOString();
         // The schedule trigger is host-implemented in fancy-flow: it hands its downstream what fired.
@@ -80,9 +91,31 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         const entry = fired !== null && graph.nodes.some((n) => n.id === fired) ? { entryNodes: [fired] } : {};
         // Each node's last status, from the engine's own events: what a stopped run says it got through (genie#1204).
         const statuses = new Map<string, string>();
-        const onEvent = (event: { type: string; nodeId?: string; status?: string }) => {
-            if (event.type === 'node-status' && typeof event.nodeId === 'string' && typeof event.status === 'string') statuses.set(event.nodeId, event.status);
+        const skipped = new Set<string>();
+        // Every node that takes part in the run (an annotation or a lane never does), each 'not reached' until it is.
+        const runnable = graph.nodes.filter((n) => {
+            const kind = canonicalKind(String(((n.data ?? {}) as { kind?: unknown }).kind ?? n.type ?? ''));
+            return kind !== '@particle-academy/note' && kind !== '@particle-academy/lane';
+        });
+        const outcomes = (final: boolean): Record<string, NodeOutcome> =>
+            Object.fromEntries(runnable.map((n) => {
+                const status = statuses.get(n.id);
+                const o: NodeOutcome = status === 'done' ? 'ran'
+                    : skipped.has(n.id) ? 'skipped'
+                    : status === 'error' ? (step.held !== null ? 'held' : 'failed')
+                    : status === 'running' ? (final ? (step.held !== null ? 'held' : 'failed') : 'running')
+                    : 'not reached';
+                return [n.id, o];
+            }));
+        const onEvent = (event: { type: string; nodeId?: string; status?: string; text?: string; message?: string }) => {
+            if (event.type === 'node-status' && typeof event.nodeId === 'string' && typeof event.status === 'string') {
+                statuses.set(event.nodeId, event.status);
+                if (event.status === 'idle' && event.text === 'skipped') skipped.add(event.nodeId);
+                observer?.nodes?.(outcomes(false));
+            }
+            if (event.type === 'log' && typeof event.nodeId === 'string' && typeof event.message === 'string' && statuses.get(event.nodeId) === 'running') observer?.log?.(event.nodeId, event.message);
         };
+        const finish = <T>(result: T): T => { observer?.nodes?.(outcomes(true)); return result; };
         const stepsOf = (): FlowRunStep[] =>
             graph.nodes
                 .map((n) => ({ id: n.id, data: (n.data ?? {}) as { kind?: unknown; config?: Record<string, unknown> } }))
@@ -94,12 +127,12 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                 });
         try {
             const result = await runFlow(graph, executors, onEvent as never, { ...entry, run: `${flow.id}:${firedAt}` });
-            if (result.ok) return { outcome: 'ran' };
-            if (step.held !== null) return { outcome: 'held', reason: step.held, steps: stepsOf() };
-            return { outcome: 'failed', reason: result.error ?? 'the run failed and the engine gave no reason', steps: stepsOf() };
+            if (result.ok) return finish({ outcome: 'ran' });
+            if (step.held !== null) return finish({ outcome: 'held', reason: step.held, steps: stepsOf() });
+            return finish({ outcome: 'failed', reason: result.error ?? 'the run failed and the engine gave no reason', steps: stepsOf() });
         } catch (error) {
-            if (step.held !== null) return { outcome: 'held', reason: step.held, steps: stepsOf() };
-            return { outcome: 'failed', reason: error instanceof Error ? error.message : String(error), steps: stepsOf() };
+            if (step.held !== null) return finish({ outcome: 'held', reason: step.held, steps: stepsOf() });
+            return finish({ outcome: 'failed', reason: error instanceof Error ? error.message : String(error), steps: stepsOf() });
         }
     };
 }

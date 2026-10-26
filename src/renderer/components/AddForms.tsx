@@ -1,14 +1,12 @@
 import { PathBrowse } from './HostPathPicker.js';
 import { useState } from 'react';
 import { Input } from '@particle-academy/react-fancy';
-import { flowFields, flowFormFromFields, type FlowStep } from '../../core/flow-form.js';
-import { SCHEDULE_PRESETS, nextRunWords } from '../../core/flow-schedule.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
-import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
+import type { KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
 import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
 
 /**
- * THE FORMS — "Add a site" and "Add a flow".
+ * THE FORMS — "Add a site" (and a memory, a service). A flow is drawn on the canvas, not filled in (genie#1204).
  *
  * Defaults are prefilled from disk (core/forms.ts decides them), the hint says what Genie will do,
  * and every problem is shown beside its field at once — the person fixes the form in one pass.
@@ -112,160 +110,6 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel, phpVersion
             </label>
             <div className="flex gap-2">
                 <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">{submitLabel}</button>
-                <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
-            </div>
-        </form>
-    );
-}
-
-export interface AddFlowFormProps {
-    readonly defaults: FlowForm;
-    readonly problems: readonly Problem[];
-    readonly onSubmit: (form: FlowForm) => void;
-    readonly onCancel: () => void;
-    /** The workspace's folder — a command's folder is relative to it, and Browse picks inside it (Tynn #835). */
-    readonly root?: string | undefined;
-    /** Editing an existing flow (genie#1204): Save instead of Add, and no Arm-now (arming stays its own choice). */
-    readonly editing?: boolean | undefined;
-}
-
-const STEP_CHOICES: ReadonlyArray<{ value: FlowStep['kind']; label: string }> = [
-    { value: 'command', label: 'Run a command in the workspace' },
-    { value: 'agent', label: 'Prompt an agent' },
-    { value: 'log', label: 'Only note that it fired' },
-];
-/** A file flow's own step (genie#1204): offered only when a file starts the flow — it moves THAT file. */
-const MOVE_CHOICE = { value: 'move' as const, label: 'Move the file into a folder' };
-const TRIGGER_CHOICES = [
-    { value: 'schedule' as const, label: 'On a schedule' },
-    { value: 'file' as const, label: 'When a file is added to the workspace' },
-];
-
-/**
- * "Add a flow": a schedule and what it RUNS — a command in the workspace (its output kept like a background
- * process's log), a prompt to an agent (held back while the agent is mid-turn), or only a note that it fired.
- * Only the chosen step's fields are drawn; the document is built from the fields on submit (core/flow-form.ts).
- */
-export function AddFlowForm({ defaults, problems, onSubmit, onCancel, root, editing = false }: AddFlowFormProps) {
-    const initial = flowFields(defaults.document);
-    const [cron, setCron] = useState(initial.cron);
-    const [step, setStep] = useState<FlowStep['kind']>(initial.step.kind);
-    const [trigger, setTrigger] = useState<'schedule' | 'file'>(initial.trigger.kind);
-    const file = initial.trigger.kind === 'file' ? initial.trigger : { folder: '', extensions: '', minSizeMb: '' };
-    const moveTo = initial.step.kind === 'move' ? initial.step.to : '.untracked';
-    const choices = trigger === 'file' ? [...STEP_CHOICES, MOVE_CHOICE] : STEP_CHOICES;
-    const command = initial.step.kind === 'command' ? initial.step : { command: '', folder: '' };
-    const agent = initial.step.kind === 'agent' ? initial.step : { agent: '', prompt: '' };
-    return (
-        <form
-            data-form="add-flow"
-            className="flex flex-col gap-4 p-5"
-            onSubmit={(e) => {
-                e.preventDefault();
-                const data = new FormData(e.currentTarget);
-                const fields: Record<string, string> = {};
-                data.forEach((value, key) => { if (typeof value === 'string') fields[key] = value; });
-                onSubmit(flowFormFromFields(defaults, fields));
-            }}
-        >
-            <p className="text-sm text-[var(--fg-3)]">What starts it, and the work it runs. A flow with more than one step is edited by an agent until the canvas editor lands.</p>
-            <Row label="Name">
-                <Input name="name" defaultValue={defaults.name} />
-                <ProblemLine field="name" problems={problems} />
-            </Row>
-            <fieldset data-flow-trigger={trigger} className="flex flex-col gap-2">
-                <legend className="text-sm font-medium">What starts it</legend>
-                {TRIGGER_CHOICES.map((c) => (
-                    <label key={c.value} className="flex items-center gap-2 text-sm">
-                        <input type="radio" name="trigger" value={c.value} checked={trigger === c.value} onChange={() => { setTrigger(c.value); if (c.value === 'schedule' && step === 'move') setStep('log'); }} />
-                        {c.label}
-                    </label>
-                ))}
-            </fieldset>
-            {trigger === 'file' ? (
-                <>
-                    <Row label="Folder to watch (optional — empty means anywhere in the workspace; never .git, node_modules or vendor)">
-                        <Input name="watchFolder" defaultValue={file.folder} placeholder="uploads" />
-                        <PathBrowse name="watchFolder" root={root ?? null} />
-                        <ProblemLine field="watchFolder" problems={problems} />
-                    </Row>
-                    <Row label="File kinds (optional, comma-separated)">
-                        <Input name="extensions" defaultValue={file.extensions} placeholder="png, jpg" />
-                    </Row>
-                    <Row label="Only files of at least (MB, optional)">
-                        <Input name="minSizeMb" defaultValue={file.minSizeMb} placeholder="5" />
-                        <ProblemLine field="minSizeMb" problems={problems} />
-                    </Row>
-                </>
-            ) : null}
-            {trigger === 'schedule' ? (
-            <Row label="Schedule (cron, five fields, this machine's local time)">
-                <select
-                    data-schedule-preset=""
-                    aria-label="Schedule presets"
-                    value={SCHEDULE_PRESETS.some((p) => p.cron === cron.trim()) ? cron.trim() : ''}
-                    onChange={(e) => { if (e.target.value) setCron(e.target.value); }}
-                    className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm"
-                >
-                    <option value="">Custom…</option>
-                    {SCHEDULE_PRESETS.map((p) => <option key={p.cron} value={p.cron}>{p.label}</option>)}
-                </select>
-                <Input name="cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 * * * *" />
-                <span data-next-run="" className="text-xs text-[var(--fg-3)]">{nextRunWords(cron, Date.now())}</span>
-                <ProblemLine field="cron" problems={problems} />
-                <ProblemLine field="timezone" problems={problems} />
-            </Row>
-            ) : null}
-            {/* the schedule row ends here */}
-            <fieldset data-flow-step={step} className="flex flex-col gap-2">
-                <legend className="text-sm font-medium">What it runs</legend>
-                {choices.map((c) => (
-                    <label key={c.value} className="flex items-center gap-2 text-sm">
-                        <input type="radio" name="step" value={c.value} checked={step === c.value} onChange={() => setStep(c.value)} />
-                        {c.label}
-                    </label>
-                ))}
-            </fieldset>
-            {step === 'command' ? (
-                <>
-                    <Row label="Command">
-                        <Input name="command" defaultValue={command.command} placeholder="php artisan schedule:run" />
-                        <ProblemLine field="command" problems={problems} />
-                    </Row>
-                    <Row label="Folder in the workspace (optional)">
-                        <Input name="folder" defaultValue={command.folder} placeholder="repos/app" />
-                        <PathBrowse name="folder" root={root ?? null} />
-                        <ProblemLine field="folder" problems={problems} />
-                    </Row>
-                </>
-            ) : null}
-            {step === 'agent' ? (
-                <>
-                    <Row label="Agent">
-                        <Input name="agent" defaultValue={agent.agent} placeholder="claude:atlas" />
-                        <ProblemLine field="agent" problems={problems} />
-                    </Row>
-                    <Row label="Prompt">
-                        <textarea name="prompt" defaultValue={agent.prompt} rows={3} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm" />
-                        <ProblemLine field="prompt" problems={problems} />
-                    </Row>
-                </>
-            ) : null}
-            {step === 'move' && trigger === 'file' ? (
-                <Row label="Move it into (a folder in the workspace; nothing is ever overwritten)">
-                    <Input name="moveTo" defaultValue={moveTo} placeholder=".untracked" />
-                    <PathBrowse name="moveTo" root={root ?? null} />
-                    <ProblemLine field="moveTo" problems={problems} />
-                </Row>
-            ) : null}
-            {editing ? null : (
-                <label className="flex items-center gap-2 text-sm">
-                    <input type="checkbox" name="armed" defaultChecked={defaults.armed} />
-                    Arm now — it starts running on its own. Off by default; an agent can create a flow but only you can arm it.
-                </label>
-            )}
-            <div className="flex gap-2">
-                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">{editing ? 'Save flow' : 'Add flow'}</button>
                 <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
             </div>
         </form>

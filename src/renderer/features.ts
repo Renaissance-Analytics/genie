@@ -89,6 +89,11 @@ export interface SiteEditing {
 /** A site row: the site, and the end of each of its processes' output (the supervisor's tail — there after a crash). */
 export type HostedSite = SiteInfo & { readonly logs?: readonly SiteProcessLog[] };
 
+/** What the canvas's save did (genie#1204): stored — disarmed if it changed what an armed flow does — or refused, on the nodes. */
+export type FlowSaved =
+    | { readonly ok: true; readonly flowId: string; readonly disarmed: boolean }
+    | { readonly ok: false; readonly problems: readonly import('../core/flow-canvas.js').FlowProblem[] };
+
 /** An Add-a-flow form open in the Flows surface. */
 export interface FlowAdding {
     readonly defaults: FlowForm;
@@ -259,7 +264,11 @@ export interface ToolchainSection {
 
 export interface FeatureData {
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
-    readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null } | null;
+    /**
+     * `saved`: what the canvas's last `flows.saveGraph` did (genie#1204) — served in the answer to that action only, never
+     * in a pushed snapshot: the flow it saved (and whether the save disarmed it), or the problems, each on its node.
+     */
+    readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null } | null;
     readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
@@ -320,6 +329,11 @@ export type FeatureAction =
     /** Open the form on an existing flow; save it in place (genie#1204). */
     | { kind: 'flows.edit'; flowId: string }
     | { kind: 'flows.save'; flowId: string; form: FlowForm }
+    /** THE CANVAS (genie#1204): open a flow, or a new one in a workspace, in the flow editor's own window. */
+    | { kind: 'flows.openEditor'; flowId: string }
+    | { kind: 'flows.newFlow'; workspaceId: string }
+    /** The canvas's Save, as the USER: create (`flowId` absent, always disarmed) or update in place. Answered in `flows.saved`. */
+    | { kind: 'flows.saveGraph'; flowId?: string; workspaceId: string; name: string; document: unknown }
     | { kind: 'hosting.addSite'; workspaceId: string; repoPath: string }
     | { kind: 'hosting.cancelForm' }
     /** The Add-a-site form, submitted. Validated in main; a refusal names every problem. */

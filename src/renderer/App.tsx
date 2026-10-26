@@ -1,5 +1,6 @@
 import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
+import { FlowEditorWindow } from './components/FlowEditorWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
@@ -1264,6 +1265,19 @@ function DesktopApp({ bridge }: AppProps) {
     // TUI is the window (§1).
     if (parsed.surface === 'takeover') {
         return <TakeOverWindow terminalId={parsed.terminalId} terminals={resolvedBridge?.terminals ?? NO_TERMINALS} login={parsed.login} />;
+    }
+    // THE FLOW EDITOR IN ITS OWN WINDOW (genie#1204, Genie 1's genie#505): fancy-flow's canvas and nothing else.
+    if (parsed.surface === 'flow') {
+        return (
+            <FlowEditorWindow
+                flowId={parsed.flowId}
+                workspaceId={parsed.workspaceId}
+                data={features}
+                workspaces={snapshot.workspaces ?? []}
+                act={(action) => (resolvedBridge ? resolvedBridge.features.act(action) : Promise.reject(new Error('This runs inside Genie.')))}
+                onSaved={(id) => window.location.replace(`#genie://flow/${encodeURIComponent(id)}`)}
+            />
+        );
     }
     // THE FILE PANEL IN ITS OWN WINDOW (§4.3): the panel and nothing else; closing the window docks it back.
     if (parsed.surface === 'files') {

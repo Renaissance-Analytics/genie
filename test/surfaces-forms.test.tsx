@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { flowFormDefaults, siteFormDefaults } from '../src/core/forms.js';
-import { FlowsSurface, HostingSurface } from '../src/renderer/components/FeatureSurfaces.js';
+import { siteFormDefaults } from '../src/core/forms.js';
+import { HostingSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
 
 /**
@@ -37,14 +37,4 @@ describe('Hosting', () => {
     });
 });
 
-describe('Flows', () => {
-    it('with the flow form open it renders with the hourly default and no problems', () => {
-        const open = renderToStaticMarkup(
-            <FlowsSurface data={data} onAction={() => {}} onNavigate={() => {}} adding={{ kind: 'flow', defaults: flowFormDefaults({ workspaceId: 'tynn' }), problems: [] }} onCloseForm={() => {}} />,
-        );
-        expect(open).toContain('data-surface="flows"');
-        expect(open).toContain('data-form="add-flow"');
-        expect(open).toContain('value="0 * * * *"');
-        expect(open.match(/data-problem="/g) ?? []).toHaveLength(0);
-    });
-});
+// The Flows surface opens no form since genie#1204: Add a flow opens the canvas (test/flows-surface-canvas.test.tsx).

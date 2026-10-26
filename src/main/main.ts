@@ -528,6 +528,32 @@ function openFilesWindow(route: string, activation: Activation): void {
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
 
+/**
+ * THE FLOW EDITOR IN ITS OWN WINDOW (genie#1204; Genie 1's genie#505 — its editor first lived in a modal card that clipped
+ * the canvas). A real, resizable window per flow, whose whole client area is the canvas; opening a flow already open
+ * brings its window up. A new flow's window moves to the flow's own route on its first save.
+ */
+function openFlowEditorWindow(route: string, activation: Activation): void {
+    const request = { activation, reason: `flow editor ${route}`, ledger: activationLedger, label: 'flow' };
+    for (const w of BrowserWindow.getAllWindows()) {
+        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
+    }
+    const win = new BrowserWindow({
+        width: 1280,
+        height: 820,
+        minWidth: 480,
+        minHeight: 360,
+        ...genieWindowIcon(here),
+        backgroundColor: '#0a0a0c',
+        show: false,
+        webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
+    win.once('ready-to-show', () => showWhenReady(win, request));
+    void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
+}
+
 function closeWindowAt(route: string): void {
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) w.close();
@@ -2105,7 +2131,8 @@ async function boot(): Promise<void> {
     services = composed;
     const pushFeatures = () => {
         void featureSnapshot(composed, featureState, processPorts()).then((data) => {
-            if (window && !window.isDestroyed()) window.webContents.send(FEATURE_CHANNELS.changed, data);
+            // Every window: a flow editor window draws the flow's runs and armed state from the same snapshot (genie#1204).
+            broadcast(FEATURE_CHANNELS.changed, data);
             for (const l of featureListeners) l(data);
         });
     };
@@ -2648,6 +2675,8 @@ async function boot(): Promise<void> {
     });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
+        // The flow editor's own window (genie#1204): Open, a row's name, Add a flow.
+        openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         openInBrowser: openInBrowserFor('user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
