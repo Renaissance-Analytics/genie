@@ -121,3 +121,29 @@ describe('runPluginTool', () => {
         expect(silent.wasKilled()).toBe(true);
     });
 });
+
+/*
+ * WHAT THE SANDBOX IS GIVEN (genie#871): the launch carries the plugin's folder, the caller's workspace ONLY when the
+ * manifest declares `fs`, and the declared network hosts. With no capabilities given, the narrowest sandbox.
+ */
+describe('the launch carries the sandbox the manifest declares', () => {
+    const answering = () => fakeChild((line) => (JSON.parse(line).call ? [JSON.stringify({ result: 1 }), { exit: 0 }] : []));
+    const launchWith = async (capabilities?: PluginManifest['capabilities']) => {
+        const specs: LaunchSpec[] = [];
+        const fake = answering();
+        await runPluginTool({ pluginDir: '/plugins/acme.lint', tool, args: {}, caller, guard, api: async () => null, launch: (spec) => { specs.push(spec); return fake.child; }, timeoutMs: 5_000, ...(capabilities ? { capabilities } : {}) });
+        return specs[0]!.sandbox;
+    };
+
+    it('fs and hosts declared: the workspace and those hosts', async () => {
+        const sandbox = await launchWith({ fs: { scope: 'workspace', extensions: ['.md'] }, network: { hosts: ['api.example.com'] }, genieApi: [] });
+        expect(sandbox.pluginDir.split('\\').join('/')).toBe('/plugins/acme.lint');
+        expect(sandbox.workspace).toBe('/w/tynn');
+        expect(sandbox.hosts).toEqual(['api.example.com']);
+    });
+
+    it('nothing declared — or no capabilities given at all: no workspace, no hosts', async () => {
+        expect(await launchWith({ network: { hosts: [] }, genieApi: [] })).toMatchObject({ workspace: null, hosts: [] });
+        expect(await launchWith()).toMatchObject({ workspace: null, hosts: [] });
+    });
+});
