@@ -41,7 +41,7 @@ function fakeApi() {
         workspaceOfAgent: (id) => snapshot.agents.find((a) => a.id === id)?.workspaceId ?? null,
         workspaceOfTerminal: (id) => ({ term_t: 'tynn', term_f: 'fancy' } as Record<string, string>)[id] ?? null,
     };
-    return { api, calls, emit: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); } };
+    return { api, calls, listening: () => listeners.size, emit: (channel: string, payload: unknown) => { for (const l of listeners) l(channel, payload); } };
 }
 
 /** A client end: send a frame, await the next frame(s). */
@@ -132,6 +132,43 @@ describe('authentication', () => {
     it('a call before hello is refused; a frame that is not a message is refused with the parse reason', async () => {
         const x = connect();
         expect(await x.call('snapshot')).toEqual({ kind: 'refused', reason: 'say hello first' });
+    });
+});
+
+describe('the host API is listened to only while someone is connected (genie#1200)', () => {
+    /*
+     * The owner, 2026-10-26: "The UI is still laggy with the number of agents I have going right now." Listening to the host
+     * API builds an agent's whole detail on every update of every agent (host-api.ts), for #broadcast to send to NO ONE when
+     * no device is connected — which is always, until the socket is wired. Measured on the owner's machine: main at 78–98 %
+     * of a core for seconds at a time.
+     */
+    const settled = () => new Promise((r) => setTimeout(r, 0));
+    it('nothing connected: not listening; an authenticated connection: listening and receiving; it closes: not listening', async () => {
+        expect(api.listening()).toBe(0);
+        const { code } = host.issuePin();
+        const a = connect();
+        await a.hello({ kind: 'pin', code, label: 'phone' });
+        expect(api.listening()).toBe(1);
+        api.emit('snapshot', snapshot);
+        expect(await a.next()).toMatchObject({ kind: 'event', channel: 'snapshot' });
+        a.close(); await settled();
+        expect(api.listening()).toBe(0);
+    });
+
+    it('a connection that never authenticates does not start the listening; two connections listen ONCE, until the last closes', async () => {
+        const stranger = connect();
+        expect(await stranger.hello({ kind: 'token', token: 'nope' })).toMatchObject({ kind: 'refused' });
+        expect(api.listening()).toBe(0);
+        const { code } = host.issuePin();
+        const a = connect();
+        await a.hello({ kind: 'pin', code, label: 'phone' });
+        const b = connect();
+        await b.hello({ kind: 'token', token: 'tok0' });
+        expect(api.listening()).toBe(1);
+        a.close(); await settled();
+        expect(api.listening()).toBe(1);
+        b.close(); await settled();
+        expect(api.listening()).toBe(0);
     });
 });
 
