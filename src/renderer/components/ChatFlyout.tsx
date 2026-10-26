@@ -346,6 +346,8 @@ export function ChatFlyout({
             data-chat="pinned"
             // Whether the subject's own conversation is loaded — the smoke reads it on a page reached without `chat=`.
             data-chat-loaded={thread?.loaded ? 'true' : 'false'}
+            // Whose chat this is — the smoke reads it after a Dashboard row click (genie#1209).
+            data-chat-subject={thread?.agentId ?? ''}
             style={{ width }}
             className="relative flex min-h-0 min-w-0 shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--surface)]"
         >

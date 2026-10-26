@@ -337,14 +337,25 @@ check(typeof agentRow === 'string', '16. the seeded agent appears on the Dashboa
 check(await cdp.evaluate(`(() => { const g = document.querySelector('[data-genie-group]'); const w = document.querySelector('[data-surface="dashboard"] div[data-workspace]'); return Boolean(g && w && (g.compareDocumentPosition(w) & Node.DOCUMENT_POSITION_FOLLOWING) && /default agent · not in a workspace/.test(g.textContent ?? '')); })()`), '60. the Dashboard opens with genie’s own group, above the workspaces', await cdp.evaluate(`document.querySelector('[data-genie-group]')?.textContent?.slice(0, 80) ?? null`));
 
 if (typeof agentRow === 'string') {
+    // 17. A ROW CLICK OPENS THAT AGENT'S CHAT BESIDE THE DASHBOARD, WHICH STAYS (genie#1209; the owner, 2026-10-26: "on the
+    // dashboard page I should be able to click on agent to bring up their chat and stay on the dashboard").
+    const rowId = JSON.parse(agentRow).id;
     await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]').click(); true`);
+    const chatted = await waitFor(
+        cdp,
+        `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${rowId}"]')) && Boolean(document.querySelector('[data-surface="dashboard"]'))`,
+        'that agent\'s chat beside the Dashboard after clicking a row',
+    );
+    check(chatted, '17. clicking the row opens THAT agent\'s chat beside the Dashboard, which stays');
 
+    // The Agent view itself is the agent's page (the row tray's Open agent): reached by its route.
+    await cdp.evaluate(`window.location.hash = '#genie://agent/${rowId}?tab=stream'; true`);
     const opened = await waitFor(
         cdp,
         `Boolean(document.querySelector('[data-surface="agent"]'))`,
-        'the Agent view after clicking a row',
+        'the Agent view from its route',
     );
-    check(opened, '17. clicking the row OPENS the Agent view');
+    check(opened, '17b. the agent\'s page OPENS the Agent view');
 
     // And the Stream is PRESENT and showing — not hidden behind a fidelity check, which is the
     // precise mechanism that hid it for three releases.
