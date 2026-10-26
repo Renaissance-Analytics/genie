@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { FileAddedProps } from '../src/core/file-trigger.js';
 import { startFileSource, type FileSourceDeps, type RawWatchEvent } from '../src/main/flow-file-source.js';
@@ -14,7 +14,7 @@ import { startFileSource, type FileSourceDeps, type RawWatchEvent } from '../src
  * just moved in (`expectArrival`) is not a new addition — else a "move it to .untracked" flow chases its own tail.
  */
 
-const ROOT = join('/', 'work', 'tynn');
+const ROOT = resolve('/', 'work', 'tynn'); // absolute, drive and all on Windows
 
 function harness(over: Partial<FileSourceDeps> = {}) {
     let deliver: ((e: RawWatchEvent) => void) | null = null;
