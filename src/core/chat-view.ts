@@ -1,7 +1,8 @@
 import { limitTitle, limitWords } from './limit-words.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
-import type { TimedEvent } from './stream-view.js';
+import { repeatsCompaction, type TimedEvent } from './stream-view.js';
+import type { StreamEvent } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
 import { messageLines } from './chat-window.js';
@@ -148,8 +149,12 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
     const deliveries = promptDeliveries(detail.rows);
     // Whether the row before was a thought: a reply (or any other row) between two thoughts splits them.
     let lastWasThink = false;
+    // The row before, debug notices aside: a compaction repeating it is the same compaction (genie#1249).
+    let previous: StreamEvent | undefined;
     for (const row of detail.rows) {
         const e = row.event;
+        if (repeatsCompaction(previous, e)) continue;
+        if (!(e.kind === 'notice' && e.level === 'debug')) previous = e;
         if (e.kind === 'stopped') {
             const text = e.by === null ? 'Stopped' : `Stopped by ${e.by}`;
             out.push({ id: row.id, who: 'stopped', from: e.by ?? '', text, delivered: true, at: row.at });

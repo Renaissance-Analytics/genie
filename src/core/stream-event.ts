@@ -228,6 +228,11 @@ function toolStatusOf(value: unknown): ToolStatus | null {
  * init notice; Codex after thread start or resume and on `model/rerouted`. No key = the provider did not say.
  */
 export const MODEL_META = 'particle.academy/model';
+/**
+ * Where prism-acp puts the frame it could not map on its debug `notice` (its exported `META_UNMAPPED_FRAME`): the
+ * diagnostics a Codex replay raises per item (`replayed reasoning item had no summary`, `unmapped Codex item: …`).
+ */
+export const UNMAPPED_FRAME_META = 'particle.academy/unmapped_frame';
 /** Where prism-acp (0.19.0+) puts a compaction on a `notice` (its exported `META_COMPACTION`): trigger, pre/post tokens. */
 export const COMPACTION_META = 'particle.academy/compaction';
 

@@ -517,6 +517,7 @@ export function findRows(rows: readonly TimedEvent[], query: string): readonly T
 export function activityRows(rows: readonly TimedEvent[]): TimedEvent[] {
     const out: TimedEvent[] = [];
     for (const r of rows) {
+        if (repeatsCompaction(out[out.length - 1]?.event, r.event)) continue;
         const e = r.event;
         if (e.kind === 'message') continue;
         if (e.kind === 'notice' && e.level === 'debug') {
@@ -534,6 +535,18 @@ export function activityRows(rows: readonly TimedEvent[]): TimedEvent[] {
         out.push(r);
     }
     return joinToolCalls(out);
+}
+
+/**
+ * A COMPACTION DIVIDER THAT ONLY REPEATS THE ONE BEFORE IT (genie#1249): the same compaction, with nothing between them
+ * but what the views do not show as activity (debug notices; the chat's own rule adds nothing more). A Codex resume used
+ * to re-record the thread's history, and every replayed compaction landed as a new divider: the owner's miapa showed a
+ * column of "context compacted · turns 1–56 summarised" after each restart. The ledger keeps what was written; the
+ * views show it once. A real compaction comes after work — a turn, a thought, a tool, a usage report — and stays.
+ */
+export function repeatsCompaction(previous: StreamEvent | undefined, event: StreamEvent): boolean {
+    return event.kind === 'divider' && previous?.kind === 'divider'
+        && previous.variant === event.variant && previous.before === event.before && previous.after === event.after;
 }
 
 /**

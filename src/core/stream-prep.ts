@@ -1,4 +1,5 @@
-import { activityRows, resolveThinkTokens, resolveToolDurations, resolveTurnCosts, type TimedEvent } from './stream-view.js';
+import { activityRows, repeatsCompaction, resolveThinkTokens, resolveToolDurations, resolveTurnCosts, type TimedEvent } from './stream-view.js';
+import type { StreamEvent } from './stream-event.js';
 
 /**
  * THE WORK STREAM'S PREPARATION (the owner, 2026-10-22: never rebuild the whole thread per update).
@@ -53,6 +54,7 @@ interface Undo {
     durations: Array<[string, number | undefined]>;
     turnsSoFar: number;
     summarisedAdded: string | null;
+    lastActivity: StreamEvent | undefined;
 }
 
 export class StreamPrep {
@@ -72,6 +74,8 @@ export class StreamPrep {
     #durations = new Map<string, number>();
     #turnsSoFar = 0;
     #summarised = new Map<string, number>();
+    /** The newest ACTIVITY row read (activityRows' last, before its tool updates fold): a compaction repeating it is not a row (genie#1249). */
+    #lastActivity: StreamEvent | undefined;
     /** What the fold has read: how many ledger rows, the first and the newest (the wire only appends or replaces the newest). */
     #length = 0;
     #first: TimedEvent | undefined;
@@ -114,6 +118,7 @@ export class StreamPrep {
         this.#durations = new Map();
         this.#turnsSoFar = 0;
         this.#summarised = new Map();
+        this.#lastActivity = undefined;
         this.#length = 0;
         this.#first = undefined;
         this.#last = undefined;
@@ -135,7 +140,7 @@ export class StreamPrep {
         const undo: Undo = {
             outLength: this.#out.length, replaced: [], joinAdded: null, lastThink: this.#lastThink,
             usageSeen: this.#usageSeen, lastUsed: this.#lastUsed, pending: this.#pending.slice(), previous: { ...this.#previous },
-            started: [], durations: [], turnsSoFar: this.#turnsSoFar, summarisedAdded: null,
+            started: [], durations: [], turnsSoFar: this.#turnsSoFar, summarisedAdded: null, lastActivity: this.#lastActivity,
         };
         const replace = (i: number, next: TimedEvent) => { undo.replaced.push([i, this.#out[i]!]); this.#out[i] = next; };
         const e = row.event;
@@ -161,6 +166,10 @@ export class StreamPrep {
             }
             return undo;
         }
+
+        // A compaction divider repeating the one before it, nothing shown between (repeatsCompaction): one compaction.
+        if (repeatsCompaction(this.#lastActivity, e)) return undo;
+        this.#lastActivity = e;
 
         // joinToolCalls: a call's later frames fold into its row.
         if (e.kind === 'tool' && e.toolCallId !== '') {
@@ -228,6 +237,7 @@ export class StreamPrep {
         for (const [id, prev] of u.durations) { if (prev === undefined) this.#durations.delete(id); else this.#durations.set(id, prev); }
         this.#turnsSoFar = u.turnsSoFar;
         if (u.summarisedAdded !== null) this.#summarised.delete(u.summarisedAdded);
+        this.#lastActivity = u.lastActivity;
         this.#undo = null;
     }
 }

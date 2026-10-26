@@ -3,7 +3,7 @@ import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { lastTurnOf, openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
-import { toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
+import { toStreamEvent, UNMAPPED_FRAME_META, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -347,6 +347,8 @@ export class AgentSession {
     #limitThisTurn = false;
     /** A resumed thread's history being replayed by the driver, before its `ready` (AgentSessionOptions.replaysTranscript). */
     #replaying = false;
+    /** How many replayed updates `#replaying` dropped: said in one notice when the replay ends (genie#1249). */
+    #replayed = 0;
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
@@ -1091,7 +1093,19 @@ export class AgentSession {
             // resumed Codex agent wrote its whole past into the ledger again: as `peer` rows under prism-acp 0.24.0, as
             // agent messages under 0.24.1). Genie already holds that history; the replay is not recorded twice.
             this.#replaying = Boolean(this.#options.resumeSessionId) && this.#options.replaysTranscript === true;
-            const done = (): void => { this.#starting = false; this.#replaying = false; this.#changed(); };
+            this.#replayed = 0;
+            const done = (): void => {
+                this.#starting = false;
+                // What the replay held, said ONCE (genie#1249): a resumed miapa wrote 16 compaction dividers and 3,036
+                // `replayed reasoning item had no summary` notices into its ledger, and every restart did it again.
+                if (this.#replaying && this.#replayed > 0) {
+                    const n = this.#replayed;
+                    void this.#emitRow({ kind: 'notice', level: 'debug', message: `Resumed the thread: the provider replayed ${n} item${n === 1 ? '' : 's'} of its history; not recorded again (already in this history).`, headroom: null, model: null, estimate: null });
+                }
+                this.#replaying = false;
+                this.#replayed = 0;
+                this.#changed();
+            };
             ready.then(() => { done(); this.#flushAfterTurn(); }, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
@@ -1524,9 +1538,12 @@ export class AgentSession {
 
         const event = toStreamEvent(update);
         if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
-        // The provider replaying a resumed thread's history (see `#replaying`): not recorded again. Notices (the model,
-        // a rate-limit reading) still are — they are about now, not the past.
-        if (this.#replaying && (event.kind === 'message' || event.kind === 'think' || event.kind === 'tool' || event.kind === 'plan')) return;
+        // The provider replaying a resumed thread's history (see `#replaying`): not recorded again. Notices that read
+        // NOW (the model, a rate-limit reading, an MCP server coming up) still are — they are about now, not the past.
+        if (this.#replaying && isReplayedHistory(event, update)) {
+            this.#replayed += 1;
+            return;
+        }
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
@@ -1684,6 +1701,22 @@ export interface PromptContext {
  * A prompt's own message row: yours (`you`, or nobody said), or the sender's as a peer — with its files, and, for a
  * Genie notice, the mail it told about. Absent fields are left off, never written empty.
  */
+/**
+ * WHAT A RESUMED THREAD'S REPLAY CARRIES THAT GENIE ALREADY HOLDS (genie#1249). prism-acp's CodexDriver replays the
+ * thread on `thread/resume` (`#replayHistory` → `#mapItem(item, true)`) with no mark on the updates, so the replay is
+ * known by WHEN it arrives (before `ready`) and by WHAT it is: the history's own rows — messages, thoughts, tools,
+ * plans and compactions — and the debug diagnostics its items raise (prism-acp's unmapped-frame notice: `replayed
+ * reasoning item had no summary`, `unmapped Codex item: webSearch`). A notice that reads NOW (the model, a rate limit,
+ * an MCP server's startup) is not history and is kept.
+ */
+function isReplayedHistory(event: StreamEvent, update: Record<string, unknown>): boolean {
+    if (event.kind === 'message' || event.kind === 'think' || event.kind === 'tool' || event.kind === 'plan' || event.kind === 'divider') return true;
+    if (event.kind !== 'notice' || event.level !== 'debug') return false;
+    if (event.model != null || event.headroom != null || event.estimate != null || event.tasks !== undefined || event.task !== undefined) return false;
+    const meta = update['_meta'];
+    return typeof meta === 'object' && meta !== null && UNMAPPED_FRAME_META in meta;
+}
+
 function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext): StreamEvent {
     const attachments = sent && sent.attachments.length > 0 ? { attachments: sent.attachments } : {};
     const mail = context.mail && context.mail.length > 0 ? { mail: context.mail } : {};
