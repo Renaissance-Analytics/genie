@@ -175,8 +175,7 @@ describe('a scheduled background process', () => {
  * genie#1250: "paused, it does not fire" once saw a 03:00 timer armed after Pause schedule (PR #1247's CI). Nothing in
  * that test arms one. The timer came from the PREVIOUS test's scheduler: `settled()` resolved as soon as the run's exit
  * was seen, before its outcome was written, so the write landed after that test had ended, told that book's listeners,
- * and the old scheduler re-planned into the shared `timers` — after the next test's `beforeEach` had emptied it. A quit
- * that awaits `settled()` had the same gap: Genie could go down before a run's outcome was on disk.
+ * and the old scheduler re-planned into the shared `timers` — after the next test's `beforeEach` had emptied it.
  */
 describe('genie#1250: settled() means every run is over AND its outcome is written', () => {
     it('PROBE, the CI failure forced: a run settled in one test arms nothing in the next', async () => {
