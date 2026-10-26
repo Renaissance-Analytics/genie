@@ -1,4 +1,5 @@
 import type { SessionDriver, SessionDriverFactory } from '../core/session.js';
+import { mcpPreparationMessage } from './mcp-preparation-error.js';
 
 /** Preparation and the provider handshake share the session's existing readiness gate and input queue. */
 export function deferredDriverFactory(prepare: (signal: AbortSignal) => Promise<SessionDriverFactory>): SessionDriverFactory {
@@ -44,11 +45,11 @@ export function deferredDriverFactory(prepare: (signal: AbortSignal) => Promise<
                     aroundSpawn(() => inner!.start());
                     await inner.ready;
                     if (!controller.signal.aborted && !exited) resolve();
-                }).catch(() => {
+                }).catch((error: unknown) => {
                     if (controller.signal.aborted || exited) return;
                     // Credential preparation exceptions can contain a key or an HTTP response. Only this fixed
-                    // message crosses into the ledger or renderer; the original exception stays private.
-                    const reason = 'The agent could not prepare its private MCP connection. Restart to try again.';
+                    // message or a fixed main-process failure code crosses into the ledger or renderer.
+                    const reason = mcpPreparationMessage(error);
                     options.events.onProtocolError?.(reason, { recoverable: false });
                     try { inner?.kill(); } catch { /* the session still owns and records a partial spawn */ }
                     finally { exit(null, null); reject(new Error(reason)); }

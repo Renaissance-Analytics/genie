@@ -36,3 +36,21 @@ it.each(['start', 'resume'] as const)('the Codex app-server fixture supports rea
         await rm(dir, { recursive: true, force: true });
     }
 });
+
+it('the preparation fixture completes the pinned SDK config handshake with a private Tynn bearer', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'genie-prepared-sdk-'));
+    const problems: string[] = [];
+    const driver = new CodexDriver({ cwd: dir, binary: process.execPath, binaryArgs: [resolve('test/live/fixtures/prepared-provider.mjs')],
+        mcpServers: [{ type: 'http', name: 'tynn', url: 'https://tynn.ai/mcp/tynn', headers: [{ name: 'Authorization', value: 'Bearer synthetic-private' }] }],
+    }, { onProtocolError: (problem) => problems.push(problem) });
+    try {
+        driver.start();
+        await expect(driver.ready).resolves.toBeUndefined();
+        expect(problems).toEqual([]);
+        expect(driver.cliSessionId).toBe('prepared-native-thread');
+    } finally {
+        const stopped = await driver.stop({ graceMs: 0 }); expect(stopped.empty).toBe(true);
+        if (dirname(resolve(dir)) !== resolve(tmpdir()) || !basename(dir).startsWith('genie-prepared-sdk-')) throw new Error('Refusing fixture cleanup outside its temporary root');
+        await rm(dir, { recursive: true, force: true });
+    }
+});

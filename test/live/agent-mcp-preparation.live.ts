@@ -1,5 +1,6 @@
 /** VM-only: actual Prism drivers, native fixture children, real process ownership, no model inference. */
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -50,12 +51,16 @@ try {
     for (const [index, record] of records.entries()) {
         const capture = JSON.parse(await readFile(join(dir, `${record.provider}.json`), 'utf8'));
         const own = keyFor(index);
-        assert.equal(capture.servers.tynn.url, 'https://tynn.ai/mcp/tynn');
-        assert.equal((capture.servers.tynn.headers ?? capture.servers.tynn.http_headers).Authorization, own);
+        assert.equal(capture.tynnUrl, 'https://tynn.ai/mcp/tynn');
+        assert.equal(capture.authSha256, createHash('sha256').update(own).digest('hex'));
+        if (record.provider === 'codex') {
+            assert.equal(capture.bearerExcluded, true, 'private bearer is excluded from model-run commands');
+            assert.equal(capture.shellSnapshotDisabled, true, 'private bearer cannot enter a shell snapshot');
+        }
         assert.equal(capture.leakedPairing, false, 'main-only pairing fixture never enters child environment');
         assert(!JSON.stringify(capture.argv).includes(own), 'credential is absent from argv');
         assert(!JSON.stringify(host.probe(record.id)).includes(own), 'credential is absent from live view');
-        if (record.provider === 'claude') assert.equal(capture.privateMode, 0o600, 'Prism MCP temporary file is private');
+        if (record.provider === 'claude' && process.platform !== 'win32') assert.equal(capture.privateMode, 0o600, 'Prism MCP temporary file is private');
         // Prism spawns a supervisor synchronously; that supervisor starts the provider after its IPC handshake.
         // The recorded root must own the actual provider now, even when that descendant did not exist at the snapshot.
         const table = systemProcessTree.snapshot(); assert(table, 'process table is readable');

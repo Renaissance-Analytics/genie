@@ -351,16 +351,18 @@ export const realListModels: ListProviderModels = (provider) =>
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
+    // Without an explicit private Tynn server, neither provider may recover one from user/project config.
+    const inheritedPolicy = extras?.mcpServers?.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };
     // The workspace's managed-service variables, by allow-list (serviceEnvDriverOptions) — nothing else Genie holds.
     // The binary (a configured script runs as the runtime + the script) and the workspace's service variables.
     const launch = providerLaunchOptions(providerBinary(record.provider), extras?.serviceEnv ?? {}, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...mcp }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...mcp, ...inheritedPolicy }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...inheritedPolicy }, driverEvents(options.events));
 
         default:
             return null;

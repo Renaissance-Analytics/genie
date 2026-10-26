@@ -15,7 +15,6 @@ import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
-import { tynnMcpServersOnDisk } from './tynn-agent-token.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
@@ -915,13 +914,13 @@ async function boot(): Promise<void> {
          */
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
-        // A CODEX session also gets the Tynn server Genie wrote into its workspace (#1098), so the session can approve it
-        // (codexOptionsFor approves every server in this list; prism only lets it approve a server it was given). Claude
-        // reads `.mcp.json` itself and runs Genie's tools unasked, so it is given nothing it does not already have.
-        mcpServersFor: (record) => [
-            ...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
-            ...(record.provider === 'codex' ? tynnMcpServersOnDisk(cwdFor(record), (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }) : []),
-        ],
+        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
+        prepareMcpServers: async (record, _cwd, signal) => {
+            if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
+            const privateServers = await services.prepareAgentMcp(record, signal);
+            return [...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)), ...privateServers];
+        },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
         onThreadId: (agentId, threadId) => {
@@ -1851,8 +1850,13 @@ async function boot(): Promise<void> {
         // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
         remoteTransport: remoteHub,
         mcpEndpoint: () => mcp?.endpoint() ?? null,
-        // A linked workspace's Tynn agent token is minted over this session (main/tynn-agent-token.ts); opened after compose.
+        // The account is opened after compose; private credentials are requested only when an agent starts.
         tynn: () => tynnAccount,
+        tynnCipher: {
+            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
+            encrypt: (text) => safeStorage.encryptString(text),
+            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        },
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
