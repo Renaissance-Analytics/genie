@@ -184,14 +184,18 @@ export type QuestionOutcome = QuestionLeft | { readonly kind: 'timed out' };
  * act on the answer. Here the step holds the run, like an approval, until the question LEAVES: answered, dismissed (or
  * withdrawn) — or, after `waitMs`, it is withdrawn (the person is not asked any more) and the run goes on as timed out.
  */
-export function questionWaiter(attention: Pick<AttentionStore, 'onLeave' | 'pending' | 'withdraw'>): (questionId: string, waitMs: number) => Promise<QuestionOutcome> {
+export function questionWaiter(attention: Pick<AttentionStore, 'onLeave' | 'pending' | 'withdraw' | 'leftOutcome'>): (questionId: string, waitMs: number) => Promise<QuestionOutcome> {
     return (questionId, waitMs) => new Promise<QuestionOutcome>((resolve) => {
         const asked = attention.pending().find((q) => q.id === questionId);
-        if (!asked) { resolve({ kind: 'withdrawn' }); return; }
+        // Already gone: answered (or dismissed) in the moment between the ask and this wait — that answer counts.
+        if (!asked) { resolve(attention.leftOutcome(questionId) ?? { kind: 'withdrawn' }); return; }
         let settled = false;
         const finish = (outcome: QuestionOutcome) => { if (settled) return; settled = true; off(); clearTimeout(timer); resolve(outcome); };
-        const off = attention.onLeave((id, outcome) => { if (id === questionId) finish(outcome); });
+        let timingOut = false;
+        // Our own take-back on the timeout is not the person withdrawing it: that one ends as timed out, below.
+        const off = attention.onLeave((id, outcome) => { if (id === questionId && !(timingOut && outcome.kind === 'withdrawn')) finish(outcome); });
         const timer = setTimeout(() => {
+            timingOut = true;
             // Taken back first, so the person is not asked about a run that has moved on.
             void attention.withdraw({ agentId: asked.agentId, workspaceId: asked.workspaceId }, questionId).catch(() => {}).finally(() => finish({ kind: 'timed out' }));
         }, Math.max(0, waitMs));

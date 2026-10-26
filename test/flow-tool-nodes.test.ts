@@ -217,7 +217,8 @@ describe('Genie 1’s renamed tool steps, mapped field by field (manageProcess �
         const { planV1FlowImport } = await import('../src/core/v1-flows.js');
         const plan = planV1FlowImport([row(id, { kind, config })], { workspaces: [{ id: 'example' }] })!;
         const f = plan.flows[0];
-        return { step: f ? (f.document.graph as { nodes: Array<{ kind: string; config: Record<string, unknown> }> }).nodes[1]! : null, notes: plan.notes };
+        const s = f ? (f.document.graph as { nodes: Array<{ kind: string; config: Record<string, unknown> }> }).nodes[1]! : null;
+        return { step: s ? { kind: s.kind, config: s.config } : null, notes: plan.notes };
     };
 
     it('manageProcess: create → add, label → name, repo → folder, its id → the imported process; scheduled tasks too — nothing noted when everything maps', async () => {

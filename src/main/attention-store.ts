@@ -521,7 +521,18 @@ export class AttentionStore {
     }
 
     #left(questionId: string, outcome: QuestionLeft): void {
+        // Kept a while too: a waiter that looks just after the question left (answered in the same moment it was asked)
+        // still learns how, rather than finding it gone and guessing.
+        this.#recentlyLeft.set(questionId, outcome);
+        if (this.#recentlyLeft.size > 200) this.#recentlyLeft.delete(this.#recentlyLeft.keys().next().value as string);
         for (const l of this.#leaveListeners) l(questionId, outcome);
+    }
+
+    readonly #recentlyLeft = new Map<string, QuestionLeft>();
+
+    /** How a question that recently left, left (genie#1204); undefined for one still pending or long gone. */
+    leftOutcome(questionId: string): QuestionLeft | undefined {
+        return this.#recentlyLeft.get(questionId);
     }
 
     /** Something the Deck shows changed: a question asked or answered, a list item, a finished agent. */
