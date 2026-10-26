@@ -172,7 +172,7 @@ export interface GenieBridge {
     /** The host asking the window to go somewhere (the tray's Settings…). Absent on a remote bridge: a remote window is not this host's tray. */
     onNavigate?(onRoute: (route: string) => void): () => void;
     /** What an agent just did (Tynn #766 C), for its sound. Absent on a remote bridge for now: the host's own window plays it. */
-    onAction?(onAction: (action: { agentId: string | null; kind: string }) => void): () => void;
+    onAction?(onAction: (action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }) => void): () => void;
     /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
     onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 

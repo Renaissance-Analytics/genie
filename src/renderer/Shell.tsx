@@ -1,5 +1,6 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
 import type { Headroom } from '../core/headroom.js';
+import type { MailSignal } from '../core/mail-signals.js';
 import { readChatDockWidth } from '../core/chat-width.js';
 import { providerLogin } from '../core/provider-login.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
@@ -91,6 +92,8 @@ export interface ShellProps {
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** Each provider's rate limit for the Dashboard header. */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** Mail between agents for the Dashboard (genie#1209). */
+    mailSignals?: readonly MailSignal[] | undefined;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the host's folder picker and the manifest write. Absent = the registry door. */
@@ -273,6 +276,7 @@ export function Shell({
     snapshot,
     rowEmoji,
     rateLimits,
+    mailSignals,
     workspaceFaults,
     onLocateRepo,
     servable,
@@ -525,6 +529,7 @@ export function Shell({
                         <Dashboard
                             rowEmoji={rowEmoji}
                             rateLimits={rateLimits}
+                            mailSignals={mailSignals}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}

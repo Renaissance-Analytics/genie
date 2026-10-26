@@ -3,6 +3,8 @@ import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../
 import { ActivityLight, Icon } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
 import { headroomTitle, type Headroom } from '../../core/headroom.js';
+import type { MailSignal } from '../../core/mail-signals.js';
+import { MailSignalLayer } from './MailSignalLayer.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
@@ -456,9 +458,11 @@ export interface DashboardProps {
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** Each provider's rate limit, buffered in main (the header's pills). */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
+    /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
+    mailSignals?: readonly MailSignal[] | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals }: DashboardProps) {
     // Hide known hibernated workspaces consistently; unregistered agents keep their status visibility.
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
@@ -580,7 +584,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     }
 
     return (
-        <div data-surface="dashboard" className="flex min-h-0 flex-col">
+        <div data-surface="dashboard" className="relative flex min-h-0 flex-col">
             {/* View header, 56px. */}
             <div data-view-header="" className="flex h-14 shrink-0 items-center gap-4 border-b border-[var(--border-1)] pl-7 pr-5">
                 <h1 className="text-lg font-semibold tracking-tight">Dashboard</h1>
@@ -697,6 +701,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     No active workspaces. Wake a hibernated workspace from the sidebar to see it here.
                 </p>
             ) : null}
+            <MailSignalLayer signals={mailSignals ?? []} />
         </div>
     );
 }
