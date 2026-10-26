@@ -5,7 +5,7 @@ import { midTurnAgents } from '../core/upgrade-drain.js';
 export interface ShutdownRecordPorts {
     agents(): readonly { id: string }[];
     /** The agent's session in the host, or `null` when it has none: never started, or stopped. */
-    probe(id: AgentId): { running: boolean; turnState: string } | null;
+    probe(id: AgentId): { running: boolean; turnState: string; inTurn?: boolean | undefined } | null;
     markRunningAtQuit(ids: readonly AgentId[]): Promise<void>;
     markInterruptedAtQuit(ids: readonly AgentId[]): Promise<void>;
 }
@@ -29,7 +29,8 @@ export function recordShutdown(ports: ShutdownRecordPorts): Promise<unknown> {
     // Read at once, synchronously, so it is taken before anything that follows can stop a session.
     const sessions = ports.agents().map((a) => ({ id: a.id as AgentId, probe: ports.probe(a.id as AgentId) }));
     const comeBack = sessions.filter((a) => a.probe !== null).map((a) => a.id);
-    const midTurn = midTurnAgents(sessions.map((a) => ({ id: a.id, turnState: a.probe?.turnState ?? null }))) as AgentId[];
+    // MID-TURN = a turn in flight (`inTurn`), never `working`: a session only started reads `working` too (genie#1248).
+    const midTurn = midTurnAgents(sessions.map((a) => ({ id: a.id, inTurn: a.probe?.inTurn ?? null }))) as AgentId[];
     return Promise.all([ports.markRunningAtQuit(comeBack), ports.markInterruptedAtQuit(midTurn)]);
 }
 
