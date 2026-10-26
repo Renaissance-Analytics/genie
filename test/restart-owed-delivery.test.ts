@@ -84,11 +84,15 @@ function world() {
         const states = promptDeliveries(rows);
         return rows.flatMap(({ event: e }) => (e.kind === 'message' && e.pending ? [{ text: e.text, status: states.get(e.pending.id) }] : []));
     };
-    /** Each start's preparation is taken in turn: the run in progress gets its MCP context, or fails to. */
+    /**
+     * The CURRENT run's preparation: the newest one not yet taken. A run stopped while preparing (a second Restart) had
+     * its preparation cancelled; resolving that one would start nothing.
+     */
     let consumed = 0;
     const nextPreparation = async () => {
         await vi.waitFor(() => expect(preparations.length).toBeGreaterThan(consumed));
-        return preparations[consumed++]!;
+        consumed = preparations.length;
+        return preparations[consumed - 1]!;
     };
     /** The run in progress gets its MCP context and its provider says it is ready. */
     const comeUp = async () => {

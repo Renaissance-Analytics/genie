@@ -109,7 +109,8 @@ export interface HostApiDeps {
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
     };
     agentOps: {
-        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<unknown>;
+        /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
+        restart(agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' | 'fresh'; discarded?: string | null } | { ok: false; reason: string }>;
         previewDelete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[]): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;
         /** `handoff`: ask a running agent for a handoff first (bounded wait); see agent-ops-host `deleteAgent`. */
         delete(agentId: string, outcome: 'unmount' | 'delete', alsoRemoveFrom: readonly string[], handoff: boolean): Promise<{ ok: true; plan: DeletePlan } | { ok: false; reason: string }>;

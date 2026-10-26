@@ -28,7 +28,6 @@ function fakes() {
         host: {
             start: (r, cwd) => { calls.push(`start:${r.id}:${cwd}`); return { ok: true }; },
             stop: (id) => { calls.push(`stop:${id}`); return true; },
-            ended: async () => null,
             cancel: (id) => { calls.push(`cancel:${id}`); return { ok: true }; },
             resumeLimit: (provider) => { calls.push(`resume-limit:${provider}`); },
             prompt: (id, text) => { calls.push(`prompt:${id}:${text}`); return true; },
