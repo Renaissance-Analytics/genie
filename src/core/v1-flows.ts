@@ -1,5 +1,5 @@
 import { getNodeKind } from '@particle-academy/fancy-flow/engine';
-import { canonicalKind, ensureGenieKinds } from './flow-canvas.js';
+import { canonicalKind, ensureGenieKinds, toolKinds } from './flow-canvas.js';
 import { FLOW_SCHEMA_URL } from './flow-form.js';
 
 /**
@@ -50,6 +50,8 @@ type V1Node = { id?: unknown; type?: unknown; position?: { x?: unknown; y?: unkn
 type V1Edge = { id?: unknown; source?: unknown; target?: unknown; sourceHandle?: unknown; targetHandle?: unknown };
 
 const LAYOUT = new Set(['@particle-academy/terminal_lane', '@particle-academy/lane', 'terminal_lane', 'lane']);
+/** Genie 1 tools whose Genie 2 tool has another name and other arguments (main/apps/capabilities.ts → Genie 2's tools). */
+const RENAMED: Readonly<Record<string, string>> = { manageSite: 'sites', manageService: 'services', manageProcess: 'processes' };
 const OPS: Record<string, string> = { '==': 'eq', '===': 'eq', '!=': 'neq', '!==': 'neq', '>': 'gt', '>=': 'gte', '<': 'lt', '<=': 'lte' };
 
 function parse(json: string): unknown {
@@ -132,7 +134,17 @@ function convertStep(kind: string, config: Record<string, unknown>, ws: string, 
         return { kind: 'genie/file_added', config: { workspace: ws } };
     }
     if (kind.startsWith('@genie/') || kind.startsWith('genie.')) {
-        return { problem: `Genie 1's ${kind.replace(/^@genie\/|^genie\./, '')} step has no counterpart in Genie 2's flows` };
+        const tool = kind.replace(/^@genie\/|^genie\./, '');
+        // The same tool, under the same name, as a step (main/flow-tools.ts): its settings are that tool's arguments in both,
+        // less the terminalId a flow never has and the workspaceId the flow's own workspace now gives.
+        const same = `@genie/${tool}`;
+        if (toolKinds().includes(same)) {
+            const { terminalId: _t, workspaceId: _w, ...args } = config;
+            return { kind: same, config: args };
+        }
+        const renamed = RENAMED[tool];
+        if (renamed) return { problem: `Genie 1's ${tool} step is \`${renamed}\` in Genie 2, whose settings differ; it was not converted` };
+        return { problem: `Genie 1's ${tool} step has no counterpart in Genie 2's flows` };
     }
     const canonical = canonicalKind(kind);
     if (canonical === '@particle-academy/terminal_run') {

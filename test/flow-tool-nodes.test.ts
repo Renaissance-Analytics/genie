@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getNodeKind, listNodeKinds } from '@particle-academy/fancy-flow/engine';
@@ -153,7 +153,9 @@ describe('each step runs as the flow, through the tool’s own rules', () => {
 
     it('sites: adds a site for a server already running, in the workspace', async () => {
         await mkdir(join(wsPath, 'app'), { recursive: true });
-        expect(await run(step('sites', { action: 'add', name: 'docs-app', repoPath: 'app', mode: 'proxy', hostPort: 4100 }))).toEqual({ outcome: 'ran' });
+        // A site is kept in the workspace's envelope (the tool refuses a workspace without one, for a flow as for an agent).
+        await writeFile(join(wsPath, 'project.json'), JSON.stringify({ name: 'example' }));
+        expect(await run(step('sites',{ action: 'add', name: 'docs-app', repoPath: 'app', mode: 'proxy', hostPort: 4100 }))).toEqual({ outcome: 'ran' });
         expect(services.sites.list('example').map((s) => s.host)).toEqual(['docs-app.gen']);
     });
 
