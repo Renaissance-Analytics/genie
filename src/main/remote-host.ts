@@ -73,6 +73,14 @@ interface Connection {
 /** A push a connection does not receive. */
 const NOT_SENT = Symbol('not sent');
 
+/** A feature snapshot for a non-owner: the remote section's secrets emptied, its shape kept (the window still renders). */
+function withoutRemoteSecrets(value: unknown): unknown {
+    if (typeof value !== 'object' || value === null || !('remote' in value)) return value;
+    const remote = (value as { remote: unknown }).remote;
+    if (typeof remote !== 'object' || remote === null) return value;
+    return { ...value, remote: { ...remote, pin: null, devices: [], shares: [], connections: [], servedLink: null } };
+}
+
 export class RemoteHost {
     readonly #api: HostApi;
     readonly #hostName: string;
@@ -324,7 +332,11 @@ export class RemoteHost {
 
         try {
             const value = await this.#api.invoke(method, args);
-            return ok(method === 'snapshot' && auth.workspaceId !== null ? filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId) : value);
+            if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
+            // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
+            // paired devices, the share links (their URLs carry the secret) and the connections. Only an owner sees them.
+            if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
+            return ok(value);
         } catch (error) {
             return refuse(error instanceof Error ? error.message : String(error));
         }
