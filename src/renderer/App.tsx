@@ -75,6 +75,7 @@ import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
+import { composerFocusLine } from '../core/composer-focus.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -1046,6 +1047,27 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
+
+    // THE COMPOSER-FOCUS LOG (genie#1235, core/composer-focus.ts): the chat composer taking the caret with no click or key
+    // in Genie is logged with the call that moved it — main writes the line to its log — so the owner's report has a cause.
+    useEffect(() => {
+        let lastInput: number | null = null;
+        const onInput = () => { lastInput = Date.now(); };
+        const describe = (el: EventTarget | null) => (el instanceof Element ? `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ''}${[...el.attributes].filter((a) => a.name.startsWith('data-')).slice(0, 2).map((a) => `[${a.name}]`).join('')}` : 'none');
+        const onFocusIn = (e: FocusEvent) => {
+            const target = e.target instanceof Element ? e.target : null;
+            const line = composerFocusLine({ inComposer: target?.closest('[data-chat-composer]') != null, windowFocused: document.hasFocus(), sinceUserInputMs: lastInput === null ? null : Date.now() - lastInput, from: describe(e.relatedTarget), stack: new Error().stack ?? '' });
+            if (line) console.warn(line);
+        };
+        window.addEventListener('pointerdown', onInput, true);
+        window.addEventListener('keydown', onInput, true);
+        document.addEventListener('focusin', onFocusIn, true);
+        return () => {
+            window.removeEventListener('pointerdown', onInput, true);
+            window.removeEventListener('keydown', onInput, true);
+            document.removeEventListener('focusin', onFocusIn, true);
+        };
+    }, []);
 
     /**
      * THE ANSWER IN FLIGHT — which agent's, for which approval — and the host's last refusal (`core/approval-answering.ts`).

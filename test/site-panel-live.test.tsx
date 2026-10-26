@@ -53,6 +53,6 @@ describe('the Electron half (read from source)', () => {
         expect(prefs).not.toMatch(/preload/);
     });
     it('a page’s new window opens in the Genie browser window, never a window of its own', () => {
-        expect(code).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*options\.openInWindow\(url\);\s*return \{ action: 'deny' \};/);
+        expect(code).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*options\.openInWindow\(url, 'background'\);\s*return \{ action: 'deny' \};/);
     });
 });

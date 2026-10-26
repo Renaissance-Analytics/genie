@@ -3,6 +3,7 @@ import { attachPageNavigation } from './page-navigation-electron.js';
 import { normalizeNavUrl } from '../core/genie-browser.js';
 import { genieBrowserSession } from './genie-browser-electron.js';
 import { SitePanelViews, type PanelViewPort } from './site-panel-views.js';
+import type { Activation } from '../core/window-activation.js';
 
 /**
  * LIVE SITE PANELS — the Electron half (beta.35 item 36, step 5). Everything decidable is in site-panel-views.ts
@@ -20,8 +21,11 @@ export interface SitePanelsOptions {
     readonly frontDoorPort: number;
     readonly caPem: string | null;
     readonly enabledHosts: () => readonly string[];
-    /** The Genie browser window, for a page's new window and the panel's "Open in browser". */
-    readonly openInWindow: (url: string) => void;
+    /**
+     * The Genie browser window, for a page's new window and the panel's "Open in browser". `activation` (genie#1235): the
+     * panel's button is the person's; a page opening a window — its own script, or an agent driving it — is background.
+     */
+    readonly openInWindow: (url: string, activation: Activation) => void;
 }
 
 export function sitePanels(options: SitePanelsOptions): SitePanelViews {
@@ -35,7 +39,7 @@ export function sitePanels(options: SitePanelsOptions): SitePanelViews {
         view.setVisible(false);
         window.contentView.addChildView(view);
         wc.setWindowOpenHandler(({ url }) => {
-            options.openInWindow(url);
+            options.openInWindow(url, 'background');
             return { action: 'deny' };
         });
         wc.on('will-navigate', (event, url) => {
@@ -67,7 +71,7 @@ export function sitePanels(options: SitePanelsOptions): SitePanelViews {
     });
     ipcMain.handle('site-panel:hide', (event, panelKey: unknown) => { if (ours(event)) panels.hide(key(panelKey)); });
     ipcMain.handle('site-panel:reload', (event, panelKey: unknown) => { if (ours(event)) panels.reload(key(panelKey)); });
-    ipcMain.handle('site-panel:open-window', (event, host: unknown) => { if (ours(event)) options.openInWindow(`https://${key(host)}/`); });
+    ipcMain.handle('site-panel:open-window', (event, host: unknown) => { if (ours(event)) options.openInWindow(`https://${key(host)}/`, 'user-gesture'); });
     window.on('closed', () => panels.closeAll());
     return panels;
 }

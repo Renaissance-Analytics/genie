@@ -7,6 +7,7 @@ import { genieWindowIcon } from './app-identity.js';
 import { genCertificateVerifier, type PresentedCertificate } from './browser-trust.js';
 import { GenieBrowser, type TabViewEvents, type TabViewPort } from './genie-browser-window.js';
 import { attachPageNavigation } from './page-navigation-electron.js';
+import { bringUp, showWhenReady, type Activation, type ActivationLedger } from '../core/window-activation.js';
 
 /**
  * THE GENIE BROWSER WINDOW — the Electron half (beta.35 item 36; Genie 1's main/testing-browser/index.ts). Everything
@@ -37,6 +38,8 @@ export interface GenieBrowserWindowOptions {
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
     readonly log?: (line: string) => void;
+    /** Where each bring-up is recorded for main's focus log (genie#1235). */
+    readonly ledger?: ActivationLedger;
 }
 
 /** A Genie browser session's rules: a `.gen` certificate trusted only on `caPem()`'s say, every request secure-only. */
@@ -95,9 +98,11 @@ export interface RemoteBrowsing {
 export interface GenieBrowserWindows {
     /**
      * Bring the window up — made if it is not open — with `address` in a new tab; no address: the first site, once.
-     * `remote`: another workstation's window instead of this machine's.
+     * `remote`: another workstation's window instead of this machine's. `activation` (genie#1235): the person's click
+     * brings the window up and focuses it; anything else (an agent's `sites open`, a page's window.open) opens it
+     * inactive, or flashes an open one — never takes the keyboard.
      */
-    open(address?: string, remote?: RemoteBrowsing): { ok: true } | { ok: false; error: string };
+    open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing): { ok: true } | { ok: false; error: string };
 }
 
 const NOT_OURS = { ok: false as const, error: 'this is not the Genie browser window' };
@@ -217,7 +222,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         };
     };
 
-    const make = (key: string, title: string): { window: BrowserWindow; brain: GenieBrowser } => {
+    const make = (key: string, title: string, activation: Activation): { window: BrowserWindow; brain: GenieBrowser } => {
         const window = new BrowserWindow({
             ...browserWindowOptions(process.platform),
             ...genieWindowIcon(options.here),
@@ -238,7 +243,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             return { action: 'deny' };
         });
         window.webContents.on('will-navigate', (event) => event.preventDefault());
-        window.once('ready-to-show', () => window.show());
+        window.once('ready-to-show', () => showWhenReady(window, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) }));
         window.on('closed', () => {
             b.closeAll();
             if (windows.get(key)?.win === window) windows.delete(key);
@@ -248,18 +253,17 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     };
 
     return {
-        open: (address, remote) => {
+        open: (address, activation, remote) => {
             const key = remote?.key ?? LOCAL;
             if (remote) remotes.set(key, remote);
             let entry = windows.get(key);
             const fresh = !entry || entry.win.isDestroyed();
             if (fresh) {
-                const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser');
+                const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation);
                 entry = { win: m.window, browser: m.brain };
                 windows.set(key, entry);
             } else {
-                if (entry!.win.isMinimized()) entry!.win.restore();
-                entry!.win.focus();
+                bringUp(entry!.win, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) });
             }
             const target = address ?? (fresh ? initialGenUrl(hostsOf(key)) : null);
             if (target === null) return { ok: true };
