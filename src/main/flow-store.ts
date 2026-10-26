@@ -5,7 +5,6 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { parseCron, timeZoneProblem } from '../core/cron.js';
 import { canonicalFlowDocument, flowNodes } from '../core/flow-form.js';
-import type { V1SchedulePlan } from '../core/v1-schedules.js';
 import { importFlowDocument } from './flow-kinds.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
@@ -115,11 +114,14 @@ export interface FlowRecord {
     readonly runs: readonly FlowRun[];
     /** The run going now, if any (genie#1204 (e)). */
     readonly inFlight?: FlowInFlight;
-    /** Set on a flow brought over from Genie 1 (core/v1-schedules.ts): which scheduled task it was. */
+    /** Set on a flow an earlier beta brought over from Genie 1's scheduled tasks; moved to the processes (scheduled-tasks-move.ts). */
     readonly importedFrom?: { readonly v1SpecId: string };
 }
 
-/** What the Genie 1 import did, kept IN flows.json — the store it filled — so "once" and the flows cannot disagree. */
+/**
+ * What an earlier beta's import of Genie 1's scheduled tasks did, kept in flows.json. Read and kept as it is: those tasks
+ * are background processes now (process-book.ts imports them; scheduled-tasks-move.ts moved the ones imported here).
+ */
 export interface V1ScheduleImportRecord {
     readonly at: string;
     /** false = the boot could not see v1's database: provisional, a later boot that can see it still imports. */
@@ -306,63 +308,6 @@ export class FlowStore {
         if (this.#data.flows.length === before) return false;
         await this.#flush();
         return true;
-    }
-
-    /** What the Genie 1 import did, or undefined when it has not been attempted. */
-    v1Import(): V1ScheduleImportRecord | undefined {
-        return this.#data.v1Import;
-    }
-
-    /**
-     * GENIE 1's SCHEDULED TASKS, ONCE (core/v1-schedules.ts plans them). Every flow comes over DISARMED: the
-     * person arms what they still want. "Once" is recorded in this file in the same write as the flows, so an
-     * import that saw v1 is never repeated — a flow the person removed or changed stays as they left it. A
-     * plan of `null` (v1 not visible) is recorded provisionally and a later boot that can see v1 imports. A
-     * flow whose id is already here is left alone and counted.
-     */
-    async importFromV1(plan: V1SchedulePlan | null): Promise<{ alreadyDone: boolean; record: V1ScheduleImportRecord }> {
-        const prior = this.#data.v1Import;
-        if (prior?.sawV1 === true) return { alreadyDone: true, record: prior };
-        const at = this.#iso();
-        if (plan === null) {
-            if (prior) return { alreadyDone: true, record: prior };
-            const record: V1ScheduleImportRecord = { at, sawV1: false };
-            this.#data = { ...this.#data, v1Import: record };
-            await this.#flush();
-            return { alreadyDone: false, record };
-        }
-        const have = new Set(this.#data.flows.map((f) => f.id));
-        const fresh: FlowRecord[] = [];
-        const notes = [...plan.notes];
-        for (const p of plan.flows) {
-            if (have.has(p.id)) continue;
-            // A task the engine refuses is NOTED and left behind. It does not stop the others — nor, by failing the
-            // whole import, make every later boot retry it and fail again.
-            let document: Record<string, unknown>;
-            try {
-                document = validated(p.document);
-            } catch (error) {
-                notes.push(`"${p.name}" (v1 task ${p.v1SpecId}): ${error instanceof Error ? error.message : String(error)}; not imported`);
-                continue;
-            }
-            fresh.push({
-                id: p.id,
-                workspaceId: p.workspaceId,
-                name: p.name,
-                document,
-                armed: false,
-                createdBy: { kind: 'user' },
-                createdAt: at,
-                updatedAt: at,
-                refusals: [],
-                runs: [],
-                importedFrom: { v1SpecId: p.v1SpecId },
-            });
-        }
-        const record: V1ScheduleImportRecord = { at, sawV1: true, imported: fresh.length, alreadyHere: plan.flows.filter((p) => have.has(p.id)).length, notes };
-        this.#data = { ...this.#data, flows: [...this.#data.flows, ...fresh], v1Import: record };
-        await this.#flush();
-        return { alreadyDone: false, record };
     }
 
     #require(id: string): FlowRecord {

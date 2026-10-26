@@ -127,6 +127,8 @@ import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, re
 import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
+import { ProcessScheduler } from './process-scheduler.js';
+import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
@@ -1905,6 +1907,7 @@ async function boot(): Promise<void> {
     // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
     let processBook: ProcessBook | null = null;
+    let processScheduler: ProcessScheduler | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
     // The Tynn this Genie uses: Help → Genie documentation opens its docs (Tynn #762).
     const tynnHost = (): string => TYNN_HOST;
@@ -1931,7 +1934,7 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
@@ -1961,8 +1964,6 @@ async function boot(): Promise<void> {
         // containers stopped — beside importFromV1/reapV1Runtime in spirit, but here because the engine registry is born in
         // composition and must hold them before sites and kept processes read a workspace's env (main/v1-services.ts).
         v1Services: { database: v1DatabaseFile() },
-        // Genie 1's scheduled tasks, read-only, brought over ONCE as DISARMED flows (main/v1-schedules.ts); the person arms them.
-        v1Schedules: { database: v1DatabaseFile() },
         // What a flow's agent prompt reaches (flow-runner.ts): the live sessions, late-bound — a prompt to an agent mid-turn
         // is held back, never queued inside its turn.
         agentSessions: {
@@ -2292,8 +2293,27 @@ async function boot(): Promise<void> {
         // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
         limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
         // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
-        v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [] },
+        // Genie 1's SCHEDULED TASKS too (genie#1204): background processes with a schedule, imported PAUSED.
+        v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [], roster: () => (registry?.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) },
     });
+    // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
+    await moveScheduledTasksOutOfFlows(composed.flows, processBook, (id) => registry?.workspace(id)?.path ?? null).catch((error: unknown) => console.error(`[genie] scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
+    // SCHEDULED TASKS' CLOCK (genie#1204): one timer for the enabled ones; a nudge reaches its agent when its turn ends.
+    processScheduler = new ProcessScheduler({
+        book: processBook,
+        supervisor: composed.supervisor,
+        envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+        asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+        nudge: (address, text, from) => {
+            const found = composed.resolveAddress(address);
+            return found.kind === 'one' && host !== null ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
+        },
+        now: Date.now,
+        schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
+    });
+    processScheduler.plan();
+    // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
+    registry.subscribe(() => processScheduler?.plan());
     const restoredProcesses = processBook.restore();
     if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
@@ -2356,7 +2376,7 @@ async function boot(): Promise<void> {
             // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235).
             openInBrowser: openInBrowserFor('background'),
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
-            ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines) } } : {}),
+            ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines), ...(processScheduler ? { runNow: (id: string) => processScheduler!.runNow(id) } : {}) } } : {}),
             // The agents' `flows` tool: the Flows tab's own store, and the scheduler's Run now (the tool runs only armed flows).
             flows: { store: composed.flows, runNow: (id: string) => composed.flowScheduler.runNow(id) },
             // `services exec`: a one-off command with the workspace's service variables (main/service-exec.ts).

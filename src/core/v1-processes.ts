@@ -63,7 +63,7 @@ export function planV1ProcessImport(
         const name = spec.label.trim() || (typeof meta.command === 'string' ? meta.command.trim() : '') || spec.id;
         const say = (why: string) => notes.push(`process ${spec.id} ("${name}"): ${why}`);
         if (typeof meta.schedule === 'string' && meta.schedule.trim() !== '') {
-            say('scheduled in Genie 1 — it comes over as a flow in Flows (disarmed, core/v1-schedules.ts), not as a background process');
+            say('scheduled in Genie 1 — it comes over as a PAUSED scheduled task (core/v1-schedules.ts), not as a process kept running');
             continue;
         }
         if (spec.workspaceId === null) {

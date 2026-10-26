@@ -20,7 +20,6 @@ import { planV1KnowledgeImport, type V1Knowledge } from '../core/v1-import.js';
 import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
-import { runV1ScheduleImport } from './v1-schedules.js';
 import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -103,11 +102,6 @@ export interface ComposeInput {
      * sites and the process book start, because both read the engines' env. Absent = no Genie 1 to take over from.
      */
     readonly v1Services?: { readonly database: string };
-    /**
-     * Genie 1's database, for bringing its SCHEDULED TASKS over as disarmed flows (main/v1-schedules.ts) — at boot until
-     * flows.json records an import that saw Genie 1. Absent = no Genie 1 to import from.
-     */
-    readonly v1Schedules?: { readonly database: string };
     /**
      * The live agent sessions a flow's `genie/agent_prompt` prompts (main.ts wires the session host), late-bound like the
      * roster. Absent = no agent is running, so a scheduled prompt fails with that reason.
@@ -659,9 +653,6 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // Genie 1's AgentInbox history, once (inbox-store.ts records it), mapped onto the roster the v1 agent import already registered.
     if (input.v1Inbox) await runV1InboxImport(inbox, input.v1Inbox, { roster: input.roster?.() ?? [], now: now() });
     const flows = await FlowStore.open(input.userData, now);
-    // Genie 1's scheduled tasks, once (flow-store.ts records it), DISARMED — before the scheduler plans, which arms nothing
-    // they bring. Their agents are the roster the v1 agent import already registered.
-    if (input.v1Schedules) await runV1ScheduleImport(flows, { database: input.v1Schedules.database, workspaces: input.workspaces?.() ?? [], roster: input.roster?.() ?? [] });
 
     const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
     // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has

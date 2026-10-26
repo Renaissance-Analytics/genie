@@ -81,6 +81,8 @@ export interface FeaturePorts {
     readonly githubAccount?: GithubAccountPort;
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: ProcessBook;
+    /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
+    readonly processScheduler?: Pick<import('./process-scheduler.js').ProcessScheduler, 'runNow'>;
     /** Open the flow editor window on a route (`genie://flow/<id>`, `genie://flow/new?workspace=<id>`, genie#1204). Absent = no windows (doctor mode). */
     readonly openFlowEditor?: (route: string) => void;
     /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
@@ -718,9 +720,25 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'hosting.createProcess': {
             const book = ports.processes;
             if (!book) throw new Error('no process book is wired into this Genie; a background process cannot be kept');
-            await book.create({ workspaceId: action.workspaceId, workspacePath: action.workspacePath, name: action.name, command: action.command, folder: action.folder, restart: action.restart });
+            // With a schedule it is a SCHEDULED TASK (genie#1204, Genie 1's form): kept, enabled, fired by its schedule.
+            const cron = action.schedule?.trim();
+            await book.create({ workspaceId: action.workspaceId, workspacePath: action.workspacePath, name: action.name, command: action.command, folder: action.folder, restart: action.restart, ...(cron ? { schedule: { cron, kind: 'command' as const }, enabled: true } : {}) });
             break;
         }
+        case 'hosting.runScheduledNow': {
+            if (!ports.processes?.owns(action.processId)) throw new Error(`no scheduled task ${action.processId} that you keep`);
+            if (!ports.processScheduler) throw new Error('this Genie runs no scheduled tasks');
+            await ports.processScheduler.runNow(action.processId);
+            break;
+        }
+        case 'hosting.enableSchedule':
+            if (!ports.processes?.owns(action.processId)) throw new Error(`no scheduled task ${action.processId} that you keep`);
+            await ports.processes.enableSchedule(action.processId);
+            break;
+        case 'hosting.pauseSchedule':
+            if (!ports.processes?.owns(action.processId)) throw new Error(`no scheduled task ${action.processId} that you keep`);
+            await ports.processes.pauseSchedule(action.processId);
+            break;
         case 'hosting.startProcess':
             if (!ports.processes?.owns(action.processId)) throw new Error(`no background process ${action.processId} that you keep`);
             await ports.processes.start(action.processId);

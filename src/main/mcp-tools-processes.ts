@@ -2,7 +2,9 @@ import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-a
 import type { ProcessLog } from '../core/output-tail.js';
 import { callerFrom } from './mcp-callers.js';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { describeSchedule, type ScheduleKind } from '../core/scheduled-task.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
+import type { RunNowResult } from './process-scheduler.js';
 import type { RestartPolicy } from './process-supervisor.js';
 
 /**
@@ -25,14 +27,21 @@ import type { RestartPolicy } from './process-supervisor.js';
  * - `start`, `stop`, `restart` act at once, on a process the book keeps; a site's server belongs to its site (`sites`).
  * - `logs` reads any of this workspace's processes, a site's server included — the supervisor's tail, there after a
  *   crash.
+ * - A SCHEDULED TASK (genie#1204) is a kept process with a `schedule` — Genie 1's `manageProcess` create with `schedule`
+ *   and `scheduleKind` (main/mcp/host-tools.ts:695-870 at v0.7.0-beta.342): `command` runs it, `agent-nudge` prompts an
+ *   agent. The person approves it with the recurrence in front of them ("It will keep running on this schedule … until
+ *   you disable it", approveScheduledTask :583-605) and, approved, it is enabled. `run-now` runs one once; `enable` /
+ *   `disable` arm and pause its schedule (Genie 1's actions, :914-962).
  */
 
 export type ProcessApproval = 'processes.add' | 'processes.remove';
 
 /** What the tool acts on: the book (kept processes) and the supervisor's log tail. Main wires the real ones. */
 export interface ProcessesPort {
-    readonly book: Pick<ProcessBook, 'list' | 'prepare' | 'create' | 'start' | 'stop' | 'restart' | 'remove'>;
+    readonly book: Pick<ProcessBook, 'list' | 'prepare' | 'create' | 'start' | 'stop' | 'restart' | 'remove' | 'enableSchedule' | 'pauseSchedule'>;
     readonly logs: (id: string, lines?: number) => ProcessLog | null;
+    /** A scheduled task's Run now (process-scheduler.ts). Absent = no scheduler here, and `run-now` says so. */
+    readonly runNow?: (id: string) => Promise<RunNowResult>;
 }
 
 export interface ProcessToolsDeps {
@@ -49,7 +58,7 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim
 const POLICIES: readonly RestartPolicy[] = ['never', 'on-failure', 'always'];
 export const DEFAULT_LOG_LINES = 200;
 const NOT_HERE = 'this Genie keeps no background processes (doctor mode runs none); nothing was done';
-const ACTIONS = 'list, logs, add, start, stop, restart, remove';
+const ACTIONS = 'list, logs, add, start, stop, restart, remove, run-now, enable, disable';
 
 function view(p: HostedProcess): Record<string, unknown> {
     return {
@@ -64,6 +73,18 @@ function view(p: HostedProcess): Record<string, unknown> {
         // Kept: Genie brings it back on every launch and an agent may start/stop it. Not kept: a site's server.
         kept: p.durable === true,
         ...(p.reason === undefined ? {} : { reason: p.reason }),
+        ...(p.schedule === undefined ? {} : {
+            schedule: {
+                cron: p.schedule.cron,
+                description: describeSchedule(p.schedule.cron),
+                kind: p.schedule.kind,
+                enabled: p.schedule.enabled,
+                nextRunAt: p.schedule.nextRunAt === null ? null : new Date(p.schedule.nextRunAt).toISOString(),
+                ...(p.schedule.prompt === undefined ? {} : { prompt: p.schedule.prompt }),
+                ...(p.schedule.agent === undefined ? {} : { agent: p.schedule.agent }),
+                ...(p.schedule.lastRunAt === undefined ? {} : { lastRunAt: new Date(p.schedule.lastRunAt).toISOString(), lastRunStatus: p.schedule.lastRunStatus }),
+            },
+        }),
     };
 }
 
@@ -77,18 +98,24 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                 + '`logs` {process, lines?} — the end of its output (default 200 lines), still there after a crash. '
                 + '`add` {name, command, folder? (inside the workspace; default its root), restart? on-failure (default) | always | never} — the person approves it first and sees the command. '
                 + '`start` / `stop` / `restart` {process} — a process this workspace keeps (a site’s server is the `sites` tool’s). '
-                + '`remove` {process} — the person approves it; it is stopped and no longer brought back.',
+                + '`remove` {process} — the person approves it; it is stopped and no longer brought back. '
+                + 'A SCHEDULED TASK is a process with a `schedule` (five-field cron, this machine’s local time): `add` {name, schedule, command, folder?} runs the command at each due, once (never restarted); with `scheduleKind: agent-nudge` {name, schedule, prompt, agent (an inbox address)} each due hands the prompt to that agent (delivered when its turn ends). The person approves it and sees the recurrence; then it is enabled. '
+                + '`run-now` {process} — run a scheduled task once now. `enable` / `disable` {process} — arm or pause its schedule.',
             {
                 type: 'object',
                 properties: {
                     terminalId: MIRRORED_TERMINAL_ID,
-                    action: { type: 'string', enum: ['list', 'logs', 'add', 'start', 'stop', 'restart', 'remove'] },
+                    action: { type: 'string', enum: ['list', 'logs', 'add', 'start', 'stop', 'restart', 'remove', 'run-now', 'enable', 'disable'] },
                     process: { type: 'string', description: 'logs / start / stop / restart / remove: the process’s id or name, from `list`.' },
                     lines: { type: 'number', description: 'logs: how many lines from the end (default 200).' },
                     name: { type: 'string', description: 'add: what to call it (queue worker).' },
                     command: { type: 'string', description: 'add: the command Genie runs (php artisan queue:work).' },
                     folder: { type: 'string', description: 'add: a folder inside this workspace, relative to its root (repos/app); default the root.' },
                     restart: { type: 'string', enum: ['on-failure', 'always', 'never'], description: 'add: when Genie restarts it by itself; default on-failure.' },
+                    schedule: { type: 'string', description: 'add: a five-field cron (minute hour day-of-month month day-of-week, local time), e.g. "0 3 * * *" — makes it a scheduled task.' },
+                    scheduleKind: { type: 'string', enum: ['command', 'agent-nudge'], description: 'add with schedule: run the command (default), or nudge an agent.' },
+                    prompt: { type: 'string', description: 'add agent-nudge: the text delivered to the agent at each due.' },
+                    agent: { type: 'string', description: 'add agent-nudge: whom to nudge — an inbox address (atlas@workspace).' },
                 },
                 required: ['action'],
             },
@@ -134,6 +161,29 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                     case 'add': {
                         const name = str(args.name);
                         const command = str(args.command);
+                        const cron = str(args.schedule);
+                        if (cron !== undefined) {
+                            // A SCHEDULED TASK (genie#1204). The book's checks first: a recurrence Genie cannot read, a nudge
+                            // with no prompt or no agent, is refused before the person is asked.
+                            if (!name) return err('add needs `name`. Nothing was done');
+                            const kind = (str(args.scheduleKind) ?? 'command') as ScheduleKind;
+                            const input = {
+                                workspaceId: caller.workspaceId,
+                                workspacePath: caller.workspacePath,
+                                name,
+                                command: command ?? '',
+                                folder: str(args.folder),
+                                restart: 'never' as const,
+                                schedule: { cron, kind, prompt: str(args.prompt), agent: str(args.agent) },
+                            };
+                            const ready = port.book.prepare(input);
+                            const what = kind === 'agent-nudge' ? `nudges ${str(args.agent)} with “${str(args.prompt)}”` : `runs \`${ready.command}\` in ${ready.cwd}`;
+                            const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: ${describeSchedule(cron)} (${cron}) it ${what}. It will keep running on this schedule, without asking again, until you pause it.`);
+                            if (verdict !== 'allowed') return err(`scheduling ${ready.name} was denied by the person; nothing was kept`);
+                            const status = await port.book.create({ ...input, enabled: true });
+                            const row = after(status.id);
+                            return ok({ ok: true, process: row ? view(row) : { id: status.id, name: status.name } });
+                        }
                         if (!name || !command) return err('add needs `name` and `command`. Nothing was done');
                         if (args.restart !== undefined && !POLICIES.includes(args.restart as RestartPolicy)) return err('`restart` is on-failure, always or never. Nothing was done');
                         if (args.folder !== undefined && typeof args.folder !== 'string') return err('`folder` is a folder inside this workspace. Nothing was done');
@@ -161,6 +211,23 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                         if (action === 'start') await port.book.start(p.id);
                         else if (action === 'stop') await port.book.stop(p.id);
                         else await port.book.restart(p.id);
+                        const row = after(p.id);
+                        return ok({ ok: true, process: row ? view(row) : { id: p.id, name: p.name } });
+                    }
+                    case 'run-now':
+                    case 'enable':
+                    case 'disable': {
+                        const p = kept(str(args.process));
+                        if (typeof p === 'string') return err(p);
+                        if (!p.schedule) return err(`${p.name} has no schedule — it runs as a service: use \`start\`. Nothing was done`);
+                        if (action === 'enable') await port.book.enableSchedule(p.id);
+                        else if (action === 'disable') await port.book.pauseSchedule(p.id);
+                        else {
+                            if (!port.runNow) return err('this Genie runs no scheduled tasks; nothing was run');
+                            const outcome = await port.runNow(p.id);
+                            const row = after(p.id);
+                            return ok({ ok: true, outcome, process: row ? view(row) : { id: p.id, name: p.name } });
+                        }
                         const row = after(p.id);
                         return ok({ ok: true, process: row ? view(row) : { id: p.id, name: p.name } });
                     }

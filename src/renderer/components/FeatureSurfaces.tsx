@@ -1,6 +1,6 @@
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
@@ -26,6 +26,7 @@ import { AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
 import { flowSummary } from '../../core/flow-canvas.js';
+import { PROCESS_SCHEDULE_PRESETS, describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 
@@ -563,7 +564,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
  * native `<details>` (as Workspace.tsx's plugin menu): its body is in the markup closed or open,
  * and its summary is not a button, so the row's actions stay exactly the row's.
  */
-export function ProcessesPanel({ processes, workspaces, onAction }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction'] }) {
+export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now() }: { processes: NonNullable<FeatureData['hosting']>['processes']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; now?: number }) {
     const field = 'rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm';
     const button = 'text-[13px]';
     return (
@@ -577,6 +578,9 @@ export function ProcessesPanel({ processes, workspaces, onAction }: { processes:
                     if (!w) return;
                     const f = new FormData(e.currentTarget);
                     const folder = String(f.get('folder') ?? '').trim();
+                    // A schedule makes it a SCHEDULED TASK (genie#1204, Genie 1's form): a preset, or a typed expression.
+                    const preset = String(f.get('schedule') ?? '');
+                    const schedule = (preset === 'custom' ? String(f.get('scheduleCustom') ?? '') : preset).trim();
                     onAction({
                         kind: 'hosting.createProcess',
                         workspaceId: w.id,
@@ -585,6 +589,7 @@ export function ProcessesPanel({ processes, workspaces, onAction }: { processes:
                         command: String(f.get('command') ?? ''),
                         ...(folder ? { folder } : {}),
                         restart: String(f.get('restart') ?? 'on-failure') as 'never' | 'on-failure' | 'always',
+                        ...(schedule ? { schedule } : {}),
                     });
                 }}
             >
@@ -598,6 +603,10 @@ export function ProcessesPanel({ processes, workspaces, onAction }: { processes:
                     <option value="always">Always restart</option>
                     <option value="never">Never restart</option>
                 </select>
+                <select name="schedule" defaultValue="" aria-label="Schedule" className={field}>
+                    {PROCESS_SCHEDULE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
+                </select>
+                <Input name="scheduleCustom" placeholder="Custom schedule (0 3 * * *)" aria-label="Custom schedule" />
                 <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                     Add a process
                 </button>
@@ -608,6 +617,8 @@ export function ProcessesPanel({ processes, workspaces, onAction }: { processes:
                 <ul className="divide-y divide-[var(--border-1)]">
                     {processes.map((p) => {
                         const up = p.state === 'running' || p.state === 'restarting';
+                        // Drawn in place (no hooks): the row's own buttons stay in this list's element tree.
+                        if (p.schedule) return <Fragment key={p.id}>{scheduledRow({ p, up, now, onAction })}</Fragment>;
                         return (
                             <li key={p.id} data-process={p.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
                                 <span className="font-medium">{p.name}</span>
@@ -634,6 +645,44 @@ export function ProcessesPanel({ processes, workspaces, onAction }: { processes:
                 </ul>
             )}
         </div>
+    );
+}
+
+/**
+ * A SCHEDULED TASK'S ROW (genie#1204) — Genie 1's Processes card for one (lib/process-manager.ts `processCard` at
+ * v0.7.0-beta.342): the "scheduled" badge; "Running now", "Scheduled" or "Paused — not firing"; the schedule in words, the
+ * next and the last run; for a nudge, whom it prompts and with what. Run now, Pause schedule / Enable schedule, Remove.
+ */
+function scheduledRow({ p, up, now, onAction }: { p: NonNullable<FeatureData['hosting']>['processes'][number]; up: boolean; now: number; onAction: SurfaceProps['onAction'] }) {
+    const s = p.schedule!;
+    const nudge = s.kind === 'agent-nudge';
+    const status = up ? 'Running now' : s.enabled ? 'Scheduled' : 'Paused — not firing';
+    return (
+        <li data-process={p.id} data-process-scheduled={s.enabled ? 'enabled' : 'paused'} className="flex flex-wrap items-center gap-3 px-5 py-2">
+            <span className="font-medium">{p.name}</span>
+            <Badge variant="soft" size="sm">scheduled</Badge>
+            <span className="text-sm text-[var(--fg-2)]">{status}</span>
+            {!nudge && p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
+            <span className="ml-auto flex shrink-0 items-center gap-3">
+                <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.runScheduledNow', processId: p.id })}>Run now</button>
+                {s.enabled
+                    ? <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.pauseSchedule', processId: p.id })}>Pause schedule</button>
+                    : <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.enableSchedule', processId: p.id })}>Enable schedule</button>}
+                {!up ? <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</button> : null}
+            </span>
+            <span className="basis-full text-xs text-[var(--fg-3)]">
+                {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}
+            </span>
+            {nudge ? (
+                <span className="basis-full text-xs text-[var(--fg-3)]">Each run nudges {s.agent} with: <span className="text-[var(--fg-2)]">{s.prompt}</span></span>
+            ) : null}
+            {p.log && p.log.lines > 0 ? (
+                <details data-process-log={p.id} className="basis-full">
+                    <summary className="cursor-pointer text-xs text-[var(--fg-3)]">Log · last {p.log.lines} line{p.log.lines === 1 ? '' : 's'}{p.log.dropped > 0 ? ' (earlier output was cut)' : ''}</summary>
+                    <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{p.log.text}</pre>
+                </details>
+            ) : null}
+        </li>
     );
 }
 
