@@ -89,7 +89,9 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         await mkdir(directory); const file = join(directory, 'credentials.json'); await writeFile(file, 'encrypted fixture');
         const [sid] = await windows('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
         expect(sid).toMatch(/^S-\d+(?:-\d+)+$/);
-        const otherSid = sid!.replace(/-\d+$/, '-500'); expect(otherSid).not.toBe(sid);
+        // A FOREIGN account: the built-in Administrator (-500) — unless that IS this account, as on GitHub's Windows runner
+        // (main CI 40284230068), then Guest (-501). Both exist on every Windows machine.
+        const otherSid = sid!.replace(/-\d+$/, sid!.endsWith('-500') ? '-501' : '-500'); expect(otherSid).not.toBe(sid);
         const system = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'icacls.exe');
         for (const foreign of ['S-1-1-0', otherSid]) {
             await execute(system, [directory, '/grant', `*${foreign}:(OI)(CI)RX`], { windowsHide: true });
