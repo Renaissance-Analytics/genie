@@ -44,9 +44,10 @@ describe('what a flow runs', () => {
     it('reads back what a document runs — what an open form is prefilled with; a log-only flow reads as log', () => {
         const command = flowFormFromFields(d, { name: 'r', cron: '0 3 * * *', step: 'command', command: 'npm run report', folder: 'repos/app' });
         const agent = flowFormFromFields(d, { name: 's', cron: '0 9 * * 1-5', step: 'agent', agent: 'claude:atlas', prompt: 'post the standup' });
-        expect(flowFields(command.document)).toEqual({ cron: '0 3 * * *', step: { kind: 'command', command: 'npm run report', folder: 'repos/app' } });
-        expect(flowFields(agent.document)).toEqual({ cron: '0 9 * * 1-5', step: { kind: 'agent', agent: 'claude:atlas', prompt: 'post the standup' } });
-        expect(flowFields(d.document)).toEqual({ cron: '0 * * * *', step: { kind: 'log' } });
+        // A schedule flow reads back as one (genie#1204: the form also makes file flows, test/flow-form-file.test.tsx).
+        expect(flowFields(command.document)).toEqual({ cron: '0 3 * * *', trigger: { kind: 'schedule' }, step: { kind: 'command', command: 'npm run report', folder: 'repos/app' } });
+        expect(flowFields(agent.document)).toEqual({ cron: '0 9 * * 1-5', trigger: { kind: 'schedule' }, step: { kind: 'agent', agent: 'claude:atlas', prompt: 'post the standup' } });
+        expect(flowFields(d.document)).toEqual({ cron: '0 * * * *', trigger: { kind: 'schedule' }, step: { kind: 'log' } });
     });
 
     it('names each missing or unsafe field: no command, a folder outside the workspace, no agent, no prompt', () => {
