@@ -1,5 +1,6 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { promisify } from 'node:util';
 import type { RunningProcess } from './upgrade.js';
 
 /**
@@ -23,6 +24,28 @@ export function listProcesses(): readonly RunningProcess[] {
     }
 }
 
+/** `listProcesses` without holding the event loop (genie#1201: restart-to-install ran it on main, synchronously). */
+export async function listProcessesAsync(): Promise<readonly RunningProcess[]> {
+    try {
+        if (process.platform !== 'win32') return posix();
+        const { stdout } = await promisify(execFile)('powershell', ['-NoProfile', '-Command', WIN32_LISTING], { encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+        return parseWin32Listing(stdout);
+    } catch {
+        return [];
+    }
+}
+
+/** `killProcess` without holding the event loop: one pid, never a tree. */
+export async function killProcessAsync(pid: number): Promise<boolean> {
+    try {
+        if (process.platform === 'win32') await promisify(execFile)('taskkill', ['/PID', String(pid), '/F'], { timeout: 10_000, windowsHide: true });
+        else process.kill(pid, 'SIGKILL');
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Terminate ONE process — never a tree. The §7.2 teardown names each pid it stops, so each
  * is stopped by itself. `false` when the OS refused or the pid was already gone.
@@ -40,16 +63,21 @@ export function killProcess(pid: number): boolean {
     }
 }
 
+// ExecutablePath is null for processes we cannot query (SYSTEM's); those cannot be ours.
+// JSON, not a delimited line: a COMMAND LINE can contain any separator, and the boot reaper reads it (core/v1-reap).
+const WIN32_LISTING =
+    'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
+
 function win32(): RunningProcess[] {
-    // ExecutablePath is null for processes we cannot query (SYSTEM's); those cannot be ours.
-    // JSON, not a delimited line: a COMMAND LINE can contain any separator, and the boot reaper reads it (core/v1-reap).
-    const script =
-        'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
-    const out = execFileSync('powershell', ['-NoProfile', '-Command', script], {
+    const out = execFileSync('powershell', ['-NoProfile', '-Command', WIN32_LISTING], {
         encoding: 'utf8',
         timeout: 30_000,
         maxBuffer: 64 * 1024 * 1024,
     });
+    return parseWin32Listing(out);
+}
+
+function parseWin32Listing(out: string): RunningProcess[] {
     const parsed = JSON.parse(out.trim() === '' ? '[]' : out) as unknown;
     const rows = (Array.isArray(parsed) ? parsed : [parsed]) as Array<{ ProcessId?: unknown; ParentProcessId?: unknown; ExecutablePath?: unknown; CommandLine?: unknown }>;
     return rows.flatMap((r) => {

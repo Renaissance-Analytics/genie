@@ -464,6 +464,8 @@ export interface UpdateState {
     checkedAt: number | null;
     /** What is in the update (core/update-notes.ts): `null` = fetching, `'unavailable'` = offline. */
     changelog?: import('../core/update-notes.js').UpdateChangelog | 'unavailable' | null;
+    /** Restart to install, as it goes (genie#1201): the restart screen's progress. */
+    installing?: { step: 'agents' | 'processes' | 'restarting'; agents: number; left: number };
 }
 
 /** The updates bridge when there is no bridge: idle forever, every action refused. */

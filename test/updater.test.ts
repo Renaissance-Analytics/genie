@@ -220,7 +220,7 @@ describe('install — §7.2 teardown first', () => {
 
     it('terminates exactly the processes under the install directory, then asks the library to install', async () => {
         const { h, killed, fake, deferred } = await downloaded();
-        const result = h.install();
+        const result = await h.install();
         expect(result).not.toBeNull();
         expect(killed.sort()).toEqual([5001, 5002]);
         expect(result!.killed.map((p) => p.pid).sort()).toEqual([5001, 5002]);
@@ -239,7 +239,7 @@ describe('install — §7.2 teardown first', () => {
          * same tick breaks that promise invisibly.
          */
         const { h, fake, deferred } = await downloaded();
-        const result = h.install();
+        const result = await h.install();
         expect(result!.report).toBe('2 processes were running from the install directory and had to be stopped:\n5001 ' + INSTALL + '\\resources\\app.asar.unpacked\\node_modules\\node-pty\\build\\Release\\conpty\\OpenConsole.exe\n5002 ' + INSTALL.toLowerCase() + '\\genie.exe');
         expect(fake.installs).toBe(0);
         expect(deferred.map((d) => d.ms)).toEqual([QUIT_DELAY_MS]);
@@ -253,7 +253,7 @@ describe('install — §7.2 teardown first', () => {
 
     it('reports what was killed, by pid and path, and says so when it was nothing', async () => {
         const { h } = await downloaded();
-        const report = h.install()!.report;
+        const report = (await h.install())!.report;
         expect(report).toContain('2 processes were running from the install directory');
         expect(report).toContain('5001 ');
         expect(report).toContain('OpenConsole.exe');
@@ -264,6 +264,6 @@ describe('install — §7.2 teardown first', () => {
         const { h: quiet } = host(fake, []);
         const c = quiet.check(); fake.resolveCheck!(); await c;
         const d = quiet.download(); await settle(); fake.finishDownload!(); await d;
-        expect(quiet.install()!.report).toBe('No processes were running from the install directory.');
+        expect((await quiet.install())!.report).toBe('No processes were running from the install directory.');
     });
 });

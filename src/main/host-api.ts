@@ -139,7 +139,7 @@ export interface HostApiDeps {
         state(): UpdateState;
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
-        install(): { report: string } | null;
+        install(): Promise<{ report: string }> | null;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
     } | null;

@@ -141,7 +141,7 @@ import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
-import { killProcess, listProcesses } from './process-list.js';
+import { killProcess, killProcessAsync, listProcesses, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART, midTurnAgents, relaunchPlan } from '../core/upgrade-drain.js';
 import { FilesHost } from './files-host.js';
 import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
@@ -1082,16 +1082,17 @@ async function boot(): Promise<void> {
         },
         installDir: dirname(process.execPath),
         ownPid: process.pid,
-        processes: listProcesses,
-        kill: killProcess,
+        // Off the event loop (genie#1201): restart-to-install reads and kills without holding the window.
+        processes: listProcessesAsync,
+        kill: killProcessAsync,
         // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
         agents: {
             live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
-            stopAll: () => {
+            stopAll: (onLeft) => {
                 // Record who was running and who was MID-TURN BEFORE the sessions end (§7.6; the owner, 2026-10-13).
                 quit.markRecorded();
                 void recordShutdown();
-                host?.stopAll();
+                return host?.stopAll(onLeft) ?? Promise.resolve();
             },
         },
     });
@@ -1120,10 +1121,13 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
     // The update window opening reads the notes again if they were missing (beta.38, 2026-10-22).
     ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);
-    ipcMain.handle('genie:updates-install', () => {
-        const result = updates?.install() ?? null;
-        if (result) console.log(`[updater] ${result.report}`);
-        return result ? { report: result.report } : null;
+    ipcMain.handle('genie:updates-install', async () => {
+        // The window has its restart screen at once (the `installing` state, genie#1201); the answer waits for the work.
+        const pending = updates?.install() ?? null;
+        if (!pending) return null;
+        const result = await pending;
+        console.log(`[updater] ${result.report}`);
+        return { report: result.report };
     });
 
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
@@ -2026,7 +2030,7 @@ async function boot(): Promise<void> {
                       state: () => updates!.state(),
                       check: () => updates!.check(),
                       download: () => updates!.download(),
-                      install: () => { const r = updates!.install(); return r ? { report: r.report } : null; },
+                      install: () => { const r = updates!.install(); return r ? r.then((done) => ({ report: done.report })) : null; },
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,
@@ -2914,6 +2918,7 @@ app.on('before-quit', (event) => {
     // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes from drainWritesThenQuit, as a 'pass'.
     event.preventDefault();
     host?.stopAll();
+    // The stops' readings and reaps run off main (genie#1201); drainWritesThenQuit waits for them too, bounded.
     // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
     keepaliveNow?.stop();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.

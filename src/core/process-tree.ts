@@ -1,4 +1,7 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
 
 /**
  * STOP MEANS STOP — reaping what the driver's `kill` leaves behind, without reaping the machine.
@@ -74,6 +77,16 @@ export interface ProcessTree {
      * distinguish those is the promise the previous build broke.
      */
     killTree(targets: readonly ProcessInfo[], now: readonly ProcessInfo[], limit?: number): ReapResult;
+    /**
+     * `snapshot`, WITHOUT HOLDING THE EVENT LOOP (genie#1201): the reading a stop takes, run off main so the window keeps
+     * answering while a quit or an install stops every agent. Readings asked for together are SHARED — fifteen agents
+     * stopping take a few readings, not forty-five — and a shared reading always STARTED after its caller asked, so a
+     * verification never sees a table read before its kill. `null` when it could not look. Absent on a tree whose OS
+     * calls are synchronous only (an injected test tree): its stop stays synchronous.
+     */
+    read?(): Promise<readonly ProcessInfo[] | null>;
+    /** `killTree`, asynchronously: the same rules (no tree, the same process only, the cap), each kill off main. */
+    reap?(targets: readonly ProcessInfo[], now: readonly ProcessInfo[], limit?: number): Promise<ReapResult>;
 }
 
 /** One process as the snapshot reads it. `started` is epoch ms (Windows: CreationDate; Linux/macOS: `ps lstart`). */
@@ -97,6 +110,10 @@ export interface ProcessTreeIo {
     snapshot(): ProcessInfo[];
     /** Terminate exactly this pid. Not its tree. Never throws for an already-dead pid. */
     killOne(pid: number): void;
+    /** `snapshot` without blocking (execFile, not execFileSync). Both async calls present = the tree has `read`/`reap`. */
+    snapshotAsync?(): Promise<ProcessInfo[]>;
+    /** `killOne` without blocking. Never rejects for an already-dead pid. */
+    killOneAsync?(pid: number): Promise<void>;
 }
 
 /**
@@ -169,8 +186,65 @@ export function newChildrenOf(before: readonly ProcessInfo[], after: readonly Pr
     return after.filter((p) => p.ppid === parentPid && findIn(before, p) === undefined);
 }
 
-export function makeProcessTree(io: ProcessTreeIo): ProcessTree {
+/** Why a reap of `targets` is refused, or `null` when it may go ahead (the plausibility cap, rule 3 above). */
+function refusal(targets: readonly ProcessInfo[], limit: number): ReapResult | null {
+    if (targets.length <= limit) return null;
     return {
+        killed: 0,
+        refused: true,
+        reason:
+            `Refusing to reap ${targets.length} processes for one session — more than ` +
+            `${limit} means its tree is not what it seems. The provider's own kill has already run.`,
+    };
+}
+
+/**
+ * ONE READING AT A TIME, SHARED BY EVERYONE WHO ASKED FOR IT: every caller joins the next reading, which starts once
+ * the one in flight (if any) has ended and the callers of this turn of the event loop have all asked — so it began
+ * after each of them asked. A failed reading is `null` for all who shared it.
+ */
+function sharedReader(look: () => Promise<ProcessInfo[]>): () => Promise<readonly ProcessInfo[] | null> {
+    let running = false;
+    let next: { promise: Promise<readonly ProcessInfo[] | null>; resolve: (r: readonly ProcessInfo[] | null) => void } | null = null;
+    const pump = (): void => {
+        if (running || next === null) return;
+        const batch = next;
+        next = null;
+        running = true;
+        look().then((r) => r, () => null).then((r) => {
+            running = false;
+            batch.resolve(r);
+            if (next !== null) setTimeout(pump, 0);
+        });
+    };
+    return () => {
+        if (next === null) {
+            let resolve!: (r: readonly ProcessInfo[] | null) => void;
+            const promise = new Promise<readonly ProcessInfo[] | null>((r) => { resolve = r; });
+            next = { promise, resolve };
+            setTimeout(pump, 0);
+        }
+        return next.promise;
+    };
+}
+
+export function makeProcessTree(io: ProcessTreeIo): ProcessTree {
+    const snapshotAsync = io.snapshotAsync?.bind(io);
+    const killOneAsync = io.killOneAsync?.bind(io);
+    const async = snapshotAsync && killOneAsync ? {
+        read: sharedReader(snapshotAsync),
+        async reap(targets: readonly ProcessInfo[], now: readonly ProcessInfo[], limit = PLAUSIBLE_REAP): Promise<ReapResult> {
+            if (targets.length === 0) return { killed: 0, refused: false };
+            const refused = refusal(targets, limit);
+            if (refused) return refused;
+            // The same process in the reading taken just before, as killTree; each kill off main, together.
+            const same = targets.filter((t) => findIn(now, t));
+            await Promise.all(same.map((t) => killOneAsync(t.pid).catch(() => {})));
+            return { killed: same.length, refused: false };
+        },
+    } : {};
+    return {
+        ...async,
         snapshot() {
             try {
                 return io.snapshot();
@@ -184,15 +258,8 @@ export function makeProcessTree(io: ProcessTreeIo): ProcessTree {
             // Nothing to do, and no reason to read the machine to find that out.
             if (targets.length === 0) return { killed: 0, refused: false };
 
-            if (targets.length > limit) {
-                return {
-                    killed: 0,
-                    refused: true,
-                    reason:
-                        `Refusing to reap ${targets.length} processes for one session — more than ` +
-                        `${limit} means its tree is not what it seems. The provider's own kill has already run.`,
-                };
-            }
+            const refused = refusal(targets, limit);
+            if (refused) return refused;
 
             let killed = 0;
             for (const target of targets) {
@@ -212,8 +279,7 @@ export function makeProcessTree(io: ProcessTreeIo): ProcessTree {
  * PowerShell, O(n²)). The scan's own PowerShell, and anything under it, is left out — THE OBSERVER EFFECT, measured
  * 2026-10-10: counting it made a clean stop look like two survivors.
  */
-function win32Snapshot(): ProcessInfo[] {
-    const script = [
+const WIN32_SCRIPT = [
         '$ErrorActionPreference = "Stop";',
         '"self|$PID";',
         '$epoch = New-Object DateTime 1970, 1, 1, 0, 0, 0, ([DateTimeKind]::Utc);',
@@ -221,14 +287,18 @@ function win32Snapshot(): ProcessInfo[] {
         '  $ms = 0; if ($_.CreationDate) { $ms = [long]($_.CreationDate.ToUniversalTime() - $epoch).TotalMilliseconds };',
         '  "$($_.ProcessId)|$($_.ParentProcessId)|$ms|$($_.Name)"',
         '}',
-    ].join(' ');
-    const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], {
-        encoding: 'utf8',
-        timeout: 30_000,
-        maxBuffer: 32 * 1024 * 1024,
-        windowsHide: true,
-    });
-    return parseWin32Snapshot(out, process.pid);
+].join(' ');
+const WIN32_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WIN32_SCRIPT];
+const WIN32_OPTIONS = { encoding: 'utf8' as const, timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true };
+
+function win32Snapshot(): ProcessInfo[] {
+    return parseWin32Snapshot(execFileSync('powershell', WIN32_ARGS, WIN32_OPTIONS), process.pid);
+}
+
+/** The same reading, off the event loop (genie#1201). */
+async function win32SnapshotAsync(): Promise<ProcessInfo[]> {
+    const { stdout } = await execFileAsync('powershell', WIN32_ARGS, WIN32_OPTIONS);
+    return parseWin32Snapshot(stdout, process.pid);
 }
 
 /** The Windows scan's output, parsed: `self|<scanner pid>` then `pid|ppid|startedMs|name` per process. */
@@ -256,14 +326,17 @@ export function parseWin32Snapshot(out: string, selfPid: number): ProcessInfo[] 
  * Linux and macOS: one `ps` (no shell — the old scan ran a login shell per descendant, recursively, which cost seconds
  * per stop). `lstart` is the start time to the second, in the C locale. The `ps` itself is left out.
  */
+const PS_ARGS = ['-A', '-o', 'pid=,ppid=,lstart=,comm='];
+const psOptions = () => ({ encoding: 'utf8' as const, timeout: 20_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
+
 function posixSnapshot(): ProcessInfo[] {
-    const out = execFileSync('ps', ['-A', '-o', 'pid=,ppid=,lstart=,comm='], {
-        encoding: 'utf8',
-        timeout: 20_000,
-        maxBuffer: 32 * 1024 * 1024,
-        env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
-    });
-    return parsePosixSnapshot(out, process.pid);
+    return parsePosixSnapshot(execFileSync('ps', PS_ARGS, psOptions()), process.pid);
+}
+
+/** The same reading, off the event loop (genie#1201). */
+async function posixSnapshotAsync(): Promise<ProcessInfo[]> {
+    const { stdout } = await execFileAsync('ps', PS_ARGS, psOptions());
+    return parsePosixSnapshot(stdout, process.pid);
 }
 
 /** `ps -A -o pid=,ppid=,lstart=,comm=` parsed; the `ps` this process ran is left out. */
@@ -281,6 +354,16 @@ export function parsePosixSnapshot(out: string, selfPid: number): ProcessInfo[] 
 
 export const systemProcessTree: ProcessTree = makeProcessTree({
     snapshot: () => (process.platform === 'win32' ? win32Snapshot() : posixSnapshot()),
+    snapshotAsync: () => (process.platform === 'win32' ? win32SnapshotAsync() : posixSnapshotAsync()),
+    // The same kill as killOne below — one pid, never `/T` — without holding the event loop.
+    killOneAsync: async (pid) => {
+        try {
+            if (process.platform === 'win32') await execFileAsync('taskkill', ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
+            else process.kill(pid, 'SIGKILL');
+        } catch {
+            // Already gone is the common case and is a success, not an error.
+        }
+    },
 
     killOne: (pid) => {
         try {
