@@ -163,7 +163,7 @@ import { allGenieTools } from './mcp-registrations.js';
 import { genieToolDeps } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
-import { launchSubprocess, runPluginTool } from './plugin-runner.js';
+import { launchSubprocessIn, runPluginTool } from './plugin-runner.js';
 import { runOfficialTool } from './official-tools.js';
 import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
@@ -2277,7 +2277,9 @@ async function boot(): Promise<void> {
                         if (method === 'knowledge.search') return composed.knowledge.search({ ...(typeof params === 'object' && params !== null ? params : {}) } as never);
                         throw new Error(`${method} is not offered to plugins`);
                     },
-                    launch: launchSubprocess,
+                    // genie#871: sandboxed — its folder, the workspace only if declared, the declared hosts only.
+                    launch: launchSubprocessIn(join(genieHome(), 'plugin-sandbox')),
+                    capabilities: input.manifest.capabilities,
                     timeoutMs: 30_000,
                     label: `${input.manifest.id}.${input.tool.name}`,
                 }),

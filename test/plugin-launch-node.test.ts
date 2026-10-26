@@ -13,18 +13,21 @@ import { subprocessCommand } from '../src/main/plugin-runner.js';
 
 describe('the plugin subprocess launch', () => {
     it('under Electron: Genie’s binary RUN AS NODE on the module, with only the plugin’s minimal env plus that switch', () => {
-        const cmd = subprocessCommand({ module: '/p/tool.mjs', process: 'subprocess', env: { PATH: '/bin', GENIE_PLUGIN_ID: 'sheet' } }, { execPath: 'C:/Genie/Genie.exe', electron: true });
-        expect(cmd).toEqual({ file: 'C:/Genie/Genie.exe', args: ['/p/tool.mjs'], env: { PATH: '/bin', GENIE_PLUGIN_ID: 'sheet', ELECTRON_RUN_AS_NODE: '1' } });
+        // Since the sandbox (genie#871, test/plugin-sandbox.test.ts) the module is the LAST argument, after the permission flags.
+        const cmd = subprocessCommand({ module: '/p/tool.mjs', process: 'subprocess', env: { PATH: '/bin', GENIE_PLUGIN_ID: 'sheet' }, sandbox: { pluginDir: '/p', workspace: null, hosts: [] } }, { execPath: 'C:/Genie/Genie.exe', electron: true, netGuard: '/g/net-guard.mjs' });
+        expect(cmd.file).toBe('C:/Genie/Genie.exe');
+        expect(cmd.args.at(-1)).toBe('/p/tool.mjs');
+        expect(cmd.env).toEqual({ PATH: '/bin', GENIE_PLUGIN_ID: 'sheet', GENIE_PLUGIN_HOSTS: '', ELECTRON_RUN_AS_NODE: '1' });
     });
 
     it('under plain Node (tests, a headless host): node itself, no Electron switch (CONTROL)', () => {
-        const cmd = subprocessCommand({ module: '/p/tool.mjs', process: 'subprocess', env: { PATH: '/bin' } }, { execPath: '/usr/bin/node', electron: false });
-        expect(cmd.env).toEqual({ PATH: '/bin' });
+        const cmd = subprocessCommand({ module: '/p/tool.mjs', process: 'subprocess', env: { PATH: '/bin' }, sandbox: { pluginDir: '/p', workspace: null, hosts: [] } }, { execPath: '/usr/bin/node', electron: false, netGuard: '/g/net-guard.mjs' });
+        expect(cmd.env).toEqual({ PATH: '/bin', GENIE_PLUGIN_HOSTS: '' });
     });
 
     it('the real launch uses it with the running process’s own runtime (source, comment lines dropped)', () => {
         const src = readFileSync(new URL('../src/main/plugin-runner.ts', import.meta.url), 'utf8').split(/\r?\n/).filter((l) => !l.trim().startsWith('//') && !l.trim().startsWith('*')).join('\n');
-        expect(src).toMatch(/subprocessCommand\(spec, \{ execPath: process\.execPath, electron: Boolean\(process\.versions\.electron\) \}\)/);
+        expect(src).toMatch(/subprocessCommand\(spec, \{ execPath: process\.execPath, electron: Boolean\(process\.versions\.electron\), netGuard: ensureNetGuard\(guardDir\) \}\)/);
         expect(src).not.toMatch(/spawn\(process\.execPath, \[spec\.module\]/);
     });
 });
