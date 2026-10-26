@@ -148,7 +148,7 @@ describe('the phone draws names', () => {
                 upload={{ agents: [{ id: 'agent_kai', name: 'kai', provider: 'claude', workspaceId: ID }], sending: false, outcome: null, onSend: () => {} }} />,
         );
         expect(html).toContain(`value="${ID}:claude:kai"`);
-        expect(textOf(html)).toMatch(/kai · Tynn/);
+        expect(textOf(html)).toMatch(/kai@Tynn/);
         expect((textOf(html).match(/Tynn/g) ?? []).length).toBeGreaterThanOrEqual(4);
         noIdsShown(html);
     });

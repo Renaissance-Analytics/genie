@@ -1857,6 +1857,7 @@ async function boot(): Promise<void> {
         // A plain list, never `registry.snapshot()`: the snapshot builds the Deck's items, which ask this roster for
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
         roster: () => registry?.listAgents() ?? [],
+        workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
         workspaces: () => registry?.listWorkspaces() ?? [],
@@ -2157,6 +2158,7 @@ async function boot(): Promise<void> {
             settings: composed.settings,
             approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
             roster,
+            workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             resolveCaller,
             // createAgent: the workspace's default agent asks, the person approves in the Deck, the registry registers.
             agents: {

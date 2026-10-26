@@ -69,7 +69,7 @@ Workspace rules are in \`RULES.md\`; they may be stricter than this.
         description: 'Use to find other agents, message them, read your mail, and check receipts in Genie.',
         body: `# AgentInbox
 
-Use \`agentinbox\` to list peers, send a message, receive your mail and check receipts. To wait for a reply, make ONE receive with \`wait: true\`; never poll in a loop. Only your own receive marks mail read. Address an agent as \`provider:name\`, or \`workspace:provider:name\` when two share a name. Attachments are copied, not referenced; executables are refused.
+Use \`agentinbox\` to list peers, send a message, receive your mail and check receipts. To wait for a reply, make ONE receive with \`wait: true\`; never poll in a loop. Only your own receive marks mail read. Address an agent as \`name@workspace\`, exactly as \`list\` shows it (the OS agent is \`genie@system\`); a bare name works when it is unique. Attachments are copied, not referenced; executables are refused.
 `,
     },
     {

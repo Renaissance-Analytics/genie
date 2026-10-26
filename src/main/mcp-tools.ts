@@ -3,7 +3,7 @@ import { callerFrom } from './mcp-callers.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import { type Question } from '../core/attention.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
-import { HUMAN, addressOf, reachable, resolveAddress, type Participant, type WorkspaceInboxSetting } from '../core/inbox.js';
+import { HUMAN, agentAddress, reachable, resolveAddress, type Participant, type WorkspaceInboxSetting } from '../core/inbox.js';
 import type { AttentionStore } from './attention-store.js';
 import type { InboxStore } from './inbox-store.js';
 import { issueWatchCountLine, issueWatchCounts, issueWatchWhyNot, type IssueWatchSummary } from '../core/issue-watch.js';
@@ -70,6 +70,8 @@ export interface GenieToolsDeps {
     readonly inbox: InboxStore;
     readonly attention: AttentionStore;
     readonly roster: () => readonly AgentRecord[];
+    /** Each workspace's address slug: an agent is `name@slug` (registry.workspaceSlugs). Absent = the workspace id. */
+    readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
     /** Is that agent running, and when was it last seen (core/liveness.ts)? Read-only; absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
     readonly resolveCaller: (terminalId: string) => Caller | null;
@@ -267,7 +269,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
     const agentinbox: Registration = {
         definition: new ToolDefinition(
             'agentinbox',
-            'Durable 1:1 messaging with other agents and the user. list → peers, whether you may reach them (`reachable`: permission) and whether each is running (`state`: working, idle, failed or stopped, with `lastSeen`; read-only, it never starts anyone); send → to an address ({provider}:{name}, {workspace}:{provider}:{name}, human, or the `from` of mail you received — an agent that wrote to you can always be answered) with optional byte-copied attachments; receive → your mail (wait:true long-polls; acknowledge:false leaves it unread; cursor rewinds); receipts → whether what you sent was read; saveAttachment → write an attachment you received.',
+            'Durable 1:1 messaging with other agents and the user. list → peers, whether you may reach them (`reachable`: permission) and whether each is running (`state`: working, idle, failed or stopped, with `lastSeen`; read-only, it never starts anyone); send → to an address (name@workspace, as `list` shows it — the OS agent is genie@system; a bare name when it is unique; human; or the `from` of mail you received — an agent that wrote to you can always be answered) with optional byte-copied attachments; receive → your mail (wait:true long-polls; acknowledge:false leaves it unread; cursor rewinds); receipts → whether what you sent was read; saveAttachment → write an attachment you received.',
             {
                 type: 'object',
                 properties: {
@@ -298,12 +300,11 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
             switch (action) {
                 case 'list': {
                     const others = deps.roster().filter((r) => r.id !== caller.agentId);
+                    const slugs = deps.workspaceSlugs?.() ?? new Map<string, string>();
                     const peers = others.map((r) => {
-                        const shortShared = others.filter((o) => o.provider === r.provider && o.name === r.name).length > 1;
                         return {
-                            address: addressOf(r, shortShared ? 'full' : 'short'),
+                            address: agentAddress(r, slugs),
                             name: r.name,
-                            provider: r.provider,
                             workspaceId: r.workspaceId,
                             reachable: mayReach(r),
                             // Liveness beside permission: whether it is running, read-only — never started by asking.
@@ -317,7 +318,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     const text = str(args.text);
                     if (!to) return err('send needs `to`');
                     if (text === undefined) return err('send needs `text`');
-                    const target = resolveAddress(to, deps.roster());
+                    const target = resolveAddress(to, deps.roster(), deps.workspaceSlugs?.());
                     let recipient: Participant;
                     if (target.kind === 'human') recipient = HUMAN;
                     else if (target.kind === 'none') return err(`nobody at ${to}; use \`agentinbox list\` for the addresses that resolve`);

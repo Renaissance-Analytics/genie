@@ -37,7 +37,7 @@ export const GENIE_NODE_KINDS: readonly NodeKindDefinition[] = [
         inputs: [{ id: 'in' }],
         outputs: [{ id: 'out', label: 'reply' }],
         configSchema: [
-            { type: 'text', key: 'agent', label: 'Agent', placeholder: 'claude:atlas', required: true, description: 'An inbox address: {provider}:{name} or {workspace}:{provider}:{name}.' },
+            { type: 'text', key: 'agent', label: 'Agent', placeholder: 'atlas@tynn-ai', required: true, description: 'An inbox address: name@workspace (a bare name when it is unique).' },
             { type: 'textarea', key: 'prompt', label: 'Prompt', required: true, description: 'Templates like {{in.text}} resolve into the node’s inputs.' },
         ],
     },
