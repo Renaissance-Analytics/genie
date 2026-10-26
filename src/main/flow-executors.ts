@@ -1,5 +1,5 @@
 import type { ExecutorRegistry, NodeExecutor } from '@particle-academy/fancy-flow/engine';
-import { waitMs } from '../core/flow-canvas.js';
+import { toolKinds, waitMs } from '../core/flow-canvas.js';
 import type { MemoryClass, Scope } from './knowledge-store.js';
 
 /**
@@ -28,6 +28,16 @@ export interface FlowPorts {
     moveFile?(workspaceId: string, from: string, toFolder: string): Promise<{ from: string; to: string | null }>;
     /** fancy-flow's Wait, for a duration (genie#1204): injected so a test need not wait in real time; a timer otherwise. */
     sleep?(ms: number): Promise<void>;
+    /** A `@genie/<tool>` step (genie#1204, main/flow-tools.ts): the tool's own handler, called as the flow. */
+    callTool?(tool: string, args: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
+}
+
+/** Every string in a step's settings rendered against its inputs; other values as they are. */
+function renderDeep(value: unknown, inputs: Record<string, unknown>): unknown {
+    if (typeof value === 'string') return renderTemplate(value, inputs);
+    if (Array.isArray(value)) return value.map((v) => renderDeep(v, inputs));
+    if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renderDeep(v, inputs)]));
+    return value;
 }
 
 /** `{{a.b.c}}` → the value at that path in `inputs`, stringified; missing → empty. */
@@ -56,7 +66,24 @@ const text = (config: Record<string, unknown>, key: string, inputs: Record<strin
 };
 
 export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
+    // GENIE'S TOOLS AS STEPS (genie#1204): each `@genie/<tool>` calls the tool as the flow; a refusal or a denial fails
+    // the step in the tool's words. checkIssues routes `found` / `none`, as Genie 1's node did (main/flows/kinds.ts).
+    const toolSteps: ExecutorRegistry = Object.fromEntries(toolKinds().map((kind) => [kind, async (ctx: Ctx) => {
+        const tool = kind.slice('@genie/'.length);
+        if (!ports.callTool) ctx.abort(`Genie’s tools are not reachable from this run; ${tool} was not called`);
+        const args = renderDeep(configOf(ctx), ctx.inputs as Record<string, unknown>) as Record<string, unknown>;
+        const r = await ports.callTool!(tool, args);
+        if (!r.ok) ctx.abort(r.error);
+        const result = (r as { result: unknown }).result;
+        if (tool === 'checkIssues') {
+            const answer = (result ?? {}) as { ok?: unknown; reason?: unknown; items?: unknown };
+            if (answer.ok === false) ctx.abort(`checkIssues could not tell: ${String(answer.reason ?? 'no answer')}`);
+            return { __port: Array.isArray(answer.items) && answer.items.length > 0 ? 'found' : 'none', value: result };
+        }
+        return result;
+    }]));
     return {
+        ...toolSteps,
         'genie/agent_prompt': async (ctx) => {
             const config = configOf(ctx);
             const inputs = ctx.inputs as Record<string, unknown>;

@@ -77,6 +77,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             addKnowledge: (input) => watch(base.addKnowledge(input)),
             ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
             ...(base.sleep ? { sleep: base.sleep } : {}),
+            ...(base.callTool ? { callTool: (tool: string, args: Record<string, unknown>) => watch(base.callTool!(tool, args)) } : {}),
         };
         const firedAt = new Date(now()).toISOString();
         // The schedule trigger is host-implemented in fancy-flow: it hands its downstream what fired.

@@ -49,7 +49,9 @@ afterEach(async () => {
 describe('the snapshot', () => {
     it('reports every section MEASURED (never null) once the services exist — the knowledge hits too: with no search, what the graph holds (empty here)', async () => {
         const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
-        expect(snap.flows).toEqual({ flows: [], adding: null });
+        // The flows section also carries Genie's tool kinds for the editor window (genie#1204): one per offered tool.
+        expect(snap.flows).toMatchObject({ flows: [], adding: null });
+        expect(snap.flows!.toolKinds!.map((k) => k.name)).toContain('@genie/knowledge');
         expect(snap.hosting).toEqual({ sites: [], processes: [], adding: null, editing: null, frontDoor: { running: false, reason: 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works' } });
         // The AgentInbox flyout's threads (beta.33 item 19) are measured too: none yet, nothing uncollected; a thread and an
         // attachment are answers to their own actions, never in a snapshot.

@@ -141,6 +141,26 @@ export const SUPPORTED_KINDS: readonly string[] = [
 ];
 const SUPPORTED = new Set(SUPPORTED_KINDS);
 
+/**
+ * GENIE'S TOOLS AS STEPS (genie#1204): `@genie/<tool>` kinds, derived in main from the tools' own schemas
+ * (main/flow-tools.ts) and handed to the editor window in the flows snapshot. Each runs through Genie's runner as the flow,
+ * so it is as supported as the static kinds — once registered here.
+ */
+const TOOL_KINDS = new Set<string>();
+
+/** Register Genie's tool kinds (idempotent) and mark them supported: the palette offers them, the door accepts them. */
+export function registerToolKinds(defs: readonly NodeKindDefinition[]): void {
+    for (const def of defs) {
+        if (getNodeKind(def.name)?.name !== def.name) registerNodeKind(def);
+        TOOL_KINDS.add(def.name);
+    }
+}
+
+/** The registered tool kinds, `@genie/<tool>`. */
+export function toolKinds(): readonly string[] {
+    return [...TOOL_KINDS];
+}
+
 /** A kind's canonical id (an alias like `schedule_trigger` resolves); a kind nobody registered stays as written. */
 export function canonicalKind(kind: string): string {
     ensureGenieKinds();
@@ -148,12 +168,13 @@ export function canonicalKind(kind: string): string {
 }
 
 export function isSupportedKind(kind: string): boolean {
-    return SUPPORTED.has(canonicalKind(kind));
+    const k = canonicalKind(kind);
+    return SUPPORTED.has(k) || TOOL_KINDS.has(k);
 }
 
 /** `<FlowEditor kindFilter>`: the palette offers exactly what the runner executes. Module scope so its identity is stable. */
 export function paletteKindFilter({ kind }: { kind: { name: string } }): boolean {
-    return SUPPORTED.has(kind.name);
+    return SUPPORTED.has(kind.name) || TOOL_KINDS.has(kind.name);
 }
 
 const TRIGGERS = new Set(['@particle-academy/manual_trigger', '@particle-academy/schedule_trigger', 'genie/file_added']);

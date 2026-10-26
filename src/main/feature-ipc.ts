@@ -15,6 +15,7 @@ import type { RepairOutcome } from '../core/toolchain.js';
 import { canonicalKind, problemFromText, saveProblems, type FlowProblem } from '../core/flow-canvas.js';
 import { canonicalFlowDocument, flowNodes, formEditable } from '../core/flow-form.js';
 import { importFlowDocument } from './flow-kinds.js';
+import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
@@ -433,7 +434,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const nameOf = participantNamer(roster);
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
-        flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}) },
+        // Genie's tools as steps (genie#1204): their kinds go to the editor window, which registers them before its canvas mounts.
+        flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },

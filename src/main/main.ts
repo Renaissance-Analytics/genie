@@ -164,6 +164,7 @@ import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { allGenieTools } from './mcp-registrations.js';
+import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { genieToolDeps } from './genie-tool-deps.js';
 import { terminalEnvFor, type OpenInBrowser } from './hosting-actions.js';
 import { clearGenieRunning, doctorHoldNow, markGenieRunning } from './genie-running-file.js';
@@ -2330,7 +2331,9 @@ async function boot(): Promise<void> {
     // GENIE'S OWN MCP SERVER (§6.9): every tool registered, the loopback listening, the boot probe recorded.
     {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
-        const resolveCaller = (terminalId: string) => takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
+        // A FLOW calling Genie's tools as a step (genie#1204, main/flow-tools.ts) is a caller too: its own key, its workspace.
+        const flowCallers = new FlowCallers((id) => registry?.workspace(id)?.path ?? null);
+        const resolveCaller = (terminalId: string) => flowCallers.callerFor(terminalId) ?? takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
         const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
         // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
         const registrations = withActionSignal(allGenieTools(genieToolDeps({
@@ -2414,6 +2417,8 @@ async function boot(): Promise<void> {
         // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
         // wrote into workspaces stay valid after a restart.
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
+        // Flows' tool steps call these very registrations, as the flow (genie#1204).
+        composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         const endpointFile = join(genieHome(), 'mcp-endpoint.json');
         mcp = genieMcpServer({
             registrations,
