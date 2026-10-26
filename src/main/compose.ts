@@ -21,6 +21,7 @@ import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1FlowImport } from './v1-flows.js';
+import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
 import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -333,6 +334,8 @@ export interface ComposedServices {
     agentAddresses(): Array<{ address: string; agentId: string; name: string }>;
     /** Resolve an address the way the inbox does: one / ambiguous (both forms named) / none / human. */
     resolveAddress(text: string): Resolution;
+    /** Genie's tools as flow steps (genie#1204): main hands the call once it has built the tools (main/flow-tools.ts). */
+    setFlowToolCaller(call: FlowToolCall): void;
     /** The registered workspaces' ids, now — what a flow's save checks a step's workspace against (genie#1204). */
     workspaceIds(): string[];
     shutdown(): Promise<void>;
@@ -657,6 +660,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     }
     // Genie 1's AgentInbox history, once (inbox-store.ts records it), mapped onto the roster the v1 agent import already registered.
     if (input.v1Inbox) await runV1InboxImport(inbox, input.v1Inbox, { roster: input.roster?.() ?? [], now: now() });
+    // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
+    ensureFlowToolKinds();
+    let flowToolCall: FlowToolCall | null = null;
     const flows = await FlowStore.open(input.userData, now);
     // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
     if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -1003,6 +1009,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 addKnowledge: async (entry) => ({ id: knowledge.add({ ...entry, source: 'user' }).id }),
                 // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
                 moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
+                // Genie's tools as steps (genie#1204): late-bound — main builds the tools after composing (setFlowToolCaller).
+                callTool: (tool, args) => (flowToolCall ? flowToolCall(flow, tool, args) : Promise.resolve({ ok: false as const, error: 'Genie’s tools are not ready yet; the step did not run' })),
             }),
         }),
     });
@@ -1210,6 +1218,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
+        setFlowToolCaller: (call) => { flowToolCall = call; },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             down ??= (async () => {

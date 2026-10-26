@@ -191,6 +191,20 @@ describe('each step runs as the flow, through the tool’s own rules', () => {
         expect(await run(step('agentinbox', { action: 'send', to: 'atlas', text: 'hi' }))).toMatchObject({ outcome: 'failed', reason: expect.stringMatching(/not reachable/) });
     });
 
+    it('a Genie 1 flow’s tool step: one Genie 2 has under the same name comes over as that step (no terminalId); one renamed in Genie 2 is noted, not guessed at', async () => {
+        const { planV1FlowImport } = await import('../src/core/v1-flows.js');
+        const node = (id: string, kind: string, config: Record<string, unknown>) => ({ id, type: kind, position: { x: 0, y: 0 }, data: { kind, config } });
+        const graph = (stepNode: unknown) => JSON.stringify({ nodes: [node('t', '@particle-academy/manual_trigger', {}), stepNode], edges: [{ id: 'e', source: 't', target: 's' }] });
+        const plan = planV1FlowImport([
+            { id: 'f-k', appId: null, title: 'remember', scopeJson: JSON.stringify({ kind: 'workspace', workspaceId: 'example' }), graphJson: graph(node('s', '@genie/knowledge', { action: 'add', title: 'T', terminalId: 'x' })) },
+            { id: 'f-s', appId: null, title: 'restart', scopeJson: JSON.stringify({ kind: 'workspace', workspaceId: 'example' }), graphJson: graph(node('s', '@genie/manageSite', { action: 'restart', site: 'docs' })) },
+        ], { workspaces: [{ id: 'example' }] })!;
+        const steps = (plan.flows.find((f) => f.v1Id === 'f-k')!.document.graph as { nodes: Array<{ kind: string; config: Record<string, unknown> }> }).nodes;
+        expect(steps[1]).toMatchObject({ kind: '@genie/knowledge', config: { action: 'add', title: 'T' } });
+        expect(steps[1]!.config).not.toHaveProperty('terminalId');
+        expect(plan.notes).toEqual([expect.stringMatching(/"restart".*node s: Genie 1's manageSite step is `sites` in Genie 2, whose settings differ; it was not converted/)]);
+    });
+
     it('ForceTheQuestion: puts the question to the person and goes on at once', async () => {
         const questions = [{ question: 'Ship the nightly build?', header: 'Ship', options: [{ label: 'Yes', description: 'ship it' }, { label: 'No', description: 'hold it' }], multiSelect: false }];
         expect(await run(step('ForceTheQuestion', { questions }))).toEqual({ outcome: 'ran' });

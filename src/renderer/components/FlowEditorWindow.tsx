@@ -6,6 +6,7 @@ import {
     ensureGenieKinds,
     graphToDocument,
     paletteKindFilter,
+    registerToolKinds,
     saveProblems,
     starterDocument,
     viewerStatuses,
@@ -59,8 +60,12 @@ export interface FlowEditorWindowProps {
 
 export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, Editor = FlowEditor as unknown as AnyComponent, Viewer = FlowViewer as unknown as AnyComponent, now = Date.now(), onSaved }: FlowEditorWindowProps) {
     const flows = data.flows?.flows ?? null;
+    // GENIE'S TOOLS AS STEPS (genie#1204): their kinds arrive in the snapshot and are registered BEFORE any graph is read
+    // or the canvas mounts — a canvas that mounted first would draw them as bare boxes (Genie 1's lesson,
+    // FlowEditorPanel.tsx:43-54). Idempotent, so every render may call it.
+    if (data.flows?.toolKinds) registerToolKinds(data.flows.toolKinds);
     const flow = flowId !== null ? flows?.find((f) => f.id === flowId) ?? null : null;
-    const [graph, setGraph] = useState<FlowGraph | null>(() => (flowId === null ? documentToGraph(starterDocument()) : flow ? documentToGraph(flow.document) : null));
+    const [graph, setGraph] = useState<FlowGraph | null>(() => (flows === null ? null : flowId === null ? documentToGraph(starterDocument()) : flow ? documentToGraph(flow.document) : null));
     const [name, setName] = useState(flow?.name ?? '');
     const [serverProblems, setServerProblems] = useState<readonly FlowProblem[]>([]);
     const [note, setNote] = useState<string | null>(null);
@@ -72,11 +77,14 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
 
     // The flow arrives with the first snapshot when the window opens before it: take its graph and name once.
     useEffect(() => {
-        if (graph === null && flow) {
+        if (graph !== null || flows === null) return;
+        if (flow) {
             setGraph(documentToGraph(flow.document));
             setName(flow.name);
+        } else if (flowId === null) {
+            setGraph(documentToGraph(starterDocument()));
         }
-    }, [flow, graph]);
+    }, [flow, flows, flowId, graph]);
     useEffect(() => {
         if (typeof document !== 'undefined') document.title = `${name || 'New flow'} — Flow`;
     }, [name]);
