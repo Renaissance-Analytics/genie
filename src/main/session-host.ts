@@ -1244,6 +1244,9 @@ export class SessionHost {
      * proceeded reached the file 0 times in 20, and left the thread's lock file behind every time.
      */
     async drained(exitWithinMs: number): Promise<void> {
+        // Stops still reading, reaping or verifying (Genie's asynchronous tree, genie#1201): a quit before their kill would
+        // leave the provider behind. Bounded by the caller's own wait.
+        await Promise.all([...this.#ending.values()].map((e) => e.catch(() => undefined)));
         await Promise.all([...this.#stopped].filter((s) => s.exit === null).map((s) => s.exitedWithin(exitWithinMs)));
         await this.settled();
     }
@@ -1411,8 +1414,20 @@ export class SessionHost {
     /**
      * Stop everything, at once (quit, upgrade): no grace, so the kill and the reap have run when this returns.
      */
-    stopAll(): void {
-        for (const id of [...this.#running.keys()]) this.stop(id, { graceful: false });
+    stopAll(onLeft?: (left: number) => void): Promise<void> {
+        const ids = [...this.#running.keys()];
+        for (const id of ids) this.stop(id, { graceful: false });
+        /*
+         * WHEN THEY HAVE ENDED (genie#1201). With Genie's asynchronous process tree a stop's reap and verification finish
+         * after this returns — off main, so the window keeps answering — and restart-to-install says how many are still
+         * stopping and waits for them. `onLeft` counts down as each verdict lands; already-known verdicts count at once.
+         */
+        let left = ids.filter((id) => this.#ending.has(id)).length;
+        onLeft?.(left);
+        return Promise.all(ids.map((id) => {
+            const ending = this.#ending.get(id);
+            return ending ? ending.then(() => { left -= 1; onLeft?.(left); }, () => { left -= 1; onLeft?.(left); }) : Promise.resolve();
+        })).then(() => {});
     }
 
     #emit(agentId: AgentId): void {

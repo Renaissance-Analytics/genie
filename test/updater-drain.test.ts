@@ -28,7 +28,7 @@ describe('install with live agents', () => {
     it('asks nobody, ends the sessions, runs the teardown and hands the installer the app — at once', async () => {
         const f = fakes([{ id: 'agent_a', name: 'atlas' }, { id: 'agent_b', name: 'bolt' }]);
         await f.ready();
-        const result = f.h.install();
+        const result = await f.h.install();
         expect(f.stops()).toBe(1);
         expect(result).toMatchObject({ killed: [{ pid: 77 }] });
         expect(result).not.toHaveProperty('draining');
@@ -42,7 +42,7 @@ describe('install with live agents', () => {
     it('with no live agents (positive control): the same install, and the report says none were running', async () => {
         const f = fakes([]);
         await f.ready();
-        const result = f.h.install();
+        const result = await f.h.install();
         expect(result).toMatchObject({ killed: [{ pid: 77 }] });
         expect(result!.report).toMatch(/no agents were running/);
         expect(f.h.state().phase).toBe('installing');

@@ -92,7 +92,7 @@ function fakes() {
             state: () => ({ phase: 'idle', version: null, percent: null, error: null, checkedAt: null }),
             check: async () => ({ phase: 'none', version: null, percent: null, error: null, checkedAt: 1 }),
             download: async () => true,
-            install: () => ({ report: 'stopped 1 process' }),
+            install: async () => ({ report: 'stopped 1 process' }),
             onChange: (cb) => { listeners.updates.add(cb); return () => listeners.updates.delete(cb); },
         },
     };

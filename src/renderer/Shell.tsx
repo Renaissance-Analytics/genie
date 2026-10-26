@@ -45,6 +45,8 @@ import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import { useEffect, useState } from 'react';
+import { installScreen } from '../core/install-screen.js';
+import { InstallScreen } from './components/InstallScreen.js';
 import type { Attachment } from '../core/prompt-content.js';
 
 /**
@@ -361,6 +363,14 @@ export function Shell({
     // The open workspace's agents' activity feeds, kept live by the host's pushes — its Dashboard's lanes.
     const activityFeeds = useActivityFeeds(activity, parsed.surface === 'workspace' ? parsed.workspaceId : null);
     const updateState = useUpdateState(updates);
+    // RESTART TO INSTALL (genie#1201): the click shows the restart screen at once, before main has answered; main's
+    // `installing` progress fills it in. A refused or failed install brings the window back.
+    const [installAsked, setInstallAsked] = useState(false);
+    const askInstall = (): void => {
+        setInstallAsked(true);
+        void updates.install().then((r) => { if (!r) setInstallAsked(false); }, () => { setInstallAsked(false); });
+    };
+    const restartScreen = installScreen(updateState, installAsked);
     // The update window (what is in the update): open from the header's update button until closed.
     const [updateOpen, setUpdateOpen] = useState(false);
     // A workspace row's process / site indicator opened that workspace's config (Genie 1's modals).
@@ -448,10 +458,11 @@ export function Shell({
                     onClose={() => setUpdateOpen(false)}
                     onAction={(action) => {
                         if (action === 'update-download') void updates.download();
-                        else if (action === 'update-install') void updates.install();
+                        else if (action === 'update-install') askInstall();
                     }}
                 />
             ) : null}
+            {restartScreen ? <InstallScreen screen={restartScreen} /> : null}
             {/* A workspace's background processes or sites, from its row's indicator (Genie 1's modals). */}
             {runtimeModal && runtimeWorkspace ? (
                 <WorkspaceRuntimeModal kind={runtimeModal.kind} workspace={runtimeWorkspace} data={features} onAction={onFeature} onClose={() => setRuntimeModal(null)} />
@@ -588,7 +599,7 @@ export function Shell({
                             onNavigate={onNavigate}
                             onSignalAction={(action) => {
                                 if (action === 'update-download') void updates.download();
-                                else if (action === 'update-install') void updates.install();
+                                else if (action === 'update-install') askInstall();
                             }}
                         />
                     ) : null}

@@ -7,7 +7,7 @@ import { toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
-import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from './process-tree.js';
+import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
 import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
@@ -1209,6 +1209,7 @@ export class AgentSession {
 
     /** Kill, reap, verify. Synchronous up to the first verification; retries (bounded) only for a survivor. */
     #endTree(tree: ProcessTree, signal: NodeJS.Signals): Promise<StopVerdict> {
+        if (tree.read && tree.reap) return this.#endTreeAsync(tree.read.bind(tree), tree.reap.bind(tree), signal);
         const roots = this.#roots;
         const before = roots && roots.length > 0 ? tree.snapshot() : null;
         if (before && roots) this.#members = unionOf(this.#members, subtreeOf(before, roots));
@@ -1253,6 +1254,41 @@ export class AgentSession {
             if (now && survivors.length === 0) return { verified: true, ended: this.#members.length };
             return { verified: false, reason: `Still running after the stop: ${describeProcesses(survivors)}.`, survivors };
         })();
+    }
+
+    /**
+     * `#endTree` with a tree that reads WITHOUT HOLDING THE EVENT LOOP — Genie's own (genie#1201: a quit or an install
+     * stopping every agent ran one PowerShell reading after another on main, and Windows painted the window "not
+     * responding"). The same steps and the same verdicts: the tree read BEFORE the kill (the kill is what orphans), every
+     * process of the run reaped, a fresh reading verifying it, a survivor named. Only the waiting is different.
+     */
+    async #endTreeAsync(
+        read: () => Promise<readonly ProcessInfo[] | null>,
+        reap: (targets: readonly ProcessInfo[], now: readonly ProcessInfo[]) => Promise<ReapResult>,
+        signal: NodeJS.Signals,
+    ): Promise<StopVerdict> {
+        const roots = this.#roots;
+        const before = roots && roots.length > 0 ? await read() : null;
+        if (before && roots) this.#members = unionOf(this.#members, subtreeOf(before, roots));
+        const targets = before ? stillRunning(this.#members, before) : [];
+
+        this.#driver?.kill(signal);
+        const reaped = await reap(targets, before ?? []);
+
+        if (roots === null) return { verified: false, reason: 'Genie could not read this agent’s processes when it started, so it cannot verify they ended.', survivors: [] };
+        if (roots.length > 0 && before === null) return { verified: false, reason: 'Genie could not read the machine’s processes to end this agent’s tree.', survivors: [] };
+        if (this.#members.length === 0) return { verified: true, ended: 0 };
+        // A process just killed can take a moment to leave the table: look, and kill what is left again, a few times.
+        for (let attempt = 0; ; attempt += 1) {
+            const now = await read();
+            if (now === null) return { verified: false, reason: 'Genie could not read the machine’s processes to verify this agent ended.', survivors: [] };
+            const survivors = stillRunning(this.#members, now);
+            if (survivors.length === 0) return { verified: true, ended: this.#members.length };
+            if (reaped.refused) return { verified: false, reason: reaped.reason ?? 'The reap was refused.', survivors };
+            if (attempt >= 3) return { verified: false, reason: `Still running after the stop: ${describeProcesses(survivors)}.`, survivors };
+            await new Promise((r) => setTimeout(r, 250));
+            await reap(survivors, now);
+        }
     }
 
     /** Output (or a question) from this run after it was stopped: dropped, and said once. */

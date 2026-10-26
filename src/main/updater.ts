@@ -54,6 +54,17 @@ export interface UpdateState {
      * not be fetched (offline); absent = not asked (no releases source).
      */
     changelog?: UpdateChangelog | 'unavailable' | null;
+    /**
+     * RESTART TO INSTALL, AS IT GOES (genie#1201), in the `installing` phase: the agents stopping (`left` of `agents`),
+     * then what runs from the install directory being closed, then the restart. The window's restart screen says it.
+     */
+    installing?: InstallProgress;
+}
+
+export interface InstallProgress {
+    step: 'agents' | 'processes' | 'restarting';
+    agents: number;
+    left: number;
 }
 
 /** The seam to `electron-updater`. `electron-updater-port.ts` is the only real implementation. */
@@ -78,7 +89,8 @@ export interface UpdaterPort {
  */
 export interface DrainAgentsPort {
     live(): ReadonlyArray<{ id: string; name: string }>;
-    stopAll(): void;
+    /** End every session; resolves once each stop has ended, reporting how many are still stopping as they do. */
+    stopAll(onLeft?: (left: number) => void): Promise<void> | void;
 }
 
 
@@ -87,10 +99,12 @@ export interface UpdateHostOptions {
     /** Where the running app is installed; what §7.2's teardown scans for. */
     installDir: string;
     ownPid: number;
-    /** Every process the OS can describe, when asked. */
-    processes: () => readonly RunningProcess[];
+    /** Every process the OS can describe, when asked (asynchronously in the app: genie#1201). */
+    processes: () => readonly RunningProcess[] | Promise<readonly RunningProcess[]>;
     /** Terminate one process; `false` when it could not be. */
-    kill: (pid: number) => boolean;
+    kill: (pid: number) => boolean | Promise<boolean>;
+    /** How long install waits for the agents to finish stopping before it goes on regardless (and says so). */
+    stopWaitMs?: number;
     clock?: () => number;
     /** Windows paths compare case-insensitively; defaults to the platform's rule. */
     caseInsensitive?: boolean;
@@ -115,6 +129,9 @@ export interface UpdateHostOptions {
  * nobody sees a pause after pressing "restart to install".
  */
 export const QUIT_DELAY_MS = 250;
+
+/** How long restart-to-install waits for the agents' stops before installing anyway (genie#1201). */
+export const INSTALL_STOP_WAIT_MS = 30_000;
 
 export interface InstallResult {
     killed: readonly RunningProcess[];
@@ -289,10 +306,18 @@ export class UpdateHost {
      * (who shows it), and the library is told to quit and install — `QUIT_DELAY_MS` later, so
      * the answer leaves the process before the process leaves.
      */
-    install(): InstallResult | null {
+    install(): Promise<InstallResult> | null {
         if (this.current.phase !== 'downloaded') return null;
         // No agent is asked for a handoff (the owner): the sessions end, and each resumes its own thread when started.
-        return this.finishInstall(this.options.agents?.live() ?? []);
+        const live = this.options.agents?.live() ?? [];
+        /*
+         * "INSTALLING" FIRST (genie#1201; the owner: "the whole Genie UI freezes, turns a pale white … We need a better UX
+         * during that time"). This used to stop every agent, read every process and kill each inside the click's own
+         * call, synchronously, and only then say so. Now the window has its restart screen before any of it starts, and
+         * the work below waits without holding main.
+         */
+        this.set({ ...this.current, phase: 'installing', installing: { step: 'agents', agents: live.length, left: live.length } });
+        return this.finishInstall(live);
     }
 
     /** The report of the install that ran last (the drain's words first, then §7.2's), for the UI that missed the return value. */
@@ -300,19 +325,31 @@ export class UpdateHost {
         return this.last;
     }
 
-    private finishInstall(live: ReadonlyArray<{ id: string; name: string }>): InstallResult {
-        // §7.4: an upgrade ends every agent session and does not revive them.
-        this.options.agents?.stopAll();
+    private async finishInstall(live: ReadonlyArray<{ id: string; name: string }>): Promise<InstallResult> {
+        const progress = (installing: InstallProgress): void => { this.set({ ...this.current, phase: 'installing', installing }); };
+        // §7.4: an upgrade ends every agent session and does not revive them — waited for, bounded, never held on main.
+        let stillStopping = 0;
+        if (this.options.agents) {
+            let left = live.length;
+            const stopped = Promise.resolve(this.options.agents.stopAll((n) => { left = n; progress({ step: 'agents', agents: live.length, left: n }); })).then(() => true, () => true);
+            let bound: ReturnType<typeof setTimeout> | undefined;
+            const timedOut = new Promise<false>((r) => { bound = setTimeout(() => r(false), this.options.stopWaitMs ?? INSTALL_STOP_WAIT_MS); });
+            const ended = await Promise.race([stopped, timedOut]);
+            clearTimeout(bound);
+            if (!ended) stillStopping = left;
+        }
+        progress({ step: 'processes', agents: live.length, left: stillStopping });
         const orphans = orphansUnder(
-            this.options.processes(),
+            await this.options.processes(),
             this.options.installDir,
             this.options.ownPid,
             this.options.caseInsensitive,
         );
-        for (const p of orphans) this.options.kill(p.pid);
-        this.set({ ...this.current, phase: 'installing' });
+        await Promise.all(orphans.map((p) => Promise.resolve(this.options.kill(p.pid)).catch(() => false)));
+        progress({ step: 'restarting', agents: live.length, left: stillStopping });
         (this.options.defer ?? ((fn, ms) => { setTimeout(fn, ms); }))(() => this.options.port.quitAndInstall(), QUIT_DELAY_MS);
-        const result: InstallResult = { killed: orphans, report: this.options.agents ? `${endedReport(live)}. ${orphanReport(orphans)}` : orphanReport(orphans) };
+        const ended = this.options.agents ? `${endedReport(live)}${stillStopping > 0 ? ` (${stillStopping} still stopping when the installer started)` : ''}. ` : '';
+        const result: InstallResult = { killed: orphans, report: `${ended}${orphanReport(orphans)}` };
         this.last = result;
         return result;
     }
