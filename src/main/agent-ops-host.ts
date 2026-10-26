@@ -1,7 +1,7 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
-import { applyWhen, budgetDecision, deletePlan, restartPlan, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
+import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
@@ -56,10 +56,11 @@ export interface AgentOpsPorts {
         /**
          * WHAT A RESTART OWES (`SessionHost.deliverOwed`, genie#1238): every prompt of this agent's record that was never
          * delivered — the resume prompt of an interrupted turn, the person's drafts — handed to the new run, in the order
-         * written, each once. Resolves to how many were handed over. REQUIRED, as `ended` is: a port that forgot it would
-         * restart agents and quietly owe them their work again.
+         * written, each once; `then`, when given, after them (the word to carry on, when the Restart cut a turn). Resolves
+         * to how many were handed over. REQUIRED, as `ended` is: a port that forgot it would restart agents and quietly owe
+         * them their work again.
          */
-        deliverOwed(id: AgentRecord['id']): Promise<number>;
+        deliverOwed(id: AgentRecord['id'], then?: { text: string; by: string }): Promise<number>;
     };
     /**
      * WHY A START WOULD BE REFUSED (§6.1, main.ts's `startRefusal`): an asleep workspace, the agent cap — what Start
@@ -120,8 +121,11 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
     if (!record) return UNKNOWN;
     const plan = restartPlan(kind, { threadId: record.threadId });
     if (!plan.ok) return plan;
+    const before = ports.host.probe(record.id);
+    // A turn this Restart is about to cut short: the agent is told so once it is back (Genie 1 told every relaunch).
+    const cutsTurn = before?.running === true && before.turnState === 'working';
     // A running agent is already counted in its workspace's cap and is plainly awake: only a START is asked.
-    if (ports.host.probe(record.id)?.running !== true) {
+    if (before?.running !== true) {
         const refused = ports.startRefusal(record);
         if (refused !== null) return { ok: false, reason: refused };
     }
@@ -139,7 +143,7 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
     if (plan.kind === 'graceful') {
         const started = ports.host.start(record, ports.cwdFor(record));
         if (!started.ok) return started;
-        await ports.host.deliverOwed(record.id);
+        await ports.host.deliverOwed(record.id, cutsTurn ? { text: RESUME_AFTER_USER_RESTART, by: 'genie' } : undefined);
         return { ok: true, kind: 'graceful' };
     }
     /*

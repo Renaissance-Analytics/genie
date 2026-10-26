@@ -25,6 +25,18 @@ const RESUMABLE = /^[A-Za-z0-9._:-]{1,200}$/;
  * with no conversation yet starts its first (it used to be refused; there is nothing to forget). `resume: null` = a first
  * conversation. A thread id Genie will not hand to the provider is still refused. `fresh` drops the conversation on purpose.
  */
+/**
+ * WHAT AN AGENT IS TOLD WHEN A RESTART CUT ITS TURN (genie#1238). Genie 1 told every relaunched agent that it had been
+ * restarted and to pick up where it left off (v0.7.0-beta.342 main/agents/relaunch-prompt.ts:68-101). Genie 2 resumes the
+ * conversation itself, so an agent that was idle is not prompted — nothing was cut off, and a prompt would start a turn
+ * nobody asked for — but one that was MID-TURN had that turn cancelled by the Restart and is told, as a relaunch after a
+ * quit tells it (core/upgrade-drain.ts RESUME_AFTER_RESTART).
+ */
+export const RESUME_AFTER_USER_RESTART =
+    'You were restarted (Restart in Genie) while you were in the middle of a turn, so that turn was cancelled. ' +
+    'Genie has resumed this conversation. Continue the work you were doing, from where you left off. ' +
+    'Check the state of anything you were changing before you carry on — the cancelled step may not have finished.';
+
 export type RestartPlan =
     | { ok: true; kind: 'graceful'; resume: string | null }
     | { ok: true; kind: 'fresh'; resume: null; discards: string | null }

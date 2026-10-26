@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { RESUME_AFTER_USER_RESTART } from '../src/core/agent-ops.js';
 import type { AgentRecord } from '../src/core/identity.js';
 import type { LiveSession } from '../src/core/roster.js';
 import { restartAgent, type AgentOpsPorts } from '../src/main/agent-ops-host.js';
@@ -47,7 +48,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; refusal
             stop: (id: string) => { calls.push(`stop:${id}`); return over.probe != null; },
             ended: async (id: string) => { calls.push(`ended:${id}`); return null; },
             probe: () => over.probe ?? null,
-            deliverOwed: async (id: string) => { calls.push(`deliverOwed:${id}`); return 0; },
+            deliverOwed: async (id: string, then?: { text: string; by: string }) => { calls.push(`deliverOwed:${id}`); if (then) calls.push(`then:${then.by}:${then.text}`); return 0; },
         },
         cwdFor: () => '/w/tynn',
         // The rules Start always had (§6.1): an asleep workspace or the agent cap refuses a start, by name.
@@ -62,10 +63,24 @@ describe('Restart works from every state', () => {
             const f = fakes({ probe: s.probe, record: record(s.threadId !== undefined ? { threadId: s.threadId } : {}) });
             expect(await restartAgent(f.ports, 'agent_a', 'graceful')).toEqual({ ok: true, kind: 'graceful' });
             const thread = s.threadId === undefined ? THREAD : s.threadId;
-            // Stop (a no-op with no session), wait for the old run to end, start on the SAME thread, then the owed prompts.
-            expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', `start:agent_a:${thread}:/w/tynn`, 'deliverOwed:agent_a']);
+            // Stop (a no-op with no session), wait for the old run to end, start on the SAME thread, then the owed prompts —
+            // and, when the Restart cut a turn short, the word to carry on (below).
+            const cut = s.probe?.turnState === 'working' ? [`then:genie:${RESUME_AFTER_USER_RESTART}`] : [];
+            expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', `start:agent_a:${thread}:/w/tynn`, 'deliverOwed:agent_a', ...cut]);
         });
     }
+
+    it('a Restart that CUT A TURN tells the agent so, and to carry on — as Genie 1 told every relaunched agent (relaunch-prompt.ts); an idle one is not prompted', async () => {
+        // Red before: a mid-turn agent was stopped and resumed with nothing said; its turn was simply gone.
+        const working = fakes({ probe: live({ turnState: 'working' }) });
+        await restartAgent(working.ports, 'agent_a', 'graceful');
+        expect(working.calls.at(-1)).toBe(`then:genie:${RESUME_AFTER_USER_RESTART}`);
+        expect(RESUME_AFTER_USER_RESTART).toMatch(/restarted/i);
+        expect(RESUME_AFTER_USER_RESTART).toMatch(/continue/i);
+        const idle = fakes({ probe: live({}) });
+        await restartAgent(idle.ports, 'agent_a', 'graceful');
+        expect(idle.calls.some((c) => c.startsWith('then:'))).toBe(false);
+    });
 });
 
 describe('the rules a start always had still hold', () => {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { RESUME_AFTER_USER_RESTART } from '../src/core/agent-ops.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessInfo, ProcessTree } from '../src/core/process-tree.js';
 import { promptDeliveries } from '../src/core/prompt-delivery.js';
@@ -164,6 +165,19 @@ describe('Restart delivers what a Broken agent is owed — once', () => {
         await w.comeUp();
         await vi.waitFor(() => expect(w.sent).toEqual([RESUME_AFTER_RESTART]));
         await vi.waitFor(async () => expect(await w.deliveries()).toEqual([{ text: RESUME_AFTER_RESTART, status: 'sent' }]));
+    });
+
+    it('Restart pressed MID-TURN: the cut turn is not silently gone — the agent is told it was restarted and to continue, once', async () => {
+        const w = world();
+        expect(w.host.start(w.record, '.')).toEqual({ ok: true });
+        await w.comeUp();
+        expect(w.host.prompt(w.record.id, 'refactor the Deck', 'you')).toBe(true);
+        await vi.waitFor(() => expect(w.sent).toEqual(['refactor the Deck']));
+        expect(w.host.probe(w.record.id)?.turnState).toBe('working');
+
+        expect(await restartAgent(w.ports, w.record.id, 'graceful')).toEqual({ ok: true, kind: 'graceful' });
+        await w.comeUp();
+        await vi.waitFor(() => expect(w.sent).toEqual(['refactor the Deck', RESUME_AFTER_USER_RESTART]));
     });
 
     it('a Restart whose preparation fails AGAIN leaves them owed, and the next Restart delivers them', async () => {

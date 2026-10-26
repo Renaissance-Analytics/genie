@@ -1143,11 +1143,16 @@ export class SessionHost {
      * Send/Discard (`resolvePrompt`), so a draft is never both resent and sent. Resolves to how many were handed over; 0
      * when the agent has no running session.
      */
-    deliverOwed(agentId: AgentId): Promise<number> {
+    deliverOwed(agentId: AgentId, then?: { text: string; by: string }): Promise<number> {
         const deliver = async (): Promise<number> => {
             await this.settled();
             const entry = this.#running.get(agentId);
             if (!entry || !entry.session.running) return 0;
+            // `then` (the word to carry on after a Restart cut a turn) goes AFTER what was owed: it is queued last.
+            const after = (): void => {
+                if (!then || this.#running.get(agentId) !== entry || !entry.session.running) return;
+                try { entry.session.deliver(then.text, then.by); this.#emit(agentId); } catch { /* the run ended under us */ }
+            };
             const { rows } = await readHistory(this.#store(), agentId);
             // The run may have been stopped or replaced while the record was read: deliver only into the one asked for.
             if (this.#running.get(agentId) !== entry || !entry.session.running) return 0;
@@ -1169,6 +1174,7 @@ export class SessionHost {
                 }
             }
             if (handed > 0) this.#emit(agentId);
+            after();
             return handed;
         };
         const result = this.#promptActions.then(deliver, deliver);
