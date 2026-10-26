@@ -2,6 +2,7 @@ import { PathBrowse } from './HostPathPicker.js';
 import { useState } from 'react';
 import { Input } from '@particle-academy/react-fancy';
 import { flowFields, flowFormFromFields, type FlowStep } from '../../core/flow-form.js';
+import { SCHEDULE_PRESETS, nextRunWords } from '../../core/flow-schedule.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
 import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
@@ -124,6 +125,8 @@ export interface AddFlowFormProps {
     readonly onCancel: () => void;
     /** The workspace's folder — a command's folder is relative to it, and Browse picks inside it (Tynn #835). */
     readonly root?: string | undefined;
+    /** Editing an existing flow (genie#1204): Save instead of Add, and no Arm-now (arming stays its own choice). */
+    readonly editing?: boolean | undefined;
 }
 
 const STEP_CHOICES: ReadonlyArray<{ value: FlowStep['kind']; label: string }> = [
@@ -137,8 +140,9 @@ const STEP_CHOICES: ReadonlyArray<{ value: FlowStep['kind']; label: string }> = 
  * process's log), a prompt to an agent (held back while the agent is mid-turn), or only a note that it fired.
  * Only the chosen step's fields are drawn; the document is built from the fields on submit (core/flow-form.ts).
  */
-export function AddFlowForm({ defaults, problems, onSubmit, onCancel, root }: AddFlowFormProps) {
+export function AddFlowForm({ defaults, problems, onSubmit, onCancel, root, editing = false }: AddFlowFormProps) {
     const initial = flowFields(defaults.document);
+    const [cron, setCron] = useState(initial.cron);
     const [step, setStep] = useState<FlowStep['kind']>(initial.step.kind);
     const command = initial.step.kind === 'command' ? initial.step : { command: '', folder: '' };
     const agent = initial.step.kind === 'agent' ? initial.step : { agent: '', prompt: '' };
@@ -154,13 +158,24 @@ export function AddFlowForm({ defaults, problems, onSubmit, onCancel, root }: Ad
                 onSubmit(flowFormFromFields(defaults, fields));
             }}
         >
-            <p className="text-sm text-[var(--fg-3)]">A schedule and the work it runs. You can edit the full graph on the canvas afterwards.</p>
+            <p className="text-sm text-[var(--fg-3)]">A schedule and the work it runs. A flow with more than one step is edited by an agent until the canvas editor lands.</p>
             <Row label="Name">
                 <Input name="name" defaultValue={defaults.name} />
                 <ProblemLine field="name" problems={problems} />
             </Row>
             <Row label="Schedule (cron, five fields, this machine's local time)">
-                <Input name="cron" defaultValue={initial.cron} placeholder="0 * * * *" />
+                <select
+                    data-schedule-preset=""
+                    aria-label="Schedule presets"
+                    value={SCHEDULE_PRESETS.some((p) => p.cron === cron.trim()) ? cron.trim() : ''}
+                    onChange={(e) => { if (e.target.value) setCron(e.target.value); }}
+                    className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm"
+                >
+                    <option value="">Custom…</option>
+                    {SCHEDULE_PRESETS.map((p) => <option key={p.cron} value={p.cron}>{p.label}</option>)}
+                </select>
+                <Input name="cron" value={cron} onChange={(e) => setCron(e.target.value)} placeholder="0 * * * *" />
+                <span data-next-run="" className="text-xs text-[var(--fg-3)]">{nextRunWords(cron, Date.now())}</span>
                 <ProblemLine field="cron" problems={problems} />
                 <ProblemLine field="timezone" problems={problems} />
             </Row>
@@ -198,12 +213,14 @@ export function AddFlowForm({ defaults, problems, onSubmit, onCancel, root }: Ad
                     </Row>
                 </>
             ) : null}
-            <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" name="armed" defaultChecked={defaults.armed} />
-                Arm now — the schedule starts firing. Off by default; an agent can create a flow but only you can arm it.
-            </label>
+            {editing ? null : (
+                <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" name="armed" defaultChecked={defaults.armed} />
+                    Arm now — the schedule starts firing. Off by default; an agent can create a flow but only you can arm it.
+                </label>
+            )}
             <div className="flex gap-2">
-                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add flow</button>
+                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">{editing ? 'Save flow' : 'Add flow'}</button>
                 <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
             </div>
         </form>

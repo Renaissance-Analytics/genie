@@ -41,14 +41,14 @@ const buttonsOf = (row: string) => [...row.matchAll(/<button[^>]*>([^<]*)<\/butt
 describe('a flow row', () => {
     it('a disarmed flow offers Run now, Arm and Delete, and says it has not run yet', () => {
         const row = rowOf(renderToStaticMarkup(<FlowsSurface data={data([flow({})])} onAction={() => {}} onNavigate={() => {}} />), 'flow_a');
-        expect(buttonsOf(row)).toEqual(['Run now', 'Arm', 'Delete']);
+        expect(buttonsOf(row)).toEqual(['Run now', 'Arm', 'Edit', 'Delete']);
         expect(row).toMatch(/not run yet/);
         expect(row).not.toContain('data-flow-runs');
     });
 
     it('an armed flow offers Run now, Disarm and Delete', () => {
         const row = rowOf(renderToStaticMarkup(<FlowsSurface data={data([flow({ armed: true })])} onAction={() => {}} onNavigate={() => {}} />), 'flow_a');
-        expect(buttonsOf(row)).toEqual(['Run now', 'Disarm', 'Delete']);
+        expect(buttonsOf(row)).toEqual(['Run now', 'Disarm', 'Edit', 'Delete']);
     });
 
     // Each button's action — and that Arm and Delete now ASK first (genie#1204) — is test/flows-confirm.test.tsx.
@@ -70,7 +70,7 @@ describe('a flow row', () => {
         expect(row).toMatch(/on schedule/);
         expect(row).toMatch(/held back/);
         // The history does not change the row's actions.
-        expect(buttonsOf(row)).toEqual(['Run now', 'Disarm', 'Delete']);
+        expect(buttonsOf(row)).toEqual(['Run now', 'Disarm', 'Edit', 'Delete']);
     });
 
     // Changed 2026-10-21 (the owner, 2026-10-21, of the GitHub card's "Carried over from Genie 1": "this is not needed … it should be the same"): no migration labels in the product. A flow brought over from Genie 1 reads exactly

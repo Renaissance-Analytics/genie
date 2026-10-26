@@ -93,6 +93,8 @@ export type HostedSite = SiteInfo & { readonly logs?: readonly SiteProcessLog[] 
 export interface FlowAdding {
     readonly defaults: FlowForm;
     readonly problems: readonly Problem[];
+    /** Set when the form EDITS this flow (flows.save), absent when it adds one (flows.create). */
+    readonly flowId?: string;
 }
 
 /** An Add-an-engine form open in the Services tab. `consent` is the driver's answer when the image is not here: the person pulls it, or cancels. */
@@ -315,6 +317,9 @@ export type FeatureAction =
     | { kind: 'flows.cancelForm' }
     /** The Add-a-flow form, submitted as the USER (so `armed` is honoured). */
     | { kind: 'flows.create'; form: FlowForm }
+    /** Open the form on an existing flow; save it in place (genie#1204). */
+    | { kind: 'flows.edit'; flowId: string }
+    | { kind: 'flows.save'; flowId: string; form: FlowForm }
     | { kind: 'hosting.addSite'; workspaceId: string; repoPath: string }
     | { kind: 'hosting.cancelForm' }
     /** The Add-a-site form, submitted. Validated in main; a refusal names every problem. */

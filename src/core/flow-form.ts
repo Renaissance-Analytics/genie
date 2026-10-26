@@ -72,6 +72,21 @@ export function flowDocument(input: { workspaceId: string; cron: string; step: F
 
 export type FlowDocNode = { id: string; kind: string; config?: Record<string, unknown> };
 
+/** The step kinds the form writes (flowDocument). */
+const FORM_STEPS = new Set(['genie/terminal_run', 'genie/agent_prompt', 'log']);
+
+/**
+ * Whether the Add-a-flow form can EDIT this document without losing anything (genie#1204): exactly one schedule and at
+ * most one step of a kind the form writes. A bigger flow (an agent's multi-step one) is refused for the form rather than
+ * flattened into what the form can show.
+ */
+export function formEditable(document: unknown): boolean {
+    const nodes = flowNodes(document);
+    const triggers = nodes.filter((n) => /(^|\/)schedule_trigger$/.test(n.kind));
+    const steps = nodes.filter((n) => !/(^|\/)schedule_trigger$/.test(n.kind));
+    return triggers.length === 1 && steps.length <= 1 && steps.every((n) => FORM_STEPS.has(n.kind));
+}
+
 /** A document's nodes, read from the canonical shape (an old top-level document is migrated first). */
 export function flowNodes(document: unknown): FlowDocNode[] {
     const doc = canonicalFlowDocument(document) as { graph?: { nodes?: unknown } } | null;
