@@ -152,8 +152,8 @@ describe('the Default chime’s notes (Genie 1’s, pinned — genie renderer/li
 
 describe('toastFor', () => {
     it('names the workspace and the agent in the title, the detail in the body', () => {
-        expect(toastFor({ kind: 'question', workspace: 'tynn', agent: 'atlas', detail: 'Ship now?' })).toEqual({ title: 'tynn · atlas', body: 'Asks: Ship now?' });
-        expect(toastFor({ kind: 'finished', workspace: 'fancy', agent: 'wren', detail: 'PR #12 is up' })).toEqual({ title: 'fancy · wren', body: 'Finished: PR #12 is up' });
-        expect(toastFor({ kind: 'broken', workspace: 'tynn', agent: 'bolt', detail: 'exited with code 1' })).toEqual({ title: 'tynn · bolt', body: 'Broken: exited with code 1' });
+        expect(toastFor({ kind: 'question', workspace: 'tynn', agent: 'atlas', detail: 'Ship now?' })).toEqual({ title: 'atlas@tynn', body: 'Asks: Ship now?' });
+        expect(toastFor({ kind: 'finished', workspace: 'fancy', agent: 'wren', detail: 'PR #12 is up' })).toEqual({ title: 'wren@fancy', body: 'Finished: PR #12 is up' });
+        expect(toastFor({ kind: 'broken', workspace: 'tynn', agent: 'bolt', detail: 'exited with code 1' })).toEqual({ title: 'bolt@tynn', body: 'Broken: exited with code 1' });
     });
 });

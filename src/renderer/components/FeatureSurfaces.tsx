@@ -24,6 +24,7 @@ import { mailpitInboxUrl } from '../../core/mailpit-name.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
+import { flowReach } from '../../core/flow-reach.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 
@@ -151,6 +152,105 @@ export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfacePro
 const OUTCOME_LABEL = { ran: 'ran', failed: 'failed', held: 'held back' } as const;
 const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber' } as const;
 
+type FlowRecordView = NonNullable<FeatureData['flows']>['flows'][number];
+
+/**
+ * ONE FLOW (genie#1204). Run now acts at once, and so does Disarm (it only stops the clock). Arm and Delete ASK first —
+ * `onAsk` opens the question under the row (FlowConfirm), which is what acts.
+ */
+export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk }: {
+    flow: FlowRecordView;
+    workspaces: readonly { id: string; path: string; name?: string | undefined }[];
+    now: number;
+    confirming: 'arm' | 'delete' | null;
+    onAction: (action: FeatureAction) => void;
+    onAsk: (kind: 'arm' | 'delete' | null) => void;
+}) {
+    const runs = f.runs ?? [];
+    const last = runs.at(-1);
+    return (
+        <li data-flow={f.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+            <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
+            <span className="font-medium">{f.name}</span>
+            <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
+            {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
+            {last ? (
+                <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
+                    <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[last.outcome]}</Badge>
+                    {new Date(last.at).toLocaleString()}
+                </span>
+            ) : (
+                <span className="text-xs text-[var(--fg-4)]">not run yet</span>
+            )}
+            <span className="ml-auto flex gap-3">
+                <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</button>
+                {f.armed ? (
+                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</button>
+                ) : (
+                    <button type="button" className="text-[13px]" onClick={() => onAsk('arm')}>Arm</button>
+                )}
+                <button type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAsk('delete')}>Delete</button>
+            </span>
+            {confirming ? <FlowConfirm flow={f} kind={confirming} now={now} onAction={onAction} onCancel={() => onAsk(null)} /> : null}
+            {runs.length > 0 ? (
+                <details data-flow-runs={f.id} className="basis-full">
+                    <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
+                        Runs · last {runs.length}
+                    </summary>
+                    <ol className="mt-1 flex flex-col gap-1">
+                        {[...runs].reverse().map((r, i) => (
+                            <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
+                                <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
+                                <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
+                                <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : 'on schedule'}</span>
+                                {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
+                            </li>
+                        ))}
+                    </ol>
+                </details>
+            ) : null}
+        </li>
+    );
+}
+
+/**
+ * THE QUESTION BEFORE ARM OR DELETE (genie#1204). Arm names what the flow will then do with nobody watching — its
+ * schedule and next run, each command, each agent (core/flow-reach.ts), as Genie 1's arm confirm did. Delete says the
+ * flow and its runs go.
+ */
+export function FlowConfirm({ flow: f, kind, now, onAction, onCancel }: {
+    flow: FlowRecordView;
+    kind: 'arm' | 'delete';
+    now: number;
+    onAction: (action: FeatureAction) => void;
+    onCancel: () => void;
+}) {
+    const reach = flowReach(f.document, now);
+    return (
+        <div data-flow-confirm={kind} className="basis-full rounded-lg border border-[var(--border-1)] bg-[var(--bg-2)] px-3 py-2 text-[13px]">
+            {kind === 'arm' ? (
+                <>
+                    <p className="font-medium">Arm “{f.name}”?</p>
+                    <p className="text-[var(--fg-3)]">
+                        {reach.schedule
+                            ? <>It runs on its own on <code>{reach.schedule.cron}</code>{reach.schedule.nextMs !== null ? <>, next {new Date(reach.schedule.nextMs).toLocaleString()}</> : null}.</>
+                            : <>It has no schedule: it runs only when you start it.</>}
+                    </p>
+                    {reach.steps.length > 0 ? (
+                        <ul className="mt-1 list-disc pl-5 text-[var(--fg-2)]">{reach.steps.map((step) => <li key={step}>{step}</li>)}</ul>
+                    ) : null}
+                </>
+            ) : (
+                <p className="font-medium">Delete “{f.name}”? It and its run history are removed.</p>
+            )}
+            <span className="mt-2 flex gap-2">
+                <button type="button" className={`rounded-md border px-2 py-0.5 ${kind === 'delete' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)]'}`} onClick={() => onAction({ kind: kind === 'arm' ? 'flows.arm' : 'flows.remove', flowId: f.id })}>{kind === 'arm' ? 'Arm' : 'Delete'}</button>
+                <button type="button" className="rounded-md border border-[var(--border-1)] px-2 py-0.5" onClick={onCancel}>Cancel</button>
+            </span>
+        </div>
+    );
+}
+
 /**
  * FLOWS (§6.6). Each row: armed or not, the workspace, the last run's outcome and when; Run now (the
  * person's one run, armed or not), Arm / Disarm, Delete. Under a row that has run, "Runs" opens the
@@ -160,6 +260,8 @@ const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber' } as const;
  */
 export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces = [] }: SurfaceProps) {
     const flows = data.flows;
+    // Arm and Delete ask first (genie#1204): which flow, and which question, is open.
+    const [confirming, setConfirming] = useState<{ flowId: string; kind: 'arm' | 'delete' } | null>(null);
     return (
         <div data-surface="flows" className="flex h-full min-h-0 flex-col">
             <Header title="Flows">
@@ -182,52 +284,17 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                 <Empty>No flows yet. Add your first flow — a schedule, a trigger, the work it runs.</Empty>
             ) : (
                 <ul className="divide-y divide-[var(--border-1)]">
-                    {flows.flows.map((f) => {
-                        const runs = f.runs ?? [];
-                        const last = runs.at(-1);
-                        return (
-                            <li key={f.id} data-flow={f.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
-                                <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
-                                <span className="font-medium">{f.name}</span>
-                                <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
-                                {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
-                                {last ? (
-                                    <span data-flow-last={last.outcome} className="flex items-center gap-1 text-xs text-[var(--fg-3)]">
-                                        <Badge color={OUTCOME_COLOR[last.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[last.outcome]}</Badge>
-                                        {new Date(last.at).toLocaleString()}
-                                    </span>
-                                ) : (
-                                    <span className="text-xs text-[var(--fg-4)]">not run yet</span>
-                                )}
-                                <span className="ml-auto flex gap-3">
-                                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</button>
-                                    {f.armed ? (
-                                        <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</button>
-                                    ) : (
-                                        <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.arm', flowId: f.id })}>Arm</button>
-                                    )}
-                                    <button type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAction({ kind: 'flows.remove', flowId: f.id })}>Delete</button>
-                                </span>
-                                {runs.length > 0 ? (
-                                    <details data-flow-runs={f.id} className="basis-full">
-                                        <summary className="cursor-pointer text-xs text-[var(--fg-3)]">
-                                            Runs · last {runs.length}
-                                        </summary>
-                                        <ol className="mt-1 flex flex-col gap-1">
-                                            {[...runs].reverse().map((r, i) => (
-                                                <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
-                                                    <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
-                                                    <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
-                                                    <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : 'on schedule'}</span>
-                                                    {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
-                                                </li>
-                                            ))}
-                                        </ol>
-                                    </details>
-                                ) : null}
-                            </li>
-                        );
-                    })}
+                    {flows.flows.map((f) => (
+                        <FlowRow
+                            key={f.id}
+                            flow={f}
+                            workspaces={workspaces}
+                            now={Date.now()}
+                            confirming={confirming?.flowId === f.id ? confirming.kind : null}
+                            onAction={(a) => { setConfirming(null); onAction(a); }}
+                            onAsk={(kind) => setConfirming(kind === null ? null : { flowId: f.id, kind })}
+                        />
+                    ))}
                 </ul>
             )}
         </div>

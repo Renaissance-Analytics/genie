@@ -42,7 +42,8 @@ describe('the human inbox, from the roster', () => {
     it('sends to an agent by its full and its short address, with nothing registered by hand', async () => {
         await handleFeatureAction(services, { kind: 'inbox.send', to: 'tynn:claude:atlas', text: 'one' });
         await handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'two' });
-        expect(services.inbox.unread('agent_a' as never).map((m) => m.text)).toEqual(['one', 'two']);
+        await handleFeatureAction(services, { kind: 'inbox.send', to: 'atlas@tynn', text: 'three' });
+        expect(services.inbox.unread('agent_a' as never).map((m) => m.text)).toEqual(['one', 'two', 'three']);
     });
 
     it('reaches an agent added after start, and lists every roster agent as a peer', async () => {
@@ -50,12 +51,12 @@ describe('the human inbox, from the roster', () => {
         await handleFeatureAction(services, { kind: 'inbox.send', to: 'fancy:claude:wren', text: 'hi' });
         expect(services.inbox.unread('agent_b' as never)).toHaveLength(1);
         const snap = await featureSnapshot(services, { toolStatuses: null, knowledgeQuery: '' });
-        expect(snap.inbox!.peers.map((p) => [p.address, p.name])).toEqual([['tynn:claude:atlas', 'atlas'], ['fancy:claude:wren', 'wren']]);
+        expect(snap.inbox!.peers.map((p) => [p.address, p.name])).toEqual([['atlas@tynn', 'atlas'], ['wren@fancy', 'wren']]);
     });
 
     it('two agents with one short name: the short form is refused naming both full forms', async () => {
         roster.push(record('agent_c', 'atlas', 'moic'));
-        await expect(handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'x' })).rejects.toThrow(/tynn:claude:atlas.*moic:claude:atlas|moic:claude:atlas.*tynn:claude:atlas/);
+        await expect(handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'x' })).rejects.toThrow(/atlas@tynn.*atlas@moic|atlas@moic.*atlas@tynn/);
     });
 
     it('counts a roster agent\'s uncollected mail in the Deck signal (positive control: 0 before the send)', async () => {

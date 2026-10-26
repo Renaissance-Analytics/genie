@@ -86,6 +86,12 @@ export class RemoteHost {
     #pin: { code: string; expiresAt: number } | null = null;
     #next = 0;
     #locked = false;
+    /**
+     * The host API's events, listened to ONLY while an authenticated connection exists (genie#1200). Listening builds an
+     * agent's whole detail on every update of every agent (host-api.ts), and with no one connected #broadcast sent it to
+     * no one — main at 78–98 % of a core for seconds on the owner's machine with many agents.
+     */
+    #stopListening: (() => void) | null = null;
 
     constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; shares: ShareLinks; devices: DeviceStore; transport: ServerTransport; now?: () => number }) {
         this.#api = deps.api;
@@ -97,7 +103,19 @@ export class RemoteHost {
         this.#transport = deps.transport;
         this.#now = deps.now ?? Date.now;
         deps.transport.onConnection((socket) => this.#accept(socket));
-        deps.api.onEvent((channel, payload) => this.#broadcast(channel, payload));
+    }
+
+    /** Someone is connected and known: hear the host API (once, however many connect). */
+    #listen(): void {
+        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload));
+    }
+
+    /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
+    #drop(connection: Connection): void {
+        this.#connections.delete(connection.id);
+        if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
+        this.#stopListening?.();
+        this.#stopListening = null;
     }
 
     /** The six digits shown on THIS screen for a device to type. */
@@ -179,7 +197,7 @@ export class RemoteHost {
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
             this.#baton.connectionLost(connection.id);
-            this.#connections.delete(connection.id);
+            this.#drop(connection);
         });
     }
 
@@ -190,7 +208,7 @@ export class RemoteHost {
     #refuse(connection: Connection, reason: string, close: boolean): void {
         this.#send(connection, { kind: 'refused', reason });
         if (close) {
-            this.#connections.delete(connection.id);
+            this.#drop(connection);
             connection.socket.close();
         }
     }
@@ -245,6 +263,7 @@ export class RemoteHost {
             workspaceId: connection.auth.workspaceId,
             ...(token ? { token } : {}),
         });
+        this.#listen();
     }
 
     async #call(connection: Connection, id: number, method: RemoteMethod | ControlMethod, args: unknown[]): Promise<WireMessage> {

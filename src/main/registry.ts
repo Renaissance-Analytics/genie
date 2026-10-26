@@ -8,6 +8,7 @@ import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
+import { slugsFor } from '../core/address.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -188,6 +189,24 @@ export class Registry {
     }
 
     snapshot(): GenieSnapshot {
+        // ONE PROBE PER AGENT PER SNAPSHOT (genie#1200): the rows and the live approvals both read it, and each probe
+        // carries the agent's comms — read twice, it doubled the cost of a snapshot rebuilt every 50 ms.
+        const outer = this.#probe;
+        const seen = new Map<AgentId, ReturnType<SessionProbe>>();
+        this.#probe = (id) => {
+            if (seen.has(id)) return seen.get(id)!;
+            const v = outer(id);
+            seen.set(id, v);
+            return v;
+        };
+        try {
+            return this.#snapshot();
+        } finally {
+            this.#probe = outer;
+        }
+    }
+
+    #snapshot(): GenieSnapshot {
         const now = () => Date.now();
 
         return {
@@ -574,6 +593,11 @@ export class Registry {
     }
 
     /** Every workspace record, for the one-time v1 import to plan against. */
+    /** Each workspace's address slug (core/address.ts slugsFor) — the same names, in the same order, the window uses. */
+    workspaceSlugs(): Map<string, string> {
+        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
+    }
+
     listWorkspaces(): readonly WorkspaceRecord[] {
         return this.#workspaces;
     }

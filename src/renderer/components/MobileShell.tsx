@@ -190,7 +190,7 @@ function UploadSection({ agents, sending, outcome, onSend, workspaces }: MobileU
             <h2 className="text-sm font-semibold">Send a file</h2>
             <form onSubmit={submit} className="mt-2 flex flex-col gap-2">
                 <select name="to" aria-label="To" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-0)] px-2 py-1.5 text-sm">
-                    {agents.map((a) => <option key={a.id} value={`${a.workspaceId}:${a.provider}:${a.name}`}>{a.name} · {workspaceLabel(workspaces, a.workspaceId)}</option>)}
+                    {agents.map((a) => <option key={a.id} value={`${a.workspaceId}:${a.provider}:${a.name}`}>{a.name}@{workspaceLabel(workspaces, a.workspaceId)}</option>)}
                 </select>
                 <input type="file" name="file" aria-label="File" className="text-sm" />
                 <Input name="text" placeholder="a line to go with it" aria-label="Message" />

@@ -159,9 +159,20 @@ export class InboxStore {
     }
 
     /** Mail to or from `participant`, oldest first, the newest `limit` — a conversation's raw material. */
-    involving(participant: Participant, limit = 200): InboxMessage[] {
-        return this.#mail.messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
+    involving(participant: Participant, limit = 200): readonly InboxMessage[] {
+        // READ ONCE PER CHANGE (genie#1200): the estate snapshot asks for every agent's mail twenty times a second while
+        // agents work; filtering the whole mailbox each time cost main agents × messages per snapshot. Every change to
+        // the mail either grows the array (send) or replaces it (read, delete, import), so array + length says "unchanged".
+        const messages = this.#mail.messages;
+        const key = `${participant}|${limit}`;
+        const hit = this.#involving.get(key);
+        if (hit && hit.messages === messages && hit.length === messages.length) return hit.result;
+        const result = messages.filter((m) => m.from === participant || m.to === participant).slice(-Math.max(limit, 1));
+        if (this.#involving.size > 2000) this.#involving.clear();
+        this.#involving.set(key, { messages, length: messages.length, result });
+        return result;
     }
+    readonly #involving = new Map<string, { messages: readonly InboxMessage[]; length: number; result: InboxMessage[] }>();
 
     /** Every message, oldest first — what the AgentInbox flyout's threads are read from (core/inbox-threads.ts). */
     all(): InboxMessage[] {

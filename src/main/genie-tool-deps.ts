@@ -1,7 +1,7 @@
 import type { IssueWatchSummary } from '../core/issue-watch.js';
 import type { DrivablePage, PageAction } from './mcp-tools-pages.js';
 import type { Liveness } from '../core/liveness.js';
-import { addressOf, inboxSettingFrom } from '../core/inbox.js';
+import { agentAddress, inboxSettingFrom } from '../core/inbox.js';
 import { CREATE_AGENT_ACTION, type AgentToolsDeps } from './mcp-tools-agents.js';
 import { WORKSPACE_TABS_ACTION } from './mcp-tools-workspace-tabs.js';
 import type { AgentRecord } from '../core/identity.js';
@@ -35,6 +35,8 @@ export interface GenieToolParts {
     readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction, detail: string) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
+    /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
+    readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
     /** Each agent's liveness for `agentinbox list` (core/liveness.ts). Absent = not reported. */
     readonly liveness?: (agentId: string) => Liveness;
     /** A Take Over terminal's id or a session's key → who is calling; anything else is nobody. */
@@ -80,6 +82,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
             inbox: p.inbox,
             attention: p.attention,
             roster: p.roster,
+            ...(p.workspaceSlugs ? { workspaceSlugs: p.workspaceSlugs } : {}),
             ...(p.liveness ? { liveness: p.liveness } : {}),
             resolveCaller: p.resolveCaller,
             workspaceSetting: (workspaceId) => inboxSettingFrom(p.settings.snapshotFor(workspaceId)),
@@ -123,7 +126,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 roster: p.roster,
                 approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string) => p.approve(caller, action, detail),
                 register: p.agents.register,
-                addressOf: (record: AgentRecord) => addressOf(record, 'full'),
+                addressOf: (record: AgentRecord) => agentAddress(record, p.workspaceSlugs?.() ?? new Map()),
             },
         } : {}),
         ...(p.agents && p.workspaceTabs ? {

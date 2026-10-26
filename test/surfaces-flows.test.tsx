@@ -51,23 +51,7 @@ describe('a flow row', () => {
         expect(buttonsOf(row)).toEqual(['Run now', 'Disarm', 'Delete']);
     });
 
-    it('each button sends ITS action for THIS flow — Run now, Arm, Delete', () => {
-        const sent: FeatureAction[] = [];
-        // Call the surface's own handlers by walking the element tree it returns (host elements only: the row's buttons).
-        const walk = (node: unknown): void => {
-            if (node === null || typeof node !== 'object') return;
-            if (Array.isArray(node)) { node.forEach(walk); return; }
-            const el = node as { type?: unknown; props?: Record<string, unknown> };
-            if (el.type === 'button' && typeof el.props?.onClick === 'function') (el.props.onClick as () => void)();
-            walk(el.props?.children);
-        };
-        walk(FlowsSurface({ data: data([flow({})]), onAction: (a: FeatureAction) => { sent.push(a); }, onNavigate: () => {} } as never));
-        expect(sent).toEqual([
-            { kind: 'flows.runNow', flowId: 'flow_a' },
-            { kind: 'flows.arm', flowId: 'flow_a' },
-            { kind: 'flows.remove', flowId: 'flow_a' },
-        ]);
-    });
+    // Each button's action — and that Arm and Delete now ASK first (genie#1204) — is test/flows-confirm.test.tsx.
 
     it('shows the LAST run’s outcome, and the history newest first with each outcome, what started it, and why it failed or was held back', () => {
         const runs = [

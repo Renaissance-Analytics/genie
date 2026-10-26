@@ -21,43 +21,60 @@ export type Participant = AgentId | typeof HUMAN;
 export const HUMAN = 'human' as const;
 
 export interface Address {
-    /** `null` for the short form `{provider}:{name}`. */
-    readonly workspaceId: string | null;
-    readonly provider: string;
+    /** The workspace as written: its slug, its id, `system` for the OS agent — or `null` when only a name was given. */
+    readonly workspace: string | null;
+    /** Only the OLD forms carry one (`{provider}:{name}`, `{workspace}:{provider}:{name}`); `name@workspace` never does. */
+    readonly provider: string | null;
     readonly name: string;
 }
 
 const SEGMENT = /^[A-Za-z0-9._-]+$/;
+/** The OS agent's workspace, as an address says it (the owner, 2026-10-26: "the Genie OSA should be genie@system"). */
+export const SYSTEM_WORKSPACE = 'system';
 
-/** `{provider}:{name}` or `{workspace}:{provider}:{name}`; anything else is `null`. */
+/**
+ * `name@workspace` or a bare `name` (the owner, 2026-10-26: "agent@workspace for inbox registration, display and
+ * targeting"); the old `{provider}:{name}` and `{workspace}:{provider}:{name}` still parse, so mail and flows written
+ * before keep reaching their agent. Anything else is `null`.
+ */
 export function parseAddress(text: string): Address | null {
+    if (text.includes('@')) {
+        const parts = text.split('@');
+        if (parts.length !== 2 || !parts.every((p) => SEGMENT.test(p))) return null;
+        return { workspace: parts[1]!, provider: null, name: parts[0]! };
+    }
     const parts = text.split(':');
-    if (parts.length !== 2 && parts.length !== 3) return null;
     if (!parts.every((p) => SEGMENT.test(p))) return null;
-    if (parts.length === 2) return { workspaceId: null, provider: parts[0]!, name: parts[1]! };
-    return { workspaceId: parts[0]!, provider: parts[1]!, name: parts[2]! };
+    if (parts.length === 1) return { workspace: null, provider: null, name: parts[0]! };
+    if (parts.length === 2) return { workspace: null, provider: parts[0]!, name: parts[1]! };
+    if (parts.length === 3) return { workspace: parts[0]!, provider: parts[1]!, name: parts[2]! };
+    return null;
 }
 
-export function addressOf(record: AgentRecord, form: 'short' | 'full'): string {
-    return form === 'short'
-        ? `${record.provider}:${record.name}`
-        : `${record.workspaceId}:${record.provider}:${record.name}`;
+/** The workspace an agent's address names: `system` for the OS agent, else its slug (core/address.ts slugsFor), else its id. */
+function workspaceWord(record: AgentRecord, slugs: ReadonlyMap<string, string>): string {
+    return isOsAgent(record) ? SYSTEM_WORKSPACE : slugs.get(record.workspaceId) ?? record.workspaceId;
+}
+
+/** An agent's address: `name@workspace`. No provider — names are unique in a workspace, whoever runs them. */
+export function agentAddress(record: AgentRecord, slugs: ReadonlyMap<string, string>): string {
+    return `${record.name}@${workspaceWord(record, slugs)}`;
 }
 
 export type Resolution =
     | { kind: 'one'; id: AgentId }
     | { kind: 'human' }
-    /** Two agents share the short form. Both FULL forms are named so the sender can pick. */
+    /** Two agents share a bare name (or an old short form). Every `name@workspace` is named so the sender can pick. */
     | { kind: 'ambiguous'; forms: readonly string[] }
     | { kind: 'none' };
 
 /**
  * Resolve an address against the roster.
  *
- * An ambiguous short form is reported, never guessed: v1 routed `claude:review` to whichever
- * agent registered first, and a message meant for one workspace's reviewer landed in another's.
+ * An ambiguous name is reported, never guessed: v1 routed `claude:review` to whichever agent registered first, and a
+ * message meant for one workspace's reviewer landed in another's. A workspace is matched by its slug or its id.
  */
-export function resolveAddress(text: string, roster: readonly AgentRecord[]): Resolution {
+export function resolveAddress(text: string, roster: readonly AgentRecord[], slugs: ReadonlyMap<string, string> = new Map()): Resolution {
     if (text === HUMAN || text === 'you') return { kind: 'human' };
     // The `from` on mail is the sender's id, so the id is an address too: an answer goes back to
     // exactly who wrote, with no name to look up. Resolving is not permission — `reachable` still decides.
@@ -65,16 +82,16 @@ export function resolveAddress(text: string, roster: readonly AgentRecord[]): Re
     if (byId) return { kind: 'one', id: byId.id };
     const address = parseAddress(text);
     if (address === null) return { kind: 'none' };
-
+    const name = address.name.toLowerCase();
     const matches = roster.filter(
         (r) =>
-            r.provider === address.provider &&
-            r.name === address.name &&
-            (address.workspaceId === null || r.workspaceId === address.workspaceId),
+            r.name.toLowerCase() === name &&
+            (address.provider === null || r.provider === address.provider) &&
+            (address.workspace === null || r.workspaceId === address.workspace || workspaceWord(r, slugs) === address.workspace),
     );
     if (matches.length === 0) return { kind: 'none' };
     if (matches.length === 1) return { kind: 'one', id: matches[0]!.id };
-    return { kind: 'ambiguous', forms: matches.map((r) => addressOf(r, 'full')) };
+    return { kind: 'ambiguous', forms: matches.map((r) => agentAddress(r, slugs)) };
 }
 
 /** A workspace's inbox setting: who may discover and message its agents from outside. */

@@ -3,7 +3,7 @@ import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity
 import {
     ATTACHMENT_LIMITS,
     HUMAN,
-    addressOf,
+    agentAddress,
     attachmentRefusal,
     isExecutableName,
     parseAddress,
@@ -21,33 +21,28 @@ const agent = (workspaceId: string, provider: 'claude' | 'codex', name: string, 
     agentRecord({ id: mintAgentId(), workspaceId, provider, name, accessScope });
 
 describe('addressing', () => {
-    it('parses the two forms, and nothing else', () => {
-        expect(parseAddress('claude:fancy')).toEqual({ workspaceId: null, provider: 'claude', name: 'fancy' });
-        expect(parseAddress('tynn:claude:fancy')).toEqual({ workspaceId: 'tynn', provider: 'claude', name: 'fancy' });
-        // COUNTED: four malformed inputs, four nulls. A parser that accepted one of them would
+    // name@workspace is test/inbox-agent-at.test.ts; here, the OLD provider forms that must keep resolving.
+    it('the old provider forms parse, and malformed ones do not', () => {
+        expect(parseAddress('claude:fancy')).toEqual({ workspace: null, provider: 'claude', name: 'fancy' });
+        expect(parseAddress('tynn:claude:fancy')).toEqual({ workspace: 'tynn', provider: 'claude', name: 'fancy' });
+        // COUNTED: three malformed inputs, three nulls. A parser that accepted one of them would
         // route mail to an agent nobody named.
-        const bad = ['fancy', 'a:b:c:d', ':fancy', 'claude:'].map(parseAddress);
-        expect(bad.filter((a) => a === null)).toHaveLength(4);
+        const bad = ['a:b:c:d', ':fancy', 'claude:'].map(parseAddress);
+        expect(bad.filter((a) => a === null)).toHaveLength(3);
     });
 
-    it('resolves a unique short address to exactly that agent', () => {
+    it('an old short form still names its provider: same name, other provider, not ambiguous', () => {
         const fancy = agent('fancy', 'claude', 'fancy');
         const roster = [fancy, agent('tynn', 'claude', 'tynn'), agent('prism', 'codex', 'fancy')];
-
         expect(resolveAddress('claude:fancy', roster)).toEqual({ kind: 'one', id: fancy.id });
-        // The codex agent shares the NAME but not the provider — not ambiguous.
         expect(resolveAddress('codex:fancy', roster)).toEqual({ kind: 'one', id: roster[2]!.id });
     });
 
-    it('names BOTH full forms when two agents share a short address, and resolves the full form', () => {
+    it('two agents sharing an old short form: AMBIGUOUS, named as name@workspace; the old full form resolves', () => {
         const a = agent('tynn', 'claude', 'review');
         const b = agent('fancy', 'claude', 'review');
-
         const r = resolveAddress('claude:review', [a, b]);
-        expect(r.kind).toBe('ambiguous');
-        if (r.kind !== 'ambiguous') throw new Error('unreachable');
-        expect(r.forms).toEqual(['tynn:claude:review', 'fancy:claude:review']);
-
+        expect(r).toEqual({ kind: 'ambiguous', forms: ['review@tynn', 'review@fancy'] });
         expect(resolveAddress('fancy:claude:review', [a, b])).toEqual({ kind: 'one', id: b.id });
     });
 
@@ -61,10 +56,10 @@ describe('addressing', () => {
         expect(resolveAddress('you', [])).toEqual({ kind: 'human' });
     });
 
-    it('formats both forms from a record', () => {
+    it('formats name@workspace from a record (the id when no slug is known)', () => {
         const a = agent('tynn', 'claude', 'tynn');
-        expect(addressOf(a, 'short')).toBe('claude:tynn');
-        expect(addressOf(a, 'full')).toBe('tynn:claude:tynn');
+        expect(agentAddress(a, new Map())).toBe('tynn@tynn');
+        expect(agentAddress(a, new Map([['tynn', 'tynn-ai']]))).toBe('tynn@tynn-ai');
     });
 });
 
