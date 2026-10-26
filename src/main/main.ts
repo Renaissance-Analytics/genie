@@ -1964,6 +1964,8 @@ async function boot(): Promise<void> {
         // containers stopped — beside importFromV1/reapV1Runtime in spirit, but here because the engine registry is born in
         // composition and must hold them before sites and kept processes read a workspace's env (main/v1-services.ts).
         v1Services: { database: v1DatabaseFile() },
+        // Genie 1's FLOWS (its `flows` table), brought over ONCE as DISARMED canvas flows (main/v1-flows.ts, genie#1204).
+        v1Flows: { database: v1DatabaseFile() },
         // What a flow's agent prompt reaches (flow-runner.ts): the live sessions, late-bound — a prompt to an agent mid-turn
         // is held back, never queued inside its turn.
         agentSessions: {
