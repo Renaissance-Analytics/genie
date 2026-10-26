@@ -576,7 +576,8 @@ if (!approvalEnabled) {
 } else if (typeof codexRow !== 'string') {
     console.log('  SKIP  the approval round trip — no codex agent was seeded');
 } else {
-    await cdp.evaluate(`document.querySelector('[data-agent="${codexRow}"]').click(); true`);
+    // The agent's PAGE, by its route: a Dashboard row click now opens the chat beside the board (genie#1209, step 17).
+    await cdp.evaluate(`window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 
     // The composer must be REACHABLE — that is a claim about this screen and worth asserting.
@@ -890,7 +891,8 @@ if (!approvalEnabled) {
 
     await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]').click(); true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard');
-    await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.click(); true`);
+    // The agent's PAGE, by its route (a row click opens its chat beside the board, genie#1209).
+    await cdp.evaluate(`(() => { const id = document.querySelector('[data-surface="dashboard"] div[data-workspace] [data-agent]')?.getAttribute('data-agent'); if (id) window.location.hash = '#genie://agent/' + id + '?tab=stream'; return true; })()`);
     const onAgent = await waitFor(cdp, `Boolean(document.querySelector('[data-action="take-over"]'))`, 'the Agent view with its Take over control');
     if (onAgent) {
         await cdp.evaluate(`document.querySelector('[data-action="take-over"]').click(); true`);
