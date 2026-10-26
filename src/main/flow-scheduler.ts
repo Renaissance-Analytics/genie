@@ -1,6 +1,6 @@
 import { nextCronAfter } from '../core/cron.js';
 import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
-import type { FileFired, FlowRecord, FlowRun, FlowStore, RunOutcome, Schedule } from './flow-store.js';
+import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
 
 /**
  * FLOWS (§6.6) — the scheduler. ONE timer, set to the nearest due among the ARMED flows'
@@ -36,7 +36,7 @@ import type { FileFired, FlowRecord, FlowRun, FlowStore, RunOutcome, Schedule } 
  * the nightly job at launch, as Genie 1 did not: a backlog firing at once is worse than a skipped night.
  */
 
-export type RunResult = { readonly outcome: 'ran' } | { readonly outcome: 'failed' | 'held'; readonly reason: string };
+export type RunResult = { readonly outcome: 'ran' } | { readonly outcome: 'failed' | 'held'; readonly reason: string; readonly steps?: readonly FlowRunStep[] };
 
 export interface FlowSchedulerDeps {
     readonly store: FlowStore;
@@ -177,7 +177,7 @@ export class FlowScheduler {
     }
 
     async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number): Promise<FlowRun | null> {
-        let result: { outcome: RunOutcome; reason?: string };
+        let result: { outcome: RunOutcome; reason?: string; steps?: readonly FlowRunStep[] };
         try {
             // Answering nothing means it ran (a run port with nothing to say about its outcome).
             const answered = (await this.#deps.run(flow, trigger)) as RunResult | undefined;
@@ -188,7 +188,7 @@ export class FlowScheduler {
         return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...(trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {}) });
     }
 
-    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string }): Promise<FlowRun | null> {
+    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[] }): Promise<FlowRun | null> {
         return this.#deps.store.recordRun(flowId, run);
     }
 }

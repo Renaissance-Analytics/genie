@@ -78,7 +78,7 @@ describe('the runner — a fired flow EXECUTES its steps and answers an outcome'
 
     it('a failing step FAILS the run with its reason — a non-zero exit; a kind the engine does not know fails before ANY step runs', async () => {
         const failing = createFlowRunner({ ports: () => countingPorts({ runCommand: async () => ({ exitCode: 2, output: 'boom' }) }), asleep: () => false });
-        expect(await failing(flowOf([trigger, step('genie/terminal_run', { workspace: WS.id, command: 'npm test' })], [edge('t', 's')]), schedule)).toEqual({ outcome: 'failed', reason: 'npm test ended with exit code 2' });
+        expect(await failing(flowOf([trigger, step('genie/terminal_run', { workspace: WS.id, command: 'npm test' })], [edge('t', 's')]), schedule)).toEqual({ outcome: 'failed', reason: 'npm test ended with exit code 2', steps: [{ nodeId: 's', label: 'runs the command `npm test`', outcome: 'failed' }] });
 
         // Read through the engine (flow-kinds.ts) as the store reads it: refused as unknown, so the command before it never runs either.
         const ports = countingPorts();
@@ -101,7 +101,7 @@ describe('the runner — a fired flow EXECUTES its steps and answers an outcome'
     it('a step that HOLDS BACK makes the run held, with the step’s words — not failed', async () => {
         const run = createFlowRunner({ ports: () => countingPorts({ promptAgent: async () => { throw new HeldBack('atlas is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn'); } }), asleep: () => false });
         const result = await run(flowOf([trigger, step('genie/agent_prompt', { agent: 'claude:atlas', prompt: 'check in' })], [edge('t', 's')]), schedule);
-        expect(result).toEqual({ outcome: 'held', reason: 'atlas is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn' });
+        expect(result).toEqual({ outcome: 'held', reason: 'atlas is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn', steps: [{ nodeId: 's', label: 'prompts claude:atlas', outcome: 'held' }] });
     });
 
     it('a flow with no nodes fails with the reason rather than reading as run', async () => {

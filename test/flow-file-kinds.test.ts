@@ -83,6 +83,6 @@ describe('a file run hands the file to the steps after the trigger', () => {
         const p = ports({ moveFile: async () => { throw new Error('the folder ../x is outside the workspace; nothing was moved'); } });
         const run = createFlowRunner({ ports: () => p, asleep: () => false });
         const result = await run(flow([fileTrigger(), move()], [edge('t', 'm')]), { nodeId: 't', file });
-        expect(result).toEqual({ outcome: 'failed', reason: expect.stringMatching(/outside the workspace; nothing was moved/) });
+        expect(result).toEqual({ outcome: 'failed', reason: expect.stringMatching(/outside the workspace; nothing was moved/), steps: [{ nodeId: 'm', label: 'moves the file into .untracked', outcome: 'failed' }] });
     });
 });
