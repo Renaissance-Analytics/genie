@@ -1400,11 +1400,13 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
     const results = q.trim() ? searchSettings(q.trim()).filter((def) => sectionOf(def.key) !== null) : null;
     const row = (def: SettingDef) => (
         <li key={def.key} data-setting={def.key} className="flex items-center gap-4 py-2.5">
-            <div className="flex-1">
+            <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">{def.label}</div>
                 <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
             </div>
-            <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+            <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
+                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+            </div>
         </li>
     );
     // The settings a page draws as rows: its keys, in the registry's order. Internal (`hidden`) keys and the alert sounds
@@ -1450,11 +1452,13 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                                     const at = NAV_GROUPS.flatMap((g) => g.items).find((i) => i.id === sectionOf(def.key));
                                     return (
                                         <li key={def.key} data-setting={def.key} data-setting-section={at?.id} className="flex items-center gap-4 py-2.5">
-                                            <div className="flex-1">
+                                            <div className="min-w-0 flex-1">
                                                 <div className="flex items-center gap-2 text-sm font-medium">{def.label}{at ? <Badge variant="soft" size="sm">{at.label}</Badge> : null}</div>
                                                 <div className="text-xs text-[var(--fg-3)]">{def.description}</div>
                                             </div>
-                                            <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                                            <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
+                                                <SettingControl def={def} value={values === null ? null : values[def.key] ?? def.default} onAction={onAction} customPath={values?.[`${def.key}_custom`]} />
+                                            </div>
                                         </li>
                                     );
                                 })}

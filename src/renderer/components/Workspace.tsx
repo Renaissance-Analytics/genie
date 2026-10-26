@@ -670,11 +670,13 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         <ul className="mt-1 divide-y divide-[var(--border-1)]">
                             {ops.defaultAgent ? (
                                 <li data-ws-default-agent="" className="flex items-center gap-3 py-1.5">
-                                    <div className="flex-1">
+                                    <div className="min-w-0 flex-1">
                                         <div className="font-medium">Default agent</div>
                                         <div className="text-[var(--fg-3)]">The agent here that an action uses when it names none, and the one that hears GitHub by default.</div>
                                     </div>
-                                    <Select data-default-agent="" aria-label="Default agent" list={[{ value: '', label: 'None' }, ...ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name }))]} value={ops.defaultAgent.current ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
+                                    <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
+                                        <Select data-default-agent="" aria-label="Default agent" list={[{ value: '', label: 'None' }, ...ops.defaultAgent.agents.map((a) => ({ value: a.id, label: a.name }))]} value={ops.defaultAgent.current ?? ''} onValueChange={(v) => ops.defaultAgent!.onSet(v === '' ? null : v)} />
+                                    </div>
                                 </li>
                             ) : null}
                             {SETTINGS.filter((def) => def.scope === 'workspace' && !def.hidden).map((def) => {
@@ -683,18 +685,20 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 const overridden = ops.settings!.overridden.includes(def.key);
                                 return (
                                     <li key={def.key} data-ws-setting={def.key} {...(overridden ? { 'data-ws-overridden': def.key } : {})} className="flex items-center gap-3 py-1.5">
-                                        <div className="flex-1">
+                                        <div className="min-w-0 flex-1">
                                             <div className="font-medium">{def.label}</div>
                                             <div className="text-[var(--fg-3)]">{def.description}</div>
                                         </div>
+                                        <div data-setting-control="" className="flex w-64 shrink-0 items-center justify-end gap-2">
                                         {def.type === 'boolean' ? (
                                             <Switch checked={value === true} onCheckedChange={(checked) => ops.settings!.onSet(def.key, checked)} aria-label={def.label} />
                                         ) : def.type === 'enum' ? (
                                             <Select value={String(value)} list={def.options.map((o) => ({ value: o, label: def.optionLabels?.[o] ?? o }))} onValueChange={(v) => ops.settings!.onSet(def.key, v)} aria-label={def.label} />
                                         ) : (
-                                            <input type="text" defaultValue={String(value)} onBlur={(e) => ops.settings!.onSet(def.key, e.target.value)} className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
+                                            <input type="text" defaultValue={String(value)} onBlur={(e) => ops.settings!.onSet(def.key, e.target.value)} className="w-full min-w-0 rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5" />
                                         )}
                                         {overridden ? <button type="button" data-action="ws-setting-reset" data-ws-key={def.key} onClick={() => ops.settings!.onReset(def.key)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]" title="Drop this workspace's override; the workstation value applies again">reset</button> : null}
+                                        </div>
                                     </li>
                                 );
                             })}
