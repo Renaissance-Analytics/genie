@@ -6,6 +6,10 @@ import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
+import { slugsFor } from '../core/address.js';
+/** How long Genie's own alert toast stays (genie#1211). */
+const ALERT_TOAST_MS = 8_000;
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
@@ -27,7 +31,7 @@ import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
 import type { Approval } from '../core/approval.js';
 import { alertsBetween, type AlertSnapshot } from '../core/alert-diff.js';
-import { ALERT_KINDS, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
+import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from '../core/alerts.js';
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
@@ -338,7 +342,7 @@ const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false
  * the master switch are on) and raises a toast naming the WORKSPACE and the AGENT. The first
  * snapshot after boot alerts nobody.
  */
-function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null): void {
+function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string }) => void): void {
     const prev = useRef<AlertSnapshot | null>(null);
     useEffect(() => {
         const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason })) };
@@ -346,10 +350,7 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
             for (const alert of alertsBetween(prev.current, next)) {
                 // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
                 playAlertSound(alertSound(alert.kind, settings ?? {}));
-                if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
-                    const toast = toastFor(alert);
-                    try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
-                }
+                show(toastFor(alert, slugsFor(snapshot.workspaces ?? [])));
             }
             prev.current = next;
         }
@@ -361,16 +362,13 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
  * tool newly under its security floor raises the `ghsecurity` alert once — the sound and notification the person set
  * for "a security alert" — the moment the probe reports it, not when Settings is next opened.
  */
-function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null): void {
+function useToolchainSecurityAlerts(tools: readonly ToolStatus[] | null, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string }) => void): void {
     const prev = useRef<readonly ToolStatus[] | null>(null);
     useEffect(() => {
         if (tools === null) return;
         for (const alert of toolchainSecurityAlerts(prev.current, tools)) {
             playAlertSound(alertSound(alert.kind, settings ?? {}));
-            if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
-                const toast = toastFor(alert);
-                try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
-            }
+            show(toastFor(alert));
         }
         prev.current = tools;
     }, [tools, settings]);
@@ -557,8 +555,20 @@ function DesktopApp({ bridge }: AppProps) {
     const panelHost = useMemo(() => ({ repo: resolvedBridge?.repo, artboard: resolvedBridge?.artboard, files: resolvedBridge?.files }), [resolvedBridge]);
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
-    useAlerts(snapshot, features.settings.values);
-    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values);
+    // An alert's toast (genie#1211): Genie in front → its own, bottom-left, clear of the chat; behind → the OS notification.
+    const [alertToasts, setAlertToasts] = useState<readonly AlertToast[]>([]);
+    const dismissAlert = useCallback((id: string) => setAlertToasts((prev) => prev.filter((t) => t.id !== id)), []);
+    const showAlert = useCallback((toast: { title: string; body: string }) => {
+        if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
+            const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
+            setTimeout(() => dismissAlert(id), ALERT_TOAST_MS);
+        } else if (typeof Notification !== 'undefined' && Notification.permission !== 'denied') {
+            try { new Notification(toast.title, { body: toast.body }); } catch { /* no notification surface here */ }
+        }
+    }, [dismissAlert]);
+    useAlerts(snapshot, features.settings.values, showAlert);
+    useToolchainSecurityAlerts(features.toolchain?.tools ?? null, features.settings.values, showAlert);
     // EVERY KIND OF ACTION (Tynn #766 C): what an agent just did, pushed by main; the sound chosen for it, if any.
     const soundSettings = useRef(features.settings.values);
     soundSettings.current = features.settings.values;
@@ -1550,6 +1560,7 @@ function DesktopApp({ bridge }: AppProps) {
                 }}
             />
         ) : null}
+        <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />
         </PanelHostContext.Provider>
         </PluginEditorsContext.Provider>
         </HostPathPickerContext.Provider>
