@@ -3,30 +3,25 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
-import type { AgentRecord } from '../src/core/identity.js';
-import { FlowStore } from '../src/main/flow-store.js';
 import { runtimeDir } from '../src/main/paths.js';
-import type { PtyPort } from '../src/main/terminal-host.js';
-import { runV1ScheduleImport } from '../src/main/v1-schedules.js';
-import { composeTracker } from './support/compose-tracker.js';
+import { ProcessBook } from '../src/main/process-book.js';
 import { inOneTransaction, openFixtureDb } from './support/sqlite-fixture.js';
 
 /**
  * GENIE 1's SCHEDULED TASKS COME THROUGH THE UPGRADE (hosting ship line P4). Genie 1 kept a scheduled task as a
  * background process with a schedule (`terminal_specs` type 'process', `meta_json.schedule` + `schedule_kind`);
- * the process import (core/v1-processes.ts) leaves them to Flows, and until now Flows imported nothing.
+ * and Genie 2 keeps them the same way (genie#1204; the owner, 2026-10-26: "a scheduled command is a BG Process in a
+ * workspace, just with a schedule"). Earlier betas imported them as flows; test/scheduled-tasks-move.test.ts moves those.
  *
- * Driven through `runV1ScheduleImport` — the boot's own call — and once through `composeServices`, with a v1
- * database built here from v1's REAL `CREATE TABLE` statements (copied from a v1 `genie.db`); every value is
- * invented.
+ * Driven through `ProcessBook.open` — the boot's own call — with a v1 database built here from v1's REAL `CREATE TABLE`
+ * statements (copied from a v1 `genie.db`); every value is invented.
  *
  * The contract:
- * - Every task comes over as a flow, DISARMED: the person arms what they want. One that was firing in Genie 1
- *   is NOTED so, so the person knows what stopped.
- * - `command` → schedule → genie/terminal_run, the folder relative to the workspace; `agent-nudge` → schedule →
- *   genie/agent_prompt to the agent's FULL Genie 2 address; the schedule has no timezone (local, as Genie 1's).
- * - ONCE: recorded in flows.json itself; a later boot imports nothing more, so what the person removed or changed
+ * - Every task comes over as a scheduled background process, PAUSED: the person enables what they want. One that was
+ *   firing in Genie 1 is NOTED so, so the person knows what stopped.
+ * - `command` runs in its folder; `agent-nudge` prompts the agent at its FULL Genie 2 address; the schedule has no
+ *   timezone (local, as Genie 1's).
+ * - ONCE: recorded in processes.json itself; a later boot imports nothing more, so what the person removed or changed
  *   stays as they left it. A boot that cannot see v1 is PROVISIONAL. An id already here is left alone.
  * - Not imported, each NOTED with why: no workspace, a workspace Genie 2 lacks, an unreadable schedule, no
  *   command, a folder outside the workspace, an agent v1 no longer knows or Genie 2 lacks, a v1 workflow task.
@@ -128,188 +123,107 @@ const roster = [
 
 let home: string;
 let v1File: string;
-/** Every composition a test starts is shut down before `home` is removed — one still composing when a test timed out included (B13). */
-const composed = composeTracker();
-const flowsFile = () => join(runtimeDir(home), 'flows.json');
-const onDisk = (): { flows?: Array<Record<string, unknown>>; v1Import?: Record<string, unknown> } => (existsSync(flowsFile()) ? JSON.parse(readFileSync(flowsFile(), 'utf8')) : {});
-const importInto = async (store: FlowStore, database: string = v1File) => runV1ScheduleImport(store, { database, workspaces: [WS], roster });
+const processesFile = () => join(runtimeDir(home), 'processes.json');
+const onDisk = (): { processes?: Array<Record<string, unknown>>; v1ScheduleImport?: Record<string, unknown> } => (existsSync(processesFile()) ? JSON.parse(readFileSync(processesFile(), 'utf8')) : {});
+const supervisor = { start: () => { throw new Error('the import starts nothing'); }, stop: () => true, forget: () => true, list: () => [] };
+/** The book as the boot opens it: Genie 1's background processes AND scheduled tasks, imported once. */
+const openBook = (database: string = v1File) => ProcessBook.open(home, { supervisor, envFor: () => ({}), asleep: () => false, v1: { database, workspaces: () => [WS], roster: () => roster } });
+const scheduledOf = (book: ProcessBook) => new Map(book.kept().filter((p) => p.schedule !== undefined).map((p) => [p.id, p]));
 const md5 = (f: string) => createHash('md5').update(readFileSync(f)).digest('hex');
 
 beforeEach(() => {
     home = mkdtempSync(join(tmpdir(), 'genie2-v1-schedules-'));
     v1File = join(home, 'v1-genie.db');
 });
-afterEach(async () => {
-    await composed.shutdownAll();
+afterEach(() => {
     rmSync(home, { recursive: true, force: true });
 });
 
-describe("Genie 1's scheduled tasks, imported once as DISARMED flows", () => {
-    it('maps each task faithfully: a command into genie/terminal_run in its folder, a nudge into genie/agent_prompt to the full address — every one disarmed, local time', async () => {
+describe("Genie 1's scheduled tasks, imported once as PAUSED scheduled background processes", () => {
+    it('maps each task faithfully: a command runs in its folder, a nudge prompts the agent at its full address — every one paused, local time', async () => {
         writeV1(v1File, rows);
-        const store = await FlowStore.open(home);
-        await importInto(store);
-        const byId = new Map(store.list().map((f) => [f.id, f]));
-        expect([...byId.keys()].sort()).toEqual(['flow_v1_s-nudge', 'flow_v1_s-nudge-term', 'flow_v1_s-pending', 'flow_v1_s-report', 'flow_v1_s-root']);
-        for (const f of byId.values()) {
-            expect(f.armed).toBe(false);
-            expect(f.workspaceId).toBe(WS.id);
-            expect(f.importedFrom).toEqual({ v1SpecId: f.id.replace('flow_v1_', '') });
+        const byId = scheduledOf(await openBook());
+        expect([...byId.keys()].sort()).toEqual(['proc_v1_s-nudge', 'proc_v1_s-nudge-term', 'proc_v1_s-pending', 'proc_v1_s-report', 'proc_v1_s-root']);
+        for (const p of byId.values()) {
+            expect(p.wanted).toBe(false);
+            expect(p.workspaceId).toBe(WS.id);
         }
-        expect(byId.get('flow_v1_s-report')).toMatchObject({
-            name: 'nightly report',
-            // The canonical shape: the steps under graph, where the engine reads (and validated) them.
-            document: {
-                $schema: FLOW_SCHEMA_URL,
-                version: 1,
-                graph: {
-                    nodes: [
-                        { id: 't', kind: 'schedule_trigger', config: { cron: '0 3 * * *' } },
-                        { id: 's', kind: 'genie/terminal_run', config: { workspace: WS.id, command: 'npm run report', cwd: 'repos/app' } },
-                    ],
-                    edges: [{ id: 'e1', source: 't', target: 's' }],
-                },
-            },
-        });
-        // No timezone: evaluated in this machine's local time, as Genie 1 did.
-        expect(store.schedules('flow_v1_s-report')).toEqual([{ nodeId: 't', cron: '0 3 * * *', timezone: undefined }]);
-        // At the workspace root there is no folder.
-        expect(((byId.get('flow_v1_s-root')!.document.graph as { nodes: unknown }).nodes as Array<{ config: Record<string, unknown> }>)[1]!.config).toEqual({ workspace: WS.id, command: 'npm run prune' });
-        expect(((byId.get('flow_v1_s-nudge')!.document.graph as { nodes: unknown }).nodes as Array<{ kind: string; config: Record<string, unknown> }>)[1]).toMatchObject({ kind: 'genie/agent_prompt', config: { agent: 'ws-example:claude:atlas', prompt: 'post the standup' } });
+        expect(byId.get('proc_v1_s-report')).toMatchObject({ name: 'nightly report', command: 'npm run report', cwd: join(WS.path, 'repos/app'), schedule: { cron: '0 3 * * *', kind: 'command' } });
+        expect(byId.get('proc_v1_s-root')).toMatchObject({ command: 'npm run prune', cwd: WS.path });
+        expect(byId.get('proc_v1_s-nudge')!.schedule).toMatchObject({ kind: 'agent-nudge', agent: 'ws-example:claude:atlas', prompt: 'post the standup' });
         // The terminal's agent, found through the terminal the nudge named.
-        expect(((byId.get('flow_v1_s-nudge-term')!.document.graph as { nodes: unknown }).nodes as Array<{ config: Record<string, unknown> }>)[1]!.config).toEqual({ agent: 'ws-example:codex:scout', prompt: 'sweep the issues' });
-        // No refusals: every imported schedule is one Genie can evaluate.
-        expect(store.list().flatMap((f) => f.refusals)).toEqual([]);
+        expect(byId.get('proc_v1_s-nudge-term')!.schedule).toMatchObject({ kind: 'agent-nudge', agent: 'ws-example:codex:scout', prompt: 'sweep the issues' });
     });
 
-    it('records what it did in flows.json and NOTES, with why, what was firing (now disarmed) and everything not imported', async () => {
+    it('records what it did in processes.json and NOTES, with why, what was firing (now paused) and everything not imported', async () => {
         writeV1(v1File, rows);
-        await importInto(await FlowStore.open(home));
-        const record = onDisk().v1Import!;
+        await openBook();
+        const record = onDisk().v1ScheduleImport!;
         expect(record).toMatchObject({ sawV1: true, imported: 5, alreadyHere: 0 });
         const notes = record.notes as string[];
         const about = (id: string) => notes.filter((n) => n.includes(`task ${id} `));
         // Firing in Genie 1 (enabled, approved) → said so; disabled or awaiting approval → nothing to say.
-        for (const id of ['s-report', 's-nudge', 's-nudge-term']) expect(about(id)).toEqual([expect.stringMatching(/was firing on its schedule in Genie 1; it comes over DISARMED/)]);
+        for (const id of ['s-report', 's-nudge', 's-nudge-term']) expect(about(id)).toEqual([expect.stringMatching(/was firing on its schedule in Genie 1; it comes over PAUSED/)]);
         expect(about('s-root')).toEqual([]);
         expect(about('s-pending')).toEqual([]);
         expect(about('s-nudge-gone')).toEqual([expect.stringMatching(/Genie 1 no longer knows which agent/)]);
         expect(about('s-nudge-ghost')).toEqual([expect.stringMatching(/its agent ghost .* is not in Genie 2; not imported/)]);
-        expect(about('s-flow')).toEqual([expect.stringMatching(/Genie 1 workflow \(f-1\).*not imported/)]);
+        expect(about('s-flow')).toEqual([expect.stringMatching(/ran a Genie 1 workflow \(f-1\)/)]);
         expect(about('s-bad-cron')).toEqual([expect.stringMatching(/"every day" is not a cron expression/)]);
         expect(about('s-outside')).toEqual([expect.stringMatching(/outside its workspace/)]);
         expect(about('s-nocmd')).toEqual([expect.stringMatching(/no command/)]);
         expect(about('s-noworkspace')).toEqual([expect.stringMatching(/no workspace/)]);
         expect(about('s-gone-ws')).toEqual([expect.stringMatching(/ws-not-in-genie2 is not in Genie 2/)]);
-        // A plain background process and a terminal are not scheduled tasks: not imported, not noted.
         expect(about('p-plain')).toEqual([]);
         expect(about('t-scout')).toEqual([]);
         expect(notes).toHaveLength(3 + 8);
     });
 
-    it('the person arms what they want: an imported flow arms for the user and then has a due', async () => {
+    it('the person enables what they want: Enable schedule arms an imported task', async () => {
         writeV1(v1File, rows);
-        const store = await FlowStore.open(home);
-        await importInto(store);
-        expect(await store.arm('flow_v1_s-report', { kind: 'user' })).toMatchObject({ ok: true });
-        expect(store.get('flow_v1_s-report')!.armed).toBe(true);
+        const book = await openBook();
+        await book.enableSchedule('proc_v1_s-report');
+        expect(scheduledOf(book).get('proc_v1_s-report')!.wanted).toBe(true);
     });
 
     it('once: what the person removed or changed stays as they left it, and a later v1 row is not picked up', async () => {
         writeV1(v1File, rows);
-        const first = await FlowStore.open(home);
-        await importInto(first);
-        await first.remove('flow_v1_s-root');
-        await first.update('flow_v1_s-report', { name: 'nightly report (mine)' }, { kind: 'user' });
+        const first = await openBook();
+        await first.remove('proc_v1_s-root');
+        await first.enableSchedule('proc_v1_s-report');
         rmSync(v1File);
         writeV1(v1File, [...rows, { id: 's-late', workspace_id: WS.id, label: 'late', cwd: WS.path, meta: { command: 'npm run late', schedule: '0 5 * * *' } }]);
-
-        const second = await FlowStore.open(home);
-        await importInto(second);
-        const ids = second.list().map((f) => f.id);
-        expect(ids).not.toContain('flow_v1_s-root');
-        expect(ids).not.toContain('flow_v1_s-late');
-        expect(second.get('flow_v1_s-report')!.name).toBe('nightly report (mine)');
-        expect(onDisk().v1Import).toMatchObject({ sawV1: true, imported: 5 });
+        const second = await openBook();
+        const ids = [...scheduledOf(second).keys()];
+        expect(ids).not.toContain('proc_v1_s-root');
+        expect(ids).not.toContain('proc_v1_s-late');
+        expect(scheduledOf(second).get('proc_v1_s-report')!.wanted).toBe(true);
+        expect(onDisk().v1ScheduleImport).toMatchObject({ sawV1: true, imported: 5 });
     });
 
     it('a boot that cannot see v1 is provisional: nothing imported, recorded as not seen; a later boot that can see it imports', async () => {
-        const blind = await FlowStore.open(home);
-        await importInto(blind, join(home, 'no-such.db'));
-        expect(blind.list()).toEqual([]);
-        expect(onDisk().v1Import).toMatchObject({ sawV1: false });
-
+        const blind = await openBook(join(home, 'no-such.db'));
+        expect(scheduledOf(blind).size).toBe(0);
+        expect(onDisk().v1ScheduleImport).toMatchObject({ sawV1: false });
         writeV1(v1File, rows);
-        const seeing = await FlowStore.open(home);
-        await importInto(seeing);
-        expect(seeing.list()).toHaveLength(5);
-        expect(onDisk().v1Import).toMatchObject({ sawV1: true, imported: 5 });
+        const seeing = await openBook();
+        expect(scheduledOf(seeing).size).toBe(5);
+        expect(onDisk().v1ScheduleImport).toMatchObject({ sawV1: true, imported: 5 });
     });
 
-    it('never overwrites: a flow already here under the same id is left exactly as it is, and counted', async () => {
+    it('never overwrites: a process already kept under the same id is left exactly as it is, and counted', async () => {
         writeV1(v1File, rows);
-        const store = await FlowStore.open(home);
-        // The person's own flow, as if written by an earlier build under the v1 id.
-        await store.importFromV1({ flows: [{ id: 'flow_v1_s-report', v1SpecId: 's-report', workspaceId: WS.id, name: 'mine', document: { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [], edges: [] } } }], notes: [] });
-        const raw = JSON.parse(readFileSync(flowsFile(), 'utf8')) as { flows: unknown[] };
-        // Forget the record (a file from before it existed) but keep the flow.
-        const { writeFileSync } = await import('node:fs');
-        writeFileSync(flowsFile(), JSON.stringify({ flows: raw.flows }));
-        const reopened = await FlowStore.open(home);
-        await importInto(reopened);
-        expect(reopened.get('flow_v1_s-report')!.name).toBe('mine');
-        expect(onDisk().v1Import).toMatchObject({ imported: 4, alreadyHere: 1 });
-    });
-
-    it('a task whose document the engine refuses is NOTED with the engine’s words and left behind; the others still come over (counted)', async () => {
-        const store = await FlowStore.open(home);
-        const graph = (step: Record<string, unknown>) => ({ $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } }, { id: 's', position: { x: 240, y: 0 }, ...step }], edges: [{ id: 'e1', source: 't', target: 's' }] } });
-        const done = await store.importFromV1({
-            flows: [
-                { id: 'flow_v1_s-hollow', v1SpecId: 's-hollow', workspaceId: WS.id, name: 'hollow', document: graph({ kind: 'genie/terminal_run', config: { workspace: WS.id } }) },
-                { id: 'flow_v1_s-whole', v1SpecId: 's-whole', workspaceId: WS.id, name: 'whole', document: graph({ kind: 'genie/terminal_run', config: { workspace: WS.id, command: 'npm run report' } }) },
-            ],
-            notes: [],
-        });
-        expect(store.list().map((f) => f.id)).toEqual(['flow_v1_s-whole']);
-        expect(done.record).toMatchObject({ sawV1: true, imported: 1, alreadyHere: 0 });
-        expect(done.record.notes).toEqual(['"hollow" (v1 task s-hollow): the flow document was refused by the engine: node s: command: Command is required; not imported']);
+        const mine = await ProcessBook.open(home, { supervisor, envFor: () => ({}), asleep: () => false });
+        await mine.adoptScheduled([{ id: 'proc_v1_s-report', workspaceId: WS.id, name: 'mine', command: 'npm run mine', cwd: WS.path, wanted: true, schedule: { cron: '0 4 * * *', kind: 'command' } }]);
+        const book = await openBook();
+        expect(scheduledOf(book).get('proc_v1_s-report')).toMatchObject({ name: 'mine', schedule: { cron: '0 4 * * *' } });
+        expect(onDisk().v1ScheduleImport).toMatchObject({ imported: 4, alreadyHere: 1 });
     });
 
     it("reads v1's database without changing a byte of it", async () => {
         writeV1(v1File, rows);
         const before = md5(v1File);
-        await importInto(await FlowStore.open(home));
+        await openBook();
         expect(md5(v1File)).toBe(before);
-    });
-});
-
-describe('boot — the composition root imports them before the scheduler plans, and arms none', () => {
-    const pty: PtyPort = {
-        open: (o) => ({ id: 'term_x', pid: 1, shell: o.command ?? 'sh', scrollback: '' }),
-        write: () => true,
-        resize: () => true,
-        kill: () => true,
-        scrollback: () => '',
-        onData: () => () => {},
-        onExit: () => () => {},
-    };
-
-    it('composeServices with Genie 1’s database: the flows are there, disarmed, and nothing is due', async () => {
-        writeV1(v1File, rows);
-        const records = roster.map((r) => ({ ...r, instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null })) as unknown as AgentRecord[];
-        const services = await composed.compose({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => records, workspaces: () => [WS], v1Schedules: { database: v1File } });
-        try {
-            expect(services.flows.list().map((f) => [f.id, f.armed]).sort()).toEqual([
-                ['flow_v1_s-nudge', false],
-                ['flow_v1_s-nudge-term', false],
-                ['flow_v1_s-pending', false],
-                ['flow_v1_s-report', false],
-                ['flow_v1_s-root', false],
-            ]);
-            expect(services.flowScheduler.nextDue()).toBeNull();
-        } finally {
-            await services.shutdown();
-        }
     });
 });

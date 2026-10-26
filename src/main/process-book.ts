@@ -157,6 +157,11 @@ export class ProcessBook {
         console.log(`[genie] v1 background processes: ${record.imported} imported (${record.wanted} to start), ${record.alreadyHere} already here${plan.notes.length ? `; ${plan.notes.length} noted: ${plan.notes.join(' | ')}` : ''}`);
     }
 
+    // RED-PHASE STUBS (genie#1204).
+    async enableSchedule(_id: string): Promise<void> {}
+    async pauseSchedule(_id: string): Promise<void> {}
+    async adoptScheduled(_entries: readonly unknown[]): Promise<void> {}
+
     owns(id: string): boolean {
         return this.#data.processes.some((p) => p.id === id);
     }
