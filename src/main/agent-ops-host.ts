@@ -123,7 +123,9 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
     if (!plan.ok) return plan;
     const before = ports.host.probe(record.id);
     // A turn this Restart is about to cut short: the agent is told so once it is back (Genie 1 told every relaunch).
-    const cutsTurn = before?.running === true && before.turnState === 'working';
+    // A turn by Genie's own record (`inTurn`): `working` is also what a session that is only STARTING reads as, and a
+    // Restart pressed then cut nothing (measured: the second of two quick Restarts told the agent its turn was cut).
+    const cutsTurn = before?.running === true && before.inTurn === true;
     // A running agent is already counted in its workspace's cap and is plainly awake: only a START is asked.
     if (before?.running !== true) {
         const refused = ports.startRefusal(record);

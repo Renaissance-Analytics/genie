@@ -1440,6 +1440,7 @@ export class SessionHost {
             designLogin: entry.session.designLogin,
             running: session.running,
             turnState: session.turnState,
+            inTurn: session.inTurn,
             startedAt,
             mcpServers: mcp,
             /*

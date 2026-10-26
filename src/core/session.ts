@@ -548,6 +548,15 @@ export class AgentSession {
      * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
      * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
      */
+    /**
+     * A TURN IN FLIGHT, by Genie's own record (a prompt went in and its end has not come) — not `turnState: 'working'`,
+     * which a session that is still STARTING reads as too. What a Restart asks before it tells the agent its turn was
+     * cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
+     */
+    get inTurn(): boolean {
+        return this.#inTurn;
+    }
+
     get promptable(): boolean {
         return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
     }

@@ -25,7 +25,8 @@ const live = (over: Partial<LiveSession>): LiveSession =>
 
 /** Every state an agent can be in when a person presses Restart (or Start). `null` = no session in the host. */
 const STATES: ReadonlyArray<{ name: string; probe: LiveSession | null; threadId?: string | null }> = [
-    { name: 'running, mid-turn', probe: live({ turnState: 'working' }) },
+    { name: 'running, mid-turn', probe: live({ turnState: 'working', inTurn: true }) },
+    { name: 'still starting (reads working, no turn yet)', probe: live({ turnState: 'working', inTurn: false }) },
     { name: 'idle', probe: live({}) },
     { name: 'Broken (the provider crashed)', probe: live({ running: false, turnState: 'failed', failure: { reason: 'codex: acp: transport closed (EOF)', fixes: ['Restart'] } as never }) },
     { name: 'Broken (preparation failed)', probe: live({ running: true, turnState: 'failed', failure: { reason: 'Preparation failed: the tynn token could not be minted', fixes: ['Restart'] } as never }) },
@@ -65,14 +66,14 @@ describe('Restart works from every state', () => {
             const thread = s.threadId === undefined ? THREAD : s.threadId;
             // Stop (a no-op with no session), wait for the old run to end, start on the SAME thread, then the owed prompts —
             // and, when the Restart cut a turn short, the word to carry on (below).
-            const cut = s.probe?.turnState === 'working' ? [`then:genie:${RESUME_AFTER_USER_RESTART}`] : [];
+            const cut = s.probe?.inTurn === true ? [`then:genie:${RESUME_AFTER_USER_RESTART}`] : [];
             expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', `start:agent_a:${thread}:/w/tynn`, 'deliverOwed:agent_a', ...cut]);
         });
     }
 
     it('a Restart that CUT A TURN tells the agent so, and to carry on — as Genie 1 told every relaunched agent (relaunch-prompt.ts); an idle one is not prompted', async () => {
         // Red before: a mid-turn agent was stopped and resumed with nothing said; its turn was simply gone.
-        const working = fakes({ probe: live({ turnState: 'working' }) });
+        const working = fakes({ probe: live({ turnState: 'working', inTurn: true }) });
         await restartAgent(working.ports, 'agent_a', 'graceful');
         expect(working.calls.at(-1)).toBe(`then:genie:${RESUME_AFTER_USER_RESTART}`);
         expect(RESUME_AFTER_USER_RESTART).toMatch(/restarted/i);
