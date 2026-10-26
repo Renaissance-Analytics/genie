@@ -36,13 +36,13 @@ describe('on screen', () => {
         expect(html).toContain('Not delivered. tynn was not running when you sent it.');
         expect(html).not.toContain('tynn is not running');
         expect(html).toMatch(/<button[^>]*data-action="send-draft"[^>]*data-draft="d1"[^>]*>Send now<\/button>/);
-        expect(html).not.toContain('restart-and-send');
+        expect(html).not.toContain('data-action="restart"');
     });
 
-    it('not running: Restart and send, as before (CONTROL)', () => {
+    it('not running: the chat’s one Restart (genie#1238) (CONTROL)', () => {
         const html = render(threadWith('restart'));
         expect(html).toContain('Not delivered. tynn is not running.');
-        expect(html).toMatch(/data-action="restart-and-send"[^>]*>Restart tynn and send</);
+        expect(html).toMatch(/data-action="restart"[^>]*>Restart</);
     });
 
     it('either way it can be discarded', () => {

@@ -13,8 +13,8 @@ import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
 /**
  * AGENT OPERATIONS IN THE APP (§6.2) — the main-process half over the pure plans in core/agent-ops.
  *
- * Restart is two NAMED operations: graceful resumes the same thread and refuses when it cannot;
- * fresh clears the thread first and is the only one that reaches a wedged agent. Delete is PREVIEWED
+ * RESTART (`restartAgent(…, 'graceful')`) is THE ONE ACTION every Restart and Start control calls (genie#1238): it works
+ * from every state and delivers what the agent is owed; `fresh` clears the thread on purpose. Delete is PREVIEWED
  * with its plan before it acts, and the cross-system opt-in travels in the same call. Switch driver
  * reads the persona's own `tuis:`. A budget is set and judged at once — unenforceable when the
  * provider reports no cost, said rather than silently never firing. Diagnose names a cause and the
@@ -53,7 +53,19 @@ export interface AgentOpsPorts {
         switchModel?(id: AgentRecord['id'], model: string): Promise<void> | null;
         /** Answer a parked shell question by the new tool setting (`SessionHost.settleParked`): `false` = none parked. */
         settleParked?(id: AgentRecord['id'], decision: 'allow' | 'deny'): boolean;
+        /**
+         * WHAT A RESTART OWES (`SessionHost.deliverOwed`, genie#1238): every prompt of this agent's record that was never
+         * delivered — the resume prompt of an interrupted turn, the person's drafts — handed to the new run, in the order
+         * written, each once. Resolves to how many were handed over. REQUIRED, as `ended` is: a port that forgot it would
+         * restart agents and quietly owe them their work again.
+         */
+        deliverOwed(id: AgentRecord['id']): Promise<number>;
     };
+    /**
+     * WHY A START WOULD BE REFUSED (§6.1, main.ts's `startRefusal`): an asleep workspace, the agent cap — what Start
+     * always obeyed, now that Start is the restart. `null` = it may start. Asked only for an agent that is not running.
+     */
+    startRefusal(record: AgentRecord): string | null;
     /** Each provider's model list, asked of its CLI once and kept (core/provider-models.ts `ProviderModelCache`). */
     models?: { get(provider: string, options?: { refresh?: boolean }): Promise<ModelChoices> };
     cwdFor(record: AgentRecord): string;
@@ -87,13 +99,32 @@ export interface AgentOpsPorts {
 type Refusal = { ok: false; reason: string };
 const UNKNOWN: Refusal = { ok: false, reason: 'unknown agent' };
 
-const isWedged = (session: LiveSession | null): boolean => session !== null && (session.turnState === 'failed' || session.failure !== null);
-
+/**
+ * RESTART — THE ONE ACTION (genie#1238; the owner, 2026-10-26: "We have so many restart buttons across so many views and
+ * some of them don't even work at all"). The Agent view's Restart and Start, the Dashboard's, the chat's, the phone's,
+ * Try again on a paused account, a sign-in, "Restart with this", a missing MCP server: all of them call this, with
+ * `graceful`, and it works from every state —
+ *
+ * - running (idle or mid-turn): stopped, and started again on its conversation;
+ * - Broken (a crash, a failed preparation): started again on its conversation. It used to be REFUSED here ("only a fresh
+ *   restart reaches a wedged agent") — and Broken was the only state the header's and the Dashboard's Restart were drawn in;
+ * - stopped, or its run ended: started on its conversation; never started: started on its first;
+ * - an asleep workspace or a full agent cap refuses a start, by name, as Start always did (`startRefusal`).
+ *
+ * After a start that went ahead it DELIVERS WHAT IS OWED (`deliverOwed`): the resume prompt Genie wrote for an
+ * interrupted turn and the person's undelivered drafts, in order, once (the owner's beta.45 agents: the resume prompt was
+ * recorded `undelivered` and never sent). `fresh` is the separate, named operation that drops the conversation.
+ */
 export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 'graceful' | 'fresh'): Promise<{ ok: true; kind: 'graceful' } | { ok: true; kind: 'fresh'; discarded: string | null } | Refusal> {
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
-    const plan = restartPlan(kind, { threadId: record.threadId, wedged: isWedged(ports.host.probe(record.id)) });
+    const plan = restartPlan(kind, { threadId: record.threadId });
     if (!plan.ok) return plan;
+    // A running agent is already counted in its workspace's cap and is plainly awake: only a START is asked.
+    if (ports.host.probe(record.id)?.running !== true) {
+        const refused = ports.startRefusal(record);
+        if (refused !== null) return { ok: false, reason: refused };
+    }
     /*
      * STOP, THEN START — IN THAT ORDER (hosting plan 1.3). Both used to run in the same tick, so the new provider started
      * while the old one was still alive: two Claudes on one conversation. The new run starts only once the old one has
@@ -107,7 +138,9 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
     }
     if (plan.kind === 'graceful') {
         const started = ports.host.start(record, ports.cwdFor(record));
-        return started.ok ? { ok: true, kind: 'graceful' } : started;
+        if (!started.ok) return started;
+        await ports.host.deliverOwed(record.id);
+        return { ok: true, kind: 'graceful' };
     }
     /*
      * FRESH: THE CONVERSATION IS DROPPED ONLY BY A START THAT WENT AHEAD. The new run starts on the record with no thread;

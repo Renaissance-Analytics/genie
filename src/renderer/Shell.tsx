@@ -155,7 +155,7 @@ export interface ShellProps {
     deckFormRefusal?: { itemId: string; reason: string } | null | undefined;
     /** NOT USED since 2026-10-19: the chat cannot be closed. Removed with the pin model's cleanup row. */
     onCloseChat?: (() => void) | undefined;
-    /** `Restart <agent> and send` on an undelivered chat draft (§4.4). */
+    /** The chat's `Restart` (or `Send now`) on an undelivered draft (§4.4, genie#1238). */
     onRestartAndSend?: ((draftId: string) => void) | undefined;
     /** Discard an undelivered chat draft, unsent. */
     onDiscardDraft?: ((draftId: string) => void) | undefined;

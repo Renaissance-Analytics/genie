@@ -118,7 +118,8 @@ describe('input sent during a Codex turn', () => {
         const message = s.messages().find((m) => m.text === 'do not lose this');
         expect(message).toMatchObject({ who: 'you', delivered: false, resend: 'restart' });
         const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: s.record.id, name: 'worker', fidelity: 'declared', unread: null, messages: message ? [message] : [], context: null }} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
-        expect(html).toContain('Restart worker and send');
+        // The chat's one Restart (genie#1238): it restarts worker and sends what was not delivered.
+        expect(html).toMatch(/data-action="restart"[^>]*>Restart<\/button>/);
         expect(s.prompts).toEqual(['first']);
     });
 

@@ -153,6 +153,7 @@ describe('restart waits for the verified end of the previous run (hosting plan 1
             registry: { find: () => record, clearThread: async () => { record = { ...record, threadId: null }; return record; } },
             host,
             cwdFor: () => dir,
+            startRefusal: () => null,
         } as unknown as AgentOpsPorts;
         return { host, ports, record: () => record, dir, drivers };
     }

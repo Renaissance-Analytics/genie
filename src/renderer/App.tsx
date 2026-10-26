@@ -26,7 +26,7 @@ import { FilesWindow } from './components/FilesWindow.js';
 import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
 import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatSendFor, chatThreadFrom, draftSendVia, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
+import { chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
@@ -454,7 +454,8 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
                 sending={sending}
                 onBack={() => { window.history.back(); }}
                 onSend={(text) => { setSending(true); void bridge!.prompt(agentId, text); setTimeout(() => setSending(false), 400); }}
-                onStart={() => bridge!.openAgent(agentId)}
+                // The phone's Start is the one restart too (genie#1238).
+                onStart={() => { void bridge!.agents.restart(agentId, 'graceful'); }}
                 onResumeLimit={() => { void bridge!.resumeLimit(agentId); }}
             />
         );
@@ -522,6 +523,13 @@ function DesktopApp({ bridge }: AppProps) {
     const remote = useRemote();
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
+    /**
+     * THE ONE RESTART (genie#1238): every Start and Restart in this window — the Agent view's header, the Dashboard's
+     * broken row and lane, the chat — calls this, and it is main's `restartAgent(…, 'graceful')`: it works from every
+     * state (a Broken agent starts again; a stopped or never-started one starts) and sends what the agent is owed.
+     */
+    const restartOne = (agentId: string): Promise<{ ok: true } | { ok: false; reason: string }> =>
+        resolvedBridge ? resolvedBridge.agents.restart(agentId, 'graceful') : Promise.resolve({ ok: false, reason: 'Genie is not connected.' });
     const snapshot = useSnapshot(resolvedBridge);
     // A workspace's designed tabs, once its settings are read (its tab addresses resolve from them).
     const [tabsByWorkspace, setTabsByWorkspace] = useState<ReadonlyMap<string, ReadonlyArray<{ id: string; name: string }>>>(() => new Map());
@@ -956,7 +964,11 @@ function DesktopApp({ bridge }: AppProps) {
               onSetManageTabs: (on) => { void resolvedBridge.agents.setManageTabs(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetDrivePages: (on) => { void resolvedBridge.agents.setDrivePages(agentId, on).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
               onSetIssueWatch: (setting) => { void resolvedBridge.agents.setIssueWatch(agentId, setting).then((r) => { if (!r.ok) setOpsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
-              onRestart: (kind) => { void resolvedBridge.agents.restart(agentId, kind).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted gracefully on the same conversation') : r.reason }))); },
+              // Restart is the one restart (genie#1238); Restart fresh, from the ⋯ menu, is the other operation.
+              onRestart: (kind) => {
+                  if (kind === 'graceful') { void restartOne(agentId).then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? 'restarted on the same conversation' : r.reason }))); return; }
+                  void resolvedBridge.agents.restart(agentId, 'fresh').then((r) => setOpsView((v) => ({ ...v, lastOutcome: r.ok ? (r.kind === 'fresh' ? `restarted fresh${r.discarded ? ` — discarded conversation ${r.discarded}` : ''}` : 'restarted on the same conversation') : r.reason })));
+              },
               // A switch starts a NEW conversation on the new provider; switchOutcome says so, and names a dropped model.
               onSwitchDriver: (to) => { void resolvedBridge.agents.switchDriver(agentId, to).then((r) => { setOpsView((v) => ({ ...v, lastOutcome: switchOutcome(detail?.agent.name ?? 'the agent', r) })); if (r.ok && !r.noop) setModelsAsked((n) => n + 1); }); },
               onDiagnose: () => { void resolvedBridge.agents.diagnose(agentId).then((r) => setOpsView((v) => (r.ok ? { ...v, diagnosis: r.diagnosis } : { ...v, lastOutcome: r.reason }))); },
@@ -1120,7 +1132,7 @@ function DesktopApp({ bridge }: AppProps) {
     // line, the workspace's chips. A declared agent's `unread` stays `null` — nothing reads it yet, and `0` would claim
     // you are up to date. An observed agent's thread IS its inbox thread (`observedMail`), with the inbox's own count.
     // Undelivered drafts (§4.4): a prompt the host refused because the agent was not running is KEPT here, shown in
-    // the thread as not delivered, and sent by `Restart <agent> and send`. Never dropped, never shown as sent.
+    // the thread as not delivered, and sent by the chat's Restart (genie#1238). Never dropped, never shown as sent.
     const [drafts, setDrafts] = useState<readonly Draft[]>([]);
     const [draftProblems, setDraftProblems] = useState<Readonly<Record<string, string>>>({});
     const draftAction = (id: string, action: Promise<{ ok: boolean; reason?: string }>): void => {
@@ -1145,29 +1157,35 @@ function DesktopApp({ bridge }: AppProps) {
             if (!r.ok) keep(r.reason);
         }).catch((error: unknown) => keep(error instanceof Error ? error.message : String(error)));
     };
+    /**
+     * An undelivered draft's button: `Send now` while its agent runs, else THE CHAT'S ONE RESTART (genie#1238). A Restart
+     * is the one restart — it works from every state (it used to be a graceful restart for a Broken agent, which always
+     * refused, or an `openAgent` that did nothing for one whose run had ended) — and main sends every undelivered message
+     * in the agent's record, in order, once. Then this window's own kept drafts to it (prompts refused while it was not
+     * running, which never reached the record), in the order written.
+     */
     const restartAndSend = (draftId: string): void => {
+        if (!resolvedBridge) return;
+        const message = chatThread?.messages.find((m) => m.id === draftId);
+        const queued = message?.promptId ? message : undefined;
         const draft = drafts.find((d) => d.id === draftId);
-        const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
-        if (queued && chatThread && resolvedBridge) {
-            const agentId = chatThread.agentId;
-            const send = () => resolvedBridge.resolvePrompt(agentId, queued.promptId!, 'send');
-            if (queued.resend === 'restart') {
-                const session = chatDetail?.agent.id === agentId ? chatDetail.session ?? null : null;
-                if (draftSendVia(session) === 'restart') draftAction(draftId, resolvedBridge.agents.restart(agentId, 'graceful').then((r) => r.ok ? send() : r));
-                else draftAction(draftId, Promise.resolve(resolvedBridge.openAgent(agentId)).then(send));
-            } else draftAction(draftId, send());
+        const agentId = queued && chatThread ? chatThread.agentId : draft?.agentId;
+        if (!agentId) return;
+        const sendKept = (d: Draft): Promise<{ ok: boolean; reason?: string }> =>
+            resolvedBridge.prompt(d.agentId, d.text, d.attachments ?? []).then((sent) => { if (sent.ok) setDrafts((all) => all.filter((x) => x.id !== d.id)); return sent; });
+        if (message?.resend === 'send') {
+            draftAction(draftId, queued ? resolvedBridge.resolvePrompt(agentId, queued.promptId!, 'send') : draft ? sendKept(draft) : Promise.resolve({ ok: true }));
             return;
         }
-        if (!draft || !resolvedBridge) return;
-        const send = () => resolvedBridge.prompt(draft.agentId, draft.text, draft.attachments ?? []).then((sent) => { if (sent.ok) setDrafts((d) => d.filter((x) => x.id !== draftId)); });
-        // A broken session restarts on its thread; an agent that is not running is STARTED (a graceful restart refuses
-        // one with no thread yet — a fresh install's genie).
-        const session = chatDetail?.agent.id === draft.agentId ? chatDetail.session ?? null : null;
-        if (draftSendVia(session) === 'restart') {
-            void resolvedBridge.agents.restart(draft.agentId, 'graceful').then((r) => (r.ok ? send() : undefined));
-        } else {
-            void Promise.resolve(resolvedBridge.openAgent(draft.agentId)).then(send);
-        }
+        const kept = drafts.filter((d) => d.agentId === agentId && !d.reason);
+        draftAction(draftId, restartOne(agentId).then(async (r) => {
+            if (!r.ok) return r;
+            for (const d of kept) {
+                const sent = await sendKept(d);
+                if (!sent.ok) return { ok: false, reason: sent.reason ?? 'A kept message could not be sent.' };
+            }
+            return { ok: true };
+        }));
     };
     // Derived when its inputs change, not on every render of the window (the owner, 2026-10-20: "severe UI lag"): the
     // thread reads every row of the subject's ledger.
@@ -1462,14 +1480,15 @@ function DesktopApp({ bridge }: AppProps) {
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}
-            onRestartAgent={(agentId) => { void resolvedBridge?.agents.restart(agentId, 'graceful'); }}
+            // The Dashboard's broken-row Restart and every Start: the one restart (genie#1238). A refusal is logged, never dropped silently.
+            onRestartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] restart refused:', r.reason); }); }}
             onStopAgent={(agentId) => { resolvedBridge?.stopAgent(agentId); }}
             onCancelTurn={(agentId) => { void resolvedBridge?.cancelTurn(agentId); }}
             onResumeLimit={(agentId) => { void resolvedBridge?.resumeLimit(agentId); }}
             onProviderLogin={(agentId) => { void resolvedBridge?.providerLogin(agentId); }}
             onAccountRetry={(agentId) => { void resolvedBridge?.accountRetry?.(agentId); }}
             onDesignLogin={(agentId) => { void resolvedBridge?.designLogin?.(agentId); }}
-            onStartAgent={(agentId) => { resolvedBridge?.openAgent(agentId); }}
+            onStartAgent={(agentId) => { void restartOne(agentId).then((r) => { if (!r.ok) console.error('[genie] start refused:', r.reason); }); }}
             onSelectRow={setSelectedRowId}
             // The title bar's "Search, jump, run · Ctrl K" box opens the Command Window (Tynn #757), as Ctrl/Cmd+K does.
             onOpenPalette={() => setPaletteOpen(true)}

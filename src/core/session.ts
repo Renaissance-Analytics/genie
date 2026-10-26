@@ -771,6 +771,20 @@ export class AgentSession {
         return this.#afterTurn.some((p) => p.id === id);
     }
 
+    /**
+     * A PROMPT AN EARLIER RUN OWES, handed to this one (genie#1238: Restart delivers what is owed). It keeps its own id and
+     * its message row — already in the record — so the chat shows it once, where it was written, and its delivery row
+     * (`sent`, or `undelivered` again if this run breaks before it goes) settles THAT message. Sent in queue order once the
+     * run can take a turn: at once, at `ready`, or when the current turn ends. Already waiting here: nothing is added.
+     */
+    redeliver(id: string, text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+        if (!this.running) throw new Error('session is not running');
+        if (this.hasQueuedPrompt(id)) return;
+        this.#afterTurn.push({ id, text, by, sent, context });
+        this.#changed();
+        this.#flushAfterTurn();
+    }
+
     discardPrompt(id: string): void {
         this.#afterTurn = this.#afterTurn.filter((p) => p.id !== id);
         void this.#emitRow({ kind: 'prompt_delivery', id, status: 'discarded' });

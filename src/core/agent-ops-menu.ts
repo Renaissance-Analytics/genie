@@ -21,7 +21,7 @@ export function agentOpsMenu(agent: { provider: string; fidelity: string }, prov
     if (agent.fidelity !== 'declared') return [];
     return [
         ...(state.running ? [{ id: 'stop-agent', label: 'Stop agent', hint: 'ends its session; identity, inbox and history kept' }] : []),
-        { id: 'restart-graceful', label: 'Restart gracefully', hint: 'same conversation; refuses if it cannot resume' },
+        // No "Restart gracefully" here (genie#1238): Restart is the header's, one per surface. Fresh is another operation.
         { id: 'restart-fresh', label: 'Restart fresh', hint: 'discards the conversation on purpose' },
         ...providers.filter((p) => p !== agent.provider).map((p) => ({ id: `switch:${p}`, label: `Switch driver to ${p}`, hint: 'starts a new conversation; identity, inbox, history and prompt carry across' })),
         { id: 'diagnose', label: 'Diagnose', hint: 'names a cause and the repair that fits' },

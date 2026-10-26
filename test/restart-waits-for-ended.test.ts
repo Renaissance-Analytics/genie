@@ -77,6 +77,7 @@ function world(options: { cwdForRestart?: string; graceMs?: number; exitAfterMs?
         host: sessionHostPort(() => host),
         cwdFor: () => options.cwdForRestart ?? dir,
         readManifest: async () => null,
+        startRefusal: () => null,
     } as unknown as AgentOpsPorts;
     // Providers actually SPAWNED (a driver's start ran) — `driverFor` is asked before the host's folder check, so a refused
     // start can still have asked for a driver without running one.
@@ -135,8 +136,8 @@ describe('the other stop-then-start paths wait too', () => {
         const fin = { id: 'fin_1', agentId: w.record().id, agentName: 'fancy', handoff: 'next: merge #50', at: 't', seen: false };
         const seen: string[] = [];
 
-        // main.ts hands the real host in as the port (genie:restart-with-handoff).
-        const result = await restartWithHandoff(w.host, { finished: () => [fin], markSeen: (id) => { seen.push(id); } }, w.record(), w.dir, 'fin_1');
+        // main.ts hands in the one restart and the real host's prompt (genie:restart-with-handoff, genie#1238).
+        const result = await restartWithHandoff({ restart: (id) => restartAgent(w.ports, id, 'graceful'), prompt: (id, text, by) => w.host.prompt(id, text, by) }, { finished: () => [fin], markSeen: (id) => { seen.push(id); } }, w.record(), 'fin_1');
 
         expect(result).toEqual({ ok: true });
         expect(w.host.refusals.get(w.record().id)).toBeUndefined();

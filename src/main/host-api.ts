@@ -33,7 +33,9 @@ export interface HostApiDeps {
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
-    host: RestartPorts & {
+    host: Pick<RestartPorts, 'prompt'> & {
+        start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
+        stop(agentId: AgentRecord['id']): boolean;
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
         answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
@@ -199,7 +201,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'restartWithHandoff': {
                 const r = agent(args[0]);
                 if (!r) return { ok: false, reason: 'unknown agent' };
-                return restartWithHandoff(deps.host, deps.attention, r, deps.cwdFor(r), str(args[1]));
+                // The one restart (genie#1238), then the note.
+                return restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
             }
             case 'agents.restart':
                 return deps.agentOps.restart(str(args[0]), args[1] === 'fresh' ? 'fresh' : 'graceful');

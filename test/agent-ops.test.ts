@@ -4,9 +4,9 @@ import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, switchOu
 /**
  * AGENT OPERATIONS (§6.2) — the pure half of the operations that were still missing.
  *
- * - RESTART is two named operations: GRACEFUL resumes the same thread and REFUSES when it cannot,
- *   rather than silently starting a new chat; FRESH discards the conversation and is the only one
- *   that reaches a wedged agent.
+ * - RESTART (genie#1238) is ONE action that works from every state: it resumes the same thread,
+ *   starts an agent that has none yet, and reaches a Broken one too. RESTART FRESH discards the
+ *   conversation on purpose.
  * - DELETE is two named outcomes: UNMOUNT from Genie (every `.agents/*` file kept) vs DELETE for
  *   real; cross-system removal is an explicit opt-in inside the same prompt.
  * - SWITCH DRIVER carries identity, inbox, history and prompt across; REFUSED when the agent's
@@ -16,17 +16,17 @@ import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, switchOu
  *   `unenforceable` rather than silently never firing when the provider reports no cost.
  */
 
-describe('restart — two named operations', () => {
-    it('graceful with a resumable thread → resume that thread; graceful with none → REFUSED, naming fresh as the way', () => {
-        expect(restartPlan('graceful', { threadId: 'sess-ABC.123:7', wedged: false })).toEqual({ ok: true, kind: 'graceful', resume: 'sess-ABC.123:7' });
-        expect(restartPlan('graceful', { threadId: null, wedged: false })).toEqual({ ok: false, reason: 'this agent has no conversation to resume; a graceful restart would silently start a new chat — use a fresh restart if that is what you want' });
-        expect(restartPlan('graceful', { threadId: 'a&echo PWNED', wedged: false })).toEqual({ ok: false, reason: 'the stored thread id is not one Genie will hand to the provider; use a fresh restart' });
+describe('restart — Restart (the one action) and Restart fresh', () => {
+    it('Restart resumes a resumable thread; an agent with no conversation yet STARTS its first (nothing to forget); a thread id Genie will not hand over is refused', () => {
+        expect(restartPlan('graceful', { threadId: 'sess-ABC.123:7' })).toEqual({ ok: true, kind: 'graceful', resume: 'sess-ABC.123:7' });
+        // genie#1238: a never-started agent's Restart (or Start) starts it. It used to be refused "no conversation to resume".
+        expect(restartPlan('graceful', { threadId: null })).toEqual({ ok: true, kind: 'graceful', resume: null });
+        expect(restartPlan('graceful', { threadId: 'a&echo PWNED' })).toEqual({ ok: false, reason: 'the stored thread id is not one Genie will hand to the provider; use Restart fresh' });
     });
 
-    it('fresh discards the conversation, always — and is the only one offered for a wedged agent', () => {
-        expect(restartPlan('fresh', { threadId: 'sess-1', wedged: false })).toEqual({ ok: true, kind: 'fresh', resume: null, discards: 'sess-1' });
-        expect(restartPlan('graceful', { threadId: 'sess-1', wedged: true })).toEqual({ ok: false, reason: 'this agent is not answering; only a fresh restart reaches a wedged agent' });
-        expect(restartPlan('fresh', { threadId: null, wedged: true })).toEqual({ ok: true, kind: 'fresh', resume: null, discards: null });
+    it('fresh discards the conversation, always', () => {
+        expect(restartPlan('fresh', { threadId: 'sess-1' })).toEqual({ ok: true, kind: 'fresh', resume: null, discards: 'sess-1' });
+        expect(restartPlan('fresh', { threadId: null })).toEqual({ ok: true, kind: 'fresh', resume: null, discards: null });
     });
 });
 

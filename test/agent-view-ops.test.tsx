@@ -22,13 +22,14 @@ const render = (o?: AgentOpsProps, s: Parameters<typeof AgentView>[0]['session']
     renderToStaticMarkup(<AgentView agent={agent} session={s} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} ops={o} />);
 
 describe('the header', () => {
-    it('without ops: no restart, no overflow, no confirm card; with ops: the overflow trigger, and Restart ONLY when broken (the board)', () => {
+    it('without ops: no restart, no overflow, no confirm card; with ops: the overflow trigger, and Restart while it has a session — Broken too (genie#1238)', () => {
         const none = render();
-        expect(none).not.toContain('data-action="restart-graceful"');
+        expect(none).not.toContain('data-action="restart"');
         expect(none).not.toContain('data-action="agent-more"');
         const html = render(ops());
-        expect(html).not.toContain('data-action="restart-graceful"');
-        expect(render(ops(), broken)).toContain('data-action="restart-graceful"');
+        // No session: that is Start's (onStart), not Restart's.
+        expect(html).not.toContain('data-action="restart"');
+        expect(render(ops(), broken)).toContain('data-action="restart"');
         expect(html).toContain('data-action="agent-more"');
         expect(html).not.toContain('data-delete-confirm');
         expect(html).not.toContain('data-diagnosis');
