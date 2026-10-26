@@ -201,8 +201,10 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
     );
 }
 
-function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lanes, onReveal }: {
+function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lanes, onReveal, emoji }: {
     row: AgentRow;
+    /** What the agent just did with Genie (genie#1209), shown beside its name for a moment. */
+    emoji?: string | undefined;
     onOpen: (id: string) => void;
     onFix?: ((route: FixRoute) => void) | undefined;
     focused?: boolean | undefined;
@@ -236,6 +238,7 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
             <div className="flex min-w-0 items-center gap-2">
                 <FidelityDot fidelity={row.fidelity} state={row.state} />
                 <span className="truncate font-medium">{row.name}</span>
+                {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
                 <span className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{row.provider}</span>
             </div>
 
@@ -448,9 +451,11 @@ export interface DashboardProps {
     trayId?: string | null | undefined;
     /** The tray's doors navigate; absent = `Open agent →` still opens the agent and the others do nothing. */
     onNavigate?: ((route: string) => void) | undefined;
+    /** What each agent just did with Genie (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action — by agent id. */
+    rowEmoji?: Readonly<Record<string, string>> | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji }: DashboardProps) {
     // Hide known hibernated workspaces consistently; unregistered agents keep their status visibility.
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
@@ -648,7 +653,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                             </div>
                             {g.rows.map((row) => (
                                 <Fragment key={row.id}>
-                                    <AgentRowView row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                                    <AgentRowView row={row} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
                                     {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
                                 </Fragment>
                             ))}
@@ -666,7 +671,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                         <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">default agent · not in a workspace</span>
                         <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">1 agent</span>
                     </div>
-                    <AgentRowView row={genie} onOpen={onOpenAgent} onFix={onFix} focused={genie.id === focused} reveal={reveal} lanes={lanes?.[genie.id]} onReveal={setOwnReveal} />
+                    <AgentRowView row={genie} emoji={rowEmoji?.[genie.id]} onOpen={onOpenAgent} onFix={onFix} focused={genie.id === focused} reveal={reveal} lanes={lanes?.[genie.id]} onReveal={setOwnReveal} />
                     {openTray === genie.id ? <RowTrayView row={genie} onNavigate={go} /> : null}
                 </div>
             ) : null}
@@ -675,7 +680,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
                     {group.rows.map((row) => (
                         <Fragment key={row.id}>
-                            <AgentRowView row={row} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
+                            <AgentRowView row={row} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />
                             {openTray === row.id ? <RowTrayView row={row} onNavigate={go} /> : null}
                         </Fragment>
                     ))}
