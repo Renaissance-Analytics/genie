@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { fileAddedEvent, ignoredPath, matchesFileTrigger, planFileMove, shellTemplatesInFileFlow } from '../src/core/file-trigger.js';
 
@@ -9,7 +9,9 @@ import { fileAddedEvent, ignoredPath, matchesFileTrigger, planFileMove, shellTem
  * These are the pure decisions: what an addition is, which trigger it matches, where a move lands, and what is refused.
  */
 
-const ROOT = join('/', 'work', 'tynn');
+// A workspace root is ABSOLUTE, drive and all on Windows (main CI 40319133769: join('/', …) has no drive there, and
+// the planner — rightly — resolves one, so the two never compared equal).
+const ROOT = resolve('/', 'work', 'tynn');
 
 describe('what an addition is (fs.watch reports `rename` when a path appears, `change` when content is written)', () => {
     const input = { workspaceId: 'tynn', workspacePath: ROOT, relPath: 'uploads/Photo.JPG', eventType: 'rename' as const, stat: { isFile: true, size: 6_000_000 } };
@@ -94,7 +96,7 @@ describe('where a move lands (genie/file_move: no shell, inside the workspace, n
     });
 
     it('a source or a destination outside the workspace is refused, in words', () => {
-        const outside = planFileMove(ROOT, join('/', 'etc', 'passwd'), '.untracked', none);
+        const outside = planFileMove(ROOT, resolve('/', 'etc', 'passwd'), '.untracked', none);
         expect(outside.ok).toBe(false);
         expect(outside.ok ? '' : outside.reason).toMatch(/outside the workspace/);
         const escape = planFileMove(ROOT, join(ROOT, 'uploads/big.png'), '../elsewhere', none);
