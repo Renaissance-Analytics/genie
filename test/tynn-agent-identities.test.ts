@@ -16,7 +16,7 @@ function fixture() {
     type Remote = { id: string; name: string; external_id: string | null; status: string; config: unknown; tokens: Array<{ id: string; public_id: string; active: boolean }> };
     const agents: Remote[] = [];
     const calls: Array<{ path: string; method: string; body: any }> = [];
-    const state = { userId: 'user-7' as string | null, encryption: true, minted: 0, registered: 0, wrongProject: false, wrongMint: false, lostResponse: false, shared: false, error: '', ignoreCalls: 0 };
+    const state = { userId: 'user-7' as string | null, signedIn: true, saved: null as string | null, status: 0, encryption: true, minted: 0, registered: 0, wrongProject: false, wrongMint: false, lostResponse: false, shared: false, error: '', ignoreCalls: 0 };
     const file = join(dir, 'agent-keys.json');
     const storage = { file, cipher: { isAvailable: () => state.encryption, encrypt: (s: string) => Buffer.from(`sealed:${s}`), decrypt: (b: Buffer) => b.toString().slice(7) } };
     const local = (name = 'atlas') => agentRecord({ id: mintAgentId(), workspaceId: 'workspace', name, provider: 'codex', mode: 'automated', instructions: `.agents/${name}/AGENT.md` });
@@ -25,11 +25,12 @@ function fixture() {
         agents.push(row); return row;
     };
     const tynn = {
-        status: () => ({ signedIn: true }), userId: () => state.userId,
+        status: () => ({ signedIn: state.signedIn }), userId: () => state.signedIn ? state.userId : null, savedUserId: () => state.saved,
         request: async (path: string, init: { method: string; body?: any }) => {
             calls.push({ path, method: init.method, body: init.body });
             if (state.error) throw new Error(state.error);
             const answer = (status: number, body: unknown) => { const text = JSON.stringify(body); return { ok: status < 300, status, json: async () => JSON.parse(text) as unknown }; };
+            if (state.status) return answer(state.status, { message: 'Server Error' });
             if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'GET') return answer(200, { project_id: state.wrongProject ? 'another-project' : PROJECT, agents });
             if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'POST') {
                 state.registered++;
@@ -229,5 +230,63 @@ describe('one Tynn principal and encrypted key per Genie agent', () => {
     it('keeps bearer-looking strings from a network exception out of the result', async () => {
         const t = fixture(); const secret = `gpk_${'0'.repeat(26)}.${'a'.repeat(64)}`; t.state.error = `request failed ${secret}`;
         expect(JSON.stringify(await t.ensure(t.open(), t.local()))).not.toContain(secret);
+    });
+});
+
+/*
+ * OFF GRID (genie#1234). Genie signed itself out of Tynn and every Tynn-linked agent was Broken, though each one's own
+ * key sat ready in the vault. A key Genie already holds needs no live Tynn to be USED; Tynn still has the last word on
+ * it whenever it can be asked: a revoked, suspended or conflicting identity is refused exactly as before.
+ */
+describe('a stored agent key works off grid (genie#1234)', () => {
+    it('signed out with the account still saved: the ready key is returned without asking Tynn', async () => {
+        const t = fixture(); const a = t.local(); const first = await t.ensure(t.open(), a);
+        t.state.signedIn = false; t.state.saved = 'user-7';
+        const before = t.calls.length;
+        const off = await t.ensure(t.open(), a);
+        expect(off).toMatchObject({ status: 'already', unverified: true });
+        expect(mcp(off)).toEqual(mcp(first));
+        expect(t.calls, 'no round trip to Tynn before the stored key is handed back').toHaveLength(before);
+        expect(t.state.minted).toBe(1);
+    });
+
+    it('signed in but Tynn cannot be reached (network or 5xx): the ready key is returned, marked unverified', async () => {
+        const t = fixture(); const a = t.local(); const first = await t.ensure(t.open(), a);
+        t.state.error = 'getaddrinfo ENOTFOUND tynn.ai';
+        expect(await t.ensure(t.open(), a)).toMatchObject({ status: 'already', unverified: true, mcp: mcp(first) });
+        t.state.error = ''; t.state.status = 503;
+        expect(await t.ensure(t.open(), a)).toMatchObject({ status: 'already', unverified: true, mcp: mcp(first) });
+        expect(t.state.minted).toBe(1);
+    });
+
+    it('CONTROL: Tynn reachable, the key is verified first and comes back without the unverified mark', async () => {
+        const t = fixture(); const a = t.local(); await t.ensure(t.open(), a);
+        const again = await t.ensure(t.open(), a);
+        expect(again.status).toBe('already'); expect('unverified' in again).toBe(false);
+    });
+
+    it('Tynn reachable and saying the key is revoked still refuses: the off-grid path never overrides Tynn', async () => {
+        const t = fixture(); const a = t.local(); const vault = t.open(); await t.ensure(vault, a);
+        t.agents[0]!.tokens[0]!.active = false;
+        expect(await t.ensure(vault, a)).toMatchObject({ status: 'failed', code: 'inactive' });
+    });
+
+    it('off grid with no stored key: refused without any request or mint', async () => {
+        const t = fixture(); t.state.signedIn = false; t.state.saved = 'user-7';
+        expect(await t.ensure(t.open(), t.local())).toMatchObject({ status: 'failed', code: 'refused' });
+        expect(t.calls).toHaveLength(0); expect(t.state.minted).toBe(0);
+    });
+
+    it('off grid, another saved account never receives the previous account key', async () => {
+        const t = fixture(); const a = t.local(); await t.ensure(t.open(), a);
+        t.state.signedIn = false; t.state.saved = 'user-8';
+        expect(await t.ensure(t.open(), a)).toMatchObject({ status: 'failed', code: 'refused' });
+    });
+
+    it('off grid, a key that only reached pending is never used', async () => {
+        const t = fixture(); const a = t.local(); t.state.lostResponse = true;
+        await t.ensure(t.open(), a); t.state.lostResponse = false;
+        t.state.signedIn = false; t.state.saved = 'user-7';
+        expect(await t.ensure(t.open(), a)).toMatchObject({ status: 'failed' });
     });
 });

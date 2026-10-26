@@ -70,6 +70,34 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         const work = writes.then(run, run); writes = work.catch(() => {}); return work;
     };
 
+    /** The stored key, unlocked and checked against its own public id; never a replacement. */
+    const unlock = (known: Stored): string => {
+        let token: string;
+        try { token = ports.cipher.decrypt(Buffer.from(known.tokenEnc ?? '', 'base64')); }
+        catch { throw new ProvisionFailure('storage', 'This agent’s Tynn key cannot be unlocked. No replacement was minted.'); }
+        if (RPK.exec(token)?.[1]?.toLowerCase() !== known.publicId?.toLowerCase()) throw new ProvisionFailure('storage', 'The stored Tynn agent key is invalid.');
+        return token;
+    };
+
+    /**
+     * OFF GRID (genie#1234): this agent's own READY key from the vault, with no round trip to Tynn — for when Genie is not
+     * signed in yet (the saved account, unconfirmed this launch) or Tynn cannot be reached. Nothing is registered or minted
+     * here, the key is bound to this account, project and agent, and it is marked unverified so it is checked with Tynn
+     * once Tynn answers. Tynn itself still refuses a revoked key whenever the agent uses it.
+     */
+    async function stored(input: { projectId: string; agent: AgentRecord; signal?: AbortSignal }, userId: string, key: string): Promise<TynnAgentToken> {
+        if (input.signal?.aborted) throw new ProvisionFailure('refused', 'Tynn agent credential preparation was cancelled.');
+        if (!ports.cipher.isAvailable()) throw new ProvisionFailure('storage', 'Unlock OS credential encryption before using a Tynn agent credential.');
+        const records = await load();
+        const known = records[key];
+        if (!Object.hasOwn(records, key)) throw new ProvisionFailure('refused', 'Sign in to Tynn before provisioning an agent credential.');
+        if (!known || !object(known) || known.userId !== userId || known.projectId !== input.projectId || known.genieId !== input.agent.id || typeof known.remoteAgentId !== 'string' || !['pending', 'ready'].includes(known.state)) {
+            throw new ProvisionFailure('storage', 'The stored Tynn agent binding is invalid.');
+        }
+        if (known.state !== 'ready') throw new ProvisionFailure('pending', 'An earlier key request is unconfirmed. Review this agent’s keys in Tynn before issuing another.');
+        return { status: 'already', mcp: { url: MCP_URL, token: unlock(known) }, remoteAgentId: known.remoteAgentId, unverified: true };
+    }
+
     async function decide(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }, userId: string, key: string): Promise<TynnAgentToken> {
         const { projectId, agent, tynn } = input;
         if (!ports.cipher.isAvailable()) throw new ProvisionFailure('storage', 'Unlock OS credential encryption before provisioning a Tynn agent.');
@@ -126,10 +154,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         if (known) {
             const live = remote.tokens.find((t) => t.public_id.toLowerCase() === known.publicId?.toLowerCase());
             if (!live?.active || (live.scope_target !== undefined && live.scope_target !== 'mcp')) throw new ProvisionFailure('inactive', 'This agent’s Tynn key was revoked, expired or changed. Explicit renewal is required.');
-            let token: string;
-            try { token = ports.cipher.decrypt(Buffer.from(known.tokenEnc ?? '', 'base64')); }
-            catch { throw new ProvisionFailure('storage', 'This agent’s Tynn key cannot be unlocked. No replacement was minted.'); }
-            if (RPK.exec(token)?.[1]?.toLowerCase() !== known.publicId?.toLowerCase()) throw new ProvisionFailure('storage', 'The stored Tynn agent key is invalid.');
+            const token = unlock(known);
             currentAccount();
             return { status: 'already', mcp: { url: MCP_URL, token }, remoteAgentId: remote.id };
         }
@@ -154,15 +179,23 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
 
     return {
         ensure(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }): Promise<TynnAgentToken> {
-            const userId = input.tynn?.userId?.();
-            if (!userId || !input.tynn?.status().signedIn) return Promise.resolve({ status: 'failed', code: 'refused', reason: 'Sign in to Tynn before provisioning an agent credential.' });
+            // Signed in: Tynn is asked first, as always. Not (yet) signed in: only the saved account's stored key (genie#1234).
+            const signedIn = input.tynn?.status().signedIn === true;
+            const userId = signedIn ? input.tynn?.userId?.() : input.tynn?.savedUserId?.();
+            if (!userId) return Promise.resolve({ status: 'failed', code: 'refused', reason: 'Sign in to Tynn before provisioning an agent credential.' });
             const key = JSON.stringify([userId, input.projectId, input.agent.id]);
             const pending = inFlight.get(key); if (pending) return pending;
             // Tynn upserts by case-insensitive name. Different local ids share that namespace, so serializing only
             // identical ids would still let two name-colliding registrations overwrite each other.
             const project = JSON.stringify([userId, input.projectId]);
             const before = projects.get(project) ?? Promise.resolve();
-            const run = () => decide(input, userId, key);
+            // Tynn unreachable (network, 5xx) is the only failure the stored key answers; a refusal Tynn GAVE stands.
+            const run = signedIn
+                ? () => decide(input, userId, key).catch((error: unknown) => {
+                    if (!(error instanceof ProvisionFailure) || error.code !== 'offline' || input.signal?.aborted) throw error;
+                    return stored(input, userId, key).catch(() => { throw error; });
+                })
+                : () => stored(input, userId, key);
             const work = before.then(run, run).catch((error: unknown): TynnAgentToken => ({
                 status: 'failed', code: error instanceof ProvisionFailure ? error.code : 'storage',
                 reason: error instanceof ProvisionFailure ? error.message : 'Tynn agent provisioning could not be completed. No other credential was used.',

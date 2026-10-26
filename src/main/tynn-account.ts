@@ -152,6 +152,11 @@ export class TynnAccount implements TynnAccountPort {
     host(): string { return trimHost(this.#ports.host()); }
     status(): TynnStatus { return this.#me && this.#meHost === this.host() ? { signedIn: true, host: this.#meHost, user: this.#me.user } : { signedIn: false }; }
     userId(): string | null { return this.status().signedIn ? this.#me!.id : null; }
+    /**
+     * The saved credential's account, before Tynn has confirmed it this launch (genie#1234): an agent's own stored Tynn key
+     * is usable off grid. `null` once signed out or the credential is forgotten.
+     */
+    savedUserId(): string | null { return this.#credential && this.#credential.host === this.host() ? this.#credential.userId : null; }
     onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
     #set(me: Me | null, host = this.host()): void {
         const previous = JSON.stringify(this.status());
@@ -165,12 +170,26 @@ export class TynnAccount implements TynnAccountPort {
         await this.#persist(null);
     }
 
+    /*
+     * TYNN ANSWERS EVERY UNAUTHORIZED REQUEST WITH 404 — by design, so bots get nothing but 400/404, and it will not change
+     * (the owner, genie#1234 / PR #1236). A deploy or a routing fault answers 404 too, and nothing tells the two apart. So a
+     * 404 from /me shows SIGNED OUT now, KEEPS the saved credential, and the caller schedules the backoff re-check (the
+     * thrown UNREACHABLE does that everywhere a check can fail): a passing 404 heals itself with no new sign-in, and a real
+     * revocation stays signed out until the person pairs again, when the new pairing replaces the credential. Forgetting
+     * the credential on a 404 signed Genie out for good and broke every Tynn-linked agent.
+     *
+     * 401/419 (Tynn never sends them; an explicit auth refusal if anything ever does) still forget at once: the account
+     * stays signed out until it is paired again, which is what a revocation means.
+     */
+    #unconfirmed(): void { this.#set(null); }
+
     async #whoami(signal?: AbortSignal): Promise<void> {
         const credential = this.#credential;
         if (!credential || credential.host !== this.host()) return;
         const res = await this.#fetch('/api/v1/me', { method: 'GET', ...(signal ? { signal } : {}) }, credential);
         if (this.#credential !== credential) return;
-        if ([401, 404, 419].includes(res.status)) { await this.#forget(credential); return; }
+        if (res.status === 401 || res.status === 419) { await this.#forget(credential); return; }
+        if (res.status === 404) { this.#unconfirmed(); throw new Error(UNREACHABLE); }
         if (!res.ok) throw new Error(UNREACHABLE);
         const me = parseMe(await res.json());
         if (this.#credential !== credential) return;
@@ -249,9 +268,11 @@ export class TynnAccount implements TynnAccountPort {
         const res = await this.#fetch(path, init, credential);
         if (this.#credential === credential) {
             if (res.status === 401 || res.status === 419) await this.#forget(credential);
-            else if (res.status === 404 && path !== '/api/v1/me') {
+            else if (res.status === 404 && path === '/api/v1/me') { this.#unconfirmed(); if (!this.#retry) this.#retryAfter(0); }
+            else if (res.status === 404) {
+                // A 404 is Tynn's "not authorized" as well as "not found": /me decides, and a 404 there signs out (kept).
                 try { await this.#whoami(init.signal); }
-                catch (error) { if (init.signal?.aborted) throw error; /* A transient check retains the saved credential. */ }
+                catch (error) { if (init.signal?.aborted) throw error; if (!this.#retry) this.#retryAfter(0); }
             }
         }
         return res;
