@@ -11,6 +11,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import { AgentView } from './components/AgentView.js';
 import { ChatFlyout } from './components/ChatFlyout.js';
 import { GenieLogo } from './components/GenieLogo.js';
+import { useComposerFocusLog } from './composer-focus-log.js';
 
 /**
  * THE DOCTOR WINDOW (`genie --doctor`, the owner 2026-10-12): Genie with only the Genie OSA. The facts of the install,
@@ -58,6 +59,8 @@ export function DoctorApp({ facts, connect, detail, onSend, onStart, onAnswerApp
     onAnswerApproval: (optionId: string, note?: string) => void;
     answeringApproval?: string | null;
 }) {
+    // The composer taking the caret unasked is logged with its cause (genie#1235), as in Genie's own window.
+    useComposerFocusLog();
     const [selected, setSelected] = useState<string | null>(null);
     // The Stream's own doors (the index column's `?at=<row>`) land here: the window has no router, only this view.
     const [at, setAt] = useState<string | null>(null);

@@ -51,7 +51,9 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
     it('a page in a site panel opening a window (window.open, a script, an agent driving the page) is background', () => {
         const panels = code('../src/main/site-panels-electron.ts');
         expect(panels).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*options\.openInWindow\(url, 'background'\);/);
-        expect(panels).toMatch(/'site-panel:open-window'[^\n]*options\.openInWindow\(`https:\/\/\$\{key\(host\)\}\/`, 'user-gesture'\)/);
+        // Read raw: the line holds `https://`, which the comment strip would cut.
+        const raw = readFileSync(new URL('../src/main/site-panels-electron.ts', import.meta.url), 'utf8');
+        expect(raw).toMatch(/'site-panel:open-window'[^\n]*options\.openInWindow\(`https:\/\/\$\{key\(host\)\}\/`, 'user-gesture'\)/);
     });
 
     it('the Genie browser window shows and re-raises through the rule, with the caller’s activation', () => {

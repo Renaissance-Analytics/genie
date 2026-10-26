@@ -30,16 +30,20 @@ describe('composerFocusLine', () => {
 describe('the wiring', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
     it('the window listens for focusin in the capture phase and the person’s pointer and keys, and logs the line', () => {
-        const app = strip('../src/renderer/App.tsx');
-        expect(app).toMatch(/document\.addEventListener\('focusin', onFocusIn, true\)/);
-        expect(app).toMatch(/window\.addEventListener\('pointerdown', onInput, true\)/);
-        expect(app).toMatch(/window\.addEventListener\('keydown', onInput, true\)/);
-        expect(app).toMatch(/const line = composerFocusLine\(\{/);
-        expect(app).toMatch(/if \(line\) console\.warn\(line\)/);
+        const hook = strip('../src/renderer/composer-focus-log.ts');
+        expect(hook).toMatch(/document\.addEventListener\('focusin', onFocusIn, true\)/);
+        expect(hook).toMatch(/window\.addEventListener\('pointerdown', onInput, true\)/);
+        expect(hook).toMatch(/window\.addEventListener\('keydown', onInput, true\)/);
+        expect(hook).toMatch(/const line = composerFocusLine\(\{/);
+        expect(hook).toMatch(/if \(line\) console\.warn\(line\)/);
+        // Both windows with a chat composer: Genie's and the doctor's.
+        expect(strip('../src/renderer/App.tsx')).toMatch(/^\s*useComposerFocusLog\(\);$/m);
+        expect(strip('../src/renderer/DoctorApp.tsx')).toMatch(/^\s*useComposerFocusLog\(\);$/m);
     });
 
-    it('main writes the renderer’s focus lines to its own log (the renderer console reaches no file)', () => {
-        const main = strip('../src/main/main.ts');
-        expect(main).toMatch(/win\.webContents\.on\('console-message', \(details\) => \{ if \(details\.message\.startsWith\('\[genie\] focus:'\)\) console\.log\(details\.message\); \}\);/);
+    it('main writes the renderer’s focus lines to its own log (the renderer console reaches no file) — both windows', () => {
+        const forward = /win\.webContents\.on\('console-message', \(details\) => \{ if \(details\.message\.startsWith\('\[genie\] focus:'\)\) console\.log\(details\.message\); \}\);/;
+        expect(strip('../src/main/main.ts')).toMatch(forward);
+        expect(strip('../src/main/doctor.ts')).toMatch(forward);
     });
 });
