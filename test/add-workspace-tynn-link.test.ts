@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { fakeTynnStorage, PAIRING_SCOPES, PAIRING_TOKEN } from './helpers/tynn-storage.js';
 import { parseEnvelopePlan, type EnvelopePlan } from '../src/core/envelope-plan.js';
 import { parseTynnOwner, parseTynnProjectInput, tynnProjectSlug } from '../src/core/tynn.js';
 import { buildEnvelope, type EnvelopePorts } from '../src/main/envelope-wizard-host.js';
@@ -189,49 +190,51 @@ describe('creating a Tynn project inline (Genie 1’s CreateProjectForm, no GApp
     });
 });
 
-describe('TynnAccount: owner-options and create-project over the signed-in session (Genie 1’s TynnBackend)', () => {
+describe('TynnAccount: owner-options and create-project over the scoped pairing bearer (Genie 1’s TynnBackend)', () => {
     function tynn(answer: { status: number; body: unknown }) {
         const calls: Array<{ method: string; path: string; headers: Record<string, string>; body?: unknown }> = [];
         const ports: TynnAccountPorts = {
+            ...fakeTynnStorage(),
             host: () => HOST,
             cookies: { set: async () => {}, get: async (_h, name) => (name === 'XSRF-TOKEN' ? 'xsrf%3Dvalue' : null), clear: async () => {} },
             fetch: async (url, init) => {
                 const path = url.slice(HOST.length);
                 calls.push({ method: init.method, path, headers: init.headers, ...(init.body !== undefined ? { body: JSON.parse(init.body) } : {}) });
                 const res = (status: number, body: unknown) => ({ ok: status < 300, status, text: async () => JSON.stringify(body) });
-                if (path === '/api/v1/me') return res(200, { id: '7', name: 'Ada', email: 'ada@example.com' });
+                if (path === '/api/v1/me') return res(200, { id: '7', name: 'Ada', email: 'ada@example.com', pairing_token: PAIRING_TOKEN, pairing_scopes: PAIRING_SCOPES });
                 if (path === '/api/v1/projects/owner-options' && init.method === 'GET') return res(200, { data: [{ kind: 'user', id: '7', label: 'Personal (your account)' }] });
                 if (path === '/api/v1/projects' && init.method === 'POST') return res(answer.status, answer.body);
                 return res(404, { message: 'Not Found' });
             },
         };
-        return { ports, calls };
+        return { ports, calls, ready: async () => { const a = await TynnAccount.open(ports); expect((await a.signIn('a'.repeat(64))).ok).toBe(true); return a; } };
     }
 
     it('ownerOptions: GET /api/v1/projects/owner-options, Tynn’s `data`', async () => {
         const t = tynn({ status: 201, body: {} });
-        const account = await TynnAccount.open(t.ports);
+        const account = await t.ready();
         expect(await account.ownerOptions()).toEqual([{ kind: 'user', id: '7', label: 'Personal (your account)' }]);
         expect(t.calls.at(-1)).toMatchObject({ method: 'GET', path: '/api/v1/projects/owner-options' });
     });
 
-    it('createProject: POST /api/v1/projects with the body as given and the XSRF header; 201’s `data` back', async () => {
+    it('createProject: POST /api/v1/projects with the body as given and the scoped bearer; 201’s `data` back', async () => {
         const t = tynn({ status: 201, body: { data: { id: '77', name: 'Acme', slug: 'acme' } } });
-        const account = await TynnAccount.open(t.ports);
+        const account = await t.ready();
         expect(await account.createProject({ name: 'Acme', owner_type: 'team', owner_id: '9' })).toEqual({ id: '77', name: 'Acme', slug: 'acme' });
-        expect(t.calls.at(-1)).toMatchObject({ method: 'POST', path: '/api/v1/projects', body: { name: 'Acme', owner_type: 'team', owner_id: '9' }, headers: { 'X-XSRF-TOKEN': 'xsrf=value' } });
+        expect(t.calls.at(-1)).toMatchObject({ method: 'POST', path: '/api/v1/projects', body: { name: 'Acme', owner_type: 'team', owner_id: '9' }, headers: { Authorization: `Bearer ${PAIRING_TOKEN}` } });
     });
 
     it('createProject: Tynn’s 422 message and 403 are said in words, never a bare status', async () => {
-        const invalid = await TynnAccount.open(tynn({ status: 422, body: { message: 'The name field is required.', errors: { name: ['The name field is required.'] } } }).ports);
+        const invalid = await tynn({ status: 422, body: { message: 'The name field is required.', errors: { name: ['The name field is required.'] } } }).ready();
         await expect(invalid.createProject({ name: '' })).rejects.toThrow('The name field is required.');
-        const forbidden = await TynnAccount.open(tynn({ status: 403, body: { error: 'forbidden' } }).ports);
+        const forbidden = await tynn({ status: 403, body: { error: 'forbidden' } }).ready();
         await expect(forbidden.createProject({ name: 'Acme', owner_type: 'organization', owner_id: '3' })).rejects.toThrow(/Tynn does not let you create a project under that owner/);
     });
 
     it('signed out: refused before any request', async () => {
         const calls: string[] = [];
         const account = await TynnAccount.open({
+            ...fakeTynnStorage(),
             host: () => HOST,
             cookies: { set: async () => {}, get: async () => null, clear: async () => {} },
             fetch: async (url) => { calls.push(url); return { ok: false, status: 401, text: async () => '{}' }; },
