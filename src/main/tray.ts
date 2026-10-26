@@ -1,4 +1,5 @@
-import { Menu, Tray, nativeImage } from 'electron';
+import { Menu, Tray, nativeImage, type NativeImage } from 'electron';
+import { withAttentionDot } from '../core/tray-attention.js';
 import type { UpdateState } from './updater.js';
 
 /**
@@ -106,16 +107,29 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
     ];
 }
 
-/** The tray's tooltip: what is held, or just Genie. */
-export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false): string {
-    const parts = [...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : [])];
+/** The tray's tooltip: how many Deck items wait on the person (first), what is held, or just Genie. */
+export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false, waiting = 0): string {
+    const parts = [...(waiting > 0 ? [`${waiting} waiting on you`] : []), ...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : [])];
     return parts.length === 0 ? 'Genie' : `Genie — ${parts.join('; ')}`;
 }
 
-export function createTray(handlers: TrayHandlers, iconPath: string | null = null): Tray {
-    // Genie's own mark (build/tray-icon.png, shipped as an extra resource) when it is there; the embedded mark is the fallback, never the default.
+/**
+ * The tray's two faces: Genie's mark, and the mark with the Deck's dot (core/tray-attention.ts) — the same image, so the
+ * person sees one icon change, never a different one. Genie's own mark (build/tray-icon.png, shipped as an extra
+ * resource) when it is there; the embedded mark is the fallback, never the default.
+ */
+export function trayImages(iconPath: string | null = null): { plain: NativeImage; attention: NativeImage } {
     const fromFile = iconPath ? nativeImage.createFromPath(iconPath) : null;
-    const icon = fromFile && !fromFile.isEmpty() ? fromFile : nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, 'base64'));
+    const plain = fromFile && !fromFile.isEmpty() ? fromFile : nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, 'base64'));
+    const { width, height } = plain.getSize();
+    // Electron's raw bitmap is BGRA on Windows and Linux, RGBA on macOS.
+    const order = process.platform === 'darwin' ? 'rgba' : 'bgra';
+    const dotted = withAttentionDot(new Uint8Array(plain.toBitmap()), width, height, order);
+    const attention = nativeImage.createFromBitmap(Buffer.from(dotted), { width, height });
+    return { plain, attention: attention.isEmpty() ? plain : attention };
+}
+
+export function createTray(handlers: TrayHandlers, icon: NativeImage): Tray {
     const tray = new Tray(icon);
     tray.setToolTip('Genie');
     tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(handlers)));
