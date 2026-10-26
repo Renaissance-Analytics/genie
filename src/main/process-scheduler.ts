@@ -38,6 +38,8 @@ export class ProcessScheduler {
     #cancel: (() => void) | null = null;
     /** Command runs in flight: the task id → its run's start, settled when the supervisor reports its exit. */
     readonly #inFlight = new Map<string, { at: number; done: Promise<void>; finish: () => void }>();
+    /** Outcome writes not yet on disk (and not yet told to the book's listeners) — `settled()` waits for these too. */
+    readonly #recording = new Set<Promise<void>>();
 
     constructor(deps: ProcessSchedulerDeps) {
         this.#deps = deps;
@@ -71,9 +73,18 @@ export class ProcessScheduler {
         return this.#run(p);
     }
 
-    /** Resolves when no command run is in flight — what a quit and a test await. */
+    /**
+     * Resolves when no command run is in flight AND every run's outcome is written (and told to the book's listeners).
+     *
+     * genie#1250: this used to wait on `#inFlight` alone, and a run leaves `#inFlight` the moment its exit is seen,
+     * BEFORE its outcome is written. So it resolved with the write still to come (a timer-fired nudge's write was never
+     * tracked at all). In the tests the late write told its book's listeners after the test had ended, and that test's
+     * scheduler re-planned, arming a timer inside the NEXT test (PR #1247's CI). Whoever awaits this now gets a finished run.
+     */
     async settled(): Promise<void> {
-        while (this.#inFlight.size > 0) await Promise.all([...this.#inFlight.values()].map((r) => r.done));
+        while (this.#inFlight.size > 0 || this.#recording.size > 0) {
+            await Promise.all([...[...this.#inFlight.values()].map((r) => r.done), ...this.#recording]);
+        }
     }
 
     #fire(ids: readonly string[]): void {
@@ -123,7 +134,10 @@ export class ProcessScheduler {
         void this.#record(s.id, run.at, status).finally(() => run.finish());
     }
 
+    /** Every outcome write is tracked until it has landed, so `settled()` covers it whichever path started it. */
     #record(id: string, at: number, status: LastRunStatus): Promise<void> {
-        return this.#deps.book.recordScheduledRun(id, at, status).catch(() => {});
+        const write: Promise<void> = this.#deps.book.recordScheduledRun(id, at, status).catch(() => {}).finally(() => { this.#recording.delete(write); });
+        this.#recording.add(write);
+        return write;
     }
 }
