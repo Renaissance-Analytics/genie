@@ -33,6 +33,7 @@ function fakeApi() {
         invoke: async (method, args) => {
             calls.push({ method, args });
             if (method === 'snapshot') return snapshot;
+            if (method === 'features.snapshot') return { settings: { values: { theme: 'dark' } }, remote: { url: 'wss://alphar', pin: { code: '771122', expiresAt: 9 }, devices: [{ id: 'd1', label: 'owner phone' }], shares: [{ id: 's1', grantedTo: 'wren' }], connections: [{ id: 'c1', label: 'laptop' }], enabled: true } };
             if (method === 'openAgent') return { ok: true };
             if (method === 'updates.install') return { report: 'stopped 2 processes' };
             return { ok: true };
@@ -303,6 +304,19 @@ describe('a guest receives ONLY its workspace’s pushes (beta.33 item 26, SECUR
         return { g, o };
     }
     const ownAgent = { agent: { id: 'agent_a' }, rows: [] };
+
+    // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN, the paired devices, the share links and the
+    // connections. A guest who read the PIN could pair as an OWNER. A guest gets the snapshot without them; the owner still
+    // gets all of it (positive control).
+    it('a guest’s features.snapshot carries no pairing PIN, devices, shares or connections; the owner’s does', async () => {
+        const { g, o } = await guestAndOwner();
+        const guest = JSON.stringify(await g.call('features.snapshot'));
+        const owner = JSON.stringify(await o.call('features.snapshot'));
+        expect(owner).toContain('771122');
+        expect(owner).toContain('owner phone');
+        for (const secret of ['771122', 'owner phone', '"grantedTo":"wren"', '"c1"']) expect(guest).not.toContain(secret);
+        expect(guest).toContain('"theme":"dark"'); // CONTROL: the guest still gets the rest of the snapshot
+    });
 
     const leaks: Array<[string, string, unknown]> = [
         ['another workspace’s agent ledger', 'agent:agent_b', { agent: { id: 'agent_b' }, rows: [{ text: 'fancy secrets' }] }],
