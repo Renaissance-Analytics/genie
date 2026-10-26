@@ -1,5 +1,6 @@
 import type { FileAddedProps } from '../core/file-trigger.js';
 import type { NodeOutcome } from '../core/flow-canvas.js';
+import type { V1FlowPlan } from '../core/v1-flows.js';
 import { stepLabel } from '../core/flow-reach.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
@@ -132,9 +133,21 @@ export interface V1ScheduleImportRecord {
     readonly notes?: readonly string[];
 }
 
+/** What the import of Genie 1's FLOWS did (genie#1204, main/v1-flows.ts), kept in flows.json — the store it filled. */
+export interface V1FlowImportRecord {
+    readonly at: string;
+    /** false = the boot could not see Genie 1's flows table: provisional, a later boot that can see it imports. */
+    readonly sawV1: boolean;
+    readonly imported?: number;
+    readonly alreadyHere?: number;
+    /** Each flow not imported, with why (core/v1-flows.ts), and each the engine refused, in its words. */
+    readonly notes: readonly string[];
+}
+
 interface FlowsFile {
     flows: FlowRecord[];
     v1Import?: V1ScheduleImportRecord;
+    v1FlowImport?: V1FlowImportRecord;
 }
 
 export type ArmResult = { ok: true; flow: FlowRecord } | { ok: false; reason: string };
@@ -176,7 +189,8 @@ export class FlowStore {
         const v1Import = data.v1Import !== null && typeof data.v1Import === 'object' ? data.v1Import : undefined;
         // A run Genie quit in the middle of (genie#1204 (e)) is recorded STOPPED, at the step it was on — never silently lost.
         const settled = flows.map((f) => (f.inFlight ? stoppedByQuit(f, new Date(now()).toISOString()) : f));
-        const store = new FlowStore(file, { flows: settled, ...(v1Import ? { v1Import } : {}) }, now);
+        const v1FlowImport = data.v1FlowImport !== null && typeof data.v1FlowImport === 'object' ? data.v1FlowImport : undefined;
+        const store = new FlowStore(file, { flows: settled, ...(v1Import ? { v1Import } : {}), ...(v1FlowImport ? { v1FlowImport } : {}) }, now);
         // A document that moved into the canonical shape is written back now, so the file never holds two shapes.
         if (flows.some((f, i) => f.document !== raw[i]!.document) || settled.some((f, i) => f !== flows[i])) await store.#flush();
         return store;
@@ -308,6 +322,50 @@ export class FlowStore {
         if (this.#data.flows.length === before) return false;
         await this.#flush();
         return true;
+    }
+
+    /** What the import of Genie 1's flows did, or undefined when it has not been attempted. */
+    v1FlowImport(): V1FlowImportRecord | undefined {
+        return this.#data.v1FlowImport;
+    }
+
+    /**
+     * GENIE 1's FLOWS, ONCE (genie#1204; core/v1-flows.ts plans them). Each comes over DISARMED, as the person's, through
+     * the same door every flow passes (the engine, Genie's kinds, a loop): one the door refuses is NOTED in the engine's
+     * words and left behind, and the others still come over. "Once" is recorded in the same write; `null` (Genie 1's
+     * flows not visible) is recorded provisionally, and a later boot that can see them imports. An id already here is
+     * left exactly as it is.
+     */
+    async importV1Flows(plan: V1FlowPlan | null): Promise<V1FlowImportRecord> {
+        const prior = this.#data.v1FlowImport;
+        if (prior?.sawV1 === true) return prior;
+        const at = this.#iso();
+        if (plan === null) {
+            if (prior) return prior;
+            const record: V1FlowImportRecord = { at, sawV1: false, notes: [] };
+            this.#data = { ...this.#data, v1FlowImport: record };
+            await this.#flush();
+            return record;
+        }
+        const have = new Set(this.#data.flows.map((f) => f.id));
+        const notes = [...plan.notes];
+        const fresh: FlowRecord[] = [];
+        let alreadyHere = 0;
+        for (const p of plan.flows) {
+            if (have.has(p.id)) { alreadyHere += 1; continue; }
+            let document: Record<string, unknown>;
+            try {
+                document = validated(p.document);
+            } catch (error) {
+                notes.push(`"${p.name}" (Genie 1 flow ${p.v1Id}): ${error instanceof Error ? error.message : String(error)}; not imported`);
+                continue;
+            }
+            fresh.push({ id: p.id, workspaceId: p.workspaceId, name: p.name, document, armed: false, createdBy: { kind: 'user' }, createdAt: at, updatedAt: at, refusals: [], runs: [] });
+        }
+        const record: V1FlowImportRecord = { at, sawV1: true, imported: fresh.length, alreadyHere, notes };
+        this.#data = { ...this.#data, flows: [...this.#data.flows, ...fresh], v1FlowImport: record };
+        await this.#flush();
+        return record;
     }
 
     #require(id: string): FlowRecord {
