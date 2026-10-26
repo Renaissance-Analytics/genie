@@ -1,4 +1,5 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
+import type { Headroom } from '../core/headroom.js';
 import { readChatDockWidth } from '../core/chat-width.js';
 import { providerLogin } from '../core/provider-login.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
@@ -88,6 +89,8 @@ export interface ShellProps {
     snapshot: GenieSnapshot;
     /** What each agent just did with Genie, for its Dashboard row (genie#1209). */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
+    /** Each provider's rate limit for the Dashboard header. */
+    rateLimits?: Readonly<Record<string, Headroom>> | undefined;
     /** Workspace-level faults (a missing repo) by workspace id, from each workspace's registry; absent = none seen. */
     workspaceFaults?: Readonly<Record<string, WorkspaceFault | null | undefined>> | undefined;
     /** The fault's fix: the host's folder picker and the manifest write. Absent = the registry door. */
@@ -269,6 +272,7 @@ export function Shell({
     address,
     snapshot,
     rowEmoji,
+    rateLimits,
     workspaceFaults,
     onLocateRepo,
     servable,
@@ -520,6 +524,7 @@ export function Shell({
                     {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
                         <Dashboard
                             rowEmoji={rowEmoji}
+                            rateLimits={rateLimits}
                             rows={snapshot.agents}
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}

@@ -82,7 +82,7 @@ export const NOT_DRAWN: readonly string[] = [
 export const NEW_PROJECT_DEFAULTS: readonly string[] = ['default_env_file'];
 
 const PLACE: Readonly<Record<string, SectionId>> = {
-    update_channel: 'general', launch_at_login: 'general', start_minimized: 'general',
+    update_channel: 'general', launch_at_login: 'general', start_minimized: 'general', rate_limit_refresh: 'general',
     do_not_disturb: 'general', dnd_reply: 'general', dnd_question_sound: 'general',
     notification_sounds: 'notifications',
     command_window_hotkey: 'keyboard', ftq_nudge_hotkey: 'keyboard',

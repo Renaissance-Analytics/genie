@@ -2,6 +2,7 @@ import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
 import { ActivityLight, Icon } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
+import { headroomTitle, type Headroom } from '../../core/headroom.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
@@ -453,9 +454,11 @@ export interface DashboardProps {
     onNavigate?: ((route: string) => void) | undefined;
     /** What each agent just did with Genie (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action — by agent id. */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
+    /** Each provider's rate limit, buffered in main (the header's pills). */
+    rateLimits?: Readonly<Record<string, Headroom>> | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits }: DashboardProps) {
     // Hide known hibernated workspaces consistently; unregistered agents keep their status visibility.
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
@@ -602,6 +605,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                         </button>
                     ))}
                 </div>
+                <RateLimitPills limits={rateLimits ?? {}} />
                 {/* `py-1`, not a row-height class: the row-height census counts ` h-7 ` as "28px header rows", and this is a button. */}
                 <button type="button" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie — the composer, one click from the board" className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
                     <Icon name="message-square" className="h-3.5 w-3.5" />
@@ -693,6 +697,30 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     No active workspaces. Wake a hibernated workspace from the sidebar to see it here.
                 </p>
             ) : null}
+        </div>
+    );
+}
+
+/**
+ * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its share of the binding window left,
+ * the full reset time on hover. Buffered in main, so this redraws at most once per provider per buffer.
+ */
+export function RateLimitPills({ limits }: { limits: Readonly<Record<string, Headroom>> }) {
+    const providers = Object.keys(limits).sort();
+    if (providers.length === 0) return null;
+    return (
+        <div data-rate-limits="" className="flex items-center gap-1.5">
+            {providers.map((p) => {
+                const h = limits[p]!;
+                const tone = h.over || h.leftPct <= 10 ? 'text-[var(--danger)]' : h.leftPct <= 30 ? 'text-[var(--warning)]' : 'text-[var(--fg-2)]';
+                return (
+                    <span key={p} data-rate-limit={p} title={headroomTitle(h)} className="flex items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs">
+                        <span className="text-[var(--fg-3)]">{p}</span>
+                        <span className={`font-mono ${tone}`}>{h.over ? 'over' : `${h.leftPct}%`}</span>
+                        <span className="font-mono text-[11px] text-[var(--fg-4)]">{h.window}</span>
+                    </span>
+                );
+            })}
         </div>
     );
 }
