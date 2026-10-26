@@ -40,6 +40,7 @@ import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
+import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
@@ -261,6 +262,33 @@ function refreshTray(): void {
     tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin, trayWaiting));
     // THE DECK NEEDS YOU (the owner, 2026-10-26): the mark with a dot while anything waits on the person.
     if (trayImages) tray.setImage(trayWaiting > 0 ? trayImages.attention : trayImages.plain);
+}
+
+const mcpRecovery = new McpRecovery();
+const mcpRecheck = new Map<string, ReturnType<typeof setTimeout>>();
+/** The latest report per agent: a spaced recheck acts on what is true THEN, never on the report that scheduled it. */
+const mcpLatest = new Map<string, readonly McpServerReport[]>();
+/** Set where the agent operations are built: a graceful restart on the same conversation. */
+let restartForMcp: ((agentId: AgentId) => Promise<void>) | null = null;
+function recoverMissingMcp(agentId: AgentId, reports: readonly McpServerReport[]): void {
+    mcpLatest.set(agentId, reports);
+    const missing = missingServers(reports, GENIE_MANAGED_MCP);
+    if (missing.length === 0) {
+        mcpRecovery.healthy(agentId);
+        const pending = mcpRecheck.get(agentId);
+        if (pending) { clearTimeout(pending); mcpRecheck.delete(agentId); }
+        return;
+    }
+    const said = missing.map((m) => `${m.name} (${m.why})`).join(', ');
+    const decision = mcpRecovery.decide(agentId, Date.now());
+    if (decision.action === 'restart') {
+        host?.notice(agentId, `This session came up without ${said}. Genie is restarting it on the same conversation to reconnect (attempt ${decision.attempt} of ${MCP_RECOVERY_ATTEMPTS}).`);
+        void restartForMcp?.(agentId);
+    } else if (decision.action === 'wait') {
+        if (!mcpRecheck.has(agentId)) mcpRecheck.set(agentId, setTimeout(() => { mcpRecheck.delete(agentId); recoverMissingMcp(agentId, mcpLatest.get(agentId) ?? []); }, Math.max(0, decision.untilMs - Date.now())));
+    } else if (decision.action === 'give-up') {
+        host?.notice(agentId, `Still without ${said} after ${decision.attempts} restarts. Genie has stopped retrying; restart this agent once the server answers.`);
+    }
 }
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
@@ -889,6 +917,10 @@ async function boot(): Promise<void> {
         onPlan: (agentId, steps) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
         onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
+        // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
+        // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
+        // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
+        onMcpServers: (agentId, reports) => recoverMissingMcp(agentId, reports),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
         serviceEnvFor: (workspaceId) => services?.engines.envFor(workspaceId) ?? {},
         // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
@@ -1267,6 +1299,7 @@ async function boot(): Promise<void> {
         },
     });
     loginHost = logins;
+    restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
         for (const id of host?.pausedAgents(provider) ?? []) {

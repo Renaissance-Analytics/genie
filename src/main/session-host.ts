@@ -7,6 +7,7 @@ import { LiveReadings, planStepsOf } from '../core/live-readings.js';
 import { BackgroundCount } from '../core/background-count.js';
 import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
+import type { McpServerReport } from '../core/mcp-missing.js';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
@@ -417,6 +418,7 @@ export class SessionHost {
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
+    readonly #onMcpServers: ((agentId: AgentId, reports: readonly McpServerReport[]) => void) | undefined;
     /** The workspace's managed-service variables now, for a session starting (serviceEnvDriverOptions). Absent = none. */
     readonly #serviceEnvFor: ((workspaceId: string) => Readonly<Record<string, string>>) | undefined;
     readonly #clock: () => number;
@@ -509,6 +511,8 @@ export class SessionHost {
          * pushes it to the window, which plays the sound the person chose for it.
          */
         onAction?: (agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void;
+        /** Each MCP server's state as an agent's provider reports it (genie#1202): main decides whether one is missing. */
+        onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
         serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
         /**
          * Who this agent exchanged AgentInbox mail with since `since` (its session start) — the Dashboard's comms
@@ -541,6 +545,7 @@ export class SessionHost {
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
+        this.#onMcpServers = options.onMcpServers;
         this.#serviceEnvFor = options.serviceEnvFor;
         this.#clock = options.clock ?? (() => Date.now());
         this.#processTree = options.processTree;
@@ -839,6 +844,7 @@ export class SessionHost {
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),
             onRateLimit: (readings, message) => this.#limitReport(record.provider, readings, message),
+            onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions) } : {}),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
