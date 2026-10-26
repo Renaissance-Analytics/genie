@@ -23,6 +23,9 @@ import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1ScheduleImport } from './v1-schedules.js';
 import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
+import type { McpServer } from '@particle-academy/prism-acp';
+import { OS_WORKSPACE } from '../core/os-agent.js';
+import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import { configSync, type SyncResult } from '../core/integrations.js';
@@ -32,6 +35,9 @@ import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
 import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
+import type { AgentCredentialPorts } from './tynn-agent-identities.js';
+import { McpPreparationError } from './mcp-preparation-error.js';
+import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
@@ -164,10 +170,11 @@ export interface ComposeInput {
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
     /**
-     * The signed-in Tynn session (main/tynn-account.ts), late-bound: it opens after composition. Config sync mints a linked
-     * workspace's Tynn agent token over it (main/tynn-agent-token.ts). Absent or null = no token is minted.
+     * The scoped Tynn account, late-bound because it opens after composition. Used only during private agent preparation.
      */
     readonly tynn?: () => TynnSessionPort | null;
+    /** OS encryption from Electron; the vault's path is fixed under Genie's own userData, never an envelope path. */
+    readonly tynnCipher?: AgentCredentialPorts['cipher'];
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -223,6 +230,8 @@ export type FrontDoorStatus =
     | { running: false; reason: string; blocked?: { port: FrontDoorPort; holder: string | null } };
 
 export interface ComposedServices {
+    /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
+    prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
     readonly inbox: InboxStore;
     readonly attention: AttentionStore;
     readonly knowledge: KnowledgeStore;
@@ -850,7 +859,54 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
-    const tynnTokens = tynnAgentTokens();
+    const tynnTokens = tynnAgentTokens({
+        file: join(input.userData, 'agent-credentials', 'agents.json'),
+        cipher: input.tynnCipher ?? { isAvailable: () => false, encrypt: () => { throw new Error('OS encryption unavailable'); }, decrypt: () => { throw new Error('OS encryption unavailable'); } },
+    });
+    // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
+    const configWork = new Map<string, Promise<unknown>>();
+    const withConfig = <T>(path: string, run: () => Promise<T>): Promise<T> => {
+        const previous = configWork.get(path) ?? Promise.resolve();
+        const next = previous.then(run, run).finally(() => { if (configWork.get(path) === next) configWork.delete(path); });
+        configWork.set(path, next); return next;
+    };
+    const projectText = async (workspacePath: string): Promise<string | null> => {
+        try {
+            const file = join(workspacePath, 'project.json');
+            const stat = await lstat(file);
+            if (stat.isSymbolicLink() || !stat.isFile()) throw new Error();
+            const text = await readFileP(file, 'utf8');
+            const data: unknown = JSON.parse(text);
+            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
+            return text;
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw new McpPreparationError('workspace');
+        }
+    };
+    const prepareAgentMcp = async (agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]> => {
+        const checkStop = () => { if (signal.aborted) throw new McpPreparationError('cancelled'); };
+        checkStop();
+        if (agent.workspaceId === OS_WORKSPACE) return [];
+        const workspace = input.workspaces?.().find((w) => w.id === agent.workspaceId);
+        if (!workspace || workspace.asleep) throw new McpPreparationError('workspace');
+        const text = await projectText(workspace.path);
+        await withConfig(workspace.path, () => reconcileLegacyTynnConfig({ workspacePath: workspace.path, fs: nodeTynnConfigFs(workspace.path) }));
+        checkStop();
+        const projectId = tynnProjectIdOf(text);
+        if (projectId === null) return [];
+        const result = await tynnTokens.ensure({
+            workspacePath: workspace.path, agent, signal, tynn: input.tynn?.() ?? null,
+            fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },
+        });
+        checkStop();
+        if (result.status === 'failed') throw new McpPreparationError(result.code ?? 'refused');
+        if (result.status === 'unlinked') throw new McpPreparationError('workspace');
+        const current = input.workspaces?.().find((w) => w.id === agent.workspaceId);
+        if (!current || current.asleep || current.path !== workspace.path || tynnProjectIdOf(await projectText(workspace.path)) !== projectId) throw new McpPreparationError('workspace');
+        checkStop();
+        return [{ type: 'http', name: 'tynn', url: result.mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${result.mcp.token}` }] }];
+    };
     // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
     // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
     // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could
@@ -891,6 +947,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
 
     return {
         inbox,
+        prepareAgentMcp,
         attention,
         knowledge,
         flows,
@@ -1008,7 +1065,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         get plugins() { return plugins; },
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
-        syncConfig: async (workspacePath, source = 'start') => {
+        syncConfig: async (workspacePath, source = 'start') => withConfig(workspacePath, async () => {
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) {
                 const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
@@ -1024,16 +1081,19 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 list: async (d: string) => { try { return await readdirP(d); } catch { return []; } },
             };
             const flags = { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') };
-            // A workspace linked to Tynn: its agents' Tynn token, minted once and written by the same targets as Genie's own.
-            const tynn = await tynnTokens.ensure({ workspacePath, fs, flags, tynn: input.tynn?.() ?? null, ignore: () => writeAgentGitignore({ workspacePath, fs }) });
+            try {
+                await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });
+                await writeAgentGitignore({ workspacePath, fs });
+            } catch {
+                const failed: SyncResult[] = [{ id: 'tynn', label: 'Tynn (legacy config cleanup)', ok: false, error: new McpPreparationError('config').message }];
+                agentFiles.config(workspacePath, failed, Date.now(), source);
+                return failed;
+            }
             const targets = configSyncTargets({ workspacePath, fs, flags });
-            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token, ...(tynn.status === 'already' || tynn.status === 'minted' ? { TYNN_MCP_URL: tynn.mcp.url, TYNN_MCP_TOKEN: tynn.mcp.token } : {}) });
-            const all: SyncResult[] = tynn.status === 'unlinked'
-                ? results
-                : [...results, tynn.status === 'failed' ? { id: 'tynn', label: 'Tynn (agent token)', ok: false, error: tynn.reason } : { id: 'tynn', label: 'Tynn (agent token)', ok: true }];
-            agentFiles.config(workspacePath, all, Date.now(), source);
-            return all;
-        },
+            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+            agentFiles.config(workspacePath, results, Date.now(), source);
+            return results;
+        }),
         syncAgentDocs: async (workspacePath, source = 'start') => {
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const on = settings.snapshot().mcp_sync_agents !== false;

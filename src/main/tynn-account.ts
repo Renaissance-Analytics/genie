@@ -1,24 +1,19 @@
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
+import { migratePrivateCredential, preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
 
-/**
- * THIS GENIE'S TYNN ACCOUNT — GENIE 1'S SESSION, AS IT WAS (the owner, 2026-10-19: "tynn already had this half.
- * everything was already working in genie 1").
- *
- * Genie 1 (`v1:main/auth.ts` `redeemToken`, `main/backend/tynn.ts` `fetch`): the single-use code from /genie/callback
- * is dropped as a `genie_token` cookie on the Tynn origin, and `GET /api/v1/me` swaps it for a real Tynn session —
- * Tynn's GenieAuthController::exchange. Every call after that rides the session's cookies through a session-bound
- * fetch; a write carries the `X-XSRF-TOKEN` Laravel checks, read from the `XSRF-TOKEN` cookie. Nothing on Tynn's side is
- * Genie 2's own, and Genie keeps no key: the cookies live in Electron's persistent `persist:tynn` session, which the
- * OS's own encryption protects (main.ts).
- *
- * Sign out ends the session at Tynn (`POST /logout`, Fortify's) and clears the cookies; Tynn unreachable, the cookies
- * are cleared anyway and the person is told the Tynn session ends when it expires.
- */
-
-export type SessionFetch = (url: string, init: { method: 'GET' | 'POST' | 'DELETE'; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
+/** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
+ * subsequent API calls use only the scoped bearer, never the browser session. */
+type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+export type SessionFetch = (url: string, init: { method: Method; headers: Record<string, string>; body?: string; credentials: 'include' | 'omit'; redirect: 'error'; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export interface TynnAccountPorts {
-    /** The Tynn host from settings, read at call time. */
+    readonly file: string;
+    /** Previous shared-home file; migration restricts this file, never its parent directory. */
+    readonly legacyFile?: string;
+    readonly cipher: { isAvailable(): boolean; encrypt(text: string): Buffer; decrypt(bytes: Buffer): string };
+    /** Fixed Tynn origin in production; injected origin in isolated tests. */
     readonly host: () => string;
     /** The session's cookie jar, for the Tynn origin. */
     readonly cookies: {
@@ -26,7 +21,7 @@ export interface TynnAccountPorts {
         get(host: string, name: string): Promise<string | null>;
         clear(host: string): Promise<void>;
     };
-    /** Fetch bound to that session: its cookies ride along, and a Set-Cookie lands in it. */
+    /** Electron session fetch; credentials are explicitly included only during the code exchange. */
     readonly fetch: SessionFetch;
     /** Opens the person's browser; absent, or failing, the link stays on screen to open elsewhere. */
     readonly openExternal?: (url: string) => Promise<void>;
@@ -40,6 +35,8 @@ export interface TynnAccountPorts {
  * Waking the computer and an agent asking IssueWatch ask again too (`recheck`).
  */
 export const TYNN_RETRY_MS: readonly number[] = [30_000, 120_000, 600_000, 1_800_000];
+/** One deadline includes response headers and body; a stalled service must not block account or agent startup. */
+export const TYNN_REQUEST_TIMEOUT_MS = 30_000;
 
 export interface TynnUser {
     readonly name: string;
@@ -67,180 +64,235 @@ interface Me {
 }
 
 const trimHost = (h: string) => h.trim().replace(/\/+$/, '');
-const reach = (error: unknown) => `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`;
+const UNREACHABLE = 'Tynn could not be reached. Check your connection and try again.';
+const REQUIRED_SCOPES = ['genie:discovery', 'genie:projects', 'genie:workstations', 'genie:agents', 'genie:agent-tokens', 'genie:issue-watch', 'genie:issues', 'genie:inbox'];
+const tokenValid = (s: unknown): s is string => typeof s === 'string' && /^gpk_[0-9A-HJKMNP-TV-Z]{26}\.[a-f0-9]{64}$/i.test(s);
+interface Credential { readonly token: string; readonly host: string; readonly userId: string; readonly scopes: readonly string[] }
+const parseMe = (body: unknown): Me | null => {
+    const b = body as Record<string, unknown> | null;
+    return b && (typeof b.id === 'string' || typeof b.id === 'number') && String(b.id) !== '' && typeof b.name === 'string' && typeof b.email === 'string'
+        ? { id: String(b.id), user: { name: b.name, email: b.email } } : null;
+};
 
 export class TynnAccount implements TynnAccountPort {
     readonly #ports: TynnAccountPorts;
     #me: Me | null = null;
     #meHost = '';
+    #credential: Credential | null = null;
+    #usedCodes: string[] = [];
+    #authWork: Promise<unknown> = Promise.resolve();
+    #diskWork: Promise<unknown> = Promise.resolve();
     readonly #listeners = new Set<() => void>();
+    #retry: { step: number; cancel: () => void } | null = null;
 
-    private constructor(ports: TynnAccountPorts) {
-        this.#ports = ports;
-    }
+    private constructor(ports: TynnAccountPorts) { this.#ports = ports; }
 
-    /** Asks Tynn who the session belongs to. Unreachable = signed out FOR NOW: the cookies are kept for `recheck`. */
     static async open(ports: TynnAccountPorts): Promise<TynnAccount> {
         const account = new TynnAccount(ports);
-        try {
-            await account.#whoami();
-        } catch {
-            // Offline at launch: shown signed out; nothing is cleared, and Genie asks again on the backoff.
-            account.#retryAfter(0);
+        // A legacy browser session cannot recover a once-only pairing secret.
+        await ports.cookies.clear(account.host());
+        await account.#restore();
+        if (account.#credential) {
+            try { await account.#whoami(); } catch { account.#retryAfter(0); }
         }
         return account;
     }
 
-    /** The pending retry, if any, and which step of the backoff it is. */
-    #retry: { step: number; cancel: () => void } | null = null;
+    async #prepareStorage(): Promise<void> {
+        if (this.#ports.legacyFile) await migratePrivateCredential(this.#ports.legacyFile, this.#ports.file);
+        await preparePrivateCredential(this.#ports.file);
+    }
+
+    async #restore(): Promise<void> {
+        try {
+            await this.#prepareStorage();
+            const text = await readFile(this.#ports.file, 'utf8');
+            if (text.length > 32_768) return;
+            const data = JSON.parse(text) as Record<string, unknown>;
+            if (data.version !== 1 || data.host !== this.host()) return;
+            if (Array.isArray(data.usedCodes)) this.#usedCodes = data.usedCodes.filter((s): s is string => typeof s === 'string' && /^[a-f0-9]{64}$/.test(s)).slice(-8);
+            const scopes = data.scopes;
+            if (data.state !== 'signed-in' || !this.#ports.cipher.isAvailable() || typeof data.tokenEnc !== 'string' || typeof data.userId !== 'string' || !Array.isArray(scopes) || !REQUIRED_SCOPES.every((s) => scopes.includes(s))) return;
+            const token = this.#ports.cipher.decrypt(Buffer.from(data.tokenEnc, 'base64'));
+            if (tokenValid(token)) this.#credential = { token, host: this.host(), userId: data.userId, scopes: scopes.filter((s): s is string => typeof s === 'string') };
+        } catch { /* Missing, corrupt or locked credentials require pairing; never fall back to cookies. */ }
+    }
+
+    #persist(credential: Credential | null): Promise<void> {
+        const run = async () => {
+            if (this.#ports.legacyFile) await migratePrivateCredential(this.#ports.legacyFile, this.#ports.file);
+            const data = credential ? {
+                version: 1, state: 'signed-in', host: credential.host, userId: credential.userId, scopes: credential.scopes,
+                tokenEnc: this.#ports.cipher.encrypt(credential.token).toString('base64'), usedCodes: this.#usedCodes,
+            } : { version: 1, state: 'signed-out', host: this.host(), usedCodes: this.#usedCodes };
+            await writePrivateCredential(this.#ports.file, JSON.stringify(data));
+        };
+        const work = this.#diskWork.then(run, run);
+        this.#diskWork = work.catch(() => {});
+        return work;
+    }
+
+    #serial<T>(fn: () => Promise<T>): Promise<T> {
+        const work = this.#authWork.then(fn, fn);
+        this.#authWork = work.catch(() => {});
+        return work;
+    }
 
     #retryAfter(step: number): void {
-        this.#retry?.cancel();
-        this.#retry = null;
-        const schedule = this.#ports.schedule;
+        this.#retry?.cancel(); this.#retry = null;
         const ms = TYNN_RETRY_MS[step];
-        if (!schedule || ms === undefined) return;
-        const cancel = schedule(ms, () => {
+        if (!this.#credential || !this.#ports.schedule || ms === undefined) return;
+        const cancel = this.#ports.schedule(ms, () => {
             this.#retry = null;
             void this.#whoami().catch(() => this.#retryAfter(step + 1));
         });
         this.#retry = { step, cancel };
     }
 
-    host(): string {
-        return trimHost(this.#ports.host());
+    host(): string { return trimHost(this.#ports.host()); }
+    status(): TynnStatus { return this.#me && this.#meHost === this.host() ? { signedIn: true, host: this.#meHost, user: this.#me.user } : { signedIn: false }; }
+    userId(): string | null { return this.status().signedIn ? this.#me!.id : null; }
+    onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
+    #set(me: Me | null, host = this.host()): void {
+        const previous = JSON.stringify(this.status());
+        this.#me = me; this.#meHost = me ? host : '';
+        if (previous !== JSON.stringify(this.status())) for (const l of this.#listeners) l();
     }
 
-    status(): TynnStatus {
-        return this.#me && this.#meHost === this.host() ? { signedIn: true, host: this.#meHost, user: this.#me.user } : { signedIn: false };
+    async #forget(credential: Credential): Promise<void> {
+        if (this.#credential !== credential) return;
+        this.#credential = null; this.#retry?.cancel(); this.#retry = null; this.#set(null);
+        await this.#persist(null);
     }
 
-    /** The person's id — their own push channel is `private-App.Models.User.<id>` — only while signed in. */
-    userId(): string | null {
-        return this.status().signedIn ? this.#me!.id : null;
+    async #whoami(signal?: AbortSignal): Promise<void> {
+        const credential = this.#credential;
+        if (!credential || credential.host !== this.host()) return;
+        const res = await this.#fetch('/api/v1/me', { method: 'GET', ...(signal ? { signal } : {}) }, credential);
+        if (this.#credential !== credential) return;
+        if ([401, 404, 419].includes(res.status)) { await this.#forget(credential); return; }
+        if (!res.ok) throw new Error(UNREACHABLE);
+        const me = parseMe(await res.json());
+        if (this.#credential !== credential) return;
+        if (!me || me.id !== credential.userId) { await this.#forget(credential); return; }
+        this.#set(me, credential.host);
     }
 
-    onChange(listener: () => void): () => void {
-        this.#listeners.add(listener);
-        return () => { this.#listeners.delete(listener); };
-    }
-
-    #set(me: Me | null): void {
-        const was = this.status().signedIn;
-        this.#me = me;
-        this.#meHost = me ? this.host() : '';
-        if (was !== this.status().signedIn) for (const l of this.#listeners) l();
-    }
-
-    /** GET /api/v1/me over the session: who it belongs to, or null. Throws only when Tynn cannot be reached. */
-    async #whoami(): Promise<Me | null> {
-        const res = await this.#raw('/api/v1/me', { method: 'GET' });
-        let me: Me | null = null;
-        if (res.ok) {
-            const body = (await res.json().catch(() => null)) as { id?: unknown; name?: unknown; email?: unknown } | null;
-            if (body && (typeof body.id === 'string' || typeof body.id === 'number') && typeof body.name === 'string' && typeof body.email === 'string') {
-                me = { id: String(body.id), user: { name: body.name, email: body.email } };
-            }
-        }
-        this.#set(me);
-        return me;
-    }
-
-    /** Ask Tynn again now (waking from sleep, an agent asking IssueWatch): a pending retry gives way to it. */
     async recheck(): Promise<TynnStatus> {
-        this.#retry?.cancel();
-        this.#retry = null;
-        try {
-            await this.#whoami();
-        } catch {
-            // Still unreachable: unchanged, and the backoff starts again.
-            this.#retryAfter(0);
-        }
+        this.#retry?.cancel(); this.#retry = null;
+        try { await this.#whoami(); } catch { this.#retryAfter(0); }
         return this.status();
     }
 
     async startSignIn(): Promise<{ url: string }> {
         const url = tynnSignInUrl(this.host());
-        try {
-            await this.#ports.openExternal?.(url);
-        } catch {
-            // No browser here: the link is shown to open on another device, and the code is pasted back.
-        }
+        try { await this.#ports.openExternal?.(url); } catch { /* The visible link remains usable. */ }
         return { url };
     }
 
-    /** Genie 1's redeemToken: the code as `genie_token` on the Tynn origin, then /api/v1/me swaps it for the session. */
-    async signIn(input: string): Promise<SignInResult> {
+    signIn(input: string): Promise<SignInResult> { return this.#serial(() => this.#signIn(input)).catch(() => ({ ok: false, reason: 'Tynn pairing could not be completed. Check your connection and OS keychain, then try again.' })); }
+    async #signIn(input: string): Promise<SignInResult> {
         const code = signInCodeFrom(input);
         if (code === null) return { ok: false, reason: 'That is not a Tynn sign-in code. Paste the code Tynn shows after you sign in — 64 letters and digits.' };
+        const hash = createHash('sha256').update(code).digest('hex');
+        if (this.#usedCodes.includes(hash)) return this.status().signedIn ? { ok: true, user: this.#me!.user } : { ok: false, reason: 'That code was already used. Open Tynn again for a fresh sign-in code.' };
+        if (!this.#ports.cipher.isAvailable()) return { ok: false, reason: 'OS credential encryption is unavailable. Unlock your keychain before pairing Tynn.' };
+        await this.#prepareStorage();
         const host = this.host();
-        await this.#ports.cookies.set(host, 'genie_token', code);
-        let me: Me | null;
+        const previous = { credential: this.#credential, me: this.#me, host: this.#meHost };
+        this.#retry?.cancel(); this.#retry = null; this.#credential = null; this.#set(null);
+        let issued: Credential | null = null;
+        let accepted = false;
         try {
-            me = await this.#whoami();
-        } catch (error) {
-            return { ok: false, reason: reach(error) };
-        }
-        if (!me) {
-            // Spent or expired: no dead code is left in the jar to be sent again.
             await this.#ports.cookies.clear(host);
-            return { ok: false, reason: 'Tynn did not accept that code. Codes work once and expire 5 minutes after the Tynn page opens — open Tynn again for a fresh one.' };
+            await this.#ports.cookies.set(host, 'genie_token', code);
+            const res = await this.#fetch('/api/v1/me', { method: 'GET' }, null, host);
+            if (!res.ok) return { ok: false, reason: 'Tynn did not accept that code. Codes work once and expire 5 minutes after the Tynn page opens — open Tynn again for a fresh one.' };
+            const body = await res.json() as Record<string, unknown> | null;
+            const me = parseMe(body);
+            if (me && tokenValid(body?.pairing_token)) issued = { token: body.pairing_token, host, userId: me.id, scopes: Array.isArray(body.pairing_scopes) ? body.pairing_scopes.filter((s): s is string => typeof s === 'string') : [] };
+            if (!issued || !REQUIRED_SCOPES.every((s) => issued!.scopes.includes(s))) return { ok: false, reason: 'Tynn did not issue the required scoped desktop credential. Update Tynn and pair again.' };
+            await this.#ports.cookies.clear(host);
+            this.#usedCodes = [...this.#usedCodes, hash].slice(-8);
+            await this.#persist(issued);
+            this.#credential = issued; this.#set(me, host); accepted = true;
+            return { ok: true, user: me!.user };
+        } catch { return { ok: false, reason: 'Tynn pairing could not be completed. Check your connection and OS keychain, then try again.' }; }
+        finally {
+            if (!accepted) {
+                this.#credential = previous.credential;
+                this.#set(previous.me, previous.host);
+                await this.#ports.cookies.clear(host);
+            }
+            // A key minted but not durably accepted must not silently remain live.
+            if (issued && !accepted) await this.#fetch('/api/v1/pairing-token', { method: 'DELETE' }, issued).catch(() => {});
         }
-        return { ok: true, user: me.user };
     }
 
-    async signOut(): Promise<SignOutResult> {
-        const host = this.host();
-        let unreached: string | null = null;
+    signOut(): Promise<SignOutResult> { return this.#serial<SignOutResult>(async () => {
+        const credential = this.#credential;
+        this.#credential = null; this.#retry?.cancel(); this.#retry = null; this.#set(null);
+        await this.#persist(null);
+        await this.#ports.cookies.clear(this.host());
+        if (!credential) return { ok: true, revoked: true };
         try {
-            await this.#raw('/logout', { method: 'POST' });
-        } catch (error) {
-            unreached = reach(error);
-        }
-        await this.#ports.cookies.clear(host);
-        this.#set(null);
-        if (unreached === null) return { ok: true, revoked: true };
-        return { ok: true, revoked: false, reason: `${unreached} — this Genie is signed out; the Tynn session ends when it expires.` };
-    }
+            const res = await this.#fetch('/api/v1/pairing-token', { method: 'DELETE' }, credential);
+            const body = res.ok ? await res.json() as { revoked?: unknown } : null;
+            if (body?.revoked === true) return { ok: true, revoked: true };
+        } catch { /* Local sign-out is durable even when remote revocation cannot be confirmed. */ }
+        return { ok: true, revoked: false, reason: 'This Genie is signed out. Tynn credential revocation could not be confirmed; revoke this device in Tynn if it remains listed.' };
+    }).catch(() => { throw new Error('Local Tynn sign-out could not be saved. Try again before closing Genie.'); }); }
 
-    /**
-     * One call over the session, as Genie 1's TynnBackend.fetch made it. A 401 or 419 means Tynn no longer has this
-     * session: this Genie shows signed out (the cookies stay; signing in again replaces them).
-     *
-     * A 404 is ambiguous ON PURPOSE: Tynn answers a failed auth exactly as it answers a path that is not there (the
-     * owner, 2026-10-19 — attackers must not learn what exists). So a 404 while signed in asks /api/v1/me once: it
-     * answers who this session belongs to, or this Genie shows signed out.
-     */
-    async request(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }): Promise<TynnResponse> {
-        const res = await this.#raw(path, init);
-        if (res.status === 401 || res.status === 419) this.#set(null);
-        else if (res.status === 404 && path !== '/api/v1/me' && this.status().signedIn) {
-            try {
-                await this.#whoami();
-            } catch {
-                // Tynn unreachable for the check: unchanged until it answers.
+    async request(path: string, init: { method: Method; body?: unknown; signal?: AbortSignal }): Promise<TynnResponse> {
+        const credential = this.#credential;
+        if (!credential || credential.host !== this.host()) throw new Error('Sign in to Tynn first');
+        const res = await this.#fetch(path, init, credential);
+        if (this.#credential === credential) {
+            if (res.status === 401 || res.status === 419) await this.#forget(credential);
+            else if (res.status === 404 && path !== '/api/v1/me') {
+                try { await this.#whoami(init.signal); }
+                catch (error) { if (init.signal?.aborted) throw error; /* A transient check retains the saved credential. */ }
             }
         }
         return res;
     }
 
-    async #raw(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }): Promise<TynnResponse> {
-        const host = this.host();
+    async #fetch(path: string, init: { method: Method; body?: unknown; signal?: AbortSignal }, credential: Credential | null, exchangeHost?: string): Promise<TynnResponse> {
+        const host = credential?.host ?? exchangeHost ?? this.host();
+        if (!path.startsWith('/api/v1/') || path.includes('\\') || /[\r\n]/.test(path)) throw new Error('Invalid Tynn API path');
+        const url = new URL(`${host}${path}`);
+        if (url.origin !== new URL(host).origin || !url.pathname.startsWith('/api/v1/') || url.username || url.password) throw new Error('Invalid Tynn API origin or path');
         const headers: Record<string, string> = { Accept: 'application/json', 'X-Requested-With': 'XMLHttpRequest' };
+        if (credential) headers.Authorization = `Bearer ${credential.token}`;
         if (init.body !== undefined) headers['Content-Type'] = 'application/json';
-        if (init.method !== 'GET') {
-            const xsrf = await this.#ports.cookies.get(host, 'XSRF-TOKEN');
-            if (xsrf) headers['X-XSRF-TOKEN'] = decodeURIComponent(xsrf);
-        }
-        const res = await this.#ports.fetch(`${host}${path}`, { method: init.method, headers, ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}) });
-        return {
-            ok: res.ok,
-            status: res.status,
-            json: async () => {
-                const text = await res.text();
-                return text === '' ? null : (JSON.parse(text) as unknown);
-            },
+        const cancelled = () => Object.assign(new Error('Tynn request cancelled.'), { name: 'AbortError' });
+        if (init.signal?.aborted) throw cancelled();
+        const controller = new AbortController();
+        let interrupt!: () => void;
+        const interrupted = new Promise<never>((_resolve, reject) => {
+            interrupt = () => {
+                reject(init.signal?.aborted ? cancelled() : new Error(UNREACHABLE));
+                controller.abort();
+            };
+        });
+        const timer = setTimeout(interrupt, TYNN_REQUEST_TIMEOUT_MS);
+        init.signal?.addEventListener('abort', interrupt, { once: true });
+        const cleanup = () => {
+            clearTimeout(timer);
+            init.signal?.removeEventListener('abort', interrupt);
         };
+        const failure = () => init.signal?.aborted ? cancelled() : new Error(UNREACHABLE);
+        try {
+            const res = await Promise.race([this.#ports.fetch(url.href, {
+                method: init.method, headers, credentials: credential ? 'omit' : 'include', redirect: 'error', signal: controller.signal,
+                ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+            }), interrupted]);
+            // Return headers promptly for auth handling; the body retains the same deadline and cancellation.
+            const body = Promise.race([res.text(), interrupted]).catch(() => { throw failure(); }).finally(cleanup);
+            // A status-only caller need not read json(), but its failed/aborted body must still be handled.
+            void body.catch(() => {});
+            return { ok: res.ok, status: res.status, json: async () => { const text = await body; return text === '' ? null : JSON.parse(text) as unknown; } };
+        } catch { cleanup(); throw failure(); }
     }
 
     /** The person's projects — Genie 1's GET /api/v1/projects. Signed out is refused before any request. */

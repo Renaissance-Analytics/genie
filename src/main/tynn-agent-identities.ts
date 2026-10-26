@@ -1,10 +1,9 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { isAcpProvider } from '../core/engine.js';
 import type { AgentRecord } from '../core/identity.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import type { TynnAgentToken, TynnSessionPort } from './tynn-agent-token.js';
+import { preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
 
 export interface AgentCredentialPorts {
     readonly file: string;
@@ -50,7 +49,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
 
     const load = (): Promise<Record<string, Stored>> => rows ??= (async () => {
         let text: string;
-        try { text = await readFile(ports.file, 'utf8'); }
+        try { await preparePrivateCredential(ports.file); text = await readFile(ports.file, 'utf8'); }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be read.'); }
         try {
             const parsed = object(JSON.parse(text));
@@ -63,22 +62,19 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
     const save = (key: string, record: Stored): Promise<void> => {
         const run = async () => {
             const next = { ...await load(), [key]: record };
-            const temp = `${ports.file}.${randomUUID()}.tmp`;
             try {
-                await mkdir(dirname(ports.file), { recursive: true, mode: 0o700 });
-                await writeFile(temp, JSON.stringify({ version: 1, records: next }), { mode: 0o600 });
-                await rename(temp, ports.file);
+                await writePrivateCredential(ports.file, JSON.stringify({ version: 1, records: next }));
                 rows = Promise.resolve(next);
             } catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be saved. Review any pending key before trying again.'); }
-            finally { await rm(temp, { force: true }).catch(() => {}); }
         };
         const work = writes.then(run, run); writes = work.catch(() => {}); return work;
     };
 
-    async function decide(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null }, userId: string, key: string): Promise<TynnAgentToken> {
+    async function decide(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }, userId: string, key: string): Promise<TynnAgentToken> {
         const { projectId, agent, tynn } = input;
         if (!ports.cipher.isAvailable()) throw new ProvisionFailure('storage', 'Unlock OS credential encryption before provisioning a Tynn agent.');
         const currentAccount = () => {
+            if (input.signal?.aborted) throw new ProvisionFailure('refused', 'Tynn agent credential preparation was cancelled.');
             if (!tynn?.status().signedIn || tynn.userId?.() !== userId) throw new ProvisionFailure('refused', 'The Tynn account changed. Check the account before provisioning this agent.');
         };
         currentAccount();
@@ -96,7 +92,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
         const api = async (path: string, method: 'GET' | 'POST', body?: unknown): Promise<Record<string, unknown>> => {
             currentAccount();
             try {
-                const response = await tynn!.request(path, { method, ...(body === undefined ? {} : { body }) });
+                const response = await tynn!.request(path, { method, ...(body === undefined ? {} : { body }), ...(input.signal ? { signal: input.signal } : {}) });
                 currentAccount();
                 if (!response.ok) throw new ProvisionFailure(response.status >= 500 ? 'offline' : 'refused', `Tynn refused the agent request (${response.status}).`);
                 const value = object(await response.json()); currentAccount();
@@ -157,7 +153,7 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
     }
 
     return {
-        ensure(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null }): Promise<TynnAgentToken> {
+        ensure(input: { projectId: string; agent: AgentRecord; tynn: TynnSessionPort | null; signal?: AbortSignal }): Promise<TynnAgentToken> {
             const userId = input.tynn?.userId?.();
             if (!userId || !input.tynn?.status().signedIn) return Promise.resolve({ status: 'failed', code: 'refused', reason: 'Sign in to Tynn before provisioning an agent credential.' });
             const key = JSON.stringify([userId, input.projectId, input.agent.id]);

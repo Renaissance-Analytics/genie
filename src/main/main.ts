@@ -15,7 +15,6 @@ import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
 import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
-import { tynnMcpServersOnDisk } from './tynn-agent-token.js';
 import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
@@ -74,6 +73,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
+import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
@@ -877,6 +877,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    setPrivateCredentialFailureLog(lifecycleLog);
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
@@ -946,13 +947,13 @@ async function boot(): Promise<void> {
          */
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
-        // A CODEX session also gets the Tynn server Genie wrote into its workspace (#1098), so the session can approve it
-        // (codexOptionsFor approves every server in this list; prism only lets it approve a server it was given). Claude
-        // reads `.mcp.json` itself and runs Genie's tools unasked, so it is given nothing it does not already have.
-        mcpServersFor: (record) => [
-            ...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
-            ...(record.provider === 'codex' ? tynnMcpServersOnDisk(cwdFor(record), (path) => { try { return readFileSync(path, 'utf8'); } catch { return null; } }) : []),
-        ],
+        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
+        prepareMcpServers: async (record, _cwd, signal) => {
+            if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
+            const privateServers = await services.prepareAgentMcp(record, signal);
+            return [...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)), ...privateServers];
+        },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
         onThreadId: (agentId, threadId) => {
@@ -1883,8 +1884,13 @@ async function boot(): Promise<void> {
         // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
         remoteTransport: remoteHub,
         mcpEndpoint: () => mcp?.endpoint() ?? null,
-        // A linked workspace's Tynn agent token is minted over this session (main/tynn-agent-token.ts); opened after compose.
+        // The account is opened after compose; private credentials are requested only when an agent starts.
         tynn: () => tynnAccount,
+        tynnCipher: {
+            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
+            encrypt: (text) => safeStorage.encryptString(text),
+            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        },
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
@@ -2038,12 +2044,18 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
-    // THIS GENIE'S TYNN ACCOUNT: the key encrypted by the OS in ~/.genie, for the host in settings (main/tynn-account.ts).
-    // Genie 1's Tynn session, in its own persistent partition: Chromium keeps its cookies on disk under the OS's own
-    // encryption, and nothing else Genie loads (the window, the Genie Browser) shares them.
+    // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
+    // the one-time pairing exchange; ordinary API requests explicitly omit it.
     const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
         host: () => TYNN_HOST,
+        file: join(genieHome(), 'credentials', 'tynn.json'),
+        legacyFile: join(genieHome(), 'tynn.json'),
+        cipher: {
+            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
+            encrypt: (text) => safeStorage.encryptString(text),
+            decrypt: (bytes) => safeStorage.decryptString(bytes),
+        },
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {
