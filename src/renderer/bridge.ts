@@ -1,4 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { Headroom } from '../core/headroom.js';
 import type { ModelChoices } from '../core/provider-models.js';
 import type { AgentPermissions } from '../core/identity.js';
 import type { IssueWatchPrefs, IssueWatchSetting } from '../core/issue-watch.js';
@@ -172,6 +173,8 @@ export interface GenieBridge {
     onNavigate?(onRoute: (route: string) => void): () => void;
     /** What an agent just did (Tynn #766 C), for its sound. Absent on a remote bridge for now: the host's own window plays it. */
     onAction?(onAction: (action: { agentId: string | null; kind: string }) => void): () => void;
+    /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
+    onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 
     /** Start or REATTACH a session. Never creates a second for the same agent. */
     openAgent(agentId: string): void;

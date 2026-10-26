@@ -11,6 +11,7 @@ import { slugsFor } from '../core/address.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
+import type { Headroom } from '../core/headroom.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
@@ -575,6 +576,9 @@ function DesktopApp({ bridge }: AppProps) {
     soundSettings.current = features.settings.values;
     // ...and the row's emoji (genie#1209): 👍 thumbsUp, ✅ imDone, 🧞 a Genie action, on that agent's row for a moment.
     const [rowEmoji, setRowEmoji] = useState<Readonly<Record<string, string>>>({});
+    // Each provider's rate limit for the Dashboard header (buffered in main; this only stores what arrives).
+    const [rateLimits, setRateLimits] = useState<Readonly<Record<string, Headroom>>>({});
+    useEffect(() => resolvedBridge?.onHeadroom?.(setRateLimits), [resolvedBridge]);
     useEffect(() => resolvedBridge?.onAction?.((action) => {
         if (ALERT_KINDS.some((k) => k.kind === action.kind)) playAlertSound(alertSound(action.kind as AlertKind, soundSettings.current ?? {}));
         const emoji = action.agentId ? ROW_EMOJI[action.kind as RowSignalKind] : undefined;
@@ -1279,6 +1283,7 @@ function DesktopApp({ bridge }: AppProps) {
         <PanelHostContext.Provider value={panelHost}>
         <Shell
             rowEmoji={rowEmoji}
+            rateLimits={rateLimits}
             route={route}
             address={shownAddress}
             snapshot={snapshot}

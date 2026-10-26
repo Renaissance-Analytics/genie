@@ -10,7 +10,7 @@ import type { PromptBlock } from './prompt-content.js';
 import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
-import { RATE_LIMIT_META } from './headroom.js';
+import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
@@ -311,6 +311,8 @@ export interface AgentSessionOptions {
      * `message` is the notice's own words, when it had any.
      */
     onRateLimit?: (readings: readonly LimitReading[], message: string | null) => void;
+    /** The provider's headroom, as a frame reports it — for the Dashboard header (main buffers it per provider). */
+    onHeadroom?: (headroom: Headroom) => void;
     /** Each MCP server's state as the provider reports it (prism-acp 0.27.0, genie#1202): what a missing server is told by. */
     onMcpServers?: (reports: readonly McpServerReport[]) => void;
     /**
@@ -1439,7 +1441,12 @@ export class AgentSession {
             if (servers !== null && servers.length > 0) this.#options.onMcpServers?.(servers);
         }
         if (typeof meta === 'object' && meta !== null && RATE_LIMIT_META in meta) {
-            const readings = limitReadingsFromMeta((meta as Record<string, unknown>)[RATE_LIMIT_META]);
+            const raw = (meta as Record<string, unknown>)[RATE_LIMIT_META];
+            if (this.#options.onHeadroom) {
+                const room = headroomFromMeta(raw);
+                if (room) this.#options.onHeadroom(room);
+            }
+            const readings = limitReadingsFromMeta(raw);
             if (readings.length > 0) {
                 const notice = update['notice'];
                 const said = typeof notice === 'object' && notice !== null ? (notice as Record<string, unknown>)['message'] : null;

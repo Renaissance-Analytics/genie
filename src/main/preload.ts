@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { FEATURE_CHANNELS, type AgentDetail, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
+import type { Headroom } from '../core/headroom.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 
@@ -50,6 +51,12 @@ const bridge: PreloadBridge = {
         const listener = (_event: unknown, route: string): void => onRoute(route);
         ipcRenderer.on('genie:navigate', listener);
         return () => ipcRenderer.removeListener('genie:navigate', listener);
+    },
+    onHeadroom: (onHeadroom) => {
+        const listener = (_event: unknown, limits: Readonly<Record<string, Headroom>>): void => onHeadroom(limits);
+        ipcRenderer.on('genie:headroom', listener);
+        void ipcRenderer.invoke('genie:headroom').then((limits: Readonly<Record<string, Headroom>>) => onHeadroom(limits), () => {});
+        return () => ipcRenderer.removeListener('genie:headroom', listener);
     },
     onAction: (onAction) => {
         const listener = (_event: unknown, action: { agentId: string | null; kind: string }): void => onAction(action);
