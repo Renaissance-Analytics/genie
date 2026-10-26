@@ -4,6 +4,10 @@ Genie prepares a separate Tynn identity and MCP key for each agent in a linked w
 
 The desktop pairing credential lives in `~/.genie/credentials/tynn.json`. Agent keys live in the separate sibling `~/.genie/agent-credentials/agents.json`. OS encryption and private filesystem permissions are required. Project files cannot select either storage path. No agent key is written to the workspace's MCP configs or returned in the session status.
 
+On Windows each durable write uses one PowerShell process to secure and verify the private directory and existing credential, then verify the exclusive staging file before atomic replacement. Node writes the encrypted payload; the native process receives only a fresh staging challenge after that write closes. Replacement requires the exact matching reply and successful process exit. The native deadline remains 60 seconds across both stages. Pending intent and the ready credential remain separate writes.
+
+A refused write removes its owned staging file before removing a newly created empty leaf. If Genie dies during staging, the native process exits when stdin closes. The next startup refuses a leftover staging file before changing permissions or using stored credentials; it preserves both files for recovery.
+
 An unlinked workspace and the workstation agent receive no Tynn server. Their inherited `tynn` server is disabled for the session. Linked agents receive only their prepared private Tynn server, using Prism's per-session credential transport.
 
 Startup stops if the account is signed out, Tynn is unreachable, encryption or private storage is unavailable, the identity conflicts, or its key is revoked or awaiting confirmation. Genie explains the failure and never uses a shared workspace key to recover. A stopped preparation cannot launch a provider later. A pending key request needs review in Tynn before another key is issued.
