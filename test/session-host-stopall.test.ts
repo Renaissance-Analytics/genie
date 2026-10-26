@@ -83,11 +83,13 @@ describe('stopAll', () => {
         startAgents(host, 2);
         void host.stopAll();
         let drained = false;
-        void host.drained(1).then(() => { drained = true; });
+        const done = host.drained(1).then(() => { drained = true; });
         await new Promise((r) => setTimeout(r, 20));
         expect(drained).toBe(false);
         t.open();
-        await new Promise((r) => setTimeout(r, 20));
+        // Await the drain itself, bounded: a fixed 20 ms after open was a timing guess that GitHub's Windows runner
+        // missed (main CI 40292478624). A drain that never comes still fails, at the bound.
+        await Promise.race([done, new Promise((r) => setTimeout(r, 5_000))]);
         expect(drained).toBe(true);
     });
 
