@@ -172,7 +172,17 @@ export function alertSound(kind: AlertKind, settings: Readonly<Record<string, bo
     return previewSound(kind, settings[`sound_${kind}`], settings[`sound_${kind}_custom`]);
 }
 
-export function toastFor(alert: { kind: AlertKind; workspace: string; agent: string; detail: string }): { title: string; body: string } {
+export function toastFor(alert: { kind: AlertKind; workspace: string; agent: string; detail: string }, slugs: ReadonlyMap<string, string> = new Map()): { title: string; body: string } {
     const def = ALERT_KINDS.find((k) => k.kind === alert.kind)!;
-    return { title: `${alert.workspace} · ${alert.agent}`, body: `${def.verb}: ${alert.detail}` };
+    // The agent's ADDRESS, name@workspace (genie#1206/#1211) — the workspace's slug, never its id; the OS agent's is system.
+    const workspace = alert.workspace === '__genie__' ? 'system' : slugs.get(alert.workspace) ?? alert.workspace;
+    return { title: `${alert.agent}@${workspace}`, body: `${def.verb}: ${alert.detail}` };
+}
+
+/**
+ * WHERE AN ALERT SHOWS (genie#1211): Genie in front → its own toast, bottom-left, clear of the chat; Genie behind
+ * another app → the OS notification, the only way to reach the person then (Windows places those; Genie cannot move them).
+ */
+export function alertDelivery(genieFocused: boolean): 'in-app' | 'os' {
+    return genieFocused ? 'in-app' : 'os';
 }
