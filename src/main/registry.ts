@@ -189,6 +189,24 @@ export class Registry {
     }
 
     snapshot(): GenieSnapshot {
+        // ONE PROBE PER AGENT PER SNAPSHOT (genie#1200): the rows and the live approvals both read it, and each probe
+        // carries the agent's comms — read twice, it doubled the cost of a snapshot rebuilt every 50 ms.
+        const outer = this.#probe;
+        const seen = new Map<AgentId, ReturnType<SessionProbe>>();
+        this.#probe = (id) => {
+            if (seen.has(id)) return seen.get(id)!;
+            const v = outer(id);
+            seen.set(id, v);
+            return v;
+        };
+        try {
+            return this.#snapshot();
+        } finally {
+            this.#probe = outer;
+        }
+    }
+
+    #snapshot(): GenieSnapshot {
         const now = () => Date.now();
 
         return {
