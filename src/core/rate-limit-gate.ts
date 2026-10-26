@@ -116,6 +116,9 @@ export class RateLimitGate {
             }
         }
         if (message !== null && readings.some((r) => r.status !== 'allowed')) s.message = message;
+        // EVERY window allowed: the limit has lifted — a no-reset backoff is over, and a login still waiting on it is let
+        // go at the next wake (due) instead of at a guessed time (genie#1195: Codex's own reading said 3% used).
+        if (readings.length > 0 && readings.every((r) => r.status === 'allowed')) s.retry = null;
         return this.view(key, nowMs);
     }
 
@@ -143,7 +146,10 @@ export class RateLimitGate {
             for (const [w, at] of s.rejected) if (at > resetsAtMs) { window = w; resetsAtMs = at; }
             return { state: 'paused', window, resetsAtMs, resumeAtMs: resetsAtMs + this.#marginMs, message: s.message };
         }
-        if (s.retry) return { state: 'retrying', nextTryAtMs: s.retry.nextTryAtMs, attempt: s.retry.attempt, message: s.message };
+        // A retry is "retrying" only while it HOLDS the login. Once it fired (due let the login go) the try is in flight:
+        // said as retrying, its past time was re-armed at once — a 0 ms wake loop — and an allowed reading then held the
+        // session again with nothing left to let it go (genie#1195). It stays counted for the next breach's step.
+        if (s.retry && s.held) return { state: 'retrying', nextTryAtMs: s.retry.nextTryAtMs, attempt: s.retry.attempt, message: s.message };
         return { state: 'open' };
     }
 
