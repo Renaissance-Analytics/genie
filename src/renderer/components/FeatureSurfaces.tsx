@@ -210,12 +210,27 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
                                 <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
                                 {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
+                                {r.steps && r.steps.length > 0 ? <RunSteps steps={r.steps} /> : null}
                             </li>
                         ))}
                     </ol>
                 </details>
             ) : null}
         </li>
+    );
+}
+
+/** Where a stopped run stopped (genie#1204): the step that failed or was held, then every step with how far it got. */
+function RunSteps({ steps }: { steps: NonNullable<FlowRecordView['runs'][number]['steps']> }) {
+    const stopped = steps.find((s) => s.outcome === 'failed' || s.outcome === 'held');
+    const mark: Record<string, string> = { ran: '✓', failed: '✗', held: '⏸', 'not reached': '·' };
+    return (
+        <span data-flow-run-steps className="basis-full pl-2 text-[var(--fg-3)]">
+            {stopped ? <span className="mr-2">Stopped at: {stopped.label}</span> : null}
+            {steps.map((s) => (
+                <span key={s.nodeId} data-flow-step={s.outcome} className="mr-2" title={s.outcome}>{mark[s.outcome]} {s.label}</span>
+            ))}
+        </span>
     );
 }
 

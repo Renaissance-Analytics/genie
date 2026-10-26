@@ -35,6 +35,21 @@ function fileWords(config: Record<string, unknown>): string {
 
 interface NodeLike { readonly kind?: unknown; readonly config?: Record<string, unknown> }
 
+/**
+ * A step in words — what the Arm confirm lists and what the run history says it stopped at (genie#1204): "runs the
+ * command `npm run report`", "prompts atlas@tynn", "moves the file into .untracked", "adds knowledge "Nightly report"".
+ * A step Genie has no words for is named by its kind.
+ */
+export function stepLabel(node: { readonly kind?: unknown; readonly config?: Record<string, unknown> | undefined }): string {
+    const kind = typeof node.kind === 'string' ? node.kind : 'step';
+    const text = (key: string) => (typeof node.config?.[key] === 'string' ? (node.config[key] as string).trim() : '');
+    if (/(^|\/)terminal_run$/.test(kind)) return `runs the command \`${text('command')}\`${text('cwd') ? ` in ${text('cwd')}` : ''}`;
+    if (/(^|\/)agent_prompt$/.test(kind)) return `prompts ${text('agent')}`;
+    if (kind === 'genie/file_move') return `moves the file into ${text('to')}`;
+    if (kind === 'genie/knowledge_add') return `adds knowledge "${text('title')}"`;
+    return kind;
+}
+
 export function flowReach(document: unknown, nowMs: number): FlowReach {
     const graph = (document as { graph?: { nodes?: unknown } } | null)?.graph;
     const nodes: NodeLike[] = Array.isArray(graph?.nodes) ? (graph!.nodes as NodeLike[]) : [];
@@ -45,9 +60,7 @@ export function flowReach(document: unknown, nowMs: number): FlowReach {
     const timezone = trigger ? text(trigger, 'timezone') || undefined : undefined;
     const steps: string[] = [];
     for (const n of nodes) {
-        if (kindIs(n, 'terminal_run')) steps.push(`runs the command \`${text(n, 'command')}\`${text(n, 'cwd') ? ` in ${text(n, 'cwd')}` : ''}`);
-        else if (kindIs(n, 'agent_prompt')) steps.push(`prompts ${text(n, 'agent')}`);
-        else if (n.kind === 'genie/file_move') steps.push(`moves the file into ${text(n, 'to')}`);
+        if (kindIs(n, 'terminal_run') || kindIs(n, 'agent_prompt') || n.kind === 'genie/file_move') steps.push(stepLabel(n));
     }
     const fileTrigger = nodes.find((n) => n.kind === 'genie/file_added');
     return { schedule: cron ? { cron, nextMs: nextCronAfter(cron, nowMs, timezone) } : null, steps, file: fileTrigger ? fileWords(fileTrigger.config ?? {}) : null };

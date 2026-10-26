@@ -1,10 +1,11 @@
 import { isAbsolute, relative, resolve } from 'node:path';
 import { runFlow } from '@particle-academy/fancy-flow/engine';
+import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts } from './flow-executors.js';
 import { importFlowDocument } from './flow-kinds.js';
 import type { RunResult } from './flow-scheduler.js';
-import type { FileFired, FlowRecord, Schedule } from './flow-store.js';
+import type { FileFired, FlowRecord, FlowRunStep, Schedule } from './flow-store.js';
 import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
 /**
@@ -77,14 +78,28 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         // From the trigger that fired, so another entry point's branch does not run with it; none named → every entry.
         const fired = trigger?.nodeId ?? null;
         const entry = fired !== null && graph.nodes.some((n) => n.id === fired) ? { entryNodes: [fired] } : {};
+        // Each node's last status, from the engine's own events: what a stopped run says it got through (genie#1204).
+        const statuses = new Map<string, string>();
+        const onEvent = (event: { type: string; nodeId?: string; status?: string }) => {
+            if (event.type === 'node-status' && typeof event.nodeId === 'string' && typeof event.status === 'string') statuses.set(event.nodeId, event.status);
+        };
+        const stepsOf = (): FlowRunStep[] =>
+            graph.nodes
+                .map((n) => ({ id: n.id, data: (n.data ?? {}) as { kind?: unknown; config?: Record<string, unknown> } }))
+                .filter(({ data }) => typeof data.kind === 'string' && !/trigger$/.test(data.kind) && data.kind !== 'genie/file_added')
+                .map(({ id, data }) => {
+                    const status = statuses.get(id);
+                    const outcome: FlowRunStep['outcome'] = status === 'done' ? 'ran' : status === 'error' || status === 'running' ? (step.held !== null ? 'held' : 'failed') : 'not reached';
+                    return { nodeId: id, label: stepLabel(data), outcome };
+                });
         try {
-            const result = await runFlow(graph, executors, () => {}, { ...entry, run: `${flow.id}:${firedAt}` });
+            const result = await runFlow(graph, executors, onEvent as never, { ...entry, run: `${flow.id}:${firedAt}` });
             if (result.ok) return { outcome: 'ran' };
-            if (step.held !== null) return { outcome: 'held', reason: step.held };
-            return { outcome: 'failed', reason: result.error ?? 'the run failed and the engine gave no reason' };
+            if (step.held !== null) return { outcome: 'held', reason: step.held, steps: stepsOf() };
+            return { outcome: 'failed', reason: result.error ?? 'the run failed and the engine gave no reason', steps: stepsOf() };
         } catch (error) {
-            if (step.held !== null) return { outcome: 'held', reason: step.held };
-            return { outcome: 'failed', reason: error instanceof Error ? error.message : String(error) };
+            if (step.held !== null) return { outcome: 'held', reason: step.held, steps: stepsOf() };
+            return { outcome: 'failed', reason: error instanceof Error ? error.message : String(error), steps: stepsOf() };
         }
     };
 }

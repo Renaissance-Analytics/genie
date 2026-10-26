@@ -56,6 +56,13 @@ export interface FileFired {
 
 export type RunOutcome = 'ran' | 'failed' | 'held';
 
+/** One step of a run that stopped (genie#1204): which node, in words, and how far it got. */
+export interface FlowRunStep {
+    readonly nodeId: string;
+    readonly label: string;
+    readonly outcome: 'ran' | 'failed' | 'held' | 'not reached';
+}
+
 /** One run of a flow, as it ended. */
 export interface FlowRun {
     /** When it started (ISO). */
@@ -69,6 +76,8 @@ export interface FlowRun {
     readonly outcome: RunOutcome;
     /** Why it failed or was held back, in words. Absent for a run that ran. */
     readonly reason?: string;
+    /** A run that STOPPED (failed or held): its steps in graph order, and where it stopped (genie#1204). */
+    readonly steps?: readonly FlowRunStep[];
 }
 
 /** How many runs each flow keeps; the oldest goes first. */
@@ -240,7 +249,7 @@ export class FlowStore {
     }
 
     /** Record one run as it ended; the history keeps the last `RUN_HISTORY_LIMIT`. Returns the run, or null for a flow removed meanwhile. */
-    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string }): Promise<FlowRun | null> {
+    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[] }): Promise<FlowRun | null> {
         const flow = this.get(id);
         if (!flow) return null;
         const entry: FlowRun = {
@@ -249,6 +258,7 @@ export class FlowStore {
             trigger: run.trigger,
             outcome: run.outcome,
             ...(run.file !== undefined ? { file: run.file } : {}),
+            ...(run.outcome !== 'ran' && run.steps !== undefined ? { steps: run.steps } : {}),
             ...(run.outcome !== 'ran' && run.reason !== undefined ? { reason: run.reason } : {}),
         };
         await this.#replace({ ...flow, runs: [...flow.runs, entry].slice(-RUN_HISTORY_LIMIT) });
