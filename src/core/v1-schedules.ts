@@ -3,7 +3,11 @@ import { FLOW_SCHEMA_URL } from './flow-form.js';
 import { folderWithin, type V1ProcessSpec } from './v1-processes.js';
 
 /**
- * GENIE 1's SCHEDULED TASKS → GENIE 2's FLOWS — the pure plan (no I/O).
+ * GENIE 1's SCHEDULED TASKS → GENIE 2's SCHEDULED BACKGROUND PROCESSES — the pure plan (no I/O).
+ *
+ * What a task DOES is planned as a one-step document (a schedule feeding a command or an agent prompt) that the process
+ * book turns into a scheduled task (main/scheduled-tasks-move.ts `scheduledTaskFromFlow`) — the same reading that moves the
+ * tasks earlier betas imported as flows (genie#1204: they are background processes with a schedule, as in Genie 1).
  *
  * Genie 1 kept a scheduled task as a background process with a schedule: a `terminal_specs` row of
  * type 'process' whose `meta_json` carries `schedule` (five-field cron, evaluated in the machine's
@@ -15,9 +19,8 @@ import { folderWithin, type V1ProcessSpec } from './v1-processes.js';
  * `main/v1-schedules.ts` reads them; this decides what each one becomes.
  *
  * The rules:
- * - EVERY flow comes over DISARMED. Arming is the person's decision (an agent can never arm a flow), and an
- *   import is not the person deciding — so a task that was firing in Genie 1 is noted as such, and waits for
- *   them to arm it.
+ * - EVERY task comes over PAUSED. Enabling a schedule is the person's decision, and an import is not the person
+ *   deciding — so a task that was firing in Genie 1 is noted as such, and waits for them to enable it.
  * - The schedule keeps its meaning: no timezone, so it is evaluated in this machine's local time, as Genie 1 did.
  * - `command` → schedule → `genie/terminal_run` (the folder relative to the workspace); `agent-nudge` →
  *   schedule → `genie/agent_prompt` to the agent's FULL address (Genie 2's identity is (workspace, name), and
@@ -25,7 +28,7 @@ import { folderWithin, type V1ProcessSpec } from './v1-processes.js';
  * - Not imported, and noted with why: no workspace, a workspace Genie 2 does not have, a schedule Genie cannot
  *   evaluate, no command, a folder outside its workspace, no prompt, an agent Genie 1 no longer knows or Genie 2
  *   does not have, a `flow` task (Genie 1's workflows are not brought over), a kind Genie 2 does not know.
- * - Ids: `flow_v1_<v1 id>` — stable, so an id already in the store is recognised and left alone.
+ * - Ids: the process is `proc_v1_<v1 id>` — stable, so an id already kept is recognised and left alone.
  */
 
 /** A v1 agent and every id v1 used for it: its `workspace_agents.id`, its terminal, that terminal's inbox id. */
@@ -128,7 +131,7 @@ export function planV1ScheduleImport(v1: V1Schedules | null, ctx: V1ScheduleCont
             continue;
         }
         const armedInV1 = spec.enabled && meta.schedule_pending_approval !== true;
-        if (armedInV1) say(`was firing on its schedule in Genie 1; it comes over DISARMED — arm it in Flows to keep it running`);
+        if (armedInV1) say(`was firing on its schedule in Genie 1; it comes over PAUSED — Enable schedule in Hosting → Processes to keep it running`);
         flows.push({
             id: `${V1_FLOW_ID_PREFIX}${spec.id}`,
             v1SpecId: spec.id,

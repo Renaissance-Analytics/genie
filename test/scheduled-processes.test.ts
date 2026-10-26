@@ -88,8 +88,10 @@ describe('a scheduled background process', () => {
         const s = scheduler();
         s.plan();
         expect(timers.map((t) => new Date(t.at).getHours())).toEqual([3]);
-        now = timers[0]!.at;
-        timers[0]!.fn();
+        // The clock fires the timer (it is spent once fired).
+        const due = timers.shift()!;
+        now = due.at;
+        due.fn();
         expect(sup.started).toEqual([expect.objectContaining({ id: added.id, command: 'npm run report', cwd: join(WS.path, 'repos/app'), restart: 'never' })]);
         sup.exit(added.id, 0);
         await s.settled();

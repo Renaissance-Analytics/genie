@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
-import { planV1ScheduleImport, type V1AgentIdentity, type V1ScheduleContext, type V1Schedules } from '../core/v1-schedules.js';
-import type { FlowStore } from './flow-store.js';
+import type { V1AgentIdentity, V1Schedules } from '../core/v1-schedules.js';
 import { readV1Processes } from './v1-processes.js';
 import { V1_OPEN_OPTIONS } from './v1-settings.js';
 
@@ -55,23 +54,5 @@ function readV1Agents(dbFile: string): V1AgentIdentity[] {
         return [];
     } finally {
         try { db?.close(); } catch { /* already closed or never opened */ }
-    }
-}
-
-/**
- * Genie 1's scheduled tasks into the flow store, ONCE (FlowStore.importFromV1 records it in flows.json), disarmed.
- * At boot, after the store opens and before the scheduler plans. A failure is logged and not recorded, so the next
- * boot tries again; the flows Genie 2 already has are untouched.
- */
-export async function runV1ScheduleImport(flows: FlowStore, input: { database: string } & V1ScheduleContext): Promise<void> {
-    if (flows.v1Import()?.sawV1) return;
-    try {
-        const done = await flows.importFromV1(planV1ScheduleImport(readV1Schedules(input.database), input));
-        if (done.alreadyDone) return;
-        const r = done.record;
-        const notes = r.notes ?? [];
-        console.log(`[genie] v1 scheduled tasks: ${r.sawV1 ? `${r.imported ?? 0} imported as disarmed flows, ${r.alreadyHere ?? 0} already here` : 'no v1 database seen'}${notes.length ? `; ${notes.length} noted: ${notes.join(' | ')}` : ''}`);
-    } catch (error) {
-        console.error(`[genie] v1 scheduled tasks import failed: ${(error as Error).message}`);
     }
 }

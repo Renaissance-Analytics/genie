@@ -357,7 +357,11 @@ export type FeatureAction =
     | { kind: 'hosting.restartProcess'; processId: string }
     | { kind: 'hosting.stopProcess'; processId: string }
     /** Add a background process the person keeps (§6.6): started now, written down, brought back on launch. */
-    | { kind: 'hosting.createProcess'; workspaceId: string; workspacePath: string; name: string; command: string; folder?: string; restart: RestartPolicy }
+    | { kind: 'hosting.createProcess'; workspaceId: string; workspacePath: string; name: string; command: string; folder?: string; restart: RestartPolicy; schedule?: string }
+    /** A scheduled task (genie#1204, Genie 1's Processes card): run it once now; enable or pause its schedule. */
+    | { kind: 'hosting.runScheduledNow'; processId: string }
+    | { kind: 'hosting.enableSchedule'; processId: string }
+    | { kind: 'hosting.pauseSchedule'; processId: string }
     /** Start a kept process the person stopped; the start is written down too. */
     | { kind: 'hosting.startProcess'; processId: string }
     | { kind: 'hosting.removeProcess'; processId: string }

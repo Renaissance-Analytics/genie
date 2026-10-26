@@ -141,7 +141,8 @@ describe("Genie 1's background processes, imported once at boot", () => {
     it('maps each v1 process faithfully: v1 id kept, label as the name, command, folder, restart from restart_on_exit; wanted only when enabled, autostart and not stopped', async () => {
         writeV1(v1File, rows);
         const book = await open();
-        const kept = new Map(book.kept().map((p) => [p.id, p]));
+        // Processes kept RUNNING; a scheduled spec comes over as a scheduled task (test/v1-schedules.test.ts, genie#1204).
+        const kept = new Map(book.kept().filter((p) => p.schedule === undefined).map((p) => [p.id, p]));
         expect([...kept.keys()].sort()).toEqual(['proc_v1_p-off', 'proc_v1_p-once', 'proc_v1_p-queue', 'proc_v1_p-shell', 'proc_v1_p-sleepy', 'proc_v1_p-was', 'proc_v1_p-web', 'proc_v1_p-win']);
         expect(kept.get('proc_v1_p-web')).toEqual({ id: 'proc_v1_p-web', workspaceId: WS.id, name: 'web', command: 'npm run dev', cwd: WS.path, restart: 'always', wanted: true, changedAt: Date.UTC(2026, 9, 14) });
         expect(kept.get('proc_v1_p-queue')).toMatchObject({ cwd: `${WS.path}/repos/app`, wanted: false });
@@ -153,7 +154,7 @@ describe("Genie 1's background processes, imported once at boot", () => {
         expect(kept.get('proc_v1_p-win')).toMatchObject({ workspaceId: WINDOWS.id, cwd: 'c:\\W\\Example-Win\\repos\\api', wanted: true });
     });
 
-    it('notes everything it did not import or could not carry, with why — scheduled specs are for Flows, never processes', async () => {
+    it('notes everything it did not import or could not carry, with why — a scheduled spec is a scheduled task, not a process kept running', async () => {
         writeV1(v1File, rows);
         await open();
         const record = onDisk().v1Import!;
@@ -161,8 +162,8 @@ describe("Genie 1's background processes, imported once at boot", () => {
         const notes = record.notes as string[];
         expect(notes).toHaveLength(9);
         const about = (id: string) => notes.filter((n) => n.includes(id));
-        expect(about('p-nightly')).toEqual([expect.stringMatching(/scheduled.*Flows/)]);
-        expect(about('p-nudge')).toEqual([expect.stringMatching(/scheduled.*Flows/)]);
+        expect(about('p-nightly')).toEqual([expect.stringMatching(/scheduled in Genie 1 — it comes over as a PAUSED scheduled task/)]);
+        expect(about('p-nudge')).toEqual([expect.stringMatching(/scheduled in Genie 1 — it comes over as a PAUSED scheduled task/)]);
         expect(about('p-system')).toEqual([expect.stringMatching(/no workspace/)]);
         expect(about('p-outside')).toEqual([expect.stringMatching(/outside its workspace/)]);
         expect(about('p-win-prefix')).toEqual([expect.stringMatching(/outside its workspace/)]);
