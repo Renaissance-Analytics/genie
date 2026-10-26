@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ProcessBook } from '../src/main/process-book.js';
 import { ProcessScheduler } from '../src/main/process-scheduler.js';
 import type { ProcessSpec, ProcessStatus } from '../src/main/process-supervisor.js';
@@ -168,5 +168,57 @@ describe('a scheduled background process', () => {
         await book.pauseSchedule(added.id);
         const again = await ProcessBook.open(home, { supervisor: sup, envFor: () => ({}), asleep: () => false });
         expect(again.kept()[0]).toMatchObject({ id: added.id, wanted: false, schedule: { cron: '0 3 * * *', kind: 'command' } });
+    });
+});
+
+/**
+ * genie#1250: "paused, it does not fire" once saw a 03:00 timer armed after Pause schedule (PR #1247's CI). Nothing in
+ * that test arms one. The timer came from the PREVIOUS test's scheduler: `settled()` resolved as soon as the run's exit
+ * was seen, before its outcome was written, so the write landed after that test had ended, told that book's listeners,
+ * and the old scheduler re-planned into the shared `timers` — after the next test's `beforeEach` had emptied it. A quit
+ * that awaits `settled()` had the same gap: Genie could go down before a run's outcome was on disk.
+ */
+describe('genie#1250: settled() means every run is over AND its outcome is written', () => {
+    it('PROBE, the CI failure forced: a run settled in one test arms nothing in the next', async () => {
+        // The test before ("a non-zero exit is a failed run"), as it was.
+        const added = await book.create(nightly);
+        const s = scheduler();
+        let changes = 0;
+        book.onChange(() => { changes += 1; });
+        await s.runNow(added.id);
+        sup.exit(added.id, 2);
+        await s.settled();
+        const toldBySettled = changes;
+        // The next test's beforeEach empties the shared timers…
+        timers.length = 0;
+        // …and the run's outcome write lands whenever the disk lets it (forced here: wait for it).
+        await vi.waitFor(() => expect(changes).toBe(1));
+        expect(timers).toEqual([]);
+        expect(toldBySettled).toBe(1);
+    });
+
+    it('a run\'s outcome is on disk when settled() resolves', async () => {
+        const added = await book.create(nightly);
+        const s = scheduler();
+        await s.runNow(added.id);
+        sup.exit(added.id, 0);
+        await s.settled();
+        const again = await ProcessBook.open(home, { supervisor: sup, envFor: () => ({}), asleep: () => false });
+        expect(again.kept()[0]?.schedule).toMatchObject({ lastRunStatus: 'ok', lastRunAt: now });
+    });
+
+    it('a timer-fired nudge\'s outcome is written before settled() resolves too', async () => {
+        const added = await book.create({ workspaceId: WS.id, workspacePath: WS.path, name: 'standup', command: '', restart: 'never', schedule: { cron: '0 3 * * *', kind: 'agent-nudge', prompt: 'post the standup', agent: 'ws-example:claude:atlas' } });
+        const s = scheduler();
+        s.plan();
+        let changes = 0;
+        book.onChange(() => { changes += 1; });
+        const due = timers.shift()!;
+        now = due.at;
+        due.fn();
+        await s.settled();
+        expect(changes).toBe(1);
+        expect(nudges).toHaveLength(1);
+        expect(book.list(WS.id).find((p) => p.id === added.id)!.schedule?.lastRunStatus).toBe('ok');
     });
 });
