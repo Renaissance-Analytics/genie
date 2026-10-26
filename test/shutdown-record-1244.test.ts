@@ -71,6 +71,12 @@ async function estate() {
         expect(host.probe(agents.working.id)?.running).toBe(true);
         expect(host.probe(agents.broken.id)?.turnState).toBe('failed');
     });
+    // IDLE: it answered its last message and waits for the next (a session that was never prompted still reads its
+    // start as `working` — core/session.ts — so the idle agent here has finished a turn, as the owner's had).
+    expect(host.prompt(agents.idle.id, 'hello', 'you')).toBe(true);
+    await vi.waitFor(() => expect(host.probe(agents.idle.id)?.inTurn).toBe(true));
+    events.get(agents.idle.id)!.onTurnEnd!({ stopReason: 'end_turn', isError: false, raw: 'end_turn' });
+    await vi.waitFor(() => expect(host.probe(agents.idle.id)?.turnState).toBe('idle'));
     expect(host.prompt(agents.working.id, 'build it', 'you')).toBe(true);
     await vi.waitFor(() => expect(host.probe(agents.working.id)?.turnState).toBe('working'));
     // The person's Stop.
@@ -86,6 +92,11 @@ async function estate() {
     return { registry, host, agents, ports };
 }
 
+/** A plan by agent name, so a failure reads as names. */
+function named(agents: Record<Kind, AgentRecord>, plan: ReadonlyArray<{ agentId: string; resume: boolean }>): Array<{ name: string; resume: boolean }> {
+    return plan.map((s) => ({ name: (Object.keys(agents) as Kind[]).find((k) => agents[k].id === s.agentId) ?? s.agentId, resume: s.resume }));
+}
+
 /** What the NEXT launch reads from disk and starts (main.ts boot: take both lists, relaunchPlan). */
 async function nextBoot(): Promise<Array<{ agentId: string; resume: boolean }>> {
     const registry = new Registry(new Store(dir));
@@ -97,8 +108,10 @@ async function nextBoot(): Promise<Array<{ agentId: string; resume: boolean }>> 
 describe('genie#1244: what a shutdown records is every agent Genie started and nobody stopped', () => {
     it('the fixture is the owner\'s estate: an idle agent\'s provider IS alive; the broken one\'s never ran', async () => {
         const { host, agents } = await estate();
-        expect(host.probe(agents.idle.id)).toMatchObject({ running: true, turnState: 'idle' });
-        expect(host.probe(agents.broken.id)).toMatchObject({ running: false, turnState: 'failed' });
+        const seen = (id: AgentId) => { const p = host.probe(id); return p && { running: p.running, turnState: p.turnState }; };
+        expect(seen(agents.idle.id)).toEqual({ running: true, turnState: 'idle' });
+        expect(seen(agents.working.id)).toEqual({ running: true, turnState: 'working' });
+        expect(seen(agents.broken.id)).toEqual({ running: false, turnState: 'failed' });
         expect(host.probe(agents.stopped.id)).toBeNull();
     });
 
@@ -108,14 +121,12 @@ describe('genie#1244: what a shutdown records is every agent Genie started and n
         await recordShutdown(ports);
         await host.stopAll();
         const plan = await nextBoot();
-        expect(plan).toEqual(expect.arrayContaining([
-            { agentId: agents.working.id, resume: true },
-            { agentId: agents.idle.id, resume: false },
-            { agentId: agents.broken.id, resume: false },
-        ]));
-        expect(plan).toHaveLength(3);
-        expect(plan[0]).toEqual({ agentId: agents.working.id, resume: true });
-        expect(plan.map((s) => s.agentId)).not.toContain(agents.stopped.id);
+        // The mid-turn agent first and told to continue; then the others, unprompted, in roster order.
+        expect(named(agents, plan)).toEqual([
+            { name: 'working', resume: true },
+            { name: 'idle', resume: false },
+            { name: 'broken', resume: false },
+        ]);
     });
 
     it('UPGRADE (restart-to-install): the same three start again; the one the person stopped does not', async () => {
@@ -123,8 +134,11 @@ describe('genie#1244: what a shutdown records is every agent Genie started and n
         const stopAll = recordThenStopAll({ markRecorded: () => {}, record: () => recordShutdown(ports), stopAll: (onLeft) => host.stopAll(onLeft) });
         await stopAll();
         const plan = await nextBoot();
-        expect(plan.map((s) => s.agentId).sort()).toEqual([agents.working.id, agents.idle.id, agents.broken.id].sort());
-        expect(plan.find((s) => s.agentId === agents.working.id)?.resume).toBe(true);
+        expect(named(agents, plan)).toEqual([
+            { name: 'working', resume: true },
+            { name: 'idle', resume: false },
+            { name: 'broken', resume: false },
+        ]);
     });
 });
 

@@ -1179,6 +1179,11 @@ async function boot(): Promise<void> {
                 markRecorded: () => quit.markRecorded(),
                 record: () => recordShutdownNow(),
                 stopAll: (onLeft) => host?.stopAll(onLeft) ?? Promise.resolve(),
+                onRecordError: (error) => {
+                    const why = error instanceof Error ? error.message : String(error);
+                    lifecycleLog(`shutdown-record failed reason=${why}`);
+                    console.error(`[genie] the agents to start again could not be recorded: ${why}`);
+                },
             }),
         },
     });
