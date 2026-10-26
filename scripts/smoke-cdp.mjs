@@ -577,7 +577,8 @@ if (!approvalEnabled) {
     console.log('  SKIP  the approval round trip — no codex agent was seeded');
 } else {
     // The agent's PAGE, by its route: a Dashboard row click now opens the chat beside the board (genie#1209, step 17).
-    await cdp.evaluate(`window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
+    // Start it as the row click used to (App's onOpenAgent: openAgent, then its page) — the approval needs a running agent.
+    await cdp.evaluate(`window.genie.openAgent('${codexRow}'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 
     // The composer must be REACHABLE — that is a claim about this screen and worth asserting.
