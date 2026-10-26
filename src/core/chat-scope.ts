@@ -122,10 +122,14 @@ export interface ChatSubjectWorkspace {
  *  - an agent's tab → that agent;
  *  - a workspace's view → its DEFAULT agent (Workspace settings), else its first agent;
  *  - any other view → genie.
+ *  - the Dashboard → the agent picked there, else genie (genie#1209; the owner, 2026-10-26: "on the dashboard page I
+ *    should be able to click on agent to bring up their chat and stay on the dashboard"). The pick is the WINDOW's,
+ *    passed in, never the address's.
  * Nothing else moves it: a `chat=` in a route is not read here (the address is losing it, Tynn #831).
  */
-export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], workspaces: readonly ChatSubjectWorkspace[]): string {
+export function chatSubjectFor(route: Route, roster: readonly ChatRosterAgent[], workspaces: readonly ChatSubjectWorkspace[], dashboardPick: string | null = null): string {
     if (route.surface === 'agent') return resolveChatAgent(route.agentId, roster)?.id ?? route.agentId;
+    if (route.surface === 'dashboard' && dashboardPick !== null && roster.some((r) => r.id === dashboardPick)) return dashboardPick;
     const screen = workspaceOnScreen(route, roster);
     if (screen === null) return genieOf(roster);
     const chosen = workspaces.find((w) => w.id === screen)?.defaultAgentId;

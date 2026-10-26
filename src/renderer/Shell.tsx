@@ -150,6 +150,8 @@ export interface ShellProps {
     /** Discard an undelivered chat draft, unsent. */
     onDiscardDraft?: ((draftId: string) => void) | undefined;
     onOpenAgent: (agentId: string) => void;
+    /** The Dashboard's row click: that agent's chat, docked beside the Dashboard, which stays (genie#1209). */
+    onChatAgent?: ((agentId: string) => void) | undefined;
     onAddAgent: (workspaceId: string) => void;
     /** The first-run invitation. Without it that button is a control that does nothing. */
     onAddWorkspace: () => void;
@@ -281,6 +283,7 @@ export function Shell({
     chatSession = null,
     onNavigate,
     onOpenAgent,
+    onChatAgent: onChatAgentProp,
     onAddAgent,
     onAddWorkspace,
     onOpenBrowser,
@@ -341,6 +344,8 @@ export function Shell({
     onConfirmAdd,
     onCancelAdd,
 }: ShellProps) {
+    // Without the window's pick (a test, a remote window) a Dashboard row opens the agent's page, as before.
+    const onChatAgent = onChatAgentProp ?? onOpenAgent;
     const parsed = parseRoute(route);
     // The open workspace's agents' activity feeds, kept live by the host's pushes — its Dashboard's lanes.
     const activityFeeds = useActivityFeeds(activity, parsed.surface === 'workspace' ? parsed.workspaceId : null);
@@ -516,10 +521,12 @@ export function Shell({
                             genie={snapshot.osAgent ?? null}
                             workspaces={snapshot.workspaces}
                             // A WAITING row is a door to its Deck item (§4.1): the Deck resolves, the Dashboard shows.
+                            // A row click opens that agent's CHAT beside the Dashboard, which stays (genie#1209); its page is the
+                            // row tray's Open agent. A WAITING row is still a door to its Deck item (§4.1).
                             onOpenAgent={(id) => {
                                 const item = deckItemFor(id, snapshot.deckItems ?? []);
                                 if (item) onNavigate(`genie://deck?item=${encodeURIComponent(item)}`);
-                                else onOpenAgent(id);
+                                else onChatAgent(id);
                             }}
                             onAddAgent={onAddAgent}
                             onAddWorkspace={onAddWorkspace}
