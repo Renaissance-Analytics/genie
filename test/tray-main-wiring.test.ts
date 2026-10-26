@@ -23,15 +23,17 @@ describe('main.ts wiring', () => {
     it('the main window boots by showOnBoot (start minimised) and its close goes through wireCloseToTray with the quit sequence', () => {
         const src = main();
         expect(src).toMatch(/window = createWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
-        expect(src).toMatch(/if \(show\) win\.once\('ready-to-show', \(\) => win\.show\(\)\);/);
+        // Shown ACTIVE: this is the launch the person made (genie#1235: only a gesture may take focus).
+        expect(src).toMatch(/if \(show\) win\.once\('ready-to-show', \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
         expect(src).toMatch(/wireCloseToTray\(window, \{[\s\S]*?quitting: \(\) => quit\.quitting,/);
     });
 
     it('the tray’s Open and a second launch SHOW the window (focus alone does nothing to a hidden one)', () => {
         const src = main();
-        expect(block(src, 'function revealMainWindow', '\n}\n')).toMatch(/window\.show\(\);/);
-        expect(block(src, "app.on('second-instance'")).toMatch(/reveal: revealMainWindow,/);
-        expect(src).toMatch(/onOpen: revealMainWindow,/);
+        // bringUp's user-gesture path shows, restores and focuses (core/window-activation.ts, window-activation.test.ts).
+        expect(block(src, 'function revealMainWindow', '\n}\n')).toMatch(/bringUp\(window, \{ activation: 'user-gesture'/);
+        expect(block(src, "app.on('second-instance'")).toMatch(/reveal: \(\) => \{ revealMainWindow\('second launch'\); \},/);
+        expect(src).toMatch(/onOpen: \(\) => \{ revealMainWindow\('tray: Open'\); \},/);
         // The tray's Quit is the one quit entry `Genie --quit` also runs (quit-flag below).
         expect(src).toMatch(/onQuit: requestQuit,/);
     });
@@ -45,7 +47,7 @@ describe('main.ts wiring', () => {
         // The SAME entry, deferred past the notification (core/quit-flag.ts `answerSecondInstance`, driven in
         // quit-second-instance.test.ts): its question asked inside the handler had Genie terminated as hung.
         // A genie:// URL in its argv (Tynn's sign-in coming back) is handed to openGenieUrl, deferred the same way.
-        expect(handler).toMatch(/answerSecondInstance\(argv, additionalData, \{ quit: requestQuit, reveal: revealMainWindow, defer: \(run\) => \{ setImmediate\(run\); \}, open: openGenieUrl \}\);/);
+        expect(handler).toMatch(/answerSecondInstance\(argv, additionalData, \{ quit: requestQuit, reveal: \(\) => \{ revealMainWindow\('second launch'\); \}, defer: \(run\) => \{ setImmediate\(run\); \}, open: openGenieUrl \}\);/);
         // Never run inside the handler.
         expect(handler).not.toMatch(/requestQuit\(\)/);
         // Not a second, private quit path: the handler never calls app.quit itself.
@@ -54,10 +56,11 @@ describe('main.ts wiring', () => {
 
     it('`--quit` rides the single-instance lock, and a launch that is not `boot` exits without booting, quitting or a window', () => {
         const src = main();
-        expect(src).toMatch(/const launch = launchDecision\(\{\s*\n\s*argv: process\.argv,\s*\n\s*primary: app\.requestSingleInstanceLock\(asksToQuit\(process\.argv\) \? \{ \.\.\.QUIT_DATA \} : undefined\),\s*\n\s*\}\);/);
+        // prism-acp's approval hook is run as Node first and never asks for the lock (genie#1235, prism-hook-launch.test.ts).
+        expect(src).toMatch(/: launchDecision\(\{\s*\n\s*argv: process\.argv,\s*\n\s*primary: app\.requestSingleInstanceLock\(asksToQuit\(process\.argv\) \? \{ \.\.\.QUIT_DATA \} : undefined\),\s*\n\s*\}\);/);
         // EXIT, not quit: a quit would run this process's before-quit, which clears the RUNNING Genie's genie-running file.
-        expect(block(src, "if (launch.kind === 'exit')", '\n}\n')).toMatch(/app\.exit\(0\);/);
-        expect(block(src, "if (launch.kind === 'exit')", '\n}\n')).not.toMatch(/app\.quit\(/);
+        expect(block(src, "if (launch.kind === 'exit' && hookScript === null)", '\n}\n')).toMatch(/app\.exit\(0\);/);
+        expect(block(src, "if (launch.kind === 'exit' && hookScript === null)", '\n}\n')).not.toMatch(/app\.quit\(/);
         // Only a boot launch boots; only boot() creates the main window.
         expect(src).toMatch(/if \(launch\.kind === 'boot'\) \{\s*\n\s*app\.whenReady\(\)\.then\(boot\)/);
         expect(src.match(/app\.whenReady\(\)\.then\(boot\)/g)).toHaveLength(1);

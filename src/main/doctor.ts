@@ -127,6 +127,8 @@ export async function runDoctor(): Promise<void> {
         webPreferences: { preload: join(here, 'doctor-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     win.once('ready-to-show', () => win.show());
+    // The renderer's composer-focus log (genie#1235): written to main's log, as Genie's window does.
+    win.webContents.on('console-message', (details) => { if (details.message.startsWith('[genie] focus:')) console.log(details.message); });
     void win.loadFile(join(here, '../renderer/doctor.html'));
     // Pushed, never polled: every change to genie's session tells the window to read again.
     host.subscribe(() => { if (!win.isDestroyed()) win.webContents.send('doctor:changed'); });

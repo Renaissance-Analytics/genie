@@ -12,17 +12,17 @@ const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8
 
 describe('main wires the site row', () => {
     it('ONE opener: defined once, it brings the Genie browser WINDOW up on the URL (beta.35 item 36) — not the old pane', () => {
-        expect(main.match(/const openInBrowser: OpenInBrowser = async \(url\) =>/g) ?? []).toHaveLength(1);
-        const body = main.slice(main.indexOf('const openInBrowser: OpenInBrowser'), main.indexOf('const openInBrowser: OpenInBrowser') + 600);
-        expect(body).toMatch(/genieBrowserWindow\.open\(url\)/);
+        expect(main.match(/const openInBrowserFor = \(activation: Activation\): OpenInBrowser => async \(url\) =>/g) ?? []).toHaveLength(1);
+        const body = main.slice(main.indexOf('const openInBrowserFor = '), main.indexOf('const openInBrowserFor = ') + 600);
+        expect(body).toMatch(/genieBrowserWindow\.open\(url, activation\)/);
         expect(body).not.toMatch(/browserPane\.show|genie:navigate/);
     });
 
-    it('the same opener reaches the agents’ tools and the Hosting row — once each', () => {
-        // genieToolDeps({ … openInBrowser, … }) and featurePorts = { … openInBrowser, … }: two shorthand uses, no third copy.
-        expect(main.match(/^\s*openInBrowser,\s*$/gm) ?? []).toHaveLength(2);
+    it('the same opener reaches the agents’ tools (background) and the Hosting row (the person’s click) — once each (genie#1235)', () => {
+        expect(main.match(/openInBrowser: openInBrowserFor\('background'\),/g) ?? []).toHaveLength(1);
+        expect(main.match(/openInBrowser: openInBrowserFor\('user-gesture'\),/g) ?? []).toHaveLength(1);
         const ports = main.slice(main.indexOf('const featurePorts: FeaturePorts = {'), main.indexOf('const featurePorts: FeaturePorts = {') + 200);
-        expect(ports).toMatch(/openInBrowser,/);
+        expect(ports).toMatch(/openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 
     it('the Edit form’s state is kept between actions, as the Add form’s is — once', () => {

@@ -43,10 +43,33 @@ export function launchDecision(input: { readonly argv: readonly string[]; readon
     return { kind: 'boot' };
 }
 
-/** What the FIRST instance does when a second launch arrives: quit (the tray's Quit) or reveal its window. */
-export function secondInstanceAction(argv: readonly string[], additionalData: unknown): 'quit' | 'reveal' {
+/**
+ * PRISM-ACP'S APPROVAL HOOK LAUNCHING GENIE (genie#1235). prism-acp writes Claude's PreToolUse hook as
+ * `"<process.execPath>" "<private dir>/approve.cjs"`, and inside Genie `process.execPath` is Genie.exe. Since genie#1188
+ * every Claude agent's Bash and PowerShell call runs that hook. Launched without ELECTRON_RUN_AS_NODE it was a second
+ * Genie: the running one revealed and focused its window on every shell call, and the script never ran.
+ *
+ * The hook launch is known by what only it carries: prism-acp's channel in its environment (socket AND token) and the
+ * hook script as an argument. Returns that script, or `null` for any other launch. Decided BEFORE the single-instance
+ * lock is asked for: asking alone notifies the running Genie.
+ */
+export function prismHookScript(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): string | null {
+    if (!env.PRISM_ACP_APPROVAL_SOCKET || !env.PRISM_ACP_APPROVAL_TOKEN) return null;
+    return argv.slice(1).find((a) => /(^|[\\/])approve\.cjs$/i.test(a)) ?? null;
+}
+
+/** A launch argument that is a script: never something a person launches Genie with. */
+const SCRIPT_ARG = /\.(c|m)?js$/i;
+
+/**
+ * What the FIRST instance does when a second launch arrives: quit (the tray's Quit), reveal its window — or IGNORE it
+ * when it carries a script (genie#1235): that is a program running Genie.exe as if it were Node, never a person, and only
+ * a person's launch may raise Genie.
+ */
+export function secondInstanceAction(argv: readonly string[], additionalData: unknown): 'quit' | 'reveal' | 'ignore' {
     const data = additionalData !== null && typeof additionalData === 'object' ? (additionalData as { genie?: unknown }) : null;
-    return data?.genie === QUIT_DATA.genie || asksToQuit(argv) ? 'quit' : 'reveal';
+    if (data?.genie === QUIT_DATA.genie || asksToQuit(argv)) return 'quit';
+    return argv.slice(1).some((a) => SCRIPT_ARG.test(a)) ? 'ignore' : 'reveal';
 }
 
 /**
@@ -62,10 +85,10 @@ export function answerSecondInstance(
     argv: readonly string[],
     additionalData: unknown,
     act: { readonly quit: () => void; readonly reveal: () => void; readonly defer: (run: () => void) => void; readonly open?: (url: string) => void },
-): 'quit' | 'reveal' {
+): 'quit' | 'reveal' | 'ignore' {
     const action = secondInstanceAction(argv, additionalData);
     if (action === 'quit') act.defer(act.quit);
-    else {
+    else if (action === 'reveal') {
         act.reveal();
         // A genie:// URL (the browser handing Tynn's sign-in back, Windows and Linux): opened after the handler returns,
         // like the quit — the sign-in makes a network call.

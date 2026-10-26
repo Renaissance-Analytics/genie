@@ -78,7 +78,7 @@ describe('the wiring', () => {
     const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('main: the docs open in the browser; What’s new opens over the page; the port honours an asked-for show', () => {
         expect(main).toMatch(/onDocs: \(\) => \{ void shell\.openExternal\(genieDocsUrl\(tynnHost\(\)\)\); \},/);
-        expect(main).toMatch(/onWhatsNew: \(\) => \{ revealMainWindow\(\); broadcast\('genie:navigate', WHATS_NEW_ROUTE\); \},/);
+        expect(main).toMatch(/onWhatsNew: \(\) => \{ revealMainWindow\('menu: What is new'\); broadcast\('genie:navigate', WHATS_NEW_ROUTE\); \},/);
         expect(main).toMatch(/whatsNew: \(shown\) => whatsNewFor\(app\.getVersion\(\), String\(composed\.settings\.get\('whats_new_seen_version'\) \?\? ''\), RELEASE_NOTES, shown\)/);
     });
     it('App: What’s new asked for over the page; closing goes through whatsNew.close', () => {

@@ -48,7 +48,8 @@ import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
-import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
+import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, prismHookScript, type LaunchDecision } from '../core/quit-flag.js';
+import { ActivationLedger, bringUp, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
@@ -70,7 +71,7 @@ import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile a
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, spawnSync } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
@@ -222,11 +223,25 @@ const here = fileURLToPath(new URL('.', import.meta.url));
  * launch reaches `boot()`. They EXIT (app.exit), never app.quit: a quit would run this process's before-quit — Genie's
  * shutdown, which ends by clearing the RUNNING Genie's genie-running file — in a process that owns nothing.
  */
-const launch = launchDecision({
-    argv: process.argv,
-    primary: app.requestSingleInstanceLock(asksToQuit(process.argv) ? { ...QUIT_DATA } : undefined),
-});
-if (launch.kind === 'exit') {
+/*
+ * PRISM-ACP'S APPROVAL HOOK (genie#1235; core/quit-flag.ts `prismHookScript`): Claude runs `Genie.exe approve.cjs` on every
+ * Bash and PowerShell call. It is run as Node — Genie's own runtime with ELECTRON_RUN_AS_NODE, on the hook's own stdin and
+ * stdout (an Electron main process's stdin does not read a pipe) — and this process exits with its code. It never asks
+ * for the single-instance lock: asking alone told the running Genie, which raised its window on every shell call.
+ */
+const hookScript = prismHookScript(process.argv, process.env);
+if (hookScript !== null) {
+    const ran = spawnSync(process.execPath, [hookScript], { stdio: 'inherit', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true });
+    app.exit(ran.status ?? 2);
+}
+const launch: LaunchDecision = hookScript !== null
+    ? { kind: 'exit', reason: '' }
+    : launchDecision({
+        argv: process.argv,
+        primary: app.requestSingleInstanceLock(asksToQuit(process.argv) ? { ...QUIT_DATA } : undefined),
+    });
+// A hook launch writes nothing of its own: its stdout is the hook's answer.
+if (launch.kind === 'exit' && hookScript === null) {
     console.log(`[genie] ${launch.reason}`);
     app.exit(0);
 }
@@ -307,7 +322,7 @@ function alertAccountPaused(provider: string): void {
         title: `${loginName(provider)}: account paused`,
         body: `${pause ? `${pause.words[0]!.toUpperCase()}${pause.words.slice(1)}` : 'The provider refused this account'}. Genie stopped ${count === 1 ? 'the agent' : `${count} agents`} on it. Check the subscription and its billing with ${loginName(provider)}, then use Try again.`,
     });
-    n.on('click', revealMainWindow);
+    n.on('click', () => { revealMainWindow('notification click: account paused'); });
     n.show();
 }
 
@@ -449,10 +464,11 @@ function requestQuit(): void {
  * Loads the same renderer with the take-over route in its hash; `App` renders only the pane
  * for that route. Closing it ends the take-over — the window IS the session.
  */
-function openTakeOverWindow(route: string): void {
+function openTakeOverWindow(route: string, activation: Activation): void {
     const terminalId = route.split('/').pop() ?? '';
+    const request = { activation, reason: `take-over window ${route}`, ledger: activationLedger, label: 'takeover' };
     for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { w.focus(); return; }
+        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
     }
     const win = new BrowserWindow({
         width: 1100,
@@ -464,16 +480,17 @@ function openTakeOverWindow(route: string): void {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    win.once('ready-to-show', () => win.show());
+    win.once('ready-to-show', () => showWhenReady(win, request));
     win.on('closed', () => takeOvers?.windowClosed(terminalId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
 
 /** THE FILE PANEL IN ITS OWN WINDOW (§4.3): one per workspace; the route names it. Closing it docks the panel back. */
-function openFilesWindow(route: string): void {
+function openFilesWindow(route: string, activation: Activation): void {
     const workspaceId = route.split('/').pop() ?? '';
+    const request = { activation, reason: `files window ${route}`, ledger: activationLedger, label: 'files' };
     for (const w of BrowserWindow.getAllWindows()) {
-        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { w.focus(); return; }
+        if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) { bringUp(w, request); return; }
     }
     const win = new BrowserWindow({
         width: 960,
@@ -485,7 +502,7 @@ function openFilesWindow(route: string): void {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    win.once('ready-to-show', () => win.show());
+    win.once('ready-to-show', () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
@@ -611,11 +628,14 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
+    // The renderer's composer-focus log (genie#1235, core/composer-focus.ts): its console reaches no file, so main writes it.
+    win.webContents.on('console-message', (details) => { if (details.message.startsWith('[genie] focus:')) console.log(details.message); });
 
     // Paint when there is something to paint. A visible empty frame that then fills in is the
     // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
     // keeps it in the tray: the tray's Open shows it.
-    if (show) win.once('ready-to-show', () => win.show());
+    // Shown active: this is the launch the person made (boot) or the remote window they asked for (genie#1235).
+    if (show) win.once('ready-to-show', () => showWhenReady(win, { activation: 'user-gesture', reason: search ? 'remote window' : 'launch', ledger: activationLedger, label: search ? 'remote' : 'main' }));
 
     // A remote host's window carries the host in its query (core/remote-window.ts); the main window carries none.
     void win.loadFile(join(here, '../renderer/index.html'), search ? { search } : undefined);
@@ -632,9 +652,8 @@ function openRemoteWindow(url: string): void {
     if (remoteFromSearch(search) === null) return;
     const open = remoteWindows.get(url);
     if (open && !open.isDestroyed()) {
-        if (open.isMinimized()) open.restore();
-        open.show();
-        open.focus();
+        // Asked for by the person: the rail's Open, or a Tynn share link they clicked.
+        bringUp(open, { activation: 'user-gesture', reason: 'remote window', ledger: activationLedger, label: 'remote' });
         return;
     }
     const win = createWindow(true, search);
@@ -643,14 +662,29 @@ function openRemoteWindow(url: string): void {
 }
 
 /**
- * Bring the main window back: from the tray, a second launch, the tray notice. A hidden window
- * needs `show()` — `focus()` alone does nothing to a window that is not on screen.
+ * Every request to put a window in front, and the focus diagnostic that reads it (genie#1235): main's
+ * `browser-window-focus` logs which window took the keyboard and what asked for it.
  */
-function revealMainWindow(): void {
-    if (!window || window.isDestroyed()) return;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+const activationLedger = new ActivationLedger();
+
+/**
+ * Bring the main window back FOR THE PERSON: the tray, a menu, a Genie notification they clicked, a second launch they
+ * made, the sign-in they finished in the browser. A hidden window needs `show()` — `focus()` alone does nothing to a
+ * window that is not on screen. ONLY a gesture of theirs may call this (genie#1235); an agent or a job calls
+ * `attractMainWindow`. `reason` names the gesture in the focus log.
+ */
+function revealMainWindow(reason: string): void {
+    if (!window) return;
+    bringUp(window, { activation: 'user-gesture', reason, ledger: activationLedger, label: 'main' });
+}
+
+/**
+ * The main window, wanted by an agent or a job (an `openFileForUser`): never shown, restored or focused — its taskbar
+ * button flashes when the person is elsewhere, and what it wanted is waiting when they come (genie#1235).
+ */
+function attractMainWindow(reason: string): void {
+    if (!window) return;
+    bringUp(window, { activation: 'background', reason, ledger: activationLedger, label: 'main' });
 }
 
 /*
@@ -693,7 +727,7 @@ function openGenieUrl(url: string): void {
     const workstation = workstationOpenFrom(url);
     if (workstation) { openRemoteWindow(`relay:${workstation.id}`); return; }
     if (signInCodeFrom(url) === null) { console.log('[genie] a genie:// URL Genie does not handle was ignored'); return; }
-    revealMainWindow();
+    revealMainWindow('genie:// sign-in link');
     void tynnAccount.signIn(url).then((r) => {
         featureState = { ...featureState, tynnSignInUrl: r.ok ? null : featureState.tynnSignInUrl ?? null, tynnMessage: r.ok ? null : r.reason };
         afterTynnUrl?.();
@@ -1030,7 +1064,8 @@ async function boot(): Promise<void> {
     // One broadcast per batch, with the paths that changed (genie#921): the panel re-lists once and re-reads the open file only if it changed.
     filesHost.onChange((workspaceId, paths) => broadcast('genie:files-changed', workspaceId, paths));
     // The popped-out panels (§4.3): tracked here, pushed as the whole list.
-    filesWindows = new FilesWindows({ openWindow: openFilesWindow, closeWindow: closeWindowAt });
+    // The Files panel's pop-out button: the person's click (genie#1235).
+    filesWindows = new FilesWindows({ openWindow: (route) => openFilesWindow(route, 'user-gesture'), closeWindow: closeWindowAt });
     filesWindows.onChange((list) => broadcast('genie:files-windows-changed', list));
     // Pushed, not polled (house rule). One channel per kind; the id rides the payload.
     terminals.onData((id, data) => {
@@ -1052,7 +1087,8 @@ async function boot(): Promise<void> {
     const terminalsForTakeOver = terminals;
     takeOvers = new TakeOverHost({
         terminals: terminalsForTakeOver,
-        openWindow: (route) => openTakeOverWindow(route),
+        // Take Over is a button the person pressed (genie:take-over); nothing else starts one (genie#1235).
+        openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         // The Take Over contract (§1, §6.9): the loopback MCP endpoint, read at open time so a late-starting server still reaches the TUI.
         mcp: () => { const e = mcp?.endpoint(); return e ? { mcpUrl: e.url, token: e.token } : null; },
     });
@@ -1292,7 +1328,8 @@ async function boot(): Promise<void> {
     // Signed in (its status command exits 0), every agent that login signed out is restarted on its thread and told.
     const logins = new LoginHost({
         terminals: terminalsForTakeOver,
-        openWindow: (route) => openTakeOverWindow(route),
+        // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
+        openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
         runStatus: (command, cwd) => new Promise<number>((resolve) => {
             execFileCb(command, { shell: true, cwd, timeout: 30_000, windowsHide: true }, (error) => {
@@ -1521,11 +1558,11 @@ async function boot(): Promise<void> {
         const remoteUrl = [...remoteWindows].find(([, w]) => !w.isDestroyed() && w.webContents === event.sender)?.[0] ?? null;
         const conn = browserConnectionFor({ remoteUrl, relays: [...relayChannels.values()].filter((c) => c.sender === event.sender) });
         if (conn.kind === 'refused') return { ok: false, error: conn.reason };
-        if (conn.kind === 'local') return browser.open(at);
+        if (conn.kind === 'local') return browser.open(at, 'user-gesture');
         const via = await remoteBrowsers.connect(conn.workstationId, conn.transport);
         const hosts = Array.isArray(rawHosts) ? rawHosts.filter(isGenHost) : [];
         const title = BrowserWindow.fromWebContents(event.sender)?.getTitle() || 'another workstation';
-        return browser.open(at, { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
+        return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
     });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
     ipcMain.handle('genie:remote-open-window', (_event, url: unknown) => { if (typeof url === 'string') openRemoteWindow(url); });
@@ -2179,9 +2216,11 @@ async function boot(): Promise<void> {
     // GENIE'S BROWSER FOR A SITE'S OPEN — the Hosting row's and an agent's `sites open` alike (hosting-actions.ts
     // `openSite` checks the site is served first): the Genie browser WINDOW comes up with the site in a new tab (beta.35
     // item 36 — Genie 1's own window). The person sees what the agent opened; nothing opens outside Genie.
-    const openInBrowser: OpenInBrowser = async (url) => {
+    // WHO ASKED decides whether it may take the keyboard (genie#1235): the Hosting row's Open is the person's click and
+    // brings the window up; an agent's `sites open` opens it behind whatever the person is doing.
+    const openInBrowserFor = (activation: Activation): OpenInBrowser => async (url) => {
         if (!genieBrowserWindow) return { ok: false, reason: 'Genie’s browser is not ready yet' };
-        const opened = genieBrowserWindow.open(url);
+        const opened = genieBrowserWindow.open(url, activation);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
@@ -2236,7 +2275,7 @@ async function boot(): Promise<void> {
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
             issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId), recheckSignIn: () => { void tynnAccount?.recheck(); } },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
-            openFile: async ({ workspaceId, path, line }) => { revealMainWindow(); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
+            openFile: async ({ workspaceId, path, line }) => { attractMainWindow('openFileForUser'); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
             reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
             // ...and read back from the agent's record, where every plan is kept across restarts (identity.ts `plan`).
@@ -2254,8 +2293,8 @@ async function boot(): Promise<void> {
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
             hosting: composed,
-            // `sites open` shows the site in the same browser pane the Hosting row's Open does.
-            openInBrowser,
+            // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235).
+            openInBrowser: openInBrowserFor('background'),
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines) } } : {}),
             // The agents' `flows` tool: the Flows tab's own store, and the scheduler's Run now (the tool runs only armed flows).
@@ -2574,7 +2613,7 @@ async function boot(): Promise<void> {
     });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
-        openInBrowser,
+        openInBrowser: openInBrowserFor('user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
         // The Deck's Dismiss on a recorded main-process error.
@@ -2767,7 +2806,7 @@ async function boot(): Promise<void> {
         notify: (notice) => {
             if (!Notification.isSupported()) return;
             const n = new Notification({ title: notice.title, body: notice.body });
-            n.on('click', revealMainWindow);
+            n.on('click', () => { revealMainWindow('notification click'); });
             n.show();
         },
     });
@@ -2783,8 +2822,8 @@ async function boot(): Promise<void> {
         configHome: process.env.XDG_CONFIG_HOME && process.env.XDG_CONFIG_HOME.length > 0 ? process.env.XDG_CONFIG_HOME : join(homedir(), '.config'),
     });
     trayHandlers = {
-        onUpdate: revealMainWindow,
-        onTaskManager: () => { revealMainWindow(); broadcast('genie:navigate', 'genie://hosting?tab=processes'); },
+        onUpdate: () => { revealMainWindow('tray: update'); },
+        onTaskManager: () => { revealMainWindow('tray: Task Manager'); broadcast('genie:navigate', 'genie://hosting?tab=processes'); },
         // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
         // A signed-out login named in the tray (#967): its own login, in a window of its own.
         onProviderLogin: (provider) => {
@@ -2798,12 +2837,12 @@ async function boot(): Promise<void> {
         },
         onScratchTerminal: () => {
             if (!terminals) return;
-            const r = openScratchTerminal({ terminals, openWindow: (route) => openTakeOverWindow(route), home: homedir() });
+            const r = openScratchTerminal({ terminals, openWindow: (route) => openTakeOverWindow(route, 'user-gesture'), home: homedir() });
             if (!r.ok) console.error('[genie] scratch terminal:', r.reason);
         },
-        onOpen: revealMainWindow,
+        onOpen: () => { revealMainWindow('tray: Open'); },
         onSettings: () => {
-            revealMainWindow();
+            revealMainWindow('Settings');
             broadcast('genie:navigate', 'genie://settings');
         },
         onCheckUpdates: () => { void updates?.check(); },
@@ -2818,7 +2857,7 @@ async function boot(): Promise<void> {
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
         onSettings: () => {
-            revealMainWindow();
+            revealMainWindow('Settings');
             broadcast('genie:navigate', 'genie://settings');
         },
         onCheckUpdates: () => { void updates?.check(); },
@@ -2827,7 +2866,7 @@ async function boot(): Promise<void> {
         onOpenRepo: () => { void shell.openExternal('https://github.com/Renaissance-Analytics/genie'); },
         // HELP (Tynn #762): Genie's documentation is the Tynn docs site; What's new opens over the page, again.
         onDocs: () => { void shell.openExternal(genieDocsUrl(tynnHost())); },
-        onWhatsNew: () => { revealMainWindow(); broadcast('genie:navigate', WHATS_NEW_ROUTE); },
+        onWhatsNew: () => { revealMainWindow('menu: What is new'); broadcast('genie:navigate', WHATS_NEW_ROUTE); },
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
     // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts
@@ -2838,11 +2877,11 @@ async function boot(): Promise<void> {
     // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
     // LIVE SITE PANELS (beta.35 item 36, step 5): each workspace tab's site panel is a page in the browser's session, placed
     // over its box in this window; a panel removed from its tabs closes its page.
-    const livePanels = sitePanels({ window, frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url) => { genieBrowserWindow?.open(url); } });
+    const livePanels = sitePanels({ window, frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
     composed.settings.onChange((key, value, workspaceId) => {
         if (key === 'workspace_tabs' && workspaceId && typeof value === 'string') livePanels.retainIn(workspaceId, sitePanelKeys(workspaceId, parseTabs(value)));
     });
-    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host) });
+    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
     // What the page did (a link, a redirect, back/forward) is the address bar and the history buttons — pushed, not polled.
     // A hidden pane reports no url; the surface keeps the last page it showed.
     browserPane.onChange((state) => {
@@ -2861,8 +2900,14 @@ app.on('open-url', (event, url) => {
     openGenieUrl(url);
 });
 
+// THE FOCUS LOG (genie#1235): every time a Genie window takes the keyboard, which one, and the request that came just
+// before it — or that none did. The owner's "Genie keeps taking focus" is then one line in the log away from its cause.
+app.on('browser-window-focus', (_event, focused) => {
+    if (!focused.isDestroyed()) console.log(activationLedger.explain(windowLabelOf(focused.webContents.getURL()), Date.now()));
+});
+
 app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
-    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: revealMainWindow, defer: (run) => { setImmediate(run); }, open: openGenieUrl });
+    answerSecondInstance(argv, additionalData, { quit: requestQuit, reveal: () => { revealMainWindow('second launch'); }, defer: (run) => { setImmediate(run); }, open: openGenieUrl });
 });
 
 /**

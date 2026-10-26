@@ -66,8 +66,8 @@ describe('the tray', () => {
 describe('main', () => {
     const src = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
     it('the update item opens Genie; Task Manager opens the processes; the tray redraws when the update changes', () => {
-        expect(src).toMatch(/onUpdate: revealMainWindow,/);
-        expect(src).toMatch(/onTaskManager: \(\) => \{ revealMainWindow\(\); broadcast\('genie:navigate', 'genie:\/\/hosting\?tab=processes'\); \},/);
+        expect(src).toMatch(/onUpdate: \(\) => \{ revealMainWindow\('tray: update'\); \},/);
+        expect(src).toMatch(/onTaskManager: \(\) => \{ revealMainWindow\('tray: Task Manager'\); broadcast\('genie:navigate', 'genie:\/\/hosting\?tab=processes'\); \},/);
         expect(src).toMatch(/const update = trayUpdate\(updates\?\.state\(\) \?\? null\);/);
         expect(src).toMatch(/updates\.onChange\(\(state\) => \{\n\s*refreshTray\(\);/);
     });

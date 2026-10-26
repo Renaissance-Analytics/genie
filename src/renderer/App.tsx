@@ -75,6 +75,7 @@ import type { Diagnosis } from '../core/workspace-model.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
+import { useComposerFocusLog } from './composer-focus-log.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -1046,6 +1047,9 @@ function DesktopApp({ bridge }: AppProps) {
         window.addEventListener('keydown', onKey, true);
         return () => window.removeEventListener('keydown', onKey, true);
     }, [parsed, route]);
+
+    // THE COMPOSER-FOCUS LOG (genie#1235): the composer taking the caret unasked is logged with its cause.
+    useComposerFocusLog();
 
     /**
      * THE ANSWER IN FLIGHT — which agent's, for which approval — and the host's last refusal (`core/approval-answering.ts`).
