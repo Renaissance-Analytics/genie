@@ -831,7 +831,14 @@ export class SessionHost {
                 if (turns > reportedTurns) {
                     reportedTurns = turns;
                     // A REPLY that ended — not a failed, stopped or held turn; and the plan sounds again next turn.
-                    if (session.lastTurnEnd === 'replied') this.#onAction?.(record.id, 'replied');
+                    if (session.lastTurnEnd === 'replied') {
+                        this.#onAction?.(record.id, 'replied');
+                        // A turn that REPLIED went through: a no-reset backoff on its login is over, and the next breach
+                        // starts at its first step (genie#1195: `ok` was never called). Only when the login is open — a
+                        // reply from a turn that was already running never lets another agent's hold go.
+                        const login = this.#loginOf(record.provider);
+                        if (this.#gate.view(login, this.#clock()).state === 'open') this.#gate.ok(login);
+                    }
                     entry.sounded.clear();
                 }
                 this.#emit(record.id);
