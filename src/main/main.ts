@@ -99,7 +99,8 @@ import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
 import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
-import { createTray, loginName, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
+import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
+import { needsYouCount } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { showOnBoot } from '../core/tray-resident.js';
@@ -233,6 +234,9 @@ let tray: Tray | null = null;
 /** The tray's handlers, kept so a held login (Tynn #794) can redraw its menu; and what it last showed as held. */
 let trayHandlers: TrayHandlers | null = null;
 let trayHeldKey = '';
+/** The tray's two faces (tray.ts trayImages), and how many Deck items wait on the person — the Deck badge's own number. */
+let trayImages: ReturnType<typeof buildTrayImages> | null = null;
+let trayWaiting = 0;
 /** The tray says which provider logins the rate limit holds, with Resume now — redrawn only when that CHANGES. */
 /** One alert per paused login (core/account-pause.ts): the person is told once, however many of its agents stop. */
 const pauseAlerts = new PauseAlerts();
@@ -250,11 +254,13 @@ function refreshTray(): void {
     const signedOut = host?.signedOutProviders() ?? [];
     // Claude Design's login (#1081): per machine, so one line however many agents wait on it.
     const designLogin = (host?.designLoginAgents().length ?? 0) > 0;
-    const key = JSON.stringify({ held, update, signedOut, paused, designLogin });
+    const key = JSON.stringify({ held, update, signedOut, paused, designLogin, waiting: trayWaiting });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
     tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut, paused, designLogin)));
-    tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin));
+    tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin, trayWaiting));
+    // THE DECK NEEDS YOU (the owner, 2026-10-26): the mark with a dot while anything waits on the person.
+    if (trayImages) tray.setImage(trayWaiting > 0 ? trayImages.attention : trayImages.plain);
 }
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
@@ -2657,6 +2663,9 @@ async function boot(): Promise<void> {
     // agent did. Nothing here is on a timer.
     registry.subscribe((snapshot) => {
         if (window && !window.isDestroyed()) window.webContents.send('genie:changed', snapshot);
+        // The tray follows the Deck: the badge's own count (core/deck.ts needsYouCount), redrawn only when it changes.
+        const waiting = needsYouCount(snapshot.deckItems ?? []);
+        if (waiting !== trayWaiting) { trayWaiting = waiting; refreshTray(); }
     });
     let published = '';
     /*
@@ -2738,7 +2747,8 @@ async function boot(): Promise<void> {
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
     };
-    tray = createTray(trayHandlers, trayIconPath());
+    trayImages = buildTrayImages(trayIconPath());
+    tray = createTray(trayHandlers, trayWaiting > 0 ? trayImages.attention : trayImages.plain);
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
