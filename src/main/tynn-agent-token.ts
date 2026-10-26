@@ -8,12 +8,19 @@ import { tynnAgentIdentities, type AgentCredentialPorts } from './tynn-agent-ide
 export interface TynnSessionPort {
     status(): { readonly signedIn: boolean };
     userId?(): string | null;
+    /**
+     * The account id of the SAVED credential, before Tynn has confirmed it this launch (genie#1234): it lets an agent's
+     * own stored key be used off grid. `null` once signed out or forgotten. Never a reason to mint or register.
+     */
+    savedUserId?(): string | null;
     request(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown; signal?: AbortSignal }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 }
 export interface TynnMcp { readonly url: string; readonly token: string }
 export type TynnAgentToken =
     | { readonly status: 'unlinked' }
-    | { readonly status: 'already' | 'minted'; readonly mcp: TynnMcp; readonly remoteAgentId?: string }
+    | { readonly status: 'already' | 'minted'; readonly mcp: TynnMcp; readonly remoteAgentId?: string;
+        /** A stored key handed back without Tynn's word on it (signed out, or Tynn unreachable): checked once Tynn answers. */
+        readonly unverified?: true }
     | { readonly status: 'failed'; readonly reason: string; readonly code?: 'offline' | 'inactive' | 'conflict' | 'pending' | 'storage' | 'refused' };
 export const TYNN_SERVER_KEY = 'tynn';
 export const TYNN_TOML_BEGIN = '# >>> tynn — managed by Genie; edits between the markers are replaced on sync';

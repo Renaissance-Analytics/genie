@@ -47,7 +47,7 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
             return ok(404, { message: 'Not Found' });
         },
     };
-    return { ports, jar, calls, state, endSession: () => { sessionLive = false; } };
+    return { ports, jar, calls, state, endSession: () => { sessionLive = false; }, reviveSession: () => { sessionLive = true; } };
 }
 
 describe.skipIf(process.platform === 'win32')('Tynn account credential permissions', () => {
@@ -215,17 +215,39 @@ describe('TynnAccount.request — every call uses the scoped bearer', () => {
         expect(changes).toEqual([false]);
     });
 
-    it('Tynn answering 404 because the session is gone (a failed auth reads as Not Found, 2026-10-19): Genie asks /me and shows signed out', async () => {
+    /*
+     * A 404 NEVER SIGNS GENIE OUT (genie#1234, the owner 2026-10-26: "Genie must work off grid"). Tynn answers a failed
+     * auth as Not Found (2026-10-19), but so does a deploy in progress or a routing fault — and forgetting the saved
+     * credential on one of those signed Genie out for good and broke every Tynn-linked agent. Only a 401/419 is a definite
+     * revocation. A 404 is asked about at /me, kept, and the next answer from Tynn decides.
+     */
+    it('Tynn answering 404 (its failed-auth answer, or a deploy): Genie asks /me and KEEPS the saved credential (genie#1234)', async () => {
         const t = fakeTynn({ authFail: 404 });
         const account = await TynnAccount.open(t.ports);
         await account.signIn(CODE);
-        const changes: boolean[] = [];
-        account.onChange(() => changes.push(account.status().signedIn));
         t.endSession();
         expect((await account.request('/api/v1/projects', { method: 'GET' })).status).toBe(404);
         expect(t.calls.at(-1)).toMatchObject({ method: 'GET', path: '/api/v1/me' });
-        expect(account.status()).toEqual({ signedIn: false });
-        expect(changes).toEqual([false]);
+        t.reviveSession();
+        expect((await account.recheck()).signedIn, 'Tynn answering again signs back in with no new pairing').toBe(true);
+        expect((await TynnAccount.open(t.ports)).status().signedIn, 'and the next launch restores it').toBe(true);
+    });
+
+    it.each([404, 500, 503])('a %s from /me at launch keeps the saved credential (genie#1234)', async (status) => {
+        const t = fakeTynn();
+        await (await TynnAccount.open(t.ports)).signIn(CODE);
+        const answer = t.ports.fetch;
+        const flaky = await TynnAccount.open({ ...t.ports, fetch: async (url, init) => url.endsWith('/api/v1/me') ? { ok: false, status, text: async () => '{}' } : answer(url, init) });
+        expect(flaky.status().signedIn, 'not confirmed this time').toBe(false);
+        expect((await TynnAccount.open(t.ports)).status().signedIn, 'the next answer from Tynn signs in').toBe(true);
+    });
+
+    it.each([401, 419])('CONTROL: a %s from /me is a definite revocation and clears the credential', async (status) => {
+        const t = fakeTynn();
+        await (await TynnAccount.open(t.ports)).signIn(CODE);
+        const answer = t.ports.fetch;
+        await TynnAccount.open({ ...t.ports, fetch: async (url, init) => url.endsWith('/api/v1/me') ? { ok: false, status, text: async () => '{}' } : answer(url, init) });
+        expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(false);
     });
 
     it('CONTROL: a 404 for a path that is not there, with the session live, leaves this Genie signed in', async () => {
@@ -245,6 +267,18 @@ describe('TynnAccount.request — every call uses the scoped bearer', () => {
         expect(account.userId()).toBeNull();
         await account.signIn(CODE);
         expect(account.userId()).toBe('7');
+    });
+
+    it('the saved account id is known before Tynn confirms it, so a stored agent key works off grid (genie#1234)', async () => {
+        const t = fakeTynn();
+        expect((await TynnAccount.open(t.ports)).savedUserId()).toBeNull();
+        await (await TynnAccount.open(t.ports)).signIn(CODE);
+        t.state.reachable = false;
+        const offline = await TynnAccount.open(t.ports);
+        expect(offline.userId(), 'not confirmed: no live identity').toBeNull();
+        expect(offline.savedUserId()).toBe('7');
+        await offline.signOut();
+        expect(offline.savedUserId(), 'signing out forgets it').toBeNull();
     });
 });
 

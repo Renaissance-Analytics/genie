@@ -152,6 +152,11 @@ export class TynnAccount implements TynnAccountPort {
     host(): string { return trimHost(this.#ports.host()); }
     status(): TynnStatus { return this.#me && this.#meHost === this.host() ? { signedIn: true, host: this.#meHost, user: this.#me.user } : { signedIn: false }; }
     userId(): string | null { return this.status().signedIn ? this.#me!.id : null; }
+    /**
+     * The saved credential's account, before Tynn has confirmed it this launch (genie#1234): an agent's own stored Tynn key
+     * is usable off grid. `null` once signed out or the credential is forgotten.
+     */
+    savedUserId(): string | null { return this.#credential && this.#credential.host === this.host() ? this.#credential.userId : null; }
     onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
     #set(me: Me | null, host = this.host()): void {
         const previous = JSON.stringify(this.status());
@@ -170,7 +175,12 @@ export class TynnAccount implements TynnAccountPort {
         if (!credential || credential.host !== this.host()) return;
         const res = await this.#fetch('/api/v1/me', { method: 'GET', ...(signal ? { signal } : {}) }, credential);
         if (this.#credential !== credential) return;
-        if ([401, 404, 419].includes(res.status)) { await this.#forget(credential); return; }
+        /*
+         * ONLY A DEFINITE REVOCATION FORGETS (genie#1234). A 404 is also how Tynn answers a failed auth (2026-10-19), but a
+         * deploy or a routing fault answers it too — and forgetting on one signed Genie out for good and broke every
+         * Tynn-linked agent. A 404 or 5xx keeps the credential and is asked again, like an unreachable Tynn.
+         */
+        if (res.status === 401 || res.status === 419) { await this.#forget(credential); return; }
         if (!res.ok) throw new Error(UNREACHABLE);
         const me = parseMe(await res.json());
         if (this.#credential !== credential) return;

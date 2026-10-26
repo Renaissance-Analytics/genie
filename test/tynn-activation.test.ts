@@ -22,7 +22,7 @@ afterEach(async () => {
 const pty: PtyPort = { open: () => { throw new Error('No terminal expected'); }, write: () => false, resize: () => false, kill: () => false, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
 const legacy = 'synthetic-shared-credential';
 const entry = { type: 'http', url: 'https://tynn.ai/mcp/tynn', headers: { Authorization: `Bearer ${legacy}` } };
-type Activated = ComposedServices & { prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]> };
+type Activated = ComposedServices & { prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>; tynnNote(agentId: string): string | null; tynnRecovery(): Promise<string[]> };
 function deferred() {
     let resolve!: () => void; let reject!: (error: unknown) => void;
     const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
@@ -33,10 +33,10 @@ function deferred() {
 async function fixture() {
     const workspace = join(dir, 'workspace'); await mkdir(workspace);
     await writeFile(join(workspace, 'project.json'), JSON.stringify({ tynn: { projectId: 'project-42' } }));
-    const state = { online: true, encryption: true, signedIn: true, userId: 'user-7', minted: 0, lists: 0, requests: 0, gate: Promise.resolve() };
+    const state = { online: true, encryption: true, signedIn: true, userId: 'user-7', saved: null as string | null, accountLate: false, minted: 0, lists: 0, requests: 0, gate: Promise.resolve() };
     const rows: Array<{ id: string; name: string; external_id: string; status: string; tokens: Array<{ public_id: string; active: boolean }> }> = [];
     const requestEntered = deferred();
-    const account = { status: () => ({ signedIn: state.signedIn }), userId: () => state.userId,
+    const account = { status: () => ({ signedIn: state.signedIn }), userId: () => state.signedIn ? state.userId : null, savedUserId: () => state.saved,
         request: async (path: string, init: { method: string; body?: any }) => {
             state.requests++;
             requestEntered.resolve();
@@ -57,7 +57,7 @@ async function fixture() {
         } };
     const input = { userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
         mcpEndpoint: () => ({ url: 'http://127.0.0.1:1/mcp', token: 'synthetic-genie' }),
-        workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => account,
+        workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
         tynnCipher: { isAvailable: () => state.encryption, encrypt: (s: string) => Buffer.from([...Buffer.from(s)].map((b) => b ^ 0x5a)), decrypt: (b: Buffer) => Buffer.from([...b].map((v) => v ^ 0x5a)).toString() } };
     const boot = async () => { await services?.shutdown(); services = await composeServices(input); return services as Activated; };
     const s = await boot();
@@ -129,18 +129,26 @@ it('uses distinct keys for two agents, restores them after restart, and writes o
     expect((await readFile(join(t.workspace, 'project.json'), 'utf8')).includes('rpk_')).toBe(false);
 });
 
-it('explains a failed Tynn preparation in session status and never constructs a provider or exposes upstream text', async () => {
+/*
+ * OFF GRID (genie#1234, the owner 2026-10-26): Genie signed itself out of Tynn and every agent in a Tynn-linked workspace
+ * showed Broken. Tynn being signed out, down or unreachable must never stop an agent from starting: it starts without
+ * the `tynn` server, says so in a note that blocks nothing, and still never borrows a shared workspace credential.
+ */
+it('Tynn unreachable: the agent STILL STARTS, without the tynn server, with a note instead of a failure (genie#1234)', async () => {
     const t = await fixture(); await t.seed(); t.state.online = false;
-    let created = 0;
-    const host = new SessionHost({ userData: join(dir, 'failed-session'), processTree: { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) },
-        prepareMcpServers: (record, _cwd, signal) => t.prepare(record, signal),
-        driverFor: () => { created++; return null; } });
+    const launched = deferred();
+    const seen: Array<readonly McpServer[]> = [];
+    const host = new SessionHost({ userData: join(dir, 'off-grid-session'), processTree: { snapshot: () => [], killTree: () => ({ killed: 0, refused: false }) },
+        prepareMcpServers: (record, _cwd, signal) => t.prepare(record, signal).catch((error: unknown) => { launched.reject(error); throw error; }),
+        driverFor: (_record, _cwd, _resume, extras) => () => ({ start: () => { seen.push(extras?.mcpServers ?? []); launched.resolve(); }, kill: () => {}, prompt: () => {}, cliSessionId: null, ready: Promise.resolve() }) });
     hosts.push(host); const agent = t.agent(); host.start(agent, t.workspace);
-    await t.requestEntered;
-    await vi.waitFor(() => expect(host.probe(agent.id)?.failure).toBeTruthy());
-    const status = JSON.stringify(host.probe(agent.id));
-    expect(status.includes('Tynn could not be reached'), 'show an actionable, sanitized failure').toBe(true);
-    expect(status.includes(legacy)).toBe(false); expect(created).toBe(0);
+    await launched.promise;
+    expect(seen).toEqual([[]]);
+    expect(host.probe(agent.id)?.failure ?? null, 'not Broken').toBeNull();
+    const note = t.s.tynnNote(agent.id);
+    expect(note, 'a non-blocking note says why the Tynn tools are missing').toMatch(/Tynn/);
+    expect(note!.includes(legacy)).toBe(false);
+    expect(JSON.stringify(seen).includes(legacy)).toBe(false);
 });
 
 it('refuses a credential for a workspace link changed during preparation', async () => {
@@ -163,14 +171,79 @@ it('does not register or mint after Stop cancels an in-flight identity lookup', 
     expect(await outcome).toBeInstanceOf(Error); expect(t.rows, 'cancelled lookup must not register an identity').toHaveLength(0); expect(t.state.minted).toBe(0);
 });
 
-it.each(['offline', 'signed-out', 'locked', 'revoked'] as const)('refuses %s without using the legacy credential', async (mode) => {
+it.each(['offline', 'signed-out', 'locked', 'revoked'] as const)('%s starts without Tynn and never uses the legacy credential (genie#1234)', async (mode) => {
     const t = await fixture(); await t.seed(); const a = t.agent();
     if (mode === 'revoked') { await t.prepare(a); t.rows[0]!.tokens[0]!.active = false; }
     if (mode === 'offline') t.state.online = false;
     if (mode === 'signed-out') t.state.signedIn = false;
     if (mode === 'locked') t.state.encryption = false;
-    await expect(t.prepare(a)).rejects.toThrow(/Tynn.*(credential|agent|sign|encryption|reached|key)/i);
+    expect(await t.prepare(a)).toEqual([]);
+    expect(t.s.tynnNote(a.id)).toMatch(/Tynn/);
     expect(t.state.minted).toBe(mode === 'revoked' ? 1 : 0);
+});
+
+it('CONTROL: an agent that got its key carries no Tynn note', async () => {
+    const t = await fixture(); const a = t.agent();
+    expect((await t.prepare(a)).map((s) => s.name)).toEqual(['tynn']);
+    expect(t.s.tynnNote(a.id)).toBeNull();
+});
+
+it('a stored key is used off grid: signed out, or Tynn down, the agent keeps its own Tynn tools (genie#1234)', async () => {
+    const t = await fixture(); const a = t.agent(); const first = await t.prepare(a);
+    t.state.online = false;
+    expect(await t.prepare(a)).toEqual(first);
+    t.state.online = true; t.state.signedIn = false; t.state.saved = 'user-7';
+    const requests = t.state.requests;
+    expect(await t.prepare(a)).toEqual(first);
+    expect(t.state.requests, 'signed out: no request before the stored key is used').toBe(requests);
+    expect(t.state.minted).toBe(1);
+});
+
+/*
+ * NOTHING RETRIED (genie#1234): after signing back in the agents stayed broken until Genie restarted. Now the agents that
+ * started without Tynn because of the account (signed out, or unreachable) are named for a restart when the account
+ * signs in, and an agent that started on an unverified stored key is checked then and named if Tynn refuses that key.
+ */
+it('the account arriving signed in while an agent prepares is not missed (no change event is left to recover it)', async () => {
+    const t = await fixture(); const a = t.agent();
+    t.state.accountLate = true;
+    expect((await t.prepare(a)).map((s) => s.name)).toEqual(['tynn']);
+    expect(t.s.tynnNote(a.id)).toBeNull();
+});
+
+it('signing in to Tynn names the agents that started without it, and only those (genie#1234)', async () => {
+    const t = await fixture(); const out = t.agent(); const fine = t.agent('claude');
+    expect((await t.prepare(fine)).map((s) => s.name)).toEqual(['tynn']);
+    t.state.signedIn = false;
+    expect(await t.prepare(out)).toEqual([]);
+    expect(await t.s.tynnRecovery(), 'still signed out: nothing to do yet').toEqual([]);
+    t.state.signedIn = true;
+    expect(await t.s.tynnRecovery()).toEqual([out.id]);
+    expect((await t.prepare(out)).map((s) => s.name), 'the restart gets its key').toEqual(['tynn']);
+    expect(t.s.tynnNote(out.id)).toBeNull();
+    expect(await t.s.tynnRecovery(), 'once recovered, it is not restarted again').toEqual([]);
+});
+
+it('signing in does not churn an agent whose Tynn identity is refused for a reason sign-in cannot fix', async () => {
+    const t = await fixture(); const a = t.agent(); await t.prepare(a);
+    t.rows[0]!.status = 'suspended';
+    expect(await t.prepare(a)).toEqual([]);
+    expect(t.s.tynnNote(a.id)).toMatch(/Tynn/);
+    expect(await t.s.tynnRecovery()).toEqual([]);
+});
+
+it('an agent started on an unverified stored key is checked once Tynn answers, and named only if Tynn refuses it (genie#1234)', async () => {
+    const t = await fixture(); const keep = t.agent(); const lose = agentRecord({ ...t.agent('claude'), name: 'second-agent' });
+    await t.prepare(keep); await t.prepare(lose);
+    t.state.online = false;
+    expect((await t.prepare(keep)).map((s) => s.name)).toEqual(['tynn']);
+    expect((await t.prepare(lose)).map((s) => s.name)).toEqual(['tynn']);
+    t.state.online = true;
+    t.rows.find((r) => r.external_id === lose.id)!.tokens[0]!.active = false;
+    const requests = t.state.requests;
+    expect(await t.s.tynnRecovery()).toEqual([lose.id]);
+    expect(t.state.requests, 'each unverified key was checked with Tynn').toBeGreaterThan(requests);
+    expect(await t.s.tynnRecovery(), 'the verified one is settled; the refused one waits for its restart').toEqual([lose.id]);
 });
 
 it('refuses a malformed config or an unrecognized Tynn entry without overwriting it or minting', async () => {
@@ -189,6 +262,14 @@ it('does not provision an unlinked or OS agent, refuses unknown workspace bindin
     await expect(t.prepare(agentRecord({ ...a, workspaceId: 'missing' }))).rejects.toThrow(/workspace/i);
     const abort = new AbortController(); abort.abort(); await expect(t.prepare(a, abort.signal)).rejects.toThrow(/cancel/i);
     expect(t.state.minted).toBe(0);
+});
+
+it('production main restarts the agents Tynn recovery names when the account changes, and notes a missing Tynn (genie#1234)', async () => {
+    const main = await readFile('src/main/main.ts', 'utf8');
+    expect(/tynnAccount\.onChange\(\s*recoverTynnAgents\s*\)/.test(main), 'an account change asks for recovery').toBe(true);
+    expect(/\n\s*recoverTynnAgents\(\);/.test(main), 'and once after the account opens, signed in before anyone listened').toBe(true);
+    expect(/function recoverTynnAgents[\s\S]*?tynnRecovery\(\)[\s\S]*?restartForMcp/.test(main), 'with the existing graceful restart').toBe(true);
+    expect(/prepareAgentMcp\(record,\s*signal\)[\s\S]*?tynnNote\(record\.id\)[\s\S]*?notice\(/.test(main), 'the note reaches the chat').toBe(true);
 });
 
 it('production main wires preparation for both providers and safeStorage without the on-disk fallback', async () => {

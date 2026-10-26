@@ -293,6 +293,27 @@ function recoverMissingMcp(agentId: AgentId, reports: readonly McpServerReport[]
     }
 }
 
+/**
+ * TYNN IS BACK (genie#1234). An agent in a Tynn-linked workspace starts without its `tynn` server when Genie is signed
+ * out or Tynn is unreachable; when the account signs in, the agents that went without it — and any whose unverified stored
+ * key Tynn now refuses — are restarted on the same conversation (the graceful restart `restartForMcp` uses), so nobody
+ * has to restart them or Genie. One recovery at a time: two quick account changes must not restart an agent twice.
+ */
+let tynnRecovering = false;
+function recoverTynnAgents(): void {
+    if (tynnRecovering || !services || !tynnAccount?.status().signedIn) return;
+    tynnRecovering = true;
+    void services.tynnRecovery().then((ids) => {
+        for (const id of ids) {
+            if (!host?.probe(id as AgentId)) continue;
+            host?.notice(id as AgentId, 'Tynn is available again. Genie is restarting this session on the same conversation to bring its Tynn tools up to date.');
+            void restartForMcp?.(id as AgentId);
+        }
+    }).catch((error: unknown) => {
+        console.error(`[tynn] agents could not be brought back to Tynn: ${error instanceof Error ? error.message : String(error)}`);
+    }).finally(() => { tynnRecovering = false; });
+}
+
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
 const headroomBoard = new HeadroomBoard();
 
@@ -959,6 +980,9 @@ async function boot(): Promise<void> {
         prepareMcpServers: async (record, _cwd, signal) => {
             if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
             const privateServers = await services.prepareAgentMcp(record, signal);
+            // Without its Tynn server it still starts (genie#1234): the reason is a note in its chat, never Broken.
+            const tynnNote = services?.tynnNote(record.id) ?? null;
+            if (tynnNote) host?.notice(record.id, tynnNote);
             return [...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)), ...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
@@ -2090,6 +2114,10 @@ async function boot(): Promise<void> {
         openExternal: (url) => shell.openExternal(url),
     });
     tynnAccount.onChange(pushFeatures);
+    // Signing in brings back the Tynn tools of the agents that started without them (genie#1234) — and once now, for an
+    // account that signed in while it opened, before anyone was listening.
+    tynnAccount.onChange(recoverTynnAgents);
+    recoverTynnAgents();
     afterTynnUrl = pushFeatures;
     // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
     // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
