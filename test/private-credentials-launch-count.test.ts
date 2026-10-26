@@ -5,8 +5,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const observed = vi.hoisted(() => ({
     launches: [] as { args: readonly string[]; env: NodeJS.ProcessEnv | undefined }[],
-    fault: null as 'exit-without-verification' | 'unexpected-output' | 'premature-verification' | 'replayed-nonce' | 'die-after-staging' | 'hang-after-staging' | 'closed-stdin' | null,
+    fault: null as 'exit-without-verification' | 'unexpected-output' | 'premature-verification' | 'replayed-nonce' | 'die-after-staging' | 'hang-after-staging' | 'closed-stdin' | 'stdin-eof' | null,
     challenges: [] as string[],
+    nativeFailures: [] as { killed: boolean; code: unknown; signal: unknown }[],
+    nativeAliveAtEof: false,
     payload: null as string | null,
     payloadInStdin: false,
     stagingOpened: false,
@@ -20,7 +22,7 @@ vi.mock('node:child_process', async (original) => {
     Object.defineProperty(execFile, promisify.custom, {
         value: (...args: [string, readonly string[], { env?: NodeJS.ProcessEnv }]) => {
             const nativeArgs = [...args[1]];
-            if (observed.fault && observed.fault !== 'closed-stdin') {
+            if (observed.fault && observed.fault !== 'closed-stdin' && observed.fault !== 'stdin-eof') {
                 const index = nativeArgs.indexOf('-EncodedCommand') + 1;
                 const originalScript = Buffer.from(nativeArgs[index]!, 'base64').toString('utf16le');
                 const verification = "Send-PrivateSignal ('PRIVATE_CREDENTIAL_VERIFIED:'+$stageId)";
@@ -39,7 +41,10 @@ vi.mock('node:child_process', async (original) => {
             observed.launches.push({ args: nativeArgs, env: args[2].env });
             const began = performance.now();
             const work = (actual.execFile as unknown as Record<symbol, (...values: unknown[]) => unknown>)[promisify.custom]!(args[0], nativeArgs, args[2]) as Promise<unknown> & { child: import('node:child_process').ChildProcess };
-            void work.then(() => { observed.elapsedMs.push(performance.now() - began); }, () => { observed.elapsedMs.push(performance.now() - began); });
+            void work.then(() => { observed.elapsedMs.push(performance.now() - began); }, (error: { killed?: boolean; code?: unknown; signal?: unknown }) => {
+                observed.elapsedMs.push(performance.now() - began);
+                observed.nativeFailures.push({ killed: error.killed === true, code: error.code, signal: error.signal });
+            });
             observed.children.push(work.child);
             const input = work.child.stdin;
             if (input) for (const method of ['write', 'end'] as const) {
@@ -65,11 +70,20 @@ vi.mock('node:fs/promises', async (original) => {
         const handle = await actual.open(...args);
         if (String(args[0]).endsWith('.tmp')) {
             observed.stagingOpened = true;
-            if (observed.fault === 'closed-stdin') {
+            if (observed.fault === 'closed-stdin' || observed.fault === 'stdin-eof') {
                 const close = handle.close.bind(handle);
                 handle.close = async () => {
                     await close();
-                    for (const child of observed.children) child.stdin?.end();
+                    for (const child of observed.children) {
+                        if (observed.fault !== 'stdin-eof') { child.stdin?.end(); continue; }
+                        // Keep Node's stage paused so protocol refusal cannot kill the child for us.
+                        observed.nativeAliveAtEof = child.pid !== undefined && alive(child.pid);
+                        await new Promise<void>((resolve, reject) => {
+                            const timer = setTimeout(() => reject(new Error('Owned native EOF barrier timed out.')), 75_000);
+                            child.once('close', () => { clearTimeout(timer); resolve(); });
+                            child.stdin?.end();
+                        });
+                    }
                 };
             }
         }
@@ -80,11 +94,16 @@ vi.mock('node:fs/promises', async (original) => {
 import { preparePrivateCredential, setPrivateCredentialFailureLog, writePrivateCredential } from '../src/main/private-credentials.js';
 
 const roots: string[] = [];
+function alive(pid: number): boolean {
+    try { process.kill(pid, 0); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false; throw error; }
+}
 afterEach(async () => {
     observed.launches.length = 0;
     observed.fault = null;
     observed.payload = null; observed.payloadInStdin = false; observed.stagingOpened = false; observed.children.length = 0; observed.elapsedMs.length = 0;
     observed.challenges.length = 0;
+    observed.nativeFailures.length = 0; observed.nativeAliveAtEof = false;
     vi.restoreAllMocks();
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
@@ -157,6 +176,24 @@ describe.skipIf(process.platform !== 'win32')('credential write native launch bu
             expect(await readdir(directory)).toEqual(['credential.json']);
             expect(observed.children.every((child) => child.exitCode !== null || child.signalCode !== null)).toBe(true);
         } finally { restore(); }
+    }, 180_000);
+
+    it('refuses actual stdin EOF while Node is still staging without relying on native timeout termination', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'genie-acl-eof-')); roots.push(root);
+        const directory = join(root, 'private-keys'); await mkdir(directory);
+        const file = join(directory, 'credential.json'); await writeFile(file, 'previous encrypted bytes');
+        observed.fault = 'stdin-eof';
+
+        await expect(writePrivateCredential(file, 'replacement encrypted bytes')).rejects.toThrow('Private Tynn credential permissions could not be secured.');
+
+        expect(observed.nativeAliveAtEof, 'the process scan finds the live verifier before closing its stdin').toBe(true);
+        expect(observed.nativeFailures.length).toBe(1);
+        expect(observed.nativeFailures[0]!.killed, 'stdin EOF must refuse without relying on timeout termination').toBe(false);
+        expect(observed.nativeFailures[0]!.code).toBe(1);
+        expect(observed.nativeFailures[0]!.signal).toBeNull();
+        expect(observed.children.every((child) => child.pid !== undefined && !alive(child.pid))).toBe(true);
+        expect(await readFile(file, 'utf8')).toBe('previous encrypted bytes');
+        expect((await readdir(root, { recursive: true })).some((name) => name.endsWith('.tmp'))).toBe(false);
     }, 180_000);
 
     it('refuses an unfinished staging file on the next preparation without changing or deleting stored data', async () => {

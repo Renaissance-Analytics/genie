@@ -63,12 +63,13 @@ require('./helper.cjs').writePrivateCredential(process.argv[2], 'encrypted fixtu
                     else reject(new Error('The owned parent did not report its native verifier.'));
                 });
             });
+            expect(alive(nativePid), 'the process scan finds the actual live verifier before parent death').toBe(true);
             const exited = once(parent, 'exit');
             parent.kill('SIGKILL');
             await exited;
             const deadline = performance.now() + 60_000;
             while (alive(nativePid) && performance.now() < deadline) await delay(100);
-            expect(alive(nativePid), 'the native child exits on parent stdin EOF within the unchanged native bound').toBe(false);
+            expect(alive(nativePid), 'the native child exits after parent death within the unchanged native bound').toBe(false);
             await expect(stat(file)).rejects.toMatchObject({ code: 'ENOENT' });
             expect((await readdir(root, { recursive: true })).some((name) => name.endsWith('.tmp')), 'the killed parent left a real uncommitted stage').toBe(true);
             await expect(preparePrivateCredential(file)).rejects.toThrow('Private Tynn credential permissions could not be secured.');
