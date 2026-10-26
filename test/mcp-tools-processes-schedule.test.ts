@@ -12,8 +12,8 @@ import type { ProcessSpec, ProcessStatus } from '../src/main/process-supervisor.
 
 /**
  * AN AGENT SCHEDULES A TASK THROUGH `processes` (Genie 1's `manageProcess` create with `schedule` / `scheduleKind`, its
- * `run-now`, `enable` and `disable` — main/mcp/host-tools.ts:698-960 at v0.7.0-beta.342). The person approves it first and
- * sees the recurrence — "It will keep running on this schedule … until you disable it" (approveScheduledTask, :577-605);
+ * `run-now`, `enable` and `disable` — main/mcp/host-tools.ts:695-962 at v0.7.0-beta.342). The person approves it first and
+ * sees the recurrence — "It will keep running on this schedule … until you disable it" (approveScheduledTask, :583-605);
  * approved, it is ENABLED, as Genie 1 armed an approved task. A recurrence Genie cannot read, or a nudge with no prompt or
  * no agent, is refused BEFORE the person is asked. `run-now` is for a scheduled task only.
  */

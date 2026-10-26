@@ -28,10 +28,10 @@ import type { RestartPolicy } from './process-supervisor.js';
  * - `logs` reads any of this workspace's processes, a site's server included — the supervisor's tail, there after a
  *   crash.
  * - A SCHEDULED TASK (genie#1204) is a kept process with a `schedule` — Genie 1's `manageProcess` create with `schedule`
- *   and `scheduleKind` (main/mcp/host-tools.ts:698-870 at v0.7.0-beta.342): `command` runs it, `agent-nudge` prompts an
+ *   and `scheduleKind` (main/mcp/host-tools.ts:695-870 at v0.7.0-beta.342): `command` runs it, `agent-nudge` prompts an
  *   agent. The person approves it with the recurrence in front of them ("It will keep running on this schedule … until
- *   you disable it", approveScheduledTask :577-605) and, approved, it is enabled. `run-now` runs one once; `enable` /
- *   `disable` arm and pause its schedule (Genie 1's actions, :915-960).
+ *   you disable it", approveScheduledTask :583-605) and, approved, it is enabled. `run-now` runs one once; `enable` /
+ *   `disable` arm and pause its schedule (Genie 1's actions, :914-962).
  */
 
 export type ProcessApproval = 'processes.add' | 'processes.remove';
