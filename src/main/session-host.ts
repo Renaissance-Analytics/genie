@@ -9,6 +9,7 @@ import { agentActionOf, type AgentActionKind } from '../core/agent-actions.js';
 import { RateLimitGate, type GateView, type LimitReading } from '../core/rate-limit-gate.js';
 import type { Comms } from '../core/comms.js';
 import { statSync } from 'node:fs';
+import { deferredDriverFactory } from './deferred-driver.js';
 import { CLAUDE_DRIVER_CAPABILITIES, CODEX_DRIVER_CAPABILITIES, ClaudeDriver, CodexDriver } from '@particle-academy/prism-acp';
 
 /**
@@ -411,6 +412,7 @@ export class SessionHost {
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
+    readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
     readonly #onAction: ((agentId: AgentId, kind: AgentActionKind | 'started' | 'replied' | 'limited' | 'resumed') => void) | undefined;
@@ -489,6 +491,8 @@ export class SessionHost {
          * the MCP server starts after the host. Absent = none.
          */
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
+        /** Private session credentials, prepared before constructing or starting either provider. */
+        prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
          * A turn STARTED and took its number — main writes it to the record (`lastTurn`) for the next start. At the start,
          * not the end: a turn cut off by an exit or a quit had already taken its number, and the next run numbered it again.
@@ -535,6 +539,7 @@ export class SessionHost {
         this.#store = options.store ?? (() => openDurableStore(sessionsDir(this.#userData)));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
+        this.#prepareMcpServers = options.prepareMcpServers;
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
         this.#onAction = options.onAction;
@@ -714,7 +719,15 @@ export class SessionHost {
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
-        const driverFactory = this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
+        const driverFactory = this.#prepareMcpServers ? deferredDriverFactory(async (signal) => {
+            const prepared = await this.#prepareMcpServers!(record, cwd, signal);
+            if (signal.aborted) throw new Error('Preparation was cancelled.');
+            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv });
+            if (!factory) throw new Error('The provider is unsupported.');
+            const current = this.#running.get(record.id);
+            if (current) current.mcp = prepared.map((server) => server.name);
+            return factory;
+        }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
         if (!driverFactory) {
             const reason = `Genie cannot run a "${record.provider}" agent. It stays registered and idle.`;
             this.refusals.set(record.id, reason);
