@@ -48,7 +48,7 @@ import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
-import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision } from '../core/quit-flag.js';
+import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, prismHookScript, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
@@ -71,7 +71,7 @@ import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile a
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { execFile as execFileCb } from 'node:child_process';
+import { execFile as execFileCb, spawnSync } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
@@ -223,11 +223,25 @@ const here = fileURLToPath(new URL('.', import.meta.url));
  * launch reaches `boot()`. They EXIT (app.exit), never app.quit: a quit would run this process's before-quit — Genie's
  * shutdown, which ends by clearing the RUNNING Genie's genie-running file — in a process that owns nothing.
  */
-const launch = launchDecision({
-    argv: process.argv,
-    primary: app.requestSingleInstanceLock(asksToQuit(process.argv) ? { ...QUIT_DATA } : undefined),
-});
-if (launch.kind === 'exit') {
+/*
+ * PRISM-ACP'S APPROVAL HOOK (genie#1235; core/quit-flag.ts `prismHookScript`): Claude runs `Genie.exe approve.cjs` on every
+ * Bash and PowerShell call. It is run as Node — Genie's own runtime with ELECTRON_RUN_AS_NODE, on the hook's own stdin and
+ * stdout (an Electron main process's stdin does not read a pipe) — and this process exits with its code. It never asks
+ * for the single-instance lock: asking alone told the running Genie, which raised its window on every shell call.
+ */
+const hookScript = prismHookScript(process.argv, process.env);
+if (hookScript !== null) {
+    const ran = spawnSync(process.execPath, [hookScript], { stdio: 'inherit', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, windowsHide: true });
+    app.exit(ran.status ?? 2);
+}
+const launch: LaunchDecision = hookScript !== null
+    ? { kind: 'exit', reason: '' }
+    : launchDecision({
+        argv: process.argv,
+        primary: app.requestSingleInstanceLock(asksToQuit(process.argv) ? { ...QUIT_DATA } : undefined),
+    });
+// A hook launch writes nothing of its own: its stdout is the hook's answer.
+if (launch.kind === 'exit' && hookScript === null) {
     console.log(`[genie] ${launch.reason}`);
     app.exit(0);
 }
