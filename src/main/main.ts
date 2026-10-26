@@ -145,7 +145,8 @@ import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcess, killProcessAsync, listProcesses, listProcessesAsync } from './process-list.js';
-import { RESUME_AFTER_RESTART, midTurnAgents, relaunchPlan } from '../core/upgrade-drain.js';
+import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
+import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
 import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
@@ -1176,12 +1177,16 @@ async function boot(): Promise<void> {
         // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
         agents: {
             live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
-            stopAll: (onLeft) => {
-                // Record who was running and who was MID-TURN BEFORE the sessions end (§7.6; the owner, 2026-10-13).
-                quit.markRecorded();
-                void recordShutdown();
-                return host?.stopAll(onLeft) ?? Promise.resolve();
-            },
+            stopAll: recordThenStopAll({
+                markRecorded: () => quit.markRecorded(),
+                record: () => recordShutdownNow(),
+                stopAll: (onLeft) => host?.stopAll(onLeft) ?? Promise.resolve(),
+                onRecordError: (error) => {
+                    const why = error instanceof Error ? error.message : String(error);
+                    lifecycleLog(`shutdown-record failed reason=${why}`);
+                    console.error(`[genie] the agents to start again could not be recorded: ${why}`);
+                },
+            }),
         },
     });
     updates.onChange((state) => {
@@ -3004,18 +3009,17 @@ app.on('second-instance', (_event, argv, _workingDirectory, additionalData) => {
  * window went away" — that branch, in a previous build, resurrected eleven agents the owner
  * had deliberately stopped: what the person stopped is not running at quit, so it stays stopped.
  */
-/**
- * EVERY SHUTDOWN — a quit or an upgrade — records who was running and, separately, who was MID-TURN, before any session
- * ends. Ending the sessions is what cancels those turns; the next launch resumes exactly those agents and tells them to
- * continue (the owner, 2026-10-13: "ONLY active agents in the middle of turning, not any idle ones … on shutdown of
- * genie, not just an upgrade").
- */
-function recordShutdown(): Promise<unknown> {
-    if (!registry || !host) return Promise.resolve();
-    const live = registry.snapshot().agents.map((a) => ({ id: a.id as AgentId, probe: host!.probe(a.id as AgentId) }));
-    const running = live.filter((a) => a.probe?.running === true).map((a) => a.id);
-    const midTurn = midTurnAgents(live.map((a) => ({ id: a.id, turnState: a.probe?.turnState ?? null }))) as AgentId[];
-    return Promise.all([registry.markRunningAtQuit(running), registry.markInterruptedAtQuit(midTurn)]);
+/** EVERY SHUTDOWN — a quit or an upgrade — records who comes back, before any session ends (main/shutdown-record.ts). */
+function recordShutdownNow(): Promise<unknown> {
+    const reg = registry;
+    const live = host;
+    if (!reg || !live) return Promise.resolve();
+    return recordShutdown({
+        agents: () => reg.snapshot().agents,
+        probe: (id) => live.probe(id),
+        markRunningAtQuit: (ids) => reg.markRunningAtQuit(ids),
+        markInterruptedAtQuit: (ids) => reg.markInterruptedAtQuit(ids),
+    });
 }
 
 let remoteSocketNow: ReturnType<typeof remoteListener> | null = null;
@@ -3044,7 +3048,7 @@ app.on('before-quit', (event) => {
         event.preventDefault();
         // §6.5: the terminals' last screens, saved beside the running set, before the ptys go.
         const shown = (terminals?.list() ?? []).map((t) => ({ workspaceId: t.workspaceId, scrollback: terminals?.scrollback(t.id) ?? '' }));
-        void Promise.all([recordShutdown(), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        void Promise.all([recordShutdownNow(), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
         return;
     }
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.
