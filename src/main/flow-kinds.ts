@@ -1,5 +1,6 @@
 import { getNodeKind, registerNodeKind, type FlowGraph, type NodeKindDefinition } from '@particle-academy/fancy-flow/engine';
 import { importWorkflow } from '@particle-academy/fancy-flow/schema';
+import { shellTemplatesInFileFlow } from '../core/file-trigger.js';
 import { canonicalFlowDocument, type FlowDocument } from '../core/flow-form.js';
 
 /**
@@ -72,6 +73,37 @@ export const GENIE_NODE_KINDS: readonly NodeKindDefinition[] = [
             { type: 'text', key: 'tags', label: 'Tags', description: 'Comma-separated.' },
         ],
     },
+    // genie#1204 item 5 — Genie 1's "a file was added" trigger. Its output is the file (core/file-trigger.ts
+    // FileAddedProps): {{in.path}}, {{in.relPath}}, {{in.name}}, {{in.extension}}, {{in.sizeBytes}}.
+    {
+        name: 'genie/file_added',
+        category: 'trigger',
+        label: 'A file is added',
+        description: 'Starts the flow when a file lands in a workspace (not in .git, node_modules or vendor).',
+        icon: '📄',
+        inputs: [],
+        outputs: [{ id: 'out', label: 'file' }],
+        configSchema: [
+            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
+            { type: 'text', key: 'folder', label: 'Folder', description: 'Relative to the workspace; empty = anywhere in it.' },
+            { type: 'text', key: 'extensions', label: 'Extensions', description: 'Comma-separated, e.g. png, jpg; empty = any.' },
+            { type: 'number', key: 'minSizeBytes', label: 'Minimum size (bytes)', min: 0, description: 'Inclusive; empty = any size.' },
+        ],
+    },
+    {
+        name: 'genie/file_move',
+        category: 'io',
+        label: 'Move a file',
+        description: 'Move a file into a folder of the same workspace. No shell; never overwrites (name (2).ext).',
+        icon: '📦',
+        inputs: [{ id: 'in' }],
+        outputs: [{ id: 'out', label: 'moved' }],
+        configSchema: [
+            { type: 'text', key: 'workspace', label: 'Workspace', required: true },
+            { type: 'text', key: 'from', label: 'File', required: true, default: '{{in.path}}', description: 'Usually {{in.path}}: the file the trigger saw.' },
+            { type: 'text', key: 'to', label: 'Into folder', required: true, placeholder: '.untracked', description: 'Relative to the workspace.' },
+        ],
+    },
 ];
 
 /**
@@ -105,6 +137,11 @@ export function importFlowDocument(document: unknown): FlowImport {
     }
     const blank = blankRequired(result.graph);
     if (blank.length > 0) return { ok: false, problems: blank };
+    // A file name can be `$(curl …).png` or `a; rm -rf ~`: in a flow a file starts, no command templates a value.
+    const shell = shellTemplatesInFileFlow({ nodes: result.graph.nodes.map((n) => { const d = (n.data ?? {}) as { kind?: unknown; config?: Record<string, unknown> }; return { id: n.id, kind: typeof d.kind === 'string' ? d.kind : '', config: d.config }; }) });
+    if (shell.length > 0) {
+        return { ok: false, problems: shell.map((id) => `node ${id}: a flow a file starts cannot template values into a command — a file name can carry shell syntax ($(…), ;). Use genie/file_move to move it, or a command that does not name the file`) };
+    }
     return { ok: true, document: doc as FlowDocument, graph: result.graph };
 }
 

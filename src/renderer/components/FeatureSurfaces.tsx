@@ -208,7 +208,7 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                             <li key={`${runs.length - i}:${r.at}`} data-flow-run={r.outcome} className="flex items-baseline gap-2 text-xs">
                                 <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
-                                <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : 'on schedule'}</span>
+                                <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
                                 {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
                             </li>
                         ))}
@@ -238,7 +238,9 @@ export function FlowConfirm({ flow: f, kind, now, onAction, onCancel }: {
                 <>
                     <p className="font-medium">Arm “{f.name}”?</p>
                     <p className="text-[var(--fg-3)]">
-                        {reach.schedule
+                        {reach.file
+                            ? <>It runs on its own when {reach.file}.</>
+                            : reach.schedule
                             ? <>It runs on its own on <code>{reach.schedule.cron}</code>{reach.schedule.nextMs !== null ? <>, next {new Date(reach.schedule.nextMs).toLocaleString()}</> : null}.</>
                             : <>It has no schedule: it runs only when you start it.</>}
                     </p>

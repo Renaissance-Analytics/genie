@@ -1,5 +1,6 @@
 import { nextCronAfter } from '../core/cron.js';
-import type { FlowRecord, FlowRun, FlowStore, RunOutcome, Schedule } from './flow-store.js';
+import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
+import type { FileFired, FlowRecord, FlowRun, FlowStore, RunOutcome, Schedule } from './flow-store.js';
 
 /**
  * FLOWS (§6.6) — the scheduler. ONE timer, set to the nearest due among the ARMED flows'
@@ -46,7 +47,7 @@ export interface FlowSchedulerDeps {
      * Execute one run of a flow. `trigger` is the schedule that fired, or the flow's first schedule for a
      * Run now (`null` when it has none). Answers the outcome; resolving with nothing means it ran.
      */
-    readonly run: (flow: FlowRecord, trigger: Schedule | null) => Promise<RunResult | void>;
+    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null) => Promise<RunResult | void>;
 }
 
 export interface Due {
@@ -137,6 +138,18 @@ export class FlowScheduler {
         return run;
     }
 
+    /**
+     * A file landed (the file source, genie#1204): every ARMED flow with a `genie/file_added` trigger it matches runs
+     * once — from that trigger, with the file — recorded as a `file` run naming it. A disarmed flow never does.
+     */
+    fileAdded(event: FileAddedProps): void {
+        for (const flow of this.#deps.store.list()) {
+            if (!flow.armed) continue;
+            const hit = this.#deps.store.fileTriggers(flow.id).find((t) => matchesFileTrigger(t.config as unknown as FileTriggerConfig, event));
+            if (hit) void this.#start(flow, { nodeId: hit.nodeId, file: event }, 'file');
+        }
+    }
+
     #fire(due: Planned): void {
         this.#cancel = null;
         const flows = due.flows.map((d) => ({ flow: this.#deps.store.get(d.flowId), trigger: d.trigger }));
@@ -150,10 +163,11 @@ export class FlowScheduler {
         }
     }
 
-    #start(flow: FlowRecord, trigger: Schedule | null, kind: FlowRun['trigger']): Promise<FlowRun | null> {
+    #start(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger']): Promise<FlowRun | null> {
         const startedAt = this.#deps.now();
+        const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
         if (this.#running.has(flow.id)) {
-            return this.#record(flow.id, { trigger: kind, outcome: 'held', reason: `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt });
+            return this.#record(flow.id, { trigger: kind, outcome: 'held', reason: `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
         }
         const run = this.#execute(flow, trigger, kind, startedAt).finally(() => {
             if (this.#running.get(flow.id) === run) this.#running.delete(flow.id);
@@ -162,7 +176,7 @@ export class FlowScheduler {
         return run;
     }
 
-    async #execute(flow: FlowRecord, trigger: Schedule | null, kind: FlowRun['trigger'], startedAt: number): Promise<FlowRun | null> {
+    async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number): Promise<FlowRun | null> {
         let result: { outcome: RunOutcome; reason?: string };
         try {
             // Answering nothing means it ran (a run port with nothing to say about its outcome).
@@ -171,10 +185,10 @@ export class FlowScheduler {
         } catch (error) {
             result = { outcome: 'failed', reason: error instanceof Error ? error.message : String(error) };
         }
-        return this.#record(flow.id, { trigger: kind, startedAt, ...result });
+        return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...(trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {}) });
     }
 
-    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number }): Promise<FlowRun | null> {
+    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string }): Promise<FlowRun | null> {
         return this.#deps.store.recordRun(flowId, run);
     }
 }

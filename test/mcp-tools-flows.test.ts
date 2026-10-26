@@ -114,6 +114,25 @@ describe('flows create: in the caller’s workspace, by the agent, always DISARM
         expect(store.list()).toHaveLength(1);
     });
 
+    // genie#1204 item 5: the file trigger WATCHES a workspace and the move CHANGES one — both are held to the same rule.
+    it('a file trigger or a move aimed at ANOTHER workspace is refused too (control: its own workspace is accepted)', async () => {
+        const fileDoc = (watch: string, moveIn: string) =>
+            doc([node('t', 'genie/file_added', { workspace: watch }), node('m', 'genie/file_move', { workspace: moveIn, from: '{{in.path}}', to: '.untracked' }, 240)], [edge('t', 'm')]);
+        const watching = await call('t-atlas', { action: 'create', name: 'watch elsewhere', document: fileDoc('example-other', 'example') });
+        expect(watching.json.error).toMatch(/node t .*workspace example-other.*only in its own workspace, example/);
+        const moving = await call('t-atlas', { action: 'create', name: 'move elsewhere', document: fileDoc('example', 'example-other') });
+        expect(moving.json.error).toMatch(/node m .*workspace example-other.*only in its own workspace, example/);
+        expect(store.list()).toEqual([]);
+        expect((await call('t-atlas', { action: 'create', name: 'here', document: fileDoc('example', 'example') })).isError).toBe(false);
+        expect(store.list()).toHaveLength(1);
+    });
+
+    it('the tool tells an agent about the file trigger and the move', () => {
+        const description = tools.find((t) => t.definition.name === 'flows')!.definition.description;
+        expect(description).toContain('genie/file_added');
+        expect(description).toContain('genie/file_move');
+    });
+
     it('create needs a name and a document; nothing is created without them', async () => {
         expect((await call('t-atlas', { action: 'create', document: commandDoc('example') })).isError).toBe(true);
         expect((await call('t-atlas', { action: 'create', name: 'x' })).isError).toBe(true);
