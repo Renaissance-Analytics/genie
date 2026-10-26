@@ -8,6 +8,7 @@ import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
+import { slugsFor } from '../core/address.js';
 
 /**
  * THE REGISTRY — the main process's single answer to "what is going on".
@@ -574,6 +575,11 @@ export class Registry {
     }
 
     /** Every workspace record, for the one-time v1 import to plan against. */
+    /** Each workspace's address slug (core/address.ts slugsFor) — the same names, in the same order, the window uses. */
+    workspaceSlugs(): Map<string, string> {
+        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path) })));
+    }
+
     listWorkspaces(): readonly WorkspaceRecord[] {
         return this.#workspaces;
     }

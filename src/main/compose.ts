@@ -21,7 +21,7 @@ import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1ScheduleImport } from './v1-schedules.js';
-import { HUMAN, addressOf, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
+import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import type { NoticeMail } from '../core/stream-event.js';
@@ -177,6 +177,8 @@ export interface ComposeInput {
      * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
      */
     readonly roster?: () => readonly AgentRecord[];
+    /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
+    readonly workspaceSlugs?: () => ReadonlyMap<string, string>;
     /**
      * The registered workspaces (id, folder, asleep), late-bound like the roster. Their envelopes' `sites`
      * are what Hosting lists and serves (§6.6); absent = no workspaces, no declared sites.
@@ -866,7 +868,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             ports: (flow) => ({
                 promptAgent: agentPrompter({
                     sessions,
-                    resolve: (text) => resolveOnRoster(text, roster()),
+                    resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
                     agent: (id) => agents().get(id) ?? null,
                     asleep,
                     by: `flow "${flow.name}"`,
@@ -1061,9 +1063,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             const report = await agentFiles.run(workspacePath, steps, Date.now(), source);
             for (const f of report.failed) console.error(`[workspace-files] ${workspacePath} ${f.step}: ${f.error}`);
         },
-        agentAddresses: () => roster().map((r) => ({ address: addressOf(r, 'full'), agentId: r.id as string, name: r.name })),
+        agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
-        resolveAddress: (text) => resolveOnRoster(text, roster()),
+        resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
         shutdown: () => {
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');

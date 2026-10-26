@@ -87,7 +87,7 @@ afterEach(async () => {
 
 describe('the reported case: moic mails tynn, tynn answers', () => {
     it('BEFORE moic writes, tynn cannot reach moic — the control that makes the reply below mean something', async () => {
-        expect((await reachableIn('t-tynn'))['claude:moic']).toBe(false);
+        expect((await reachableIn('t-tynn'))['moic@ws-moic']).toBe(false);
         const refused = await inboxTool('t-tynn', { action: 'send', to: 'claude:moic', text: 'unsolicited' });
         expect(refused.isError).toBe(true);
         expect(refused.text).toMatch(/not reachable/);
@@ -98,7 +98,7 @@ describe('the reported case: moic mails tynn, tynn answers', () => {
         const opened = await inboxTool('t-moic', { action: 'send', to: 'claude:tynn', text: 'can you look at this?' });
         expect(opened.isError).toBe(false);
 
-        expect((await reachableIn('t-tynn'))['claude:moic']).toBe(true);
+        expect((await reachableIn('t-tynn'))['moic@ws-moic']).toBe(true);
         const reply = await inboxTool('t-tynn', { action: 'send', to: 'claude:moic', text: 'yes' });
         expect(reply.isError).toBe(false);
         expect(reply.json).toMatchObject({ ok: true, delivered: 1 });
@@ -129,7 +129,7 @@ describe('CONTROLS: answering is not a hole', () => {
     it('an agent moic never wrote to still cannot reach moic — by address or by id', async () => {
         await inboxTool('t-moic', { action: 'send', to: 'claude:tynn', text: 'only tynn' });
 
-        expect((await reachableIn('t-stranger'))['claude:moic']).toBe(false);
+        expect((await reachableIn('t-stranger'))['moic@ws-moic']).toBe(false);
         const byAddress = await inboxTool('t-stranger', { action: 'send', to: 'claude:moic', text: 'x' });
         expect(byAddress.isError).toBe(true);
         expect(byAddress.text).toMatch(/not reachable/);

@@ -173,23 +173,23 @@ describe('agentinbox', () => {
         // hidden is self-scoped in another workspace → listed as not reachable; atlas itself is not listed.
         const byAddress = Object.fromEntries(peers.map((p) => [p.address, p.reachable]));
         expect(byAddress).toEqual({
-            'claude:kai': true,
-            'tynn:codex:review': true,
-            'fancy:codex:review': true,
-            'claude:hidden': false,
+            'kai@tynn': true,
+            'review@tynn': true,
+            'review@fancy': true,
+            'hidden@fancy': false,
         });
     });
 
     it('send resolves an address, refuses an ambiguous one naming BOTH forms, and refuses the unreachable', async () => {
-        const ok = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'claude:kai', text: 'hi kai' });
+        const ok = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'kai@tynn', text: 'hi kai' });
         expect(ok.isError).toBe(false);
         expect(ok.json).toMatchObject({ ok: true, delivered: 1 });
         expect((await inbox.receive({ participant: kai.id })).messages.map((m) => m.text)).toEqual(['hi kai']);
 
         const ambiguous = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'codex:review', text: 'x' });
         expect(ambiguous.isError).toBe(true);
-        expect(ambiguous.text).toContain('tynn:codex:review');
-        expect(ambiguous.text).toContain('fancy:codex:review');
+        expect(ambiguous.text).toContain('review@tynn');
+        expect(ambiguous.text).toContain('review@fancy');
 
         const unreachable = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'claude:hidden', text: 'x' });
         expect(unreachable.isError).toBe(true);
