@@ -6,7 +6,8 @@ import { promisify } from 'node:util';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
-const NATIVE_ACL_TIMEOUT_MS = 15_000;
+// Healthy cold Windows calls reached9.84s; leave bounded headroom for slow PowerShell startup/disk access.
+const NATIVE_ACL_TIMEOUT_MS = 60_000;
 let failureLog: ((line: string) => void) | undefined;
 
 /** The composition root supplies its existing rotating log; credential paths never choose a log destination. */

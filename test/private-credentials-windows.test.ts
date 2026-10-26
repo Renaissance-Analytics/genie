@@ -10,6 +10,8 @@ import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 
 const execute = promisify(execFile);
+// Native ACL calls have a60s bound; allow two slow calls plus setup/ACL verification in these cases.
+const NATIVE_CASE_TIMEOUT_MS = 180_000;
 const directories: string[] = [];
 afterEach(async () => { for (const directory of directories.splice(0)) await rm(directory, { recursive: true, force: true }); });
 async function fixture() {
@@ -40,7 +42,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         expect(await readAclSet(paths), 'occupied directory ACL remains unchanged').toEqual(before);
         expect(error).toBeInstanceOf(Error); expect((error as Error).message).toContain('unrelated entries');
         expect(await readFile(sibling, 'utf8')).toBe('unrelated runtime');
-    });
+    }, NATIVE_CASE_TIMEOUT_MS);
 
     it('migrates the pairing file and restricts both vaults without changing the home or sibling ACL', async () => {
         const home = await fixture(); const legacyFile = join(home, 'tynn.json');
@@ -80,7 +82,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         const exact = ['protected=True', `owner=${sid}`, `${sid}|False|Allow|FullControl`];
         const privatePaths = [{ path: join(home, 'credentials'), directory: true }, { path: identityDirectory, directory: true }, { path: file, directory: false }, { path: identities, directory: false }];
         expect(await readAclSet(privatePaths)).toEqual(privatePaths.flatMap((_path, index) => [`target=${index}`, ...exact]));
-    });
+    }, NATIVE_CASE_TIMEOUT_MS);
 
     it('removes explicit foreign grants from existing directories and files, including quoted Unicode paths', async () => {
         const root = await fixture(); const directory = join(root, "owner's $(unused) 日本");
@@ -100,7 +102,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         expect(await readAcl(directory, true)).toEqual(exact);
         expect(await readAcl(file, false)).toEqual(exact);
         expect(await readFile(file, 'utf8')).toBe('encrypted fixture');
-    });
+    }, NATIVE_CASE_TIMEOUT_MS);
 
     it('removes a new empty leaf after restriction failure and preserves an existing directory and file', async () => {
         const root = await fixture(); const existing = join(root, 'existing'); await mkdir(existing);
@@ -119,5 +121,5 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         }
         expect(await readFile(file, 'utf8')).toBe('existing encrypted fixture');
         expect(await readAcl(existing, true)).toEqual(before);
-    });
+    }, NATIVE_CASE_TIMEOUT_MS);
 });

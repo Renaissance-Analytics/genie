@@ -28,10 +28,10 @@ afterEach(async () => {
 
 describe.skipIf(process.platform !== 'win32')('private credential native failure diagnostics', () => {
     it.each([
-        { code: null, errno: undefined, killed: true, signal: 'SIGTERM', elapsedMs: 15_021, reason: 'terminated-after-deadline' },
+        { code: null, errno: undefined, killed: true, signal: 'SIGTERM', elapsedMs: 60_021, reason: 'terminated-after-deadline' },
         { code: 1, errno: undefined, killed: false, signal: null, elapsedMs: 73, reason: 'process-exit' },
         { code: 'ENOENT', errno: -4058, killed: false, signal: null, elapsedMs: 12, reason: 'spawn-error' },
-        { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', errno: undefined, killed: true, signal: 'SIGTERM', elapsedMs: 15_021, reason: 'output-limit' },
+        { code: 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER', errno: undefined, killed: true, signal: 'SIGTERM', elapsedMs: 60_021, reason: 'output-limit' },
         { code: null, errno: undefined, killed: true, signal: 'SIGTERM', elapsedMs: 200, reason: 'terminated' },
     ])('retains sanitized $reason evidence while refusing storage', async (failure) => {
         const root = await mkdtemp(join(tmpdir(), 'genie-private-diagnostic-')); roots.push(root);
@@ -42,10 +42,10 @@ describe.skipIf(process.platform !== 'win32')('private credential native failure
         native.mockRejectedValueOnce(Object.assign(new Error(secret), { ...failure, stdout: secret, stderr: secret, cmd: secret, path: file, spawnargs: [secret] }));
         await expect(preparePrivateCredential(file)).rejects.toThrow('Private Tynn credential permissions could not be secured.');
         expect(native).toHaveBeenCalledTimes(1);
-        expect(native.mock.calls[0]![2]).toMatchObject({ timeout: 15_000, maxBuffer: 65_536, windowsHide: true });
+        expect(native.mock.calls[0]![2]).toMatchObject({ timeout: 60_000, maxBuffer: 65_536, windowsHide: true });
         await expect(stat(directory)).rejects.toMatchObject({ code: 'ENOENT' });
         expect(warning).toHaveBeenCalledExactlyOnceWith('PRIVATE_CREDENTIAL_ACL_FAILURE', {
-            operation: 'restrict-private-credential-acl', elapsedMs: failure.elapsedMs, timeoutMs: 15_000,
+            operation: 'restrict-private-credential-acl', elapsedMs: failure.elapsedMs, timeoutMs: 60_000,
             reason: failure.reason, code: failure.code, errno: failure.errno ?? null,
             killed: failure.killed, signal: failure.signal,
         });
@@ -75,7 +75,7 @@ describe.skipIf(process.platform !== 'win32')('private credential native failure
         native.mockRejectedValueOnce(Object.assign(new Error('secret native message'), { code: 'ENOENT', errno: -4058 }));
         await expect(preparePrivateCredential(join(root, 'private-keys', 'credential.json'))).rejects.toThrow('Private Tynn credential permissions could not be secured.');
         expect(lines, 'durable credential failure log').toHaveLength(1);
-        expect(lines[0]).toBe('PRIVATE_CREDENTIAL_ACL_FAILURE ' + JSON.stringify({ operation: 'restrict-private-credential-acl', elapsedMs: 11, timeoutMs: 15_000, reason: 'spawn-error', code: 'ENOENT', errno: -4058, killed: false, signal: null }));
+        expect(lines[0]).toBe('PRIVATE_CREDENTIAL_ACL_FAILURE ' + JSON.stringify({ operation: 'restrict-private-credential-acl', elapsedMs: 11, timeoutMs: 60_000, reason: 'spawn-error', code: 'ENOENT', errno: -4058, killed: false, signal: null }));
         const recorded = await readFile(join(root, 'runtime', 'lifecycle.log'), 'utf8');
         expect(recorded).toContain(lines[0]); expect(recorded).not.toContain('secret native message'); expect(recorded).not.toContain(root);
     });
