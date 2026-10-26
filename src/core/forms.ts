@@ -136,7 +136,21 @@ export function flowFormDefaults(input: { workspaceId: string }): FlowForm {
 export function validateFlowForm(form: FlowForm): Problem[] {
     const problems: Problem[] = [];
     if (form.name.trim().length === 0) problems.push({ field: 'name', message: 'A flow needs a name.' });
+    // A folder the person typed: relative, inside the workspace.
+    const outside = (folder: string) => /^([a-zA-Z]:)?[\\/]/.test(folder) || folder.split(/[\\/]/).includes('..');
+    const fileFlow = flowNodes(form.document).some((n) => n.kind === 'genie/file_added');
     for (const n of flowNodes(form.document)) {
+        const value = (key: string) => (typeof n.config?.[key] === 'string' ? (n.config[key] as string).trim() : '');
+        if (n.kind === 'genie/file_added') {
+            if (value('folder') && outside(value('folder'))) problems.push({ field: 'watchFolder', message: `Node ${n.id}: the folder to watch must be inside the workspace — a relative path like uploads.` });
+            const size = n.config?.minSizeBytes;
+            if (size !== undefined && (typeof size !== 'number' || !Number.isFinite(size) || size < 0)) problems.push({ field: 'minSizeMb', message: `Node ${n.id}: the minimum size is a number of MB, like 5.` });
+        } else if (n.kind === 'genie/file_move') {
+            if (!value('to')) problems.push({ field: 'moveTo', message: `Node ${n.id}: which folder to move the file into — a relative path like .untracked.` });
+            else if (outside(value('to'))) problems.push({ field: 'moveTo', message: `Node ${n.id}: the folder must be inside the workspace — a relative path like .untracked.` });
+        } else if (fileFlow && n.kind === 'genie/terminal_run' && /\{\{[^}]*\}\}/.test(value('command'))) {
+            problems.push({ field: 'command', message: `Node ${n.id}: a flow a file starts cannot put the file into a command — a file name can carry shell syntax. Use Move the file, or a command that does not name the file.` });
+        }
         const text = (key: string) => (typeof n.config?.[key] === 'string' ? (n.config[key] as string).trim() : '');
         if (/(^|\/)schedule_trigger$/.test(n.kind)) {
             const cron = typeof n.config?.cron === 'string' ? n.config.cron : '';

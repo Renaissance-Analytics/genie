@@ -12,7 +12,29 @@ import type { FlowForm } from './forms.js';
 export type FlowStep =
     | { readonly kind: 'log' }
     | { readonly kind: 'command'; readonly command: string; readonly folder: string }
-    | { readonly kind: 'agent'; readonly agent: string; readonly prompt: string };
+    | { readonly kind: 'agent'; readonly agent: string; readonly prompt: string }
+    /** A file flow's step (genie#1204): the file that landed, moved into a folder of the workspace — no shell. */
+    | { readonly kind: 'move'; readonly to: string };
+
+/** What starts a form-made flow: a schedule (its cron is the form's), or a file being added (genie#1204). */
+export type FlowTrigger =
+    | { readonly kind: 'schedule' }
+    /** `minSizeMb` as typed (MB, decimal: 5 = 5 000 000 bytes); empty = any size. */
+    | { readonly kind: 'file'; readonly folder: string; readonly extensions: string; readonly minSizeMb: string };
+
+/** The file trigger's config: blank filters are left out; an MB that is not a number is kept AS TYPED, for the form to refuse. */
+function fileTriggerConfig(workspaceId: string, t: Extract<FlowTrigger, { kind: 'file' }>): Record<string, unknown> {
+    const folder = t.folder.trim();
+    const extensions = t.extensions.trim();
+    const mb = t.minSizeMb.trim();
+    const n = Number(mb);
+    return {
+        workspace: workspaceId,
+        ...(folder ? { folder } : {}),
+        ...(extensions ? { extensions } : {}),
+        ...(mb === '' ? {} : { minSizeBytes: mb !== '' && Number.isFinite(n) ? Math.round(n * 1_000_000) : mb }),
+    };
+}
 
 /**
  * THE ONE SHAPE A FLOW DOCUMENT HAS: fancy-flow's `WorkflowSchema` — `{ $schema, version: 1, graph: { nodes, edges } }`,
@@ -52,19 +74,25 @@ export function canonicalFlowDocument(document: unknown): unknown {
  * A schedule feeding one step — the document the form makes, in the canonical shape. No timezone: the schedule is
  * evaluated in this machine's local time, as Genie 1's were (core/cron.ts).
  */
-export function flowDocument(input: { workspaceId: string; cron: string; step: FlowStep }): FlowDocument {
+export function flowDocument(input: { workspaceId: string; cron: string; step: FlowStep; trigger?: FlowTrigger }): FlowDocument {
     const { step } = input;
     const node =
         step.kind === 'command'
             ? { id: 's', kind: 'genie/terminal_run', position: { x: 240, y: 0 }, config: { workspace: input.workspaceId, command: step.command.trim(), ...(step.folder.trim() ? { cwd: step.folder.trim() } : {}) } }
             : step.kind === 'agent'
               ? { id: 's', kind: 'genie/agent_prompt', position: { x: 240, y: 0 }, config: { agent: step.agent.trim(), prompt: step.prompt } }
-              : { id: 's', kind: 'log', position: { x: 240, y: 0 }, config: { message: 'tick' } };
+              : step.kind === 'move'
+                ? { id: 's', kind: 'genie/file_move', position: { x: 240, y: 0 }, config: { workspace: input.workspaceId, from: '{{in.path}}', to: step.to.trim() } }
+                : { id: 's', kind: 'log', position: { x: 240, y: 0 }, config: { message: 'tick' } };
+    const trigger =
+        input.trigger?.kind === 'file'
+            ? { id: 't', kind: 'genie/file_added', position: { x: 0, y: 0 }, config: fileTriggerConfig(input.workspaceId, input.trigger) }
+            : { id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: input.cron.trim() } };
     return {
         $schema: FLOW_SCHEMA_URL,
         version: 1,
         graph: {
-            nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: input.cron.trim() } }, node],
+            nodes: [trigger, node],
             edges: [{ id: 'e1', source: 't', target: 's' }],
         },
     };
@@ -73,7 +101,9 @@ export function flowDocument(input: { workspaceId: string; cron: string; step: F
 export type FlowDocNode = { id: string; kind: string; config?: Record<string, unknown> };
 
 /** The step kinds the form writes (flowDocument). */
-const FORM_STEPS = new Set(['genie/terminal_run', 'genie/agent_prompt', 'log']);
+const FORM_STEPS = new Set(['genie/terminal_run', 'genie/agent_prompt', 'log', 'genie/file_move']);
+/** A trigger the form can say back: a schedule or a file being added (genie#1204). */
+const isFormTrigger = (kind: string) => /(^|\/)schedule_trigger$/.test(kind) || kind === 'genie/file_added';
 
 /**
  * Whether the Add-a-flow form can EDIT this document without losing anything (genie#1204): exactly one schedule and at
@@ -82,8 +112,8 @@ const FORM_STEPS = new Set(['genie/terminal_run', 'genie/agent_prompt', 'log']);
  */
 export function formEditable(document: unknown): boolean {
     const nodes = flowNodes(document);
-    const triggers = nodes.filter((n) => /(^|\/)schedule_trigger$/.test(n.kind));
-    const steps = nodes.filter((n) => !/(^|\/)schedule_trigger$/.test(n.kind));
+    const triggers = nodes.filter((n) => isFormTrigger(n.kind));
+    const steps = nodes.filter((n) => !isFormTrigger(n.kind));
     return triggers.length === 1 && steps.length <= 1 && steps.every((n) => FORM_STEPS.has(n.kind));
 }
 
@@ -95,28 +125,42 @@ export function flowNodes(document: unknown): FlowDocNode[] {
 }
 
 /** The schedule and the step a document holds, as the form shows them (the first of each). */
-export function flowFields(document: unknown): { cron: string; step: FlowStep } {
+export function flowFields(document: unknown): { cron: string; trigger: FlowTrigger; step: FlowStep } {
     const nodes = flowNodes(document);
-    const trigger = nodes.find((n) => /(^|\/)schedule_trigger$/.test(n.kind));
-    const cron = typeof trigger?.config?.cron === 'string' ? trigger.config.cron : '';
+    const schedule = nodes.find((n) => /(^|\/)schedule_trigger$/.test(n.kind));
+    const cron = typeof schedule?.config?.cron === 'string' ? schedule.config.cron : '';
     const text = (n: FlowDocNode, key: string) => (typeof n.config?.[key] === 'string' ? (n.config[key] as string) : '');
+    const file = nodes.find((n) => n.kind === 'genie/file_added');
+    const bytes = file?.config?.minSizeBytes;
+    const trigger: FlowTrigger = file
+        ? { kind: 'file', folder: text(file, 'folder'), extensions: text(file, 'extensions'), minSizeMb: typeof bytes === 'number' ? String(bytes / 1_000_000) : typeof bytes === 'string' ? bytes : '' }
+        : { kind: 'schedule' };
+    const move = nodes.find((n) => n.kind === 'genie/file_move');
+    if (move) return { cron, trigger, step: { kind: 'move', to: text(move, 'to') } };
     const command = nodes.find((n) => n.kind === 'genie/terminal_run');
-    if (command) return { cron, step: { kind: 'command', command: text(command, 'command'), folder: text(command, 'cwd') } };
+    if (command) return { cron, trigger, step: { kind: 'command', command: text(command, 'command'), folder: text(command, 'cwd') } };
     const agent = nodes.find((n) => n.kind === 'genie/agent_prompt');
-    if (agent) return { cron, step: { kind: 'agent', agent: text(agent, 'agent'), prompt: text(agent, 'prompt') } };
-    return { cron, step: { kind: 'log' } };
+    if (agent) return { cron, trigger, step: { kind: 'agent', agent: text(agent, 'agent'), prompt: text(agent, 'prompt') } };
+    return { cron, trigger, step: { kind: 'log' } };
 }
 
 /** The form as submitted — its fields by name, as the DOM hands them over — into a `FlowForm`. */
 export function flowFormFromFields(defaults: FlowForm, fields: Readonly<Record<string, string>>): FlowForm {
     const field = (name: string) => fields[name] ?? '';
     const kind = field('step');
+    const trigger: FlowTrigger = field('trigger') === 'file' ? { kind: 'file', folder: field('watchFolder'), extensions: field('extensions'), minSizeMb: field('minSizeMb') } : { kind: 'schedule' };
     const step: FlowStep =
-        kind === 'command' ? { kind: 'command', command: field('command'), folder: field('folder') } : kind === 'agent' ? { kind: 'agent', agent: field('agent'), prompt: field('prompt') } : { kind: 'log' };
+        kind === 'command'
+            ? { kind: 'command', command: field('command'), folder: field('folder') }
+            : kind === 'agent'
+              ? { kind: 'agent', agent: field('agent'), prompt: field('prompt') }
+              : kind === 'move' && trigger.kind === 'file'
+                ? { kind: 'move', to: field('moveTo') }
+                : { kind: 'log' };
     return {
         workspaceId: defaults.workspaceId,
         name: field('name'),
         armed: field('armed') === 'on',
-        document: flowDocument({ workspaceId: defaults.workspaceId, cron: field('cron'), step }),
+        document: flowDocument({ workspaceId: defaults.workspaceId, cron: field('cron'), step, trigger }),
     };
 }
