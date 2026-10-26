@@ -1,5 +1,6 @@
 import type { ExecutorRegistry, NodeExecutor } from '@particle-academy/fancy-flow/engine';
-import { toolKinds, waitMs } from '../core/flow-canvas.js';
+import { QUESTION_DISMISSED, QUESTION_NONE_CHOSEN, toolKinds, waitMs } from '../core/flow-canvas.js';
+import type { QuestionOutcome } from './flow-tools.js';
 import type { MemoryClass, Scope } from './knowledge-store.js';
 
 /**
@@ -30,6 +31,8 @@ export interface FlowPorts {
     sleep?(ms: number): Promise<void>;
     /** A `@genie/<tool>` step (genie#1204, main/flow-tools.ts): the tool's own handler, called as the flow. */
     callTool?(tool: string, args: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
+    /** A flow's question waits for the person (genie#1204, main/flow-tools.ts `questionWaiter`). Absent = it goes on at once. */
+    awaitQuestion?(questionId: string, waitMs: number): Promise<QuestionOutcome>;
 }
 
 /** Every string in a step's settings rendered against its inputs; other values as they are. */
@@ -38,6 +41,26 @@ function renderDeep(value: unknown, inputs: Record<string, unknown>): unknown {
     if (Array.isArray(value)) return value.map((v) => renderDeep(v, inputs));
     if (value !== null && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renderDeep(v, inputs)]));
     return value;
+}
+
+/**
+ * A flow's question, waited for (genie#1204): the port is the option the person chose for the FIRST question, "none chosen"
+ * when they answered with a note alone, "dismissed" when they dismissed it, it was withdrawn, or no answer came in time.
+ * The data carries every choice and note, so a later step can read what they wrote (`{{in.note}}`).
+ */
+async function questionAnswer(args: Record<string, unknown>, asked: unknown, wait: NonNullable<FlowPorts['awaitQuestion']>): Promise<unknown> {
+    const questionId = (asked as { questionId?: unknown } | null)?.questionId;
+    if (typeof questionId !== 'string') return asked;
+    const minutes = typeof args.waitMinutes === 'number' && Number.isFinite(args.waitMinutes) && args.waitMinutes >= 0 ? args.waitMinutes : 24 * 60;
+    const outcome = await wait(questionId, minutes * 60_000);
+    if (outcome.kind !== 'answered') {
+        return { __port: QUESTION_DISMISSED, value: { questionId, outcome: outcome.kind === 'timed out' ? 'timed out' : outcome.kind, note: outcome.kind === 'dismissed' ? (outcome.notes.find((x) => x.trim() !== '') ?? '') : '', notes: outcome.kind === 'dismissed' ? outcome.notes : [] } };
+    }
+    const { selections, notes = [], note } = outcome.answer;
+    const options = ((args.questions as Array<{ options?: Array<{ label?: unknown }> }> | undefined)?.[0]?.options ?? []).map((o) => o.label);
+    const choice = (selections[0] ?? []).find((label) => options.includes(label)) ?? null;
+    const firstNote = (notes[0] ?? '').trim() || note.trim();
+    return { __port: choice ?? QUESTION_NONE_CHOSEN, value: { questionId, outcome: 'answered', choice, choices: selections, note: firstNote, notes, overallNote: note } };
 }
 
 /** `{{a.b.c}}` → the value at that path in `inputs`, stringified; missing → empty. */
@@ -75,6 +98,9 @@ export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
         const r = await ports.callTool!(tool, args);
         if (!r.ok) ctx.abort(r.error);
         const result = (r as { result: unknown }).result;
+        if (tool === 'ForceTheQuestion' && (args.action ?? 'ask') === 'ask' && ports.awaitQuestion) {
+            return questionAnswer(args, result, ports.awaitQuestion);
+        }
         if (tool === 'checkIssues') {
             const answer = (result ?? {}) as { ok?: unknown; reason?: unknown; items?: unknown };
             if (answer.ok === false) ctx.abort(`checkIssues could not tell: ${String(answer.reason ?? 'no answer')}`);

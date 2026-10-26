@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { ConfigField, NodeKindDefinition } from '@particle-academy/fancy-flow/engine';
 import { registerToolKinds } from '../core/flow-canvas.js';
 import type { AgentId } from '../core/identity.js';
+import type { AttentionStore, QuestionLeft } from './attention-store.js';
 import type { FlowRecord } from './flow-store.js';
 import { genieToolDeps } from './genie-tool-deps.js';
 import { allGenieTools } from './mcp-registrations.js';
@@ -35,6 +36,10 @@ export const FLOW_TOOLS: readonly string[] = ['knowledge', 'manageTerminals', 'p
 export const TOOL_KIND_PREFIX = '@genie/';
 
 const ROUTING_PORTS: Readonly<Record<string, string[]>> = { checkIssues: ['found', 'none'] };
+
+/** In a flow, how long a question waits for the person before the run goes on as timed out (genie#1204). */
+export const DEFAULT_QUESTION_WAIT_MINUTES = 24 * 60;
+const WAIT_MINUTES = { type: 'number', key: 'waitMinutes', label: 'Wait for an answer (minutes)', min: 0, default: DEFAULT_QUESTION_WAIT_MINUTES, description: 'How long the run waits; then the question is taken back and the run goes on down "dismissed", as timed out.' } as unknown as ConfigField;
 const NEVER_AUTHORABLE = new Set(['terminalId']);
 
 interface JsonSchemaProp { type?: string; enum?: unknown[]; description?: string; default?: unknown }
@@ -85,7 +90,7 @@ export function toolKindOf(def: { name: string; description: string; inputSchema
         category: categoryFor(def.name),
         label: def.title ?? humanise(def.name),
         description: firstSentence(def.description) ?? def.name,
-        configSchema,
+        configSchema: def.name === 'ForceTheQuestion' ? [...configSchema, WAIT_MINUTES] : configSchema,
         inputs: [{ id: 'in' }],
         outputs: def.name === 'imDone' ? [] : (ROUTING_PORTS[def.name] ?? ['out']).map((id) => ({ id })),
     };
@@ -142,7 +147,7 @@ export class FlowCallers {
         const f = this.#byKey.get(key);
         if (!f) return null;
         const path = this.#workspacePath(f.workspaceId);
-        return path === null ? null : { agentId: f.flowId as AgentId, agentName: `flow "${f.name}"`, workspaceId: f.workspaceId, workspacePath: path };
+        return path === null ? null : { agentId: f.flowId as AgentId, agentName: `flow "${f.name}"`, workspaceId: f.workspaceId, workspacePath: path, kind: 'flow' };
     }
 }
 
@@ -170,7 +175,25 @@ export function createFlowToolCaller(deps: { registrations: readonly Registratio
     };
 }
 
-// RED-PHASE STUB (genie#1204): a flow's ForceTheQuestion waits for the answer.
-export function questionWaiter(_attention: unknown): (questionId: string, waitMs: number) => Promise<unknown> {
-    return async () => ({ kind: 'not built' });
+/** How a flow's question ended (genie#1204): answered, dismissed or withdrawn by the person's side, or no answer in time. */
+export type QuestionOutcome = QuestionLeft | { readonly kind: 'timed out' };
+
+/**
+ * A FLOW'S ForceTheQuestion WAITS (genie#1204; the owner: "do it better than Genie 1"). Genie 1's question node returned at
+ * once — it could not resume a paused run (main/flows/refusals.ts:45-70 at v0.7.0-beta.342) — so a flow could ask but never
+ * act on the answer. Here the step holds the run, like an approval, until the question LEAVES: answered, dismissed (or
+ * withdrawn) — or, after `waitMs`, it is withdrawn (the person is not asked any more) and the run goes on as timed out.
+ */
+export function questionWaiter(attention: Pick<AttentionStore, 'onLeave' | 'pending' | 'withdraw'>): (questionId: string, waitMs: number) => Promise<QuestionOutcome> {
+    return (questionId, waitMs) => new Promise<QuestionOutcome>((resolve) => {
+        const asked = attention.pending().find((q) => q.id === questionId);
+        if (!asked) { resolve({ kind: 'withdrawn' }); return; }
+        let settled = false;
+        const finish = (outcome: QuestionOutcome) => { if (settled) return; settled = true; off(); clearTimeout(timer); resolve(outcome); };
+        const off = attention.onLeave((id, outcome) => { if (id === questionId) finish(outcome); });
+        const timer = setTimeout(() => {
+            // Taken back first, so the person is not asked about a run that has moved on.
+            void attention.withdraw({ agentId: asked.agentId, workspaceId: asked.workspaceId }, questionId).catch(() => {}).finally(() => finish({ kind: 'timed out' }));
+        }, Math.max(0, waitMs));
+    });
 }

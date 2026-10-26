@@ -21,7 +21,7 @@ import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1FlowImport } from './v1-flows.js';
-import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
+import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-tools.js';
 import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -1011,10 +1011,14 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
                 // Genie's tools as steps (genie#1204): late-bound — main builds the tools after composing (setFlowToolCaller).
                 callTool: (tool, args) => (flowToolCall ? flowToolCall(flow, tool, args) : Promise.resolve({ ok: false as const, error: 'Genie’s tools are not ready yet; the step did not run' })),
+                // A flow's question holds the run until the person answers (genie#1204).
+                awaitQuestion: questionWaiter(attention),
             }),
         }),
     });
     flowScheduler.plan();
+    // A run Genie quit under resumes now, when the step it reached is safe to run again (genie#1204).
+    void flowScheduler.resumeInterrupted().catch((error: unknown) => console.error(`[flows] resume: ${error instanceof Error ? error.message : String(error)}`));
     // THE FILE TRIGGER (genie#1204): only the workspaces an armed file flow names are watched (flow-file-watch.ts); what
     // lands there becomes an addition (flow-file-source.ts: de-duplicated, its size read once it stops growing) and starts
     // the armed flows it matches.

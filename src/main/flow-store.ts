@@ -1,5 +1,5 @@
 import type { FileAddedProps } from '../core/file-trigger.js';
-import type { NodeOutcome } from '../core/flow-canvas.js';
+import { safeToRerun, type NodeOutcome } from '../core/flow-canvas.js';
 import type { V1FlowPlan } from '../core/v1-flows.js';
 import { stepLabel } from '../core/flow-reach.js';
 import { randomUUID } from 'node:crypto';
@@ -85,6 +85,8 @@ export interface FlowRun {
     readonly nodes?: Readonly<Record<string, NodeOutcome>>;
     /** The Log nodes' lines, in order (bounded). */
     readonly log?: readonly string[];
+    /** A run Genie quit under, resumed at the next launch from the step it had reached (genie#1204). */
+    readonly resumed?: true;
 }
 
 /** A run in flight, kept on disk as it goes (genie#1204 (e)): if Genie quits under it, the next launch records it `stopped`. */
@@ -93,6 +95,10 @@ export interface FlowInFlight {
     readonly trigger: FlowRun['trigger'];
     readonly file?: string;
     readonly nodes: Readonly<Record<string, NodeOutcome>>;
+    /** Each finished step's output (genie#1204): what a resumed run hands on instead of running the step again. */
+    readonly outputs?: Readonly<Record<string, unknown>>;
+    /** The trigger node that started the run, so a resume starts from the same entry. */
+    readonly entry?: string;
 }
 
 /** How many Log lines a run keeps. */
@@ -188,7 +194,8 @@ export class FlowStore {
         const flows = raw.map((f) => normalised(f));
         const v1Import = data.v1Import !== null && typeof data.v1Import === 'object' ? data.v1Import : undefined;
         // A run Genie quit in the middle of (genie#1204 (e)) is recorded STOPPED, at the step it was on — never silently lost.
-        const settled = flows.map((f) => (f.inFlight ? stoppedByQuit(f, new Date(now()).toISOString()) : f));
+        // One whose interrupted steps are all safe to run again stays in flight, for the scheduler to RESUME (genie#1204).
+        const settled = flows.map((f) => (f.inFlight && !resumable(f) ? stoppedByQuit(f, new Date(now()).toISOString()) : f));
         const v1FlowImport = data.v1FlowImport !== null && typeof data.v1FlowImport === 'object' ? data.v1FlowImport : undefined;
         const store = new FlowStore(file, { flows: settled, ...(v1Import ? { v1Import } : {}), ...(v1FlowImport ? { v1FlowImport } : {}) }, now);
         // A document that moved into the canonical shape is written back now, so the file never holds two shapes.
@@ -286,6 +293,11 @@ export class FlowStore {
         return next;
     }
 
+    /** The runs Genie quit under that may resume (genie#1204): each such flow, still holding its run in flight. */
+    interrupted(): FlowRecord[] {
+        return this.#data.flows.filter((f) => f.inFlight !== undefined);
+    }
+
     /** Keep the run going now on disk, as it goes (genie#1204 (e)); `null` = none. A flow removed meanwhile is left alone. */
     async markInFlight(id: string, inFlight: FlowInFlight | null): Promise<void> {
         const flow = this.get(id);
@@ -295,7 +307,7 @@ export class FlowStore {
     }
 
     /** Record one run as it ended; the history keeps the last `RUN_HISTORY_LIMIT`. Returns the run, or null for a flow removed meanwhile. */
-    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[] }): Promise<FlowRun | null> {
+    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[]; resumed?: boolean }): Promise<FlowRun | null> {
         const flow = this.get(id);
         if (!flow) return null;
         const entry: FlowRun = {
@@ -308,6 +320,7 @@ export class FlowStore {
             ...(run.outcome !== 'ran' && run.reason !== undefined ? { reason: run.reason } : {}),
             ...(run.nodes !== undefined && Object.keys(run.nodes).length > 0 ? { nodes: run.nodes } : {}),
             ...(run.log !== undefined && run.log.length > 0 ? { log: run.log.slice(-RUN_LOG_LIMIT) } : {}),
+            ...(run.resumed === true ? { resumed: true as const } : {}),
         };
         // The run has ended, so it is no longer in flight — in the same write.
         const { inFlight: _done, ...rest } = flow;
@@ -389,6 +402,20 @@ export class FlowStore {
     }
 }
 
+/**
+ * Whether a run Genie quit under may RESUME (genie#1204): every step that was running is safe to run again
+ * (core/flow-canvas.ts `safeToRerun`), and every step it had finished left its output to hand on.
+ */
+function resumable(flow: FlowRecord): boolean {
+    const going = flow.inFlight;
+    if (!going || !going.outputs) return false;
+    const kinds = new Map(flowNodes(flow.document).map((n) => [String(n.id), n.kind]));
+    const running = Object.entries(going.nodes).filter(([, o]) => o === 'running').map(([id]) => id);
+    if (running.length === 0) return false;
+    if (!running.every((id) => safeToRerun(kinds.get(id) ?? ''))) return false;
+    return Object.entries(going.nodes).filter(([, o]) => o === 'ran').every(([id]) => id in going.outputs!);
+}
+
 /** A flow whose run was in flight when Genie quit: that run recorded `stopped`, at the step it was on (genie#1204 (e)). */
 function stoppedByQuit(flow: FlowRecord, at: string): FlowRecord {
     const going = flow.inFlight!;
@@ -402,7 +429,7 @@ function stoppedByQuit(flow: FlowRecord, at: string): FlowRecord {
         trigger: going.trigger,
         outcome: 'stopped',
         ...(going.file !== undefined ? { file: going.file } : {}),
-        reason: `Genie quit while this run was going; it stopped at ${where ? stepLabel(where) : 'its start'}. It was not resumed: run it again if it should finish`,
+        reason: `Genie quit while this run was going; it stopped at ${where ? stepLabel(where) : 'its start'}, which is not safe to run again (it may already have done its work). It was not resumed: run it again if it should finish`,
         nodes,
     };
     const { inFlight: _gone, ...rest } = flow;

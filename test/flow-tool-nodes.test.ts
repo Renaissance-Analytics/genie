@@ -189,7 +189,7 @@ describe('each step runs as the flow, through the tool’s own rules', () => {
 
     it('agentinbox: a flow acts with the PERSON’s reach (genie#761 again, closed): its message to the person and to an agent of its workspace is delivered, from the flow', async () => {
         expect(await run(step('agentinbox', { action: 'send', to: 'human', text: 'the report is ready' }))).toEqual({ outcome: 'ran' });
-        expect(services.inbox.involving(HUMAN).map((m) => m.text)).toContain('the report is ready');
+        expect(services.inbox.involving(HUMAN).map((m) => m.text)).toContain('flow "nightly": the report is ready');
         expect(await run(step('agentinbox', { action: 'send', to: 'atlas', text: 'hi' }))).toEqual({ outcome: 'ran' });
         const toAtlas = services.inbox.involving('agent_atlas' as never).filter((m) => m.to === 'agent_atlas');
         expect(toAtlas).toHaveLength(1);

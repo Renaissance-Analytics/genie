@@ -145,6 +145,9 @@ export interface UpdateInput extends QuestionOwner {
     readonly priority?: 'low' | 'normal' | 'high' | 'urgent';
 }
 
+/** How a question left (genie#1204): what a waiting flow branches on. */
+export type QuestionLeft = { readonly kind: 'answered'; readonly answer: Answer } | { readonly kind: 'dismissed'; readonly notes: readonly string[] } | { readonly kind: 'withdrawn' };
+
 export interface Answer {
     /** One array of chosen labels per question, in order. */
     readonly selections: readonly (readonly string[])[];
@@ -322,6 +325,7 @@ export class AttentionStore {
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         await this.#flush();
+        this.#left(questionId, { kind: 'answered', answer });
 
         // Each question, what was chosen, and — right under it — that question's own note. "(no option chosen)" says a
         // note answered it instead; the overall Note line is only there when an overall note was given.
@@ -353,6 +357,7 @@ export class AttentionStore {
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         await this.#flush();
+        this.#left(questionId, { kind: 'dismissed', notes });
         await this.#mailDismissed(q, notes);
     }
 
@@ -365,6 +370,7 @@ export class AttentionStore {
         if (gone.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !gone.includes(q));
         await this.#flush();
+        for (const q of gone) this.#left(q.id, { kind: 'dismissed', notes: [] });
         for (const q of gone) await this.#mailDismissed(q);
         return gone.length;
     }
@@ -379,6 +385,7 @@ export class AttentionStore {
         if (old.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !old.includes(q));
         await this.#flush();
+        for (const q of old) this.#left(q.id, { kind: 'dismissed', notes: [] });
         for (const q of old) await this.#mailDismissed(q);
         return old.length;
     }
@@ -392,6 +399,7 @@ export class AttentionStore {
         this.#owned(owner, questionId);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         await this.#flush();
+        this.#left(questionId, { kind: 'withdrawn' });
         return { ok: true, questionId, withdrawn: true };
     }
 
@@ -501,6 +509,20 @@ export class AttentionStore {
     }
 
     readonly #changeListeners = new Set<() => void>();
+    readonly #leaveListeners = new Set<(questionId: string, outcome: QuestionLeft) => void>();
+
+    /**
+     * A question LEFT — answered, dismissed or withdrawn — with how (genie#1204): what a flow waiting on its own
+     * ForceTheQuestion step listens for, to go on down the answer's port. Told after the change is written.
+     */
+    onLeave(listener: (questionId: string, outcome: QuestionLeft) => void): () => void {
+        this.#leaveListeners.add(listener);
+        return () => this.#leaveListeners.delete(listener);
+    }
+
+    #left(questionId: string, outcome: QuestionLeft): void {
+        for (const l of this.#leaveListeners) l(questionId, outcome);
+    }
 
     /** Something the Deck shows changed: a question asked or answered, a list item, a finished agent. */
     onChange(listener: () => void): () => void {

@@ -50,8 +50,6 @@ type V1Node = { id?: unknown; type?: unknown; position?: { x?: unknown; y?: unkn
 type V1Edge = { id?: unknown; source?: unknown; target?: unknown; sourceHandle?: unknown; targetHandle?: unknown };
 
 const LAYOUT = new Set(['@particle-academy/terminal_lane', '@particle-academy/lane', 'terminal_lane', 'lane']);
-/** Genie 1 tools whose Genie 2 tool has another name and other arguments (main/apps/capabilities.ts → Genie 2's tools). */
-const RENAMED: Readonly<Record<string, string>> = { manageSite: 'sites', manageService: 'services', manageProcess: 'processes' };
 const OPS: Record<string, string> = { '==': 'eq', '===': 'eq', '!=': 'neq', '!==': 'neq', '>': 'gt', '>=': 'gte', '<': 'lt', '<=': 'lte' };
 
 function parse(json: string): unknown {
@@ -74,12 +72,14 @@ export function planV1FlowImport(rows: readonly V1FlowRow[] | null, ctx: { reado
         if (!graph || !Array.isArray(graph.nodes)) { say('its graph could not be read'); continue; }
         const converted = convertGraph(graph.nodes as V1Node[], Array.isArray(graph.edges) ? (graph.edges as V1Edge[]) : [], ws);
         if (converted.problems.length > 0) { say(converted.problems.join('; ')); continue; }
+        // Imported, with what of its settings had no Genie 2 counterpart said field by field (genie#1204).
+        if (converted.dropped.length > 0) notes.push(`"${row.title}" (Genie 1 flow ${row.id}): imported; ${converted.dropped.join('; ')}`);
         flows.push({ id: `${V1_FLOW_IMPORT_PREFIX}${row.id}`, v1Id: row.id, workspaceId: ws, name: row.title, document: { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: converted.nodes, edges: converted.edges } } });
     }
     return { flows, notes };
 }
 
-function convertGraph(v1Nodes: readonly V1Node[], v1Edges: readonly V1Edge[], ws: string): { nodes: unknown[]; edges: unknown[]; problems: string[] } {
+function convertGraph(v1Nodes: readonly V1Node[], v1Edges: readonly V1Edge[], ws: string): { nodes: unknown[]; edges: unknown[]; problems: string[]; dropped: string[] } {
     const kindOf = (n: V1Node) => String(n.data?.kind ?? n.type ?? '');
     const kept = v1Nodes.filter((n) => !LAYOUT.has(kindOf(n)));
     const keptIds = new Set(kept.map((n) => String(n.id)));
@@ -93,12 +93,14 @@ function convertGraph(v1Nodes: readonly V1Node[], v1Edges: readonly V1Edge[], ws
         return seen;
     };
     const problems: string[] = [];
+    const dropped: string[] = [];
     const nodes = kept.flatMap((n) => {
         const id = String(n.id);
         const up = ancestorsOf(id);
         const config = rewriteTemplates((n.data?.config ?? {}) as Record<string, unknown>, up) as Record<string, unknown>;
         const step = convertStep(kindOf(n), config, ws, up);
         if ('problem' in step) { problems.push(`node ${id}: ${step.problem}`); return []; }
+        for (const d of step.dropped ?? []) dropped.push(`node ${id}: ${d}`);
         const label = typeof n.data?.label === 'string' && n.data.label.trim() !== '' ? { label: n.data.label } : {};
         const x = typeof n.position?.x === 'number' ? n.position.x : 0;
         const y = typeof n.position?.y === 'number' ? n.position.y : 0;
@@ -108,6 +110,7 @@ function convertGraph(v1Nodes: readonly V1Node[], v1Edges: readonly V1Edge[], ws
         nodes,
         edges: edges.map((e) => ({ id: String(e.id), source: String(e.source), target: String(e.target), ...(typeof e.sourceHandle === 'string' ? { sourceHandle: e.sourceHandle } : {}), ...(typeof e.targetHandle === 'string' ? { targetHandle: e.targetHandle } : {}) })),
         problems,
+        dropped,
     };
 }
 
@@ -121,7 +124,7 @@ function rewriteTemplates(value: unknown, upstream: ReadonlySet<string>): unknow
     return value;
 }
 
-type Step = { kind: string; config: Record<string, unknown> } | { problem: string };
+type Step = { kind: string; config: Record<string, unknown>; dropped?: string[] } | { problem: string };
 
 function convertStep(kind: string, config: Record<string, unknown>, ws: string, _upstream: ReadonlySet<string>): Step {
     const text = (k: string) => (typeof config[k] === 'string' ? (config[k] as string) : '');
@@ -142,8 +145,9 @@ function convertStep(kind: string, config: Record<string, unknown>, ws: string, 
             const { terminalId: _t, workspaceId: _w, ...args } = config;
             return { kind: same, config: args };
         }
-        const renamed = RENAMED[tool];
-        if (renamed) return { problem: `Genie 1's ${tool} step is \`${renamed}\` in Genie 2, whose settings differ; it was not converted` };
+        if (tool === 'manageProcess') return fromManageProcess(config);
+        if (tool === 'manageSite') return fromManageSite(config);
+        if (tool === 'manageService') return fromManageService(config);
         return { problem: `Genie 1's ${tool} step has no counterpart in Genie 2's flows` };
     }
     const canonical = canonicalKind(kind);
@@ -167,4 +171,88 @@ function narrow(kind: string, config: Record<string, unknown>): Record<string, u
     const keys = def?.configSchema?.map((f) => f.key);
     if (!keys || keys.length === 0) return config;
     return Object.fromEntries(Object.entries(config).filter(([k]) => keys.includes(k)));
+}
+
+/*
+ * GENIE 1's RENAMED TOOLS, FIELD BY FIELD (genie#1204). manageProcess, manageSite and manageService are Genie 2's
+ * `processes`, `sites` and `services`, with other argument names. Each Genie 1 argument (main/mcp/protocol.ts at
+ * v0.7.0-beta.342: manageProcess :2272-2375, manageSite :2376-2576, manageService :2577-2690) is carried to the Genie 2
+ * argument that does the same thing; only what genuinely has none is left out — and said, field by field, in the import's
+ * notes. A step whose ACTION has no counterpart cannot be carried, and the flow is not imported. `terminalId` and
+ * `workspaceId` go (a flow has no terminal; it acts in its own workspace). The ids of Genie 1 processes are their imported
+ * ids (`proc_v1_<id>`, core/v1-processes.ts).
+ */
+
+const words = (v: unknown) => (typeof v === 'string' ? v : JSON.stringify(v));
+
+function fromManageProcess(c: Record<string, unknown>): Step {
+    const actions: Record<string, string> = { list: 'list', create: 'add', start: 'start', stop: 'stop', restart: 'restart', enable: 'enable', disable: 'disable', delete: 'remove', 'run-now': 'run-now', logs: 'logs' };
+    const action = actions[String(c.action ?? '')];
+    if (!action) return { problem: `Genie 1's manageProcess "${words(c.action)}" has no counterpart in Genie 2's processes` };
+    const out: Record<string, unknown> = { action };
+    const dropped: string[] = [];
+    if (typeof c.label === 'string') out.name = c.label;
+    if (typeof c.command === 'string') out.command = c.command;
+    if (typeof c.repo === 'string' && c.repo !== '') out.folder = `repos/${c.repo}`;
+    for (const k of ['schedule', 'scheduleKind', 'prompt']) if (c[k] !== undefined) out[k] = c[k];
+    const id = c.id ?? c.processId;
+    if (typeof id === 'string') out.process = `proc_v1_${id}`;
+    if (action === 'add' && c.schedule === undefined && c.autostart !== true) dropped.push('autostart (off): Genie 2 starts a process when it is added, and on every launch — there is no "keep it, but do not start it"');
+    for (const k of ['nudgeAgentId', 'nudgeTerminalId']) if (typeof c[k] === 'string') dropped.push(`${k}: a Genie 1 agent id, which Genie 2 does not know; set the step's agent to the agent's Genie 2 address`);
+    return { kind: '@genie/processes', config: out, dropped };
+}
+
+function fromManageSite(c: Record<string, unknown>): Step {
+    const actions: Record<string, string> = { list: 'list', detect: 'detect', create: 'add', update: 'update', start: 'start', stop: 'stop', restart: 'restart', status: 'status', logs: 'logs', open: 'open', remove: 'remove' };
+    const action = actions[String(c.action ?? '')];
+    if (!action) return { problem: `Genie 1's manageSite "${words(c.action)}" has no counterpart in Genie 2's sites` };
+    const out: Record<string, unknown> = { action };
+    const dropped: string[] = [];
+    if (typeof c.name === 'string') out.name = c.name;
+    if (typeof c.repo === 'string' && c.repo !== '') out.repoPath = `repos/${c.repo}`;
+    if (typeof c.id === 'string') out.site = c.id;
+    if (typeof c.tail === 'number') out.lines = c.tail;
+    const argv = Array.isArray(c.command) ? c.command : Array.isArray(c.serve) ? c.serve : null;
+    const serve = c.hostServe !== null && typeof c.hostServe === 'object' ? (c.hostServe as Record<string, unknown>) : null;
+    if (typeof c.hostPort === 'number') { out.mode = 'proxy'; out.hostPort = c.hostPort; }
+    else if (serve && (serve.mode === 'static' || serve.mode === 'php')) {
+        out.mode = serve.mode;
+        if (typeof serve.root === 'string') out.root = serve.root;
+        if (serve.mode === 'static' && typeof serve.spa === 'boolean') out.spa = serve.spa;
+        if (serve.mode === 'php' && typeof serve.version === 'string') out.phpVersion = serve.version;
+    } else if (serve) dropped.push(`hostServe.mode (${words(serve.mode)}): Genie 2 serves a site as proxy, static or php — not ${words(serve.mode)}`);
+    else if (argv) {
+        out.mode = 'proxy';
+        out.devCommand = (argv as unknown[]).map(String).join(' ');
+        if (typeof c.port === 'number') dropped.push(`port (${c.port}): Genie 2 chooses the port — put {port} in the command where it goes`);
+    }
+    // runMode, image and build are left out without a note: Genie 1 recorded them and never used them (manageSite's own
+    // descriptions: "RECORDED BUT NOT USED", "RECORDED BUT NOT RUN", genie#125/#191) — dropping them changes nothing.
+    if (Array.isArray(c.exposed) && c.exposed.length > 0) dropped.push('exposed: extra browser-facing surfaces have no counterpart in Genie 2\'s sites');
+    if (c.env !== undefined) dropped.push('env: a site\'s own environment has no counterpart (the workspace\'s services env reaches it)');
+    if (c.kind === 'tcp') dropped.push('kind (tcp): Genie 2 serves http sites');
+    if (typeof c.genName === 'string') dropped.push('genName: Genie 2 names a site <name>.gen');
+    if (typeof c.upstreamHost === 'string') dropped.push('upstreamHost: no counterpart in Genie 2\'s sites');
+    if (c.enabled === false) dropped.push('enabled (false): Genie 2 serves a site when it is added');
+    if (c.browserExposed === true) dropped.push('browserExposed: Genie 2\'s front door decides which sites external browsers reach');
+    return { kind: '@genie/sites', config: out, dropped };
+}
+
+function fromManageService(c: Record<string, unknown>): Step {
+    const actions: Record<string, string> = { catalog: 'catalog', list: 'list', status: 'list', add: 'add', start: 'start', stop: 'stop', logs: 'logs', remove: 'remove', connection: 'env' };
+    const action = actions[String(c.action ?? '')];
+    if (!action) return { problem: `Genie 1's manageService "${words(c.action)}" has no counterpart in Genie 2's services` };
+    if (c.engine === 'minio') return { problem: 'Genie 1\'s MinIO engine has no counterpart in Genie 2\'s services (SeaweedFS is its S3 engine)' };
+    const out: Record<string, unknown> = { action };
+    const dropped: string[] = [];
+    for (const k of ['engine', 'version', 'image', 'port', 'env', 'id', 'tail']) if (c[k] !== undefined) out[k] = c[k];
+    if (typeof c.dedicated === 'boolean') out.scope = c.dedicated ? 'dedicated' : 'shared';
+    if (Array.isArray(c.extensions)) {
+        const rest = (c.extensions as unknown[]).map(String).filter((x) => x !== 'vector');
+        if ((c.extensions as unknown[]).includes('vector')) out.variant = 'pgvector';
+        if (rest.length > 0) dropped.push(`extensions (${rest.join(', ')}): Genie 2 offers pgvector as a Postgres variant, and no other extension`);
+    }
+    if (c.enabled === false) dropped.push('enabled (false): Genie 2 starts a service when it is added');
+    if (c.purge === true) dropped.push('purge: deleting a service’s data is the person’s alone (Hosting → Services), never a flow’s');
+    return { kind: '@genie/services', config: out, dropped };
 }
