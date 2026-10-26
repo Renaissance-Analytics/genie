@@ -25,6 +25,7 @@ import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
 import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
+import { formEditable } from '../../core/flow-form.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 
@@ -41,7 +42,7 @@ import type { UpdateState } from '../bridge.js';
 /** A form open inside a surface — renderer-local state; the problems are the last refused submit's. */
 export type AddingForm =
     | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[]; phpVersions?: readonly string[] }
-    | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[] }
+    | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[]; flowId?: string }
     | { kind: 'service'; workspaceId: string; defaults: ServiceForm; problems: readonly Problem[]; consent: { image: string; note: string; form: ServiceForm } | null };
 
 const NO_BOUNDS = () => {};
@@ -189,6 +190,11 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                 ) : (
                     <button type="button" className="text-[13px]" onClick={() => onAsk('arm')}>Arm</button>
                 )}
+                {formEditable(f.document) ? (
+                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.edit', flowId: f.id })}>Edit</button>
+                ) : (
+                    <button type="button" disabled className="text-[13px] opacity-50" title="More than one step: an agent edits this flow until the canvas editor lands">Edit</button>
+                )}
                 <button type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAsk('delete')}>Delete</button>
             </span>
             {confirming ? <FlowConfirm flow={f} kind={confirming} now={now} onAction={onAction} onCancel={() => onAsk(null)} /> : null}
@@ -276,7 +282,7 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                 </form>
             </Header>
             {adding?.kind === 'flow' ? (
-                <AddFlowForm defaults={adding.defaults} problems={adding.problems} root={workspaces.find((w) => w.id === adding.defaults.workspaceId)?.path} onSubmit={(form) => onAction({ kind: 'flows.create', form })} onCancel={() => onCloseForm?.()} />
+                <AddFlowForm defaults={adding.defaults} problems={adding.problems} root={workspaces.find((w) => w.id === adding.defaults.workspaceId)?.path} editing={adding.flowId !== undefined} onSubmit={(form) => onAction(adding.flowId !== undefined ? { kind: 'flows.save', flowId: adding.flowId, form } : { kind: 'flows.create', form })} onCancel={() => onCloseForm?.()} />
             ) : null}
             {flows === null ? (
                 <Skeletons />

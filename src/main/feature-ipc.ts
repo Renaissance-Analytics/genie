@@ -12,7 +12,7 @@ import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
-import { flowNodes } from '../core/flow-form.js';
+import { flowNodes, formEditable } from '../core/flow-form.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
@@ -582,6 +582,25 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 break;
             }
             next.siteAdding = null;
+            break;
+        }
+        case 'flows.edit': {
+            const flow = services.flows.get(action.flowId);
+            if (!flow) throw new Error('That flow is gone.');
+            if (!formEditable(flow.document)) throw new Error(`"${flow.name}" has more than one step, so this form cannot show all of it; it is edited by an agent (flows update) until the canvas editor lands.`);
+            next.flowAdding = { defaults: { workspaceId: flow.workspaceId, name: flow.name, document: flow.document, armed: flow.armed }, problems: [], flowId: flow.id };
+            break;
+        }
+        case 'flows.save': {
+            const problems = [...validateFlowForm(action.form), ...agentProblems(services, action.form.document)];
+            if (problems.length > 0) {
+                const open = state.flowAdding ?? { defaults: action.form, problems: [], flowId: action.flowId };
+                next.flowAdding = { ...open, problems };
+                break;
+            }
+            // The form's own fields only: the armed state is the person's separate choice (Arm / Disarm), never the form's.
+            await services.flows.update(action.flowId, { name: action.form.name, document: action.form.document }, USER);
+            next.flowAdding = null;
             break;
         }
         case 'flows.create': {

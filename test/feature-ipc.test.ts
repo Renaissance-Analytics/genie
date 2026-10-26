@@ -186,6 +186,39 @@ function flowForm(name: string, step: Record<string, unknown>) {
     };
 }
 
+describe('editing a flow (genie#1204)', () => {
+    it('flows.edit opens the form on THAT flow (its name, schedule, step); flows.save changes it in place — same id, still not armed by the edit', async () => {
+        const made = await handleFeatureAction(services, { kind: 'flows.create', form: flowForm('nightly', { kind: 'genie/terminal_run', config: { workspace: 'tynn', command: 'npm run report' } }) });
+        const id = made.flows!.flows[0]!.id;
+        const opened = await handleFeatureAction(services, { kind: 'flows.edit', flowId: id });
+        expect(opened.flows!.adding).toMatchObject({ flowId: id, defaults: { name: 'nightly', workspaceId: 'tynn' }, problems: [] });
+        const form = { ...opened.flows!.adding!.defaults, name: 'nightly report', document: flowForm('x', { kind: 'genie/terminal_run', config: { workspace: 'tynn', command: 'npm run report -- --full' } }).document };
+        const saved = await handleFeatureAction(services, { kind: 'flows.save', flowId: id, form });
+        expect(saved.flows!.flows.map((f) => [f.id, f.name, f.armed])).toEqual([[id, 'nightly report', false]]);
+        expect(JSON.stringify(saved.flows!.flows[0]!.document)).toContain('--full');
+        expect(saved.flows!.adding).toBeNull();
+    });
+
+    it('an invalid edit keeps the form open with the problem, and changes nothing (CONTROL: the flow is untouched)', async () => {
+        const made = await handleFeatureAction(services, { kind: 'flows.create', form: flowForm('nightly', { kind: 'genie/terminal_run', config: { workspace: 'tynn', command: 'npm run report' } }) });
+        const id = made.flows!.flows[0]!.id;
+        await handleFeatureAction(services, { kind: 'flows.edit', flowId: id });
+        const refused = await handleFeatureAction(services, { kind: 'flows.save', flowId: id, form: { ...flowForm('', { kind: 'log' }) } });
+        expect(refused.flows!.adding!.problems[0]!.message).toMatch(/needs a name/);
+        expect(refused.flows!.flows.map((f) => f.name)).toEqual(['nightly']);
+    });
+
+    it('a flow the form cannot say back exactly (two steps) is refused for editing, in words — never flattened', async () => {
+        const doc = { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [
+            { id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } },
+            { id: 'a', kind: 'genie/terminal_run', position: { x: 1, y: 0 }, config: { workspace: 'tynn', command: 'a' } },
+            { id: 'b', kind: 'genie/terminal_run', position: { x: 2, y: 0 }, config: { workspace: 'tynn', command: 'b' } },
+        ], edges: [{ id: 'e1', source: 't', target: 'a' }, { id: 'e2', source: 'a', target: 'b' }] } };
+        const made = await handleFeatureAction(services, { kind: 'flows.create', form: { workspaceId: 'tynn', name: 'two', armed: false, document: doc } });
+        await expect(handleFeatureAction(services, { kind: 'flows.edit', flowId: made.flows!.flows[0]!.id })).rejects.toThrow(/more than one step/);
+    });
+});
+
 describe('Run now (hosting ship line P4)', () => {
     it('flows.runNow runs a DISARMED flow’s step through the composed runner and its outcome lands in the history; it stays disarmed', async () => {
         const document = { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 't', kind: 'schedule_trigger', position: { x: 0, y: 0 }, config: { cron: '0 3 * * *' } }, { id: 'k', kind: 'genie/knowledge_add', position: { x: 240, y: 0 }, config: { workspace: 'tynn', title: 'Flow ran' } }], edges: [{ id: 'e1', source: 't', target: 'k' }] } };
