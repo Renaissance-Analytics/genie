@@ -73,6 +73,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProviders } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
+import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
@@ -848,6 +849,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    setPrivateCredentialFailureLog(lifecycleLog);
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
@@ -2008,7 +2010,8 @@ async function boot(): Promise<void> {
     const tynnSession = session.fromPartition('persist:tynn');
     tynnAccount = await TynnAccount.open({
         host: () => TYNN_HOST,
-        file: join(genieHome(), 'tynn.json'),
+        file: join(genieHome(), 'credentials', 'tynn.json'),
+        legacyFile: join(genieHome(), 'tynn.json'),
         cipher: {
             isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
             encrypt: (text) => safeStorage.encryptString(text),
