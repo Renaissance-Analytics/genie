@@ -1,4 +1,5 @@
 import type { ExecutorRegistry, NodeExecutor } from '@particle-academy/fancy-flow/engine';
+import { waitMs } from '../core/flow-canvas.js';
 import type { MemoryClass, Scope } from './knowledge-store.js';
 
 /**
@@ -25,6 +26,8 @@ export interface FlowPorts {
     addKnowledge(input: { title: string; body: string; class: MemoryClass; scope: Scope; tags: string[] }): Promise<{ id: string }>;
     /** genie/file_move: into `toFolder` (relative) of the same workspace; `to: null` when it was already there. No shell. */
     moveFile?(workspaceId: string, from: string, toFolder: string): Promise<{ from: string; to: string | null }>;
+    /** fancy-flow's Wait, for a duration (genie#1204): injected so a test need not wait in real time; a timer otherwise. */
+    sleep?(ms: number): Promise<void>;
 }
 
 /** `{{a.b.c}}` → the value at that path in `inputs`, stringified; missing → empty. */
@@ -94,6 +97,16 @@ export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
             if (!ports.moveFile) ctx.abort('moving a file is not available here');
             const moved = await ports.moveFile!(workspace, from, to);
             return { from: moved.from, to: moved.to ?? moved.from, moved: moved.to !== null };
+        },
+        // fancy-flow declares Wait and leaves running it to the host (it has no executor). Genie waits a DURATION; the
+        // other modes are refused when the flow is saved (core/flow-canvas.ts structuralProblems), and again here.
+        '@particle-academy/wait': async (ctx) => {
+            const config = configOf(ctx);
+            const ms = (config.mode ?? 'duration') === 'duration' ? waitMs(config.duration) : null;
+            if (ms === null) ctx.abort(`Wait needs a duration Genie can wait (5s, 10m, 1h, up to 24h); it has "${String(config.duration ?? '')}"`);
+            await (ports.sleep ?? ((t: number) => new Promise<void>((r) => setTimeout(r, t))))(ms!);
+            const inputs = ctx.inputs as Record<string, unknown>;
+            return { waited: 'duration', duration: ms, input: inputs.in ?? inputs };
         },
     };
 }

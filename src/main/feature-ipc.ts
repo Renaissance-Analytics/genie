@@ -12,9 +12,11 @@ import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
 import { dismissableStale, isDismissable } from '../core/deck.js';
 import { shouldCheckUpdates } from './toolchain-prober.js';
 import type { RepairOutcome } from '../core/toolchain.js';
-import { flowNodes, formEditable } from '../core/flow-form.js';
+import { canonicalKind, problemFromText, saveProblems, type FlowProblem } from '../core/flow-canvas.js';
+import { canonicalFlowDocument, flowNodes, formEditable } from '../core/flow-form.js';
+import { importFlowDocument } from './flow-kinds.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
-import type { FlowAdding, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
+import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
 import { inboxThreads, pairOf, threadKeyOfMessage, threadOf, uncollected } from '../core/inbox-threads.js';
 import { approvalNoteText } from '../core/approval-note.js';
@@ -79,6 +81,8 @@ export interface FeaturePorts {
     readonly githubAccount?: GithubAccountPort;
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: ProcessBook;
+    /** Open the flow editor window on a route (`genie://flow/<id>`, `genie://flow/new?workspace=<id>`, genie#1204). Absent = no windows (doctor mode). */
+    readonly openFlowEditor?: (route: string) => void;
     /** IssueWatch's view per workspace id (Tynn #806). Absent = none (doctor mode). */
     readonly issueWatch?: () => Readonly<Record<string, IssueWatchPanelView>>;
     /** Have Tynn read a workspace's repos now — the GitHub panel's Refresh. Absent = none (doctor mode). */
@@ -223,6 +227,8 @@ export interface FeatureState {
     siteAdding?: SiteAdding | null;
     siteEditing?: SiteEditing | null;
     flowAdding?: FlowAdding | null;
+    /** Transient: what the canvas's save did, served in that action's answer only (genie#1204). */
+    flowSaved?: FlowSaved | null;
     serviceAdding?: ServiceAdding | null;
     /** The engine log the person opened in the Services tab (H6), until they hide it. */
     serviceLogs?: ServiceLogs | null;
@@ -425,7 +431,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const nameOf = participantNamer(roster);
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
-        flows: { flows: services.flows.list(), adding: state.flowAdding ?? null },
+        flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}) },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
@@ -485,6 +491,56 @@ function agentProblems(services: ComposedServices, document: unknown): Problem[]
         if (found.kind === 'ambiguous') return [{ field: 'agent', message: `Node ${n.id}: ${agent} names more than one agent (${found.forms.join(', ')}); use the full form.` }];
         return [];
     });
+}
+
+/**
+ * THE CANVAS'S SAVE (genie#1204 item 1), as the person. Refused — nothing stored — with every problem on its node: what
+ * only a save can know (core/flow-canvas.ts `saveProblems`: a trigger and a step, the schedule, the workspaces and agents
+ * as they are now) and the store's own door (the engine, Genie's kinds, a loop — the door agents pass too). Stored, it is
+ * never armed by the save; an ARMED flow whose save changes what it does is DISARMED and the answer says so — Genie 1's
+ * `flows:save` (main/flows/ipc.ts:196-230 and `changesConsent` :315-361 at v0.7.0-beta.342): the person armed the flow as
+ * it was, and moving a node or renaming it changes nothing they agreed to.
+ */
+async function saveGraph(services: ComposedServices, action: { flowId?: string; workspaceId: string; name: string; document: unknown }): Promise<FlowSaved> {
+    const name = action.name.trim();
+    const existing = action.flowId !== undefined ? services.flows.get(action.flowId) : null;
+    if (action.flowId !== undefined && !existing) return { ok: false, problems: [{ message: 'that flow is gone; nothing was saved' }] };
+    const workspaceId = existing?.workspaceId ?? action.workspaceId;
+    const workspaces = services.workspaceIds();
+    const problems: FlowProblem[] = [];
+    if (name === '') problems.push({ message: 'name the flow' });
+    if (!workspaces.includes(workspaceId)) problems.push({ message: `there is no workspace "${workspaceId}" in Genie` });
+    problems.push(...saveProblems(action.document, { workspaces, agentProblem: (address) => agentWords(services, address) }));
+    const door = importFlowDocument(action.document);
+    if (!door.ok) for (const p of door.problems.map(problemFromText)) if (!problems.some((q) => q.nodeId === p.nodeId && q.message === p.message)) problems.push(p);
+    if (problems.length > 0) return { ok: false, problems };
+    if (!existing) {
+        const made = await services.flows.create({ workspaceId, name, document: action.document, by: USER });
+        return { ok: true, flowId: made.id, disarmed: false };
+    }
+    const disarm = existing.armed && consentDigest(existing.document) !== consentDigest(action.document);
+    await services.flows.update(existing.id, { name, document: action.document }, USER);
+    if (disarm) await services.flows.disarm(existing.id, USER);
+    return { ok: true, flowId: existing.id, disarmed: disarm };
+}
+
+/** An agent address the run could not reach, in words; null when it reaches one agent (the inbox's own rule). */
+function agentWords(services: ComposedServices, address: string): string | null {
+    const found = services.resolveAddress(address);
+    if (found.kind === 'none') return `no agent answers to ${address}`;
+    if (found.kind === 'human') return `${address} is you, not an agent`;
+    if (found.kind === 'ambiguous') return `${address} names more than one agent (${found.forms.join(', ')}); use the full form`;
+    return null;
+}
+
+/** What the person agreed to when arming: each node's kind and config, and the wiring — not where nodes sit, or the name. */
+function consentDigest(document: unknown): string {
+    const nodes = flowNodes(document).map((n) => ({ id: String(n.id), kind: canonicalKind(String(n.kind)), config: n.config ?? null })).sort((a, b) => a.id.localeCompare(b.id));
+    const doc = canonicalFlowDocument(document) as { graph?: { edges?: unknown } } | null;
+    const edges = (Array.isArray(doc?.graph?.edges) ? (doc!.graph!.edges as Array<Record<string, unknown>>) : [])
+        .map((e) => `${String(e.source)}:${String(e.sourceHandle ?? 'out')}->${String(e.target)}:${String(e.targetHandle ?? 'in')}`)
+        .sort();
+    return JSON.stringify({ nodes, edges });
 }
 
 /** The Add-a-site form's PHP version choices: the versions Genie manages, newest first (none wired = no choices, the PATH PHP). */
@@ -566,6 +622,17 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.browserUrl = (await openSite(services, action.siteId, ports.openInBrowser)).url;
             break;
         }
+        case 'flows.openEditor':
+            if (!ports.openFlowEditor) throw new Error('this Genie has no flow editor window');
+            ports.openFlowEditor(`genie://flow/${encodeURIComponent(action.flowId)}`);
+            break;
+        case 'flows.newFlow':
+            if (!ports.openFlowEditor) throw new Error('this Genie has no flow editor window');
+            ports.openFlowEditor(`genie://flow/new?workspace=${encodeURIComponent(action.workspaceId)}`);
+            break;
+        case 'flows.saveGraph':
+            next.flowSaved = await saveGraph(services, action);
+            break;
         case 'flows.add':
             next.flowAdding = { defaults: flowFormDefaults({ workspaceId: action.workspaceId }), problems: [] };
             break;

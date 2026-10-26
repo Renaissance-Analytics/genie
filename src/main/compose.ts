@@ -334,6 +334,8 @@ export interface ComposedServices {
     agentAddresses(): Array<{ address: string; agentId: string; name: string }>;
     /** Resolve an address the way the inbox does: one / ambiguous (both forms named) / none / human. */
     resolveAddress(text: string): Resolution;
+    /** The registered workspaces' ids, now — what a flow's save checks a step's workspace against (genie#1204). */
+    workspaceIds(): string[];
     shutdown(): Promise<void>;
 }
 
@@ -1210,6 +1212,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
+        workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');

@@ -18,14 +18,14 @@ import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
 import type { HostUpgradeStep } from '../../core/host-upgrade.js';
 import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
-import type { FlowForm, Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
+import type { Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { mailpitInboxUrl } from '../../core/mailpit-name.js';
 import { deleteDataVerdict, soleHolderOf } from '../../core/service-tenancy.js';
-import { AddFlowForm, AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
+import { AddKnowledgeForm, AddServiceForm, AddSiteForm } from './AddForms.js';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import { flowReach } from '../../core/flow-reach.js';
-import { formEditable } from '../../core/flow-form.js';
+import { flowSummary } from '../../core/flow-canvas.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 
@@ -42,7 +42,6 @@ import type { UpdateState } from '../bridge.js';
 /** A form open inside a surface — renderer-local state; the problems are the last refused submit's. */
 export type AddingForm =
     | { kind: 'site'; workspaceId: string; repoPath: string; defaults: SiteFormDefaults; problems: readonly Problem[]; phpVersions?: readonly string[] }
-    | { kind: 'flow'; defaults: FlowForm; problems: readonly Problem[]; flowId?: string }
     | { kind: 'service'; workspaceId: string; defaults: ServiceForm; problems: readonly Problem[]; consent: { image: string; note: string; form: ServiceForm } | null };
 
 const NO_BOUNDS = () => {};
@@ -150,14 +149,15 @@ export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfacePro
     );
 }
 
-const OUTCOME_LABEL = { ran: 'ran', failed: 'failed', held: 'held back' } as const;
-const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber' } as const;
+const OUTCOME_LABEL = { ran: 'ran', failed: 'failed', held: 'held back', stopped: 'stopped by quit' } as const;
+const OUTCOME_COLOR = { ran: 'green', failed: 'red', held: 'amber', stopped: 'amber' } as const;
 
 type FlowRecordView = NonNullable<FeatureData['flows']>['flows'][number];
 
 /**
- * ONE FLOW (genie#1204). Run now acts at once, and so does Disarm (it only stops the clock). Arm and Delete ASK first —
- * `onAsk` opens the question under the row (FlowConfirm), which is what acts.
+ * ONE FLOW (genie#1204). A WORKFLOW, and the row says so: what starts it and each step in graph order. Its name and Open
+ * open it on fancy-flow's canvas in the flow editor window. Run now acts at once, and so does Disarm (it only stops the
+ * clock). Arm and Delete ASK first — `onAsk` opens the question under the row (FlowConfirm), which is what acts.
  */
 export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk }: {
     flow: FlowRecordView;
@@ -169,10 +169,12 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
 }) {
     const runs = f.runs ?? [];
     const last = runs.at(-1);
+    const summary = flowSummary(f.document, now);
+    const open = () => onAction({ kind: 'flows.openEditor', flowId: f.id });
     return (
         <li data-flow={f.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
             <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
-            <span className="font-medium">{f.name}</span>
+            <button type="button" data-flow-open={f.id} className="font-medium hover:underline" title="Open on the canvas" onClick={open}>{f.name}</button>
             <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
             {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
             {last ? (
@@ -190,13 +192,11 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                 ) : (
                     <button type="button" className="text-[13px]" onClick={() => onAsk('arm')}>Arm</button>
                 )}
-                {formEditable(f.document) ? (
-                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.edit', flowId: f.id })}>Edit</button>
-                ) : (
-                    <button type="button" disabled className="text-[13px] opacity-50" title="More than one step: an agent edits this flow until the canvas editor lands">Edit</button>
-                )}
+                <button type="button" className="text-[13px]" onClick={open}>Open</button>
                 <button type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAsk('delete')}>Delete</button>
             </span>
+            <span data-flow-summary={f.id} className="basis-full truncate pl-5 text-xs text-[var(--fg-3)]">{[summary.trigger, ...summary.steps].join(' → ')}</span>
+            <span className="basis-full pl-5 text-[11px] text-[var(--fg-4)]">{summary.steps.length} {summary.steps.length === 1 ? 'step' : 'steps'}</span>
             {confirming ? <FlowConfirm flow={f} kind={confirming} now={now} onAction={onAction} onCancel={() => onAsk(null)} /> : null}
             {runs.length > 0 ? (
                 <details data-flow-runs={f.id} className="basis-full">
@@ -209,6 +209,7 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                                 <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
                                 <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
+                                {r.nodes ? <button type="button" className="text-[var(--fg-3)] underline" onClick={open} title="Open the flow; pick this run to see it on the canvas">on the canvas</button> : null}
                                 {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
                                 {r.steps && r.steps.length > 0 ? <RunSteps steps={r.steps} /> : null}
                             </li>
@@ -275,13 +276,12 @@ export function FlowConfirm({ flow: f, kind, now, onAction, onCancel }: {
 }
 
 /**
- * FLOWS (§6.6). Each row: armed or not, the workspace, the last run's outcome and when; Run now (the
- * person's one run, armed or not), Arm / Disarm, Delete. Under a row that has run, "Runs" opens the
- * history — the last runs, newest first, each with its outcome (ran / failed / held back), whether it
- * was the schedule or a Run now, and the reason a run failed or was held back. A native `<details>`,
- * as the processes' log.
+ * FLOWS (§6.6) — fancy-flow WORKFLOWS (genie#1204). Each row: armed or not, the workspace, what the flow is (its trigger and
+ * steps), the last run's outcome and when; Open (the canvas, in its own window), Run now (the person's one run, armed or
+ * not), Arm / Disarm, Delete. Under a row that has run, "Runs" opens the history. Add a flow opens a NEW canvas in the
+ * chosen workspace: a flow is drawn, not filled in (the owner, 2026-10-26: "they are fancy-flow workflows like genie 1 had").
  */
-export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces = [] }: SurfaceProps) {
+export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) {
     const flows = data.flows;
     // Arm and Delete ask first (genie#1204): which flow, and which question, is open.
     const [confirming, setConfirming] = useState<{ flowId: string; kind: 'arm' | 'delete' } | null>(null);
@@ -290,7 +290,7 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
             <Header title="Flows">
                 <form
                     className="ml-auto flex items-center gap-2"
-                    onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'flows.add', workspaceId: w.id }); }}
+                    onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'flows.newFlow', workspaceId: w.id }); }}
                 >
                     <WorkspacePick workspaces={workspaces} name="workspace" />
                     <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
@@ -298,13 +298,17 @@ export function FlowsSurface({ data, onAction, adding, onCloseForm, workspaces =
                     </button>
                 </form>
             </Header>
-            {adding?.kind === 'flow' ? (
-                <AddFlowForm defaults={adding.defaults} problems={adding.problems} root={workspaces.find((w) => w.id === adding.defaults.workspaceId)?.path} editing={adding.flowId !== undefined} onSubmit={(form) => onAction(adding.flowId !== undefined ? { kind: 'flows.save', flowId: adding.flowId, form } : { kind: 'flows.create', form })} onCancel={() => onCloseForm?.()} />
-            ) : null}
             {flows === null ? (
                 <Skeletons />
             ) : flows.flows.length === 0 ? (
-                <Empty>No flows yet. Add your first flow — a schedule, a trigger, the work it runs.</Empty>
+                <div className="flex flex-col items-start gap-2 p-5 text-sm text-[var(--fg-3)]">
+                    <p>No flows yet. A flow is a workflow you draw: a trigger (a schedule, a file landing, or you), then the steps it runs.</p>
+                    {workspaces.length > 0 ? (
+                        <button type="button" data-flow-new-empty className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'flows.newFlow', workspaceId: workspaces[0]!.id })}>
+                            Build a flow on the canvas
+                        </button>
+                    ) : null}
+                </div>
             ) : (
                 <ul className="divide-y divide-[var(--border-1)]">
                     {flows.flows.map((f) => (

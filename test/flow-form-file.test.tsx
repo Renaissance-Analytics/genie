@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { flowFields, flowFormFromFields, formEditable } from '../src/core/flow-form.js';
 import { flowFormDefaults, validateFlowForm, type FlowForm } from '../src/core/forms.js';
 import { importFlowDocument } from '../src/main/flow-kinds.js';
-import { AddFlowForm } from '../src/renderer/components/AddForms.js';
 
 /**
  * A PERSON MAKES A FILE FLOW IN THE FORM (genie#1204 item 5 follow-up). The file trigger landed for agents (#1228);
@@ -71,26 +70,4 @@ describe('what the form refuses, in words beside the field', () => {
     });
 });
 
-describe('the form, drawn', () => {
-    const radios = (html: string, name: string) => (html.match(new RegExp(`<input[^>]*name="${name}"[^>]*>`, 'g')) ?? []).map((t) => /value="([^"]*)"/.exec(t)?.[1]);
-
-    it('offers what starts the flow; a file flow shows its filters and offers Move the file', () => {
-        const html = renderToStaticMarkup(<AddFlowForm defaults={flowFormFromFields(d, big)} problems={[]} onSubmit={() => {}} onCancel={() => {}} />);
-        expect(radios(html, 'trigger')).toEqual(['schedule', 'file']);
-        expect(html).toContain('data-flow-trigger="file"');
-        expect(html).toContain('name="watchFolder"');
-        expect(html).toContain('name="minSizeMb"');
-        expect(html).toContain('value="5"');
-        expect(radios(html, 'step')).toEqual(['command', 'agent', 'log', 'move']);
-        expect(html).toContain('value=".untracked"');
-        expect(html).not.toContain('name="cron"');
-    });
-
-    it('CONTROL: a schedule flow shows the schedule and never offers Move the file', () => {
-        const html = renderToStaticMarkup(<AddFlowForm defaults={d} problems={[]} onSubmit={() => {}} onCancel={() => {}} />);
-        expect(html).toContain('data-flow-trigger="schedule"');
-        expect(html).toContain('name="cron"');
-        expect(html).not.toContain('name="watchFolder"');
-        expect(radios(html, 'step')).toEqual(['command', 'agent', 'log']);
-    });
-});
+// The form, drawn, went with genie#1204 (a flow is drawn on the canvas); the document helpers above remain.

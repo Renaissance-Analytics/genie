@@ -89,13 +89,13 @@ describe('a flow row', () => {
         };
         const base = { workspaces: [], now: NOW, confirming: null, onAction: (a: FeatureAction) => { sent.push(a); }, onAsk: (k: 'arm' | 'delete' | null) => { asked.push(String(k)); } };
         press(FlowRow({ ...base, flow: flow() }));
-        // Edit opens the form on THIS flow (genie#1204, the edit step); it changes nothing by itself.
-        expect(sent).toEqual([{ kind: 'flows.runNow', flowId: 'flow_a' }, { kind: 'flows.edit', flowId: 'flow_a' }]);
+        // The name and Open open THIS flow on the canvas (genie#1204 item 1); neither changes anything by itself.
+        expect(sent).toEqual([{ kind: 'flows.openEditor', flowId: 'flow_a' }, { kind: 'flows.runNow', flowId: 'flow_a' }, { kind: 'flows.openEditor', flowId: 'flow_a' }]);
         expect(asked).toEqual(['arm', 'delete']);
         sent.length = 0;
         asked.length = 0;
         press(FlowRow({ ...base, flow: flow({ armed: true }) }));
-        expect(sent).toEqual([{ kind: 'flows.runNow', flowId: 'flow_a' }, { kind: 'flows.disarm', flowId: 'flow_a' }, { kind: 'flows.edit', flowId: 'flow_a' }]);
+        expect(sent).toEqual([{ kind: 'flows.openEditor', flowId: 'flow_a' }, { kind: 'flows.runNow', flowId: 'flow_a' }, { kind: 'flows.disarm', flowId: 'flow_a' }, { kind: 'flows.openEditor', flowId: 'flow_a' }]);
         expect(asked).toEqual(['delete']);
     });
 });

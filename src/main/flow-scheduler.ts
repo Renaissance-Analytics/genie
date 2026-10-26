@@ -1,5 +1,7 @@
 import { nextCronAfter } from '../core/cron.js';
 import { matchesFileTrigger, type FileAddedProps, type FileTriggerConfig } from '../core/file-trigger.js';
+import type { NodeOutcome } from '../core/flow-canvas.js';
+import type { RunObserver } from './flow-runner.js';
 import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome, Schedule } from './flow-store.js';
 
 /**
@@ -47,7 +49,7 @@ export interface FlowSchedulerDeps {
      * Execute one run of a flow. `trigger` is the schedule that fired, or the flow's first schedule for a
      * Run now (`null` when it has none). Answers the outcome; resolving with nothing means it ran.
      */
-    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null) => Promise<RunResult | void>;
+    readonly run: (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver) => Promise<RunResult | void>;
 }
 
 export interface Due {
@@ -178,17 +180,30 @@ export class FlowScheduler {
 
     async #execute(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger'], startedAt: number): Promise<FlowRun | null> {
         let result: { outcome: RunOutcome; reason?: string; steps?: readonly FlowRunStep[] };
+        // genie#1204: every node's outcome as the run goes — kept on disk while it is in flight, so a quit mid-run is
+        // recorded at the next launch rather than lost — and the Log nodes' lines.
+        let nodes: Record<string, NodeOutcome> = {};
+        const log: string[] = [];
+        const at = new Date(startedAt).toISOString();
+        const fileOf = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
+        const observer: RunObserver = {
+            nodes: (outcomes) => {
+                nodes = outcomes;
+                void this.#deps.store.markInFlight(flow.id, { at, trigger: kind, ...fileOf, nodes: outcomes }).catch(() => {});
+            },
+            log: (_nodeId, line) => { log.push(line); },
+        };
         try {
             // Answering nothing means it ran (a run port with nothing to say about its outcome).
-            const answered = (await this.#deps.run(flow, trigger)) as RunResult | undefined;
+            const answered = (await this.#deps.run(flow, trigger, observer)) as RunResult | undefined;
             result = answered ?? { outcome: 'ran' };
         } catch (error) {
             result = { outcome: 'failed', reason: error instanceof Error ? error.message : String(error) };
         }
-        return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...(trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {}) });
+        return this.#record(flow.id, { trigger: kind, startedAt, ...result, ...fileOf, nodes, log });
     }
 
-    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[] }): Promise<FlowRun | null> {
+    #record(flowId: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[] }): Promise<FlowRun | null> {
         return this.#deps.store.recordRun(flowId, run);
     }
 }

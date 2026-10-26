@@ -1,4 +1,6 @@
 import type { FileAddedProps } from '../core/file-trigger.js';
+import type { NodeOutcome } from '../core/flow-canvas.js';
+import { stepLabel } from '../core/flow-reach.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { parseCron, timeZoneProblem } from '../core/cron.js';
@@ -54,7 +56,8 @@ export interface FileFired {
     readonly file: FileAddedProps;
 }
 
-export type RunOutcome = 'ran' | 'failed' | 'held';
+/** `stopped` = Genie quit while it ran (genie#1204): recorded at the next launch, at the step it was on — never lost. */
+export type RunOutcome = 'ran' | 'failed' | 'held' | 'stopped';
 
 /** One step of a run that stopped (genie#1204): which node, in words, and how far it got. */
 export interface FlowRunStep {
@@ -78,7 +81,22 @@ export interface FlowRun {
     readonly reason?: string;
     /** A run that STOPPED (failed or held): its steps in graph order, and where it stopped (genie#1204). */
     readonly steps?: readonly FlowRunStep[];
+    /** Every node's outcome, for EVERY run — what the canvas draws over the flow's graph (genie#1204 item 6). */
+    readonly nodes?: Readonly<Record<string, NodeOutcome>>;
+    /** The Log nodes' lines, in order (bounded). */
+    readonly log?: readonly string[];
 }
+
+/** A run in flight, kept on disk as it goes (genie#1204 (e)): if Genie quits under it, the next launch records it `stopped`. */
+export interface FlowInFlight {
+    readonly at: string;
+    readonly trigger: FlowRun['trigger'];
+    readonly file?: string;
+    readonly nodes: Readonly<Record<string, NodeOutcome>>;
+}
+
+/** How many Log lines a run keeps. */
+export const RUN_LOG_LIMIT = 50;
 
 /** How many runs each flow keeps; the oldest goes first. */
 export const RUN_HISTORY_LIMIT = 20;
@@ -95,6 +113,8 @@ export interface FlowRecord {
     readonly refusals: readonly Refusal[];
     /** The last `RUN_HISTORY_LIMIT` runs, oldest first. */
     readonly runs: readonly FlowRun[];
+    /** The run going now, if any (genie#1204 (e)). */
+    readonly inFlight?: FlowInFlight;
     /** Set on a flow brought over from Genie 1 (core/v1-schedules.ts): which scheduled task it was. */
     readonly importedFrom?: { readonly v1SpecId: string };
 }
@@ -152,9 +172,11 @@ export class FlowStore {
         const raw = Array.isArray(data.flows) ? data.flows : [];
         const flows = raw.map((f) => normalised(f));
         const v1Import = data.v1Import !== null && typeof data.v1Import === 'object' ? data.v1Import : undefined;
-        const store = new FlowStore(file, { flows, ...(v1Import ? { v1Import } : {}) }, now);
+        // A run Genie quit in the middle of (genie#1204 (e)) is recorded STOPPED, at the step it was on — never silently lost.
+        const settled = flows.map((f) => (f.inFlight ? stoppedByQuit(f, new Date(now()).toISOString()) : f));
+        const store = new FlowStore(file, { flows: settled, ...(v1Import ? { v1Import } : {}) }, now);
         // A document that moved into the canonical shape is written back now, so the file never holds two shapes.
-        if (flows.some((f, i) => f.document !== raw[i]!.document)) await store.#flush();
+        if (flows.some((f, i) => f.document !== raw[i]!.document) || settled.some((f, i) => f !== flows[i])) await store.#flush();
         return store;
     }
 
@@ -248,8 +270,16 @@ export class FlowStore {
         return next;
     }
 
+    /** Keep the run going now on disk, as it goes (genie#1204 (e)); `null` = none. A flow removed meanwhile is left alone. */
+    async markInFlight(id: string, inFlight: FlowInFlight | null): Promise<void> {
+        const flow = this.get(id);
+        if (!flow) return;
+        const { inFlight: _was, ...rest } = flow;
+        await this.#replace(inFlight === null ? rest : { ...rest, inFlight });
+    }
+
     /** Record one run as it ended; the history keeps the last `RUN_HISTORY_LIMIT`. Returns the run, or null for a flow removed meanwhile. */
-    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[] }): Promise<FlowRun | null> {
+    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string; steps?: readonly FlowRunStep[]; nodes?: Readonly<Record<string, NodeOutcome>>; log?: readonly string[] }): Promise<FlowRun | null> {
         const flow = this.get(id);
         if (!flow) return null;
         const entry: FlowRun = {
@@ -260,8 +290,12 @@ export class FlowStore {
             ...(run.file !== undefined ? { file: run.file } : {}),
             ...(run.outcome !== 'ran' && run.steps !== undefined ? { steps: run.steps } : {}),
             ...(run.outcome !== 'ran' && run.reason !== undefined ? { reason: run.reason } : {}),
+            ...(run.nodes !== undefined && Object.keys(run.nodes).length > 0 ? { nodes: run.nodes } : {}),
+            ...(run.log !== undefined && run.log.length > 0 ? { log: run.log.slice(-RUN_LOG_LIMIT) } : {}),
         };
-        await this.#replace({ ...flow, runs: [...flow.runs, entry].slice(-RUN_HISTORY_LIMIT) });
+        // The run has ended, so it is no longer in flight — in the same write.
+        const { inFlight: _done, ...rest } = flow;
+        await this.#replace({ ...rest, runs: [...flow.runs, entry].slice(-RUN_HISTORY_LIMIT) });
         for (const l of this.#runListeners) l(id, entry);
         return entry;
     }
@@ -350,6 +384,26 @@ export class FlowStore {
         await writeJsonAtomic(this.#file, this.#data);
         for (const l of this.#listeners) l();
     }
+}
+
+/** A flow whose run was in flight when Genie quit: that run recorded `stopped`, at the step it was on (genie#1204 (e)). */
+function stoppedByQuit(flow: FlowRecord, at: string): FlowRecord {
+    const going = flow.inFlight!;
+    const nodes: Record<string, NodeOutcome> = Object.fromEntries(Object.entries(going.nodes).map(([id, o]) => [id, o === 'running' ? 'stopped' : o]));
+    const docNodes = flowNodes(flow.document);
+    const at_ = Object.keys(nodes).find((id) => nodes[id] === 'stopped');
+    const where = at_ !== undefined ? docNodes.find((n) => String(n.id) === at_) : undefined;
+    const run: FlowRun = {
+        at: going.at,
+        endedAt: at,
+        trigger: going.trigger,
+        outcome: 'stopped',
+        ...(going.file !== undefined ? { file: going.file } : {}),
+        reason: `Genie quit while this run was going; it stopped at ${where ? stepLabel(where) : 'its start'}. It was not resumed: run it again if it should finish`,
+        nodes,
+    };
+    const { inFlight: _gone, ...rest } = flow;
+    return { ...rest, runs: [...flow.runs, run].slice(-RUN_HISTORY_LIMIT) };
 }
 
 /**
