@@ -9,7 +9,7 @@ import type { IssueWatchSummary } from '../src/core/issue-watch.js';
 import { HUMAN } from '../src/core/inbox.js';
 import type { AgentRecord } from '../src/core/identity.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
-import { FlowCallers, FLOW_TOOLS, createFlowToolCaller, ensureFlowToolKinds, flowToolDefinitions } from '../src/main/flow-tools.js';
+import { FlowCallers, FLOW_TOOLS, createFlowToolCaller, ensureFlowToolKinds, flowToolDefinitions, questionWaiter } from '../src/main/flow-tools.js';
 import { createFlowRunner } from '../src/main/flow-runner.js';
 import type { FlowRecord } from '../src/main/flow-store.js';
 import { genieToolDeps } from '../src/main/genie-tool-deps.js';
@@ -187,32 +187,148 @@ describe('each step runs as the flow, through the tool’s own rules', () => {
         expect(services.attention.finished().at(-1)).toMatchObject({ agentName: 'flow "nightly"', handoff: 'report written' });
     });
 
-    it('agentinbox: a message to the person arrives from the flow; to an agent the flow may not reach, refused (an agent’s rule)', async () => {
+    it('agentinbox: a flow acts with the PERSON’s reach (genie#761 again, closed): its message to the person and to an agent of its workspace is delivered, from the flow', async () => {
         expect(await run(step('agentinbox', { action: 'send', to: 'human', text: 'the report is ready' }))).toEqual({ outcome: 'ran' });
         expect(services.inbox.involving(HUMAN).map((m) => m.text)).toContain('the report is ready');
-        expect(await run(step('agentinbox', { action: 'send', to: 'atlas', text: 'hi' }))).toMatchObject({ outcome: 'failed', reason: expect.stringMatching(/not reachable/) });
+        expect(await run(step('agentinbox', { action: 'send', to: 'atlas', text: 'hi' }))).toEqual({ outcome: 'ran' });
+        const toAtlas = services.inbox.involving('agent_atlas' as never).filter((m) => m.to === 'agent_atlas');
+        expect(toAtlas).toHaveLength(1);
+        expect(toAtlas[0]).toMatchObject({ from: 'flow_nightly', text: 'flow "nightly": hi' });
     });
 
-    it('a Genie 1 flow’s tool step: one Genie 2 has under the same name comes over as that step (no terminalId); one renamed in Genie 2 is noted, not guessed at', async () => {
+    it('a Genie 1 flow’s tool step: one Genie 2 has under the same name comes over as that step (no terminalId)', async () => {
         const { planV1FlowImport } = await import('../src/core/v1-flows.js');
         const node = (id: string, kind: string, config: Record<string, unknown>) => ({ id, type: kind, position: { x: 0, y: 0 }, data: { kind, config } });
         const graph = (stepNode: unknown) => JSON.stringify({ nodes: [node('t', '@particle-academy/manual_trigger', {}), stepNode], edges: [{ id: 'e', source: 't', target: 's' }] });
         const plan = planV1FlowImport([
             { id: 'f-k', appId: null, title: 'remember', scopeJson: JSON.stringify({ kind: 'workspace', workspaceId: 'example' }), graphJson: graph(node('s', '@genie/knowledge', { action: 'add', title: 'T', terminalId: 'x' })) },
-            { id: 'f-s', appId: null, title: 'restart', scopeJson: JSON.stringify({ kind: 'workspace', workspaceId: 'example' }), graphJson: graph(node('s', '@genie/manageSite', { action: 'restart', site: 'docs' })) },
         ], { workspaces: [{ id: 'example' }] })!;
         const steps = (plan.flows.find((f) => f.v1Id === 'f-k')!.document.graph as { nodes: Array<{ kind: string; config: Record<string, unknown> }> }).nodes;
         expect(steps[1]).toMatchObject({ kind: '@genie/knowledge', config: { action: 'add', title: 'T' } });
         expect(steps[1]!.config).not.toHaveProperty('terminalId');
-        expect(plan.notes).toEqual([expect.stringMatching(/"restart".*node s: Genie 1's manageSite step is `sites` in Genie 2, whose settings differ; it was not converted/)]);
+        expect(plan.notes).toEqual([]);
+    });
+});
+
+describe('Genie 1’s renamed tool steps, mapped field by field (manageProcess → processes, manageSite → sites, manageService → services)', () => {
+    const node = (id: string, kind: string, config: Record<string, unknown>) => ({ id, type: kind, position: { x: 0, y: 0 }, data: { kind, config } });
+    const row = (id: string, step: Record<string, unknown>) => ({ id, appId: null, title: id, scopeJson: JSON.stringify({ kind: 'workspace', workspaceId: 'example' }), graphJson: JSON.stringify({ nodes: [node('t', '@particle-academy/manual_trigger', {}), node('s', step.kind as string, step.config as Record<string, unknown>)], edges: [{ id: 'e', source: 't', target: 's' }] }) });
+    const stepOf = async (id: string, kind: string, config: Record<string, unknown>) => {
+        const { planV1FlowImport } = await import('../src/core/v1-flows.js');
+        const plan = planV1FlowImport([row(id, { kind, config })], { workspaces: [{ id: 'example' }] })!;
+        const f = plan.flows[0];
+        return { step: f ? (f.document.graph as { nodes: Array<{ kind: string; config: Record<string, unknown> }> }).nodes[1]! : null, notes: plan.notes };
+    };
+
+    it('manageProcess: create → add, label → name, repo → folder, its id → the imported process; scheduled tasks too — nothing noted when everything maps', async () => {
+        expect(await stepOf('p1', '@genie/manageProcess', { action: 'create', label: 'queue', command: 'php artisan queue:work', repo: 'app', autostart: true, terminalId: 't' })).toEqual({ step: { kind: '@genie/processes', config: { action: 'add', name: 'queue', command: 'php artisan queue:work', folder: 'repos/app' } }, notes: [] });
+        expect((await stepOf('p2', '@genie/manageProcess', { action: 'create', label: 'nightly', command: 'npm run report', schedule: '0 3 * * *', scheduleKind: 'command' })).step).toEqual({ kind: '@genie/processes', config: { action: 'add', name: 'nightly', command: 'npm run report', schedule: '0 3 * * *', scheduleKind: 'command' } });
+        expect((await stepOf('p3', '@genie/manageProcess', { action: 'delete', id: 'abc' })).step).toEqual({ kind: '@genie/processes', config: { action: 'remove', process: 'proc_v1_abc' } });
+        expect((await stepOf('p4', '@genie/manageProcess', { action: 'run-now', processId: 'abc' })).step!.config).toEqual({ action: 'run-now', process: 'proc_v1_abc' });
     });
 
-    it('ForceTheQuestion: puts the question to the person and goes on at once', async () => {
-        const questions = [{ question: 'Ship the nightly build?', header: 'Ship', options: [{ label: 'Yes', description: 'ship it' }, { label: 'No', description: 'hold it' }], multiSelect: false }];
-        expect(await run(step('ForceTheQuestion', { questions }))).toEqual({ outcome: 'ran' });
-        expect(services.attention.pending().map((q) => q.agentName)).toEqual(['flow "nightly"']);
+    it('manageProcess: only what has no counterpart is noted — a create that does not start, a nudge naming a Genie 1 agent id', async () => {
+        const r = await stepOf('p5', '@genie/manageProcess', { action: 'create', label: 'later', command: 'npm run x' });
+        expect(r.step!.config).toEqual({ action: 'add', name: 'later', command: 'npm run x' });
+        expect(r.notes).toEqual([expect.stringMatching(/"p5".*imported; node s: autostart \(off\): Genie 2 starts a process when it is added/)]);
+        const nudge = await stepOf('p6', '@genie/manageProcess', { action: 'create', label: 'standup', schedule: '0 9 * * *', scheduleKind: 'agent-nudge', prompt: 'post it', nudgeAgentId: 'u-atlas' });
+        expect(nudge.step!.config).toEqual({ action: 'add', name: 'standup', schedule: '0 9 * * *', scheduleKind: 'agent-nudge', prompt: 'post it' });
+        expect(nudge.notes).toEqual([expect.stringMatching(/nudgeAgentId: a Genie 1 agent id/)]);
     });
 
+    it('manageSite: create → add with the site’s mode — a host port, a static root, a PHP root and version; an argv command becomes the dev command', async () => {
+        expect((await stepOf('s1', '@genie/manageSite', { action: 'create', name: 'web', repo: 'site', hostServe: { mode: 'static', root: 'dist', spa: true } })).step).toEqual({ kind: '@genie/sites', config: { action: 'add', name: 'web', repoPath: 'repos/site', mode: 'static', root: 'dist', spa: true } });
+        expect((await stepOf('s2', '@genie/manageSite', { action: 'create', name: 'api', repo: 'api', hostServe: { mode: 'php', root: 'public', version: '8.4' } })).step!.config).toEqual({ action: 'add', name: 'api', repoPath: 'repos/api', mode: 'php', root: 'public', phpVersion: '8.4' });
+        expect((await stepOf('s3', '@genie/manageSite', { action: 'create', name: 'dev', hostPort: 5173 })).step!.config).toEqual({ action: 'add', name: 'dev', mode: 'proxy', hostPort: 5173 });
+        const cmd = await stepOf('s4', '@genie/manageSite', { action: 'create', name: 'app', repo: 'app', command: ['npm', 'run', 'dev'], port: 3000, image: 'node:20', runMode: 'host' });
+        expect(cmd.step!.config).toEqual({ action: 'add', name: 'app', repoPath: 'repos/app', mode: 'proxy', devCommand: 'npm run dev' });
+        expect(cmd.notes).toEqual([expect.stringMatching(/node s: port \(3000\): Genie 2 chooses the port — put \{port\} in the command where it goes/)]);
+        expect((await stepOf('s5', '@genie/manageSite', { action: 'logs', id: 'web', tail: 50 })).step!.config).toEqual({ action: 'logs', site: 'web', lines: 50 });
+    });
+
+    it('manageSite: what Genie 2’s sites cannot do is noted, field by field', async () => {
+        const r = await stepOf('s6', '@genie/manageSite', { action: 'create', name: 'shop', repo: 'shop', hostServe: { mode: 'octane', server: 'swoole' }, genName: 'shop.gen', browserExposed: true });
+        expect(r.notes).toHaveLength(1);
+        expect(r.notes[0]).toMatch(/hostServe\.mode \(octane\)/);
+        expect(r.notes[0]).toMatch(/genName/);
+        expect(r.notes[0]).toMatch(/browserExposed/);
+    });
+
+    it('manageService: add → add with its scope; connection → env; what has no counterpart is noted', async () => {
+        expect((await stepOf('v1', '@genie/manageService', { action: 'add', engine: 'postgres', version: '16', dedicated: false })).step).toEqual({ kind: '@genie/services', config: { action: 'add', engine: 'postgres', version: '16', scope: 'shared' } });
+        expect((await stepOf('v2', '@genie/manageService', { action: 'add', engine: 'postgres', dedicated: true, extensions: ['vector'] })).step!.config).toEqual({ action: 'add', engine: 'postgres', scope: 'dedicated', variant: 'pgvector' });
+        expect((await stepOf('v3', '@genie/manageService', { action: 'connection', id: 'svc_1' })).step!.config).toEqual({ action: 'env', id: 'svc_1' });
+        const purge = await stepOf('v4', '@genie/manageService', { action: 'remove', id: 'svc_1', purge: true });
+        expect(purge.step!.config).toEqual({ action: 'remove', id: 'svc_1' });
+        expect(purge.notes).toEqual([expect.stringMatching(/purge: deleting a service’s data is the person’s alone/)]);
+    });
+});
+
+describe('ForceTheQuestion in a flow WAITS for the answer and branches on it', () => {
+    const questions = [{ question: 'Ship the nightly build?', header: 'Ship', options: [{ label: 'Yes', description: 'ship it' }, { label: 'No', description: 'hold it' }], multiSelect: false }];
+    const wrote: string[] = [];
+    const ask = (waitMinutes?: number) => flowOf([
+        n('t', 'manual_trigger'),
+        n('q', '@genie/ForceTheQuestion', { questions, ...(waitMinutes !== undefined ? { waitMinutes } : {}) }, 200),
+        n('y', 'genie/knowledge_add', { workspace: 'example', title: 'yes', body: '{{in.note}}' }, 400),
+        n('no', 'genie/knowledge_add', { workspace: 'example', title: 'no' }, 400),
+        n('o', 'genie/knowledge_add', { workspace: 'example', title: 'note only', body: '{{in.note}}' }, 400),
+        n('d', 'genie/knowledge_add', { workspace: 'example', title: 'dismissed', body: '{{in.outcome}}' }, 400),
+    ], [e('t', 'q'), e('q', 'y', 'Yes'), e('q', 'no', 'No'), e('q', 'o', 'none chosen'), e('q', 'd', 'dismissed')]);
+    const runAsk = (flow: FlowRecord) => createFlowRunner({ asleep: () => false, ports: (f) => ({ runCommand: async () => ({ exitCode: 0, output: '' }), promptAgent: async () => '', addKnowledge: async (k) => { wrote.push(`${k.title}:${k.body}`); return { id: 'k' }; }, callTool: (tool, args) => call(f, tool, args), awaitQuestion: questionWaiter(services.attention) }) })(flow, null);
+    const pendingId = async () => {
+        for (let i = 0; i < 400 && services.attention.pending().length === 0; i++) await new Promise((r) => setTimeout(r, 0));
+        return services.attention.pending()[0]!.id;
+    };
+
+    beforeEach(() => { wrote.length = 0; });
+
+    it('its ports are the first question’s options, then "none chosen" and "dismissed"', () => {
+        const kind = getNodeKind('@genie/ForceTheQuestion')!;
+        const outputs = typeof kind.outputs === 'function' ? kind.outputs({ questions } as never) : kind.outputs;
+        expect((outputs as Array<{ id: string }>).map((p) => p.id)).toEqual(['Yes', 'No', 'none chosen', 'dismissed']);
+    });
+
+    it('HOLDS the run until the person answers, then goes down the chosen option with their note', async () => {
+        let done = false;
+        const going = runAsk(ask()).then((r) => { done = true; return r; });
+        const id = await pendingId();
+        await new Promise((r) => setTimeout(r, 30));
+        expect(done).toBe(false);
+        await services.attention.answer(id, { selections: [['Yes']], notes: ['ship at 9'], note: '' });
+        expect(await going).toEqual({ outcome: 'ran' });
+        expect(wrote).toEqual(['yes:ship at 9']);
+    });
+
+    it('the other option goes down its own port', async () => {
+        const going = runAsk(ask());
+        await services.attention.answer(await pendingId(), { selections: [['No']], notes: [''], note: '' });
+        await going;
+        expect(wrote).toEqual(['no:']);
+    });
+
+    it('a note with no option chosen goes down "none chosen", carrying the note', async () => {
+        const going = runAsk(ask());
+        await services.attention.answer(await pendingId(), { selections: [[]], notes: ['not tonight'], note: '' });
+        await going;
+        expect(wrote).toEqual(['note only:not tonight']);
+    });
+
+    it('dismissed by the person: down "dismissed"', async () => {
+        const going = runAsk(ask());
+        await services.attention.dismiss(await pendingId());
+        await going;
+        expect(wrote).toEqual(['dismissed:dismissed']);
+    });
+
+    it('no answer in time: down "dismissed" as timed out, and the person is not asked any more', async () => {
+        expect(await runAsk(ask(0.001))).toEqual({ outcome: 'ran' });
+        expect(wrote).toEqual(['dismissed:timed out']);
+        expect(services.attention.pending()).toEqual([]);
+    });
+});
+
+describe('the rest', () => {
     it('templates resolve into a tool step’s settings, from the step before it', async () => {
         const flow = flowOf([n('t', 'schedule_trigger', { cron: '0 3 * * *' }), n('s', '@genie/knowledge', { action: 'add', title: 'fired on {{in.cron}}' }, 240)], [e('t', 's')]);
         await createFlowRunner({ asleep: () => false, ports: (f) => ({ runCommand: async () => ({ exitCode: 0, output: '' }), promptAgent: async () => '', addKnowledge: async () => ({ id: 'k' }), callTool: (tool, args) => call(f, tool, args) }) })(flow, { nodeId: 't', cron: '0 3 * * *', timezone: undefined });

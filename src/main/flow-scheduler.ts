@@ -118,6 +118,9 @@ export class FlowScheduler {
         return this.#next ? { flowId: this.#next.flows[0]!.flowId, at: this.#next.at } : null;
     }
 
+    // RED-PHASE STUB (genie#1204).
+    async resumeInterrupted(): Promise<void> {}
+
     /** How many flows are executing right now — the Deck's "N flows running" signal. */
     inFlightCount(): number {
         return this.#running.size;

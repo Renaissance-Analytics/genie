@@ -169,3 +169,8 @@ export function createFlowToolCaller(deps: { registrations: readonly Registratio
         }
     };
 }
+
+// RED-PHASE STUB (genie#1204): a flow's ForceTheQuestion waits for the answer.
+export function questionWaiter(_attention: unknown): (questionId: string, waitMs: number) => Promise<unknown> {
+    return async () => ({ kind: 'not built' });
+}

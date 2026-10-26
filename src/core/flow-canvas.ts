@@ -390,3 +390,7 @@ export function flowSummary(document: unknown, nowMs: number): { trigger: string
 export function starterDocument(): FlowDocument {
     return { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 'trigger', kind: '@particle-academy/manual_trigger', position: { x: 0, y: 0 } }], edges: [] } } as unknown as FlowDocument;
 }
+
+// RED-PHASE STUB (genie#1204): which steps a resumed run may run again.
+export const RESUMABLE_KINDS: readonly string[] = [];
+export function safeToRerun(_kind: string): boolean { return false; }
