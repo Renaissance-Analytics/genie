@@ -123,7 +123,7 @@ export class InboxStore {
     #mail: MailFile;
     readonly #waiters = new Set<Waiter>();
     readonly #sendListeners = new Set<(to: Participant, message: InboxMessage) => void>();
-    readonly #readListeners = new Set<(reader: Participant) => void>();
+    readonly #readListeners = new Set<(reader: Participant, ids?: readonly string[]) => void>();
     readonly #now: () => string;
 
     private constructor(dir: string, mail: MailFile, now: () => string) {
@@ -153,7 +153,7 @@ export class InboxStore {
     }
 
     /** A receive acknowledged mail — `reader` read it. What a sender's read receipts change on (nothing polls). */
-    onRead(listener: (reader: Participant) => void): () => void {
+    onRead(listener: (reader: Participant, ids?: readonly string[]) => void): () => void {
         this.#readListeners.add(listener);
         return () => { this.#readListeners.delete(listener); };
     }
@@ -204,7 +204,7 @@ export class InboxStore {
         const gone = before - this.#mail.messages.length;
         if (gone > 0) {
             await this.#flush();
-            for (const l of this.#readListeners) l(a);
+            for (const l of this.#readListeners) l(a, []);
         }
         return gone;
     }
@@ -254,12 +254,16 @@ export class InboxStore {
             const last = page.at(-1)!.seq;
             const readAt = this.#now();
             this.#mail.cursors[participant] = last;
-            this.#mail.messages = this.#mail.messages.map((m) =>
-                m.to === participant && m.readAt === null && m.seq > from && m.seq <= last ? { ...m, readAt } : m,
-            );
+            // WHICH messages this receive read (genie#1209): the Dashboard marks each one's signal read.
+            const read: string[] = [];
+            this.#mail.messages = this.#mail.messages.map((m) => {
+                if (!(m.to === participant && m.readAt === null && m.seq > from && m.seq <= last)) return m;
+                read.push(m.id);
+                return { ...m, readAt };
+            });
             await this.#flush();
             page = page.map((m) => this.#mail.messages.find((x) => x.seq === m.seq)!);
-            for (const l of this.#readListeners) l(participant);
+            for (const l of this.#readListeners) l(participant, read);
         }
 
         return { messages: page, cursor: this.#cursorOf(participant) };

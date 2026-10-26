@@ -12,6 +12,7 @@ import { slugsFor } from '../core/address.js';
 const ALERT_TOAST_MS = 8_000;
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
 import type { Headroom } from '../core/headroom.js';
+import { mailSignals, type MailSignal } from '../core/mail-signals.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
@@ -588,6 +589,17 @@ function DesktopApp({ bridge }: AppProps) {
             setTimeout(() => setRowEmoji((prev) => { if (prev[id] !== emoji) return prev; const next = { ...prev }; delete next[id]; return next; }), ROW_EMOJI_MS);
         }
     }), [resolvedBridge]);
+    // MAIL BETWEEN AGENTS ON THE BOARD (genie#1209): a send starts a signal, a read marks it, a tick lets it go.
+    const [mailSignalList, setMailSignalList] = useState<readonly MailSignal[]>([]);
+    useEffect(() => resolvedBridge?.onAction?.((action) => {
+        if (action.kind === 'mail-sent' && action.agentId && action.to && action.id) setMailSignalList((s) => mailSignals(s, { kind: 'sent', id: action.id!, from: action.agentId!, to: action.to!, at: Date.now() }));
+        else if (action.kind === 'mail-read' && action.ids) setMailSignalList((s) => mailSignals(s, { kind: 'read', ids: action.ids!, at: Date.now() }));
+    }), [resolvedBridge]);
+    useEffect(() => {
+        if (mailSignalList.length === 0) return;
+        const t = setInterval(() => setMailSignalList((s) => mailSignals(s, { kind: 'tick', at: Date.now() })), 1_000);
+        return () => clearInterval(t);
+    }, [mailSignalList.length]);
     const featureAct = (action: FeatureAction, what: string) => {
         void (resolvedBridge?.features ?? NO_FEATURES).act(action).then(setFeatures).catch((error: unknown) => {
             console.error(`[genie] ${what}:`, (error as Error).message);
@@ -1284,6 +1296,7 @@ function DesktopApp({ bridge }: AppProps) {
         <Shell
             rowEmoji={rowEmoji}
             rateLimits={rateLimits}
+            mailSignals={mailSignalList}
             route={route}
             address={shownAddress}
             snapshot={snapshot}
