@@ -152,10 +152,10 @@ describe('each step runs as the flow, through the tool’s own rules', () => {
     });
 
     it('sites: adds a site for a server already running, in the workspace', async () => {
-        await mkdir(join(wsPath, 'app'), { recursive: true });
+        await mkdir(join(wsPath, 'repos', 'app'), { recursive: true });
         // A site is kept in the workspace's envelope (the tool refuses a workspace without one, for a flow as for an agent).
         await writeFile(join(wsPath, 'project.json'), JSON.stringify({ name: 'example' }));
-        expect(await run(step('sites',{ action: 'add', name: 'docs-app', repoPath: 'app', mode: 'proxy', hostPort: 4100 }))).toEqual({ outcome: 'ran' });
+        expect(await run(step('sites', { action: 'add', name: 'docs-app', repoPath: 'repos/app', mode: 'proxy', hostPort: 4100 }))).toEqual({ outcome: 'ran' });
         expect(services.sites.list('example').map((s) => s.host)).toEqual(['docs-app.gen']);
     });
 
