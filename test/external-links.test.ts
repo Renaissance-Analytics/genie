@@ -46,10 +46,10 @@ describe('a window’s links', () => {
 });
 
 describe('the wiring', () => {
-    it('every Genie window is guarded — main, Take Over, the file panel (COUNTED: three)', () => {
+    it('every Genie window is guarded — main, Take Over, the file panel, the flow editor (COUNTED: four)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        expect(main.match(/new BrowserWindow\(/g)).toHaveLength(3);
-        expect(main.match(/guardWindowLinks\(win\.webContents, \(url\) => \{ void shell\.openExternal\(url\)\.catch\(\(\) => \{\}\); \}\);/g)).toHaveLength(3);
+        expect(main.match(/new BrowserWindow\(/g)).toHaveLength(4);
+        expect(main.match(/guardWindowLinks\(win\.webContents, \(url\) => \{ void shell\.openExternal\(url\)\.catch\(\(\) => \{\}\); \}\);/g)).toHaveLength(4);
     });
 
     it('a terminal’s URL is clickable and goes the same way: window.open, which the guard sends to the browser', () => {

@@ -26,7 +26,8 @@ describe('every servable feature surface is reachable by a labelled control', ()
         // DERIVED, not typed: every servable surface that is not reached through an agent or a workspace row. A typed
         // list left the Genie Browser out, and the owner found it missing (2026-10-14) — a new surface must not need
         // someone to remember to add it here.
-        const reachedOtherwise = new Set(['dashboard', 'deck', 'agent', 'workspace', 'takeover', 'files']);
+        // `flow` is the flow editor's own window (genie#1204), reached from a row on the Flows page, as `files` from its panel.
+        const reachedOtherwise = new Set(['dashboard', 'deck', 'agent', 'workspace', 'takeover', 'files', 'flow']);
         const features = SERVABLE.filter((s) => !reachedOtherwise.has(s));
         expect(features).toContain('browser');
         const unreachable = features.filter((s) => !titleBar.has(`genie://${s}`) && !html.includes(`data-nav="genie://${s}"`));

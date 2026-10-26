@@ -2675,9 +2675,9 @@ async function boot(): Promise<void> {
     });
     const featurePorts: FeaturePorts = {
         ...processPorts(),
-        // The flow editor's own window (genie#1204): Open, a row's name, Add a flow.
-        openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         openInBrowser: openInBrowserFor('user-gesture'),
+        // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
+        openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
         // An approval's note reaches the agent (beta.33 item 16): now, or when its turn ends.
         deliverToAgent: (agentId, text) => host?.deliver(agentId as AgentId, text, 'you') ?? false,
         // The Deck's Dismiss on a recorded main-process error.

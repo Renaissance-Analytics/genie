@@ -47,16 +47,17 @@ export function importFlowDocument(document: unknown): FlowImport {
         // Both shapes at once: the engine reads `graph` and would silently ignore the top-level steps.
         return { ok: false, problems: ['the document has nodes or edges both at the top level and under graph; send one graph'] };
     }
+    // What the engine cannot see (genie#1204): a kind Genie's runner does not execute, a Wait it cannot honour, a loop.
+    // Said FIRST, beside whatever the engine says: "Genie cannot run this step" is the answer, not its missing config.
+    const structural = structuralProblems(doc).map((p) => (p.nodeId !== undefined ? `node ${p.nodeId}: ${p.message}` : p.message));
     const result = importWorkflow(doc);
     if (!result.ok || result.issues.length > 0) {
-        const problems = result.issues.map((i) => (i.nodeId !== undefined ? `node ${i.nodeId}: ${i.message}` : i.edgeId !== undefined ? `edge ${i.edgeId}: ${i.message}` : i.message));
+        const problems = [...structural, ...result.issues.map((i) => (i.nodeId !== undefined ? `node ${i.nodeId}: ${i.message}` : i.edgeId !== undefined ? `edge ${i.edgeId}: ${i.message}` : i.message))];
         return { ok: false, problems: problems.length > 0 ? problems : ['not a usable workflow (check version: 1)'] };
     }
     const blank = blankRequired(result.graph);
-    if (blank.length > 0) return { ok: false, problems: blank };
-    // What the engine cannot see (genie#1204): a kind Genie's runner does not execute, a Wait it cannot honour, a loop.
-    const structural = structuralProblems(doc);
-    if (structural.length > 0) return { ok: false, problems: structural.map((p) => (p.nodeId !== undefined ? `node ${p.nodeId}: ${p.message}` : p.message)) };
+    if (blank.length > 0) return { ok: false, problems: [...structural, ...blank] };
+    if (structural.length > 0) return { ok: false, problems: structural };
     // A file name can be `$(curl …).png` or `a; rm -rf ~`: in a flow a file starts, no command templates a value.
     const shell = shellTemplatesInFileFlow({ nodes: result.graph.nodes.map((n) => { const d = (n.data ?? {}) as { kind?: unknown; config?: Record<string, unknown> }; return { id: n.id, kind: typeof d.kind === 'string' ? d.kind : '', config: d.config }; }) });
     if (shell.length > 0) {
