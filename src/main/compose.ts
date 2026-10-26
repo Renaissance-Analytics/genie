@@ -49,6 +49,9 @@ import { AttentionStore } from './attention-store.js';
 import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
 import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
 import { FlowScheduler } from './flow-scheduler.js';
+import { startFileSource, type RawWatchEvent } from './flow-file-source.js';
+import { fileMover } from './flow-file-move.js';
+import { FileTriggerWatches, nodeWatch } from './flow-file-watch.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
 import { GenLeafContexts } from './browser-trust.js';
@@ -936,10 +939,27 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 ),
                 // The person armed it (an agent never can), so what it writes is theirs.
                 addKnowledge: async (entry) => ({ id: knowledge.add({ ...entry, source: 'user' }).id }),
+                // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
+                moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
             }),
         }),
     });
     flowScheduler.plan();
+    // THE FILE TRIGGER (genie#1204): only the workspaces an armed file flow names are watched (flow-file-watch.ts); what
+    // lands there becomes an addition (flow-file-source.ts: de-duplicated, its size read once it stops growing) and starts
+    // the armed flows it matches.
+    const fileListeners = new Set<(event: RawWatchEvent) => void>();
+    const fileSource = startFileSource({
+        subscribe: (listener) => { fileListeners.add(listener); return () => { fileListeners.delete(listener); }; },
+        statFile: nodeWatch.statFile,
+        emit: (event) => flowScheduler.fileAdded(event),
+    });
+    const fileWatches = new FileTriggerWatches({
+        store: flows,
+        workspacePath: (id) => workspaceRef(id)?.path ?? null,
+        watch: nodeWatch.watch,
+        onEvent: (event) => { for (const l of fileListeners) l(event); },
+    });
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
     const stopLiveness = supervisor.watchLiveness();
@@ -1131,6 +1151,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
                 stopLiveness();
+                fileWatches.stop();
+                fileSource.stop();
                 // Nothing more is started (a port probe still in flight) or synced (a pending hosts write) from here.
                 frontDoorCtl.close();
                 // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`

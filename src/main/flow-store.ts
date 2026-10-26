@@ -1,3 +1,4 @@
+import type { FileAddedProps } from '../core/file-trigger.js';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { parseCron, timeZoneProblem } from '../core/cron.js';
@@ -47,6 +48,12 @@ export interface Schedule {
     readonly timezone: string | undefined;
 }
 
+/** A file run: the `genie/file_added` node that fired, and the file that landed (core/file-trigger.ts). */
+export interface FileFired {
+    readonly nodeId: string;
+    readonly file: FileAddedProps;
+}
+
 export type RunOutcome = 'ran' | 'failed' | 'held';
 
 /** One run of a flow, as it ended. */
@@ -56,7 +63,9 @@ export interface FlowRun {
     /** When it ended (ISO). A held-back run ends where it starts. */
     readonly endedAt: string;
     /** `schedule` = its timer fired; `manual` = the person's Run now. */
-    readonly trigger: 'schedule' | 'manual';
+    readonly trigger: 'schedule' | 'manual' | 'file';
+    /** A `file` run: the file that started it, relative to its workspace (genie#1204). */
+    readonly file?: string;
     readonly outcome: RunOutcome;
     /** Why it failed or was held back, in words. Absent for a run that ran. */
     readonly reason?: string;
@@ -183,6 +192,15 @@ export class FlowStore {
     }
 
     /** The schedule triggers in a flow's document, as written. */
+    /** The flow's `genie/file_added` triggers (genie#1204): each node's id and its config, as the document holds it. */
+    fileTriggers(id: string): { nodeId: string; config: Record<string, unknown> }[] {
+        const flow = this.get(id);
+        if (!flow) return [];
+        return flowNodes(flow.document)
+            .filter((n) => n.kind === 'genie/file_added')
+            .map((n) => ({ nodeId: String(n.id), config: { ...((n.config ?? {}) as Record<string, unknown>) } }));
+    }
+
     schedules(id: string): Schedule[] {
         const flow = this.get(id);
         return flow ? schedulesIn(flow.document) : [];
@@ -222,7 +240,7 @@ export class FlowStore {
     }
 
     /** Record one run as it ended; the history keeps the last `RUN_HISTORY_LIMIT`. Returns the run, or null for a flow removed meanwhile. */
-    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number }): Promise<FlowRun | null> {
+    async recordRun(id: string, run: { trigger: FlowRun['trigger']; outcome: RunOutcome; reason?: string; startedAt: number; file?: string }): Promise<FlowRun | null> {
         const flow = this.get(id);
         if (!flow) return null;
         const entry: FlowRun = {
@@ -230,6 +248,7 @@ export class FlowStore {
             endedAt: this.#iso(),
             trigger: run.trigger,
             outcome: run.outcome,
+            ...(run.file !== undefined ? { file: run.file } : {}),
             ...(run.outcome !== 'ran' && run.reason !== undefined ? { reason: run.reason } : {}),
         };
         await this.#replace({ ...flow, runs: [...flow.runs, entry].slice(-RUN_HISTORY_LIMIT) });

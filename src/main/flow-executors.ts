@@ -23,6 +23,8 @@ export interface FlowPorts {
     promptAgent(address: string, text: string): Promise<string>;
     runCommand(workspaceId: string, command: string, cwd: string | undefined): Promise<{ exitCode: number; output: string }>;
     addKnowledge(input: { title: string; body: string; class: MemoryClass; scope: Scope; tags: string[] }): Promise<{ id: string }>;
+    /** genie/file_move: into `toFolder` (relative) of the same workspace; `to: null` when it was already there. No shell. */
+    moveFile?(workspaceId: string, from: string, toFolder: string): Promise<{ from: string; to: string | null }>;
 }
 
 /** `{{a.b.c}}` → the value at that path in `inputs`, stringified; missing → empty. */
@@ -81,6 +83,17 @@ export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
             const cls = (typeof config.class === 'string' ? config.class : 'knowledge') as MemoryClass;
             const tags = text(config, 'tags', inputs).split(',').map((t) => t.trim()).filter((t) => t.length > 0);
             return ports.addKnowledge({ title, body: text(config, 'body', inputs), class: cls, scope: { kind: 'workspace', id: workspace }, tags });
+        },
+        'genie/file_move': async (ctx) => {
+            const config = configOf(ctx);
+            const inputs = ctx.inputs as Record<string, unknown>;
+            const workspace = text(config, 'workspace', inputs);
+            const from = text(config, 'from', inputs);
+            const to = text(config, 'to', inputs);
+            if (!workspace || !from || !to) ctx.abort('genie/file_move needs a workspace, a file and a folder');
+            if (!ports.moveFile) ctx.abort('moving a file is not available here');
+            const moved = await ports.moveFile!(workspace, from, to);
+            return { from: moved.from, to: moved.to ?? moved.from, moved: moved.to !== null };
         },
     };
 }

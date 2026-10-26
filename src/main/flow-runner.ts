@@ -4,7 +4,7 @@ import type { Resolution } from '../core/inbox.js';
 import { genieExecutors, type FlowPorts } from './flow-executors.js';
 import { importFlowDocument } from './flow-kinds.js';
 import type { RunResult } from './flow-scheduler.js';
-import type { FlowRecord, Schedule } from './flow-store.js';
+import type { FileFired, FlowRecord, Schedule } from './flow-store.js';
 import type { ProcessStatus, ProcessSupervisor } from './process-supervisor.js';
 
 /**
@@ -40,7 +40,7 @@ export interface FlowRunnerDeps {
 }
 
 /** The scheduler's `run`: one run of a flow, answering its outcome. Never throws. */
-export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | null) => Promise<RunResult> {
+export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null) => Promise<RunResult> {
     const now = deps.now ?? Date.now;
     return async (flow, trigger) => {
         if (deps.asleep(flow.workspaceId)) {
@@ -64,11 +64,16 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             promptAgent: (address, text) => watch(base.promptAgent(address, text)),
             runCommand: (workspaceId, command, cwd) => watch(base.runCommand(workspaceId, command, cwd)),
             addKnowledge: (input) => watch(base.addKnowledge(input)),
+            ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
         };
         const firedAt = new Date(now()).toISOString();
         // The schedule trigger is host-implemented in fancy-flow: it hands its downstream what fired.
-        const trig = () => ({ cron: trigger?.cron ?? '', timezone: trigger?.timezone ?? 'local', firedAt });
-        const executors = { ...genieExecutors(ports), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig };
+        const schedule = trigger !== null && 'cron' in trigger ? trigger : null;
+        const trig = () => ({ cron: schedule?.cron ?? '', timezone: schedule?.timezone ?? 'local', firedAt });
+        // A file run (genie#1204): its trigger hands the steps after it the file that landed — {{in.path}} and the rest.
+        const file = trigger !== null && 'file' in trigger ? trigger.file : null;
+        const fileTrig = () => ({ ...(file ?? {}), firedAt });
+        const executors = { ...genieExecutors(ports), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig };
         // From the trigger that fired, so another entry point's branch does not run with it; none named → every entry.
         const fired = trigger?.nodeId ?? null;
         const entry = fired !== null && graph.nodes.some((n) => n.id === fired) ? { entryNodes: [fired] } : {};
