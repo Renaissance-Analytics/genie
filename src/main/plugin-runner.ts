@@ -92,9 +92,19 @@ function pluginIdOf(pluginDir: string): string {
     return pluginDir.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? pluginDir;
 }
 
+/**
+ * The command a plugin subprocess runs (genie#871): the running binary on the module, with the minimal env — and, under
+ * Electron, ELECTRON_RUN_AS_NODE, without which Genie.exe starts a SECOND GENIE instead of running the module (the tool
+ * never ran, and the single-instance lock's handler pulled the main window to the front).
+ */
+export function subprocessCommand(spec: LaunchSpec, runtime: { execPath: string; electron: boolean }): { file: string; args: string[]; env: Record<string, string> } {
+    return { file: runtime.execPath, args: [spec.module], env: { ...spec.env, ...(runtime.electron ? { ELECTRON_RUN_AS_NODE: '1' } : {}) } };
+}
+
 /** The real launch: Node, the module, the minimal env, pipes. Lines are split on the way in; the child never sees Genie's stdio. */
 export function launchSubprocess(spec: LaunchSpec): PluginChild {
-    const proc = spawn(process.execPath, [spec.module], { env: { ...spec.env }, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const cmd = subprocessCommand(spec, { execPath: process.execPath, electron: Boolean(process.versions.electron) });
+    const proc = spawn(cmd.file, cmd.args, { env: cmd.env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     const lines = (stream: NodeJS.ReadableStream, emit: (line: string) => void) => {
         let buffer = '';
         stream.setEncoding('utf8');
