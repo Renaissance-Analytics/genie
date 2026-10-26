@@ -347,6 +347,9 @@ export function listModelsOptionsFor(
 export const realListModels: ListProviderModels = (provider) =>
     listModels(provider, listModelsOptionsFor(provider, process.env, { execPath: process.execPath, electron: Boolean(process.versions.electron) }));
 
+/** How often a held login is read again while it waits (genie#1195). */
+export const LIMIT_REREAD_MS = 15 * 60_000;
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
@@ -553,6 +556,12 @@ export class SessionHost {
 
     readonly #currentRecord: ((agentId: AgentId) => AgentRecord | null) | undefined;
     readonly #gate: RateLimitGate;
+    /**
+     * WHEN EACH HELD LOGIN WAS LAST READ (genie#1195). A stated reset can be days late — Codex's 7-day window lifted ~5
+     * days before it said — and a held session runs no turn, so nothing would ever read it again. While a login is held,
+     * one of its sessions is asked to read every `LIMIT_REREAD_MS`; the answer goes through the gate like any reading.
+     */
+    readonly #lastLimitRead = new Map<string, number>();
     readonly #schedule: (ms: number, fn: () => void) => () => void;
     #wakeCancel: (() => void) | null = null;
 
@@ -599,7 +608,36 @@ export class SessionHost {
             if (v.state === 'paused') next = Math.min(next, v.resumeAtMs);
             else if (v.state === 'retrying') next = Math.min(next, v.nextTryAtMs);
         }
+        const reread = this.#rereadHeld(now);
+        next = Math.min(next, reread.next);
         if (next !== Infinity) this.#wakeCancel = this.#schedule(next - now, () => this.#wake());
+        // Asked LAST, once this wake is settled: a reading can answer at once and wake the host again.
+        for (const ask of reread.ask) ask();
+    }
+
+    /**
+     * Read every held login whose interval has run, through ONE of its sessions that can (one login, one read); returns
+     * the next read still ahead and the reads to ask. An open login is forgotten, so a later hold starts afresh.
+     */
+    #rereadHeld(now: number): { next: number; ask: Array<() => void> } {
+        let next = Infinity;
+        const ask: Array<() => void> = [];
+        for (const provider of new Set([...this.#running.values()].map((e) => e.provider))) {
+            const state = this.#gate.view(this.#loginOf(provider), now).state;
+            if (state !== 'paused' && state !== 'retrying') { this.#lastLimitRead.delete(provider); continue; }
+            // The session that will be asked: the first on this login whose driver can read. None — nothing to wait for.
+            const reader = [...this.#running.values()].find((e) => e.provider === provider && e.session.canReadRateLimits);
+            if (!reader) { this.#lastLimitRead.delete(provider); continue; }
+            const last = this.#lastLimitRead.get(provider);
+            if (last === undefined) { this.#lastLimitRead.set(provider, now); next = Math.min(next, now + LIMIT_REREAD_MS); continue; }
+            if (now < last + LIMIT_REREAD_MS) { next = Math.min(next, last + LIMIT_REREAD_MS); continue; }
+            // prism-acp never rejects it (a failed read is reported on the session); a rejection from an older or fake
+            // driver is that same "no reading" — the hold stands and the next interval asks again.
+            ask.push(() => { reader.session.readRateLimits()?.catch(() => {}); });
+            this.#lastLimitRead.set(provider, now);
+            next = Math.min(next, now + LIMIT_REREAD_MS);
+        }
+        return { next, ask };
     }
 
     #resumeHeld(provider: string): void {
