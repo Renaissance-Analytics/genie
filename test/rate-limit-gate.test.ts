@@ -110,10 +110,29 @@ describe('the gate', () => {
         const gate = new RateLimitGate({ marginMs: 0, retryBackoffMs: [15 * MIN, 30 * MIN] });
         gate.breach(claude, T0, 'limit');
         expect(gate.due(T0 + 15 * MIN)).toEqual([claude]);
-        expect(gate.view(claude, T0 + 15 * MIN)).toMatchObject({ state: 'retrying' }); // CONTROL: held until the try says
+        // The try is in flight: nothing is held, so it is open — a past "next try" said as retrying re-armed a 0 ms wake
+        // forever (genie#1195). The step is still counted until the try says how it went.
+        expect(gate.view(claude, T0 + 15 * MIN)).toEqual({ state: 'open' });
         gate.ok(claude);
         expect(gate.view(claude, T0 + 16 * MIN)).toEqual({ state: 'open' });
         expect(gate.breach(claude, T0 + 20 * MIN, 'limit')).toMatchObject({ attempt: 1, nextTryAtMs: T0 + 35 * MIN });
+    });
+
+    it('an ALLOWED reading on every window ends a no-reset backoff: the held login is due at once, the next breach is step 1', () => {
+        const gate = new RateLimitGate({ marginMs: 0, retryBackoffMs: [15 * MIN, 30 * MIN] });
+        gate.breach(codex, T0, 'limit');
+        gate.report(codex, [{ window: 'primary', status: 'allowed', resetsAtMs: T0 + 300 * MIN }, { window: 'secondary', status: 'allowed', resetsAtMs: T0 + 9000 * MIN }], T0 + MIN, null);
+        expect(gate.view(codex, T0 + MIN)).toEqual({ state: 'open' });
+        expect(gate.due(T0 + MIN)).toEqual([codex]);
+        expect(gate.due(T0 + 2 * MIN)).toEqual([]);
+        expect(gate.breach(codex, T0 + 3 * MIN, 'limit')).toMatchObject({ attempt: 1, nextTryAtMs: T0 + 18 * MIN });
+    });
+
+    it('CONTROL: a reading with one window still rejected (no reset) keeps the backoff counting', () => {
+        const gate = new RateLimitGate({ marginMs: 0, retryBackoffMs: [15 * MIN, 30 * MIN] });
+        gate.breach(codex, T0, 'limit');
+        gate.report(codex, [{ window: 'primary', status: 'allowed', resetsAtMs: T0 + 300 * MIN }, { window: 'secondary', status: 'rejected', resetsAtMs: null }], T0 + MIN, null);
+        expect(gate.view(codex, T0 + MIN)).toMatchObject({ state: 'retrying', attempt: 2 });
     });
 
     it('a reset in the past and due() agree: nothing is due before the margin has run from now', () => {
