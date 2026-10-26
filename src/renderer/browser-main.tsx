@@ -17,6 +17,8 @@ interface BrowserBridge {
     state(): Promise<BrowserSnapshot>;
     navigate(address: string): Promise<Answer>;
     open(address: string): Promise<Answer>;
+    /** A site chip: that site's tab, shown — or a new one (genie#1196). */
+    showSite(address: string): Promise<Answer>;
     newTab(): Promise<Answer>;
     activate(id: string): Promise<void>;
     close(id: string): Promise<void>;
@@ -68,7 +70,7 @@ function Browser({ bridge }: { bridge: BrowserBridge }) {
             isMac={/Mac/i.test(navigator.platform ?? '')}
             controlsInset={controlsInset}
             onNavigate={(address) => answer(bridge.navigate(address))}
-            onOpen={(address) => answer(bridge.navigate(address))}
+            onOpen={(address) => answer(bridge.showSite(address))}
             onNewTab={() => answer(bridge.newTab())}
             onActivate={(id) => { setRefusal(null); void bridge.activate(id); }}
             onClose={(id) => void bridge.close(id)}

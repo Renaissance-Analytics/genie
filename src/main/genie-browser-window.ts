@@ -59,6 +59,15 @@ export interface GenieBrowserPorts {
 
 export type BrowserAnswer = { readonly ok: true } | { readonly ok: false; readonly error: string };
 
+/** A URL's host, lower-cased; `null` when it is not a URL. */
+function hostOf(url: string): string | null {
+    try {
+        return new URL(url).host.toLowerCase();
+    } catch {
+        return null;
+    }
+}
+
 /** Electron's ERR_ABORTED: a load replaced by another (a click during a load) — not a failure to show. */
 const ABORTED = -3;
 
@@ -85,6 +94,27 @@ export class GenieBrowser {
     newTab(): BrowserAnswer {
         const first = initialGenUrl(this.#ports.enabledHosts());
         return first === null ? { ok: false, error: 'No Genie sites are being served.' } : this.open(first);
+    }
+
+    /**
+     * A SITE CHIP (genie#1196): SHOW that site — the tab already on its host, shown and NOT loaded again (each tab is its
+     * own view, with its own page and history, so it is exactly where the person left it) — or a new tab on it. The
+     * active tab first when it is on that host. Never re-navigates the tab on screen: that is what lost the page of the
+     * site the person came back to.
+     */
+    showSite(input: string): BrowserAnswer {
+        const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
+        if ('error' in nav) return { ok: false, error: nav.error };
+        const host = hostOf(nav.url);
+        const onHost = (t: BrowserTab) => host !== null && hostOf(t.url) === host;
+        const active = this.#state.tabs.find((t) => t.id === this.#state.active);
+        const tab = active && onHost(active) ? active : this.#state.tabs.find(onHost);
+        if (tab) {
+            if (tab.id !== this.#state.active) this.activate(tab.id);
+            return { ok: true };
+        }
+        this.#openTab(nav.url);
+        return { ok: true };
     }
 
     /** The address bar: the active tab goes to `input`; with no tab open, one is opened. */

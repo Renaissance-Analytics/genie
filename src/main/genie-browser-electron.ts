@@ -119,6 +119,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     ipcMain.handle('browser-window:state', (event) => brain(event)?.snapshot() ?? null);
     ipcMain.handle('browser-window:navigate', (event, address: unknown) => brain(event)?.navigate(String(address ?? '')) ?? NOT_OURS);
     ipcMain.handle('browser-window:open', (event, address: unknown) => brain(event)?.open(String(address ?? '')) ?? NOT_OURS);
+    // A site chip: that site's tab, shown — or a new one (genie#1196).
+    ipcMain.handle('browser-window:show-site', (event, address: unknown) => brain(event)?.showSite(String(address ?? '')) ?? NOT_OURS);
     ipcMain.handle('browser-window:new-tab', (event) => brain(event)?.newTab() ?? NOT_OURS);
     ipcMain.handle('browser-window:activate', (event, id: unknown) => brain(event)?.activate(String(id)));
     ipcMain.handle('browser-window:close', (event, id: unknown) => brain(event)?.close(String(id)));
@@ -261,7 +263,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             }
             const target = address ?? (fresh ? initialGenUrl(hostsOf(key)) : null);
             if (target === null) return { ok: true };
-            return entry!.browser.open(target);
+            // A site opened from Genie shows its tab when one is open (genie#1196): never a second tab on the same site.
+            return entry!.browser.showSite(target);
         },
     };
 }
