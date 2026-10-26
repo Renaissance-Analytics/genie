@@ -71,8 +71,10 @@ describe('every main-process activation names its gesture', () => {
         expect(main.match(/[(,:]\s*revealMainWindow\s*[,)]/g) ?? []).toEqual([]);
     });
 
-    it('take-over, files, main and remote windows are shown through showWhenReady, with the opener’s activation', () => {
-        expect(main.match(/win\.once\('ready-to-show', \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(3);
+    it('take-over, files, flow editor, main and remote windows are shown through showWhenReady, with the opener’s activation', () => {
+        // Four `win` windows since genie#1204 added the flow editor's own window.
+        expect(main.match(/win\.once\('ready-to-show', \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(4);
+        expect(main).toMatch(/function openFlowEditorWindow\(route: string, activation: Activation\): void/);
         expect(main).toMatch(/function openTakeOverWindow\(route: string, activation: Activation\): void/);
         expect(main).toMatch(/function openFilesWindow\(route: string, activation: Activation\): void/);
     });
