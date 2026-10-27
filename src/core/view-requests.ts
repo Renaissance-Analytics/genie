@@ -46,11 +46,13 @@ export function viewDelivery(request: ViewRequest): ViewDelivery {
 }
 
 /**
- * WHICH WINDOWS A VIEW REQUEST REACHES — today's behaviour, written down so the tests can name it: every request reaches
- * every window (main's `showToPerson` broadcasts). genie#1302's follow-up changes this.
+ * WHICH WINDOWS A VIEW REQUEST REACHES (genie#1302). A navigation is the person's gesture to the MAIN window — the tray and
+ * the menu reveal it and move it — so it reaches that window only. Every window's renderer obeys `genie:navigate` by
+ * writing its hash, so a broadcast turned an open flow editor, take-over or file window into a second copy of the main
+ * app. A pulse moves nothing; it reaches every window, as before.
  */
-export function viewReaches(_delivery: ViewDelivery, _target: { readonly main: boolean }): boolean {
-    return true;
+export function viewReaches(delivery: ViewDelivery, target: { readonly main: boolean }): boolean {
+    return delivery.channel === 'genie:navigate' ? target.main : true;
 }
 
 /** The workspaces marked and not yet visited, each with what waits there. */

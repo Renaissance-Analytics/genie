@@ -53,7 +53,7 @@ import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
-import { viewDelivery, type ViewRequest } from '../core/view-requests.js';
+import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
@@ -585,7 +585,9 @@ function closeWindowAt(route: string): void {
  */
 function showToPerson(request: ViewRequest): void {
     const delivery = viewDelivery(request);
-    broadcast(delivery.channel, delivery.payload);
+    // A navigation goes to the MAIN window only (genie#1302): broadcast, it turned an open flow editor, take-over or file
+    // window into the main app too. A pulse moves nothing and still reaches every window.
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && viewReaches(delivery, { main: w === window })) w.webContents.send(delivery.channel, delivery.payload);
 }
 
 /** Pushed to EVERY window — a popped-out panel is a window too. */
