@@ -19,7 +19,7 @@ import { FilesHost } from '../src/main/files-host.js';
  * as base64 and clicked an `<a download>`. Genie 2 does better: MAIN opens the OS save dialog and streams the file to the
  * chosen path, so the bytes never cross into the renderer and a binary or large file exports whole. The dialog starts in
  * the folder the last export went to, else Downloads (Genie 1's main/dialog-start-dir.ts: the last place, for the session).
- * Files only — Genie 1 exported nothing, folders included.
+ * A folder exports as a .zip (genie#1288): see folder-export.test.ts.
  */
 
 describe('fileMenuItems — Export… on a file and on an editor tab', () => {
@@ -34,8 +34,11 @@ describe('fileMenuItems — Export… on a file and on an editor tab', () => {
         expect(ids('tab', all)).toEqual(['open-external', 'reveal', '-', 'export', '-', 'copy-path', 'copy-relative-path', '-', 'close', 'close-others', 'close-all']);
     });
 
-    it('a folder and empty space offer none (Genie 1 exported nothing; folders are not in scope)', () => {
-        expect(ids('tree-folder', all)).not.toContain('export');
+    it('a folder offers it too: it exports as a .zip (genie#1288)', () => {
+        expect(ids('tree-folder', all)).toEqual(['reveal', '-', 'export', '-', 'copy-path', 'copy-relative-path']);
+    });
+
+    it('empty space (the workspace root) offers none', () => {
         expect(ids('tree-root', all)).not.toContain('export');
     });
 
@@ -149,10 +152,10 @@ describe('fileExporter — main opens the save dialog and streams the file', () 
         expect(await readFile(src, 'utf8')).toBe('export const a = 1;\n');
     });
 
-    it('only files inside the workspace: outside, the root, a folder or an unknown workspace is refused BEFORE any dialog opens', async () => {
+    it('only paths inside the workspace: outside (a file or a folder), the root or an unknown workspace is refused BEFORE any dialog opens', async () => {
         await writeFile(join(elsewhere, 'secret.txt'), 's');
         const exporter = make();
-        for (const [ws, path] of [['tynn', '../../etc/passwd'], ['tynn', join(elsewhere, 'secret.txt')], ['tynn', ''], ['tynn', 'src'], ['nope', 'src/a.ts']] as const) {
+        for (const [ws, path] of [['tynn', '../../etc/passwd'], ['tynn', join(elsewhere, 'secret.txt')], ['tynn', elsewhere], ['tynn', '..'], ['tynn', ''], ['nope', 'src/a.ts'], ['nope', 'src']] as const) {
             const r = await exporter.export(ws, path);
             expect(r.ok, `${ws}:${path}`).toBe(false);
             expect('reason' in r ? r.reason : '', `${ws}:${path}`).not.toBe('');
