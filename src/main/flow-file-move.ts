@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, rename, unlink } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import { planFileMove } from '../core/file-trigger.js';
 import type { FlowPorts } from './flow-executors.js';
 
@@ -22,18 +22,21 @@ export function fileMover(deps: FileMoverDeps): NonNullable<FlowPorts['moveFile'
         if (root === null) throw new Error(`workspace ${workspaceId} is not registered here; nothing was moved`);
         const plan = planFileMove(root, from, toFolder, existsSync);
         if (!plan.ok) throw new Error(plan.reason);
-        if (plan.dest === null) return { from, to: null };
-        if (!existsSync(from)) throw new Error(`${from} is no longer there; nothing was moved`);
+        // The file as the plan read it: inside the workspace. A name relative to the workspace (a manual flow's "File"
+        // setting) is the workspace's file — never one relative to wherever Genie's own process happens to be.
+        const source = resolve(root, from);
+        if (plan.dest === null) return { from: source, to: null };
+        if (!existsSync(source)) throw new Error(`${from} is no longer there; nothing was moved`);
         await mkdir(dirname(plan.dest), { recursive: true });
         deps.expectArrival(plan.dest);
         try {
-            await rename(from, plan.dest);
+            await rename(source, plan.dest);
         } catch (error) {
             // Another volume inside the workspace (a mount): copy, then remove the original — never the other way round.
             if ((error as NodeJS.ErrnoException).code !== 'EXDEV') throw error;
-            await copyFile(from, plan.dest);
-            await unlink(from);
+            await copyFile(source, plan.dest);
+            await unlink(source);
         }
-        return { from, to: plan.dest };
+        return { from: source, to: plan.dest };
     };
 }

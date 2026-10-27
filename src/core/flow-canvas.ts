@@ -1,4 +1,4 @@
-import { getNodeKind, registerNodeKind, type FlowGraph, type NodeKindDefinition } from '@particle-academy/fancy-flow/engine';
+import { applyKindSchemaOverlay, getNodeKind, registerNodeKind, type FlowGraph, type NodeKindDefinition } from '@particle-academy/fancy-flow/engine';
 import { exportWorkflow, importWorkflow } from '@particle-academy/fancy-flow/schema';
 import { parseCron, timeZoneProblem } from './cron.js';
 import { canonicalFlowDocument, FLOW_SCHEMA_URL, type FlowDocument } from './flow-form.js';
@@ -106,6 +106,31 @@ export function ensureGenieKinds(): void {
     for (const kind of GENIE_NODE_KINDS) {
         if (getNodeKind(kind.name)?.name !== kind.name) registerNodeKind(kind);
     }
+    localScheduleByDefault();
+}
+
+const SCHEDULE_KIND = '@particle-academy/schedule_trigger';
+let scheduleOverlaid = false;
+
+/**
+ * A SCHEDULE DROPPED FROM THE PALETTE RUNS IN THIS MACHINE'S LOCAL TIME. fancy-flow's Schedule declares `timezone` with a
+ * default of "UTC", and the canvas fills a new node's config from its kind's defaults — so every Schedule a person dropped
+ * was saved as UTC: the inspector promised "Next run: 03:00" (local, core/flow-schedule.ts) and the scheduler fired at
+ * 03:00 UTC (core/cron.ts reads a timezone as written). Found by the Flows acceptance suite. Genie's rule is Genie 1's: no
+ * timezone is local time; a zone is something a person types. So Genie's Schedule has the same fields with no default
+ * timezone (fancy-flow's kind-schema overlay, the registry the canvas, the store and the runner all read).
+ */
+function localScheduleByDefault(): void {
+    if (scheduleOverlaid) return;
+    const kind = getNodeKind(SCHEDULE_KIND);
+    if (!kind) return;
+    const configSchema = (kind.configSchema ?? []).map((field) => {
+        if (field.key !== 'timezone') return field;
+        const { default: _utc, ...rest } = field as typeof field & { default?: unknown };
+        return { ...rest, placeholder: 'Europe/Amsterdam', description: "Empty = this machine's local time. Or an IANA zone name." } as typeof field;
+    });
+    applyKindSchemaOverlay([{ kind: SCHEDULE_KIND, configSchema }]);
+    scheduleOverlaid = true;
 }
 
 /**

@@ -126,6 +126,15 @@ describe('cron — this machine’s local time, across daylight saving', () => {
                 expect(nextCronAfter('30 2 * * *', gap!, zone)).toBe(at('2026-03-09T06:30:00Z'));
             });
 
+            it('and it still runs at 03:30 when the schedule is planned AFTER the jump but before 03:30 (a launch, an edit at 03:10)', () => {
+                // Found by the Flows acceptance suite: the walk began at the wall reading of "now" (03:10), past 02:30, so
+                // the day's run was lost to tomorrow whenever Genie planned between the jump and the run.
+                expect(nextCronAfter('30 2 * * *', at('2026-03-08T07:10:00Z'), zone)).toBe(at('2026-03-08T07:30:00Z'));
+                expect(nextCronAfter('30 2 * * *', at('2026-03-08T07:29:59.600Z'), zone)).toBe(at('2026-03-08T07:30:00Z'));
+                // CONTROL: a plan after 03:30 that day is tomorrow's 02:30.
+                expect(nextCronAfter('30 2 * * *', at('2026-03-08T07:30:00Z'), zone)).toBe(at('2026-03-09T06:30:00Z'));
+            });
+
             it('01:30 happens twice on 1 November: it runs at the first only, then 01:30 the next day — once a day, COUNTED', () => {
                 const first = nextCronAfter('30 1 * * *', at('2026-10-31T06:00:00Z'), zone);
                 expect(first).toBe(at('2026-11-01T05:30:00Z'));
