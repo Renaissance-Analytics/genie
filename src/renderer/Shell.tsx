@@ -835,7 +835,7 @@ export function Shell({
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
                         // An agent or workspace pill opens it — on the person's click only (genie#1263, genie#1265).
                         refs={chatRefs}
-                        onOpenAgent={(agentId: string) => onNavigate(`genie://agent/${encodeURIComponent(agentId)}`)}
+                        onOpenAgent={onOpenAgent}
                         onOpenWorkspace={(workspaceId: string) => onNavigate(`genie://workspace/${encodeURIComponent(workspaceId)}`)}
                         // A piece of mail the chat shows opens the AgentInbox, this chat kept beside it (beta.33 item 18).
                         {...(featureAsk ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
