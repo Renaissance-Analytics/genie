@@ -43,7 +43,7 @@ const OS_WORKSPACE = '__genie__';
 /** The words after the workstation that are pages, not workspaces. */
 const PAGES = ['dashboard', 'deck', 'hosting', 'settings', 'knowledge', 'flows', 'toolchain', 'inbox', 'browser', 'takeover', 'genie'] as const;
 /** The words after a workspace that are its tabs (and its popped-out file window), not agents or designed tabs. */
-const TABS = ['dashboard', 'settings', 'github', 'terminals', 'files'] as const;
+const TABS = ['dashboard', 'settings', 'github', 'tynn', 'terminals', 'files'] as const;
 /** The old heads (`genie://workspace/<id>`…): an address that starts with one is read as it is. */
 const OLD_HEADS = ['dashboard', 'deck', 'agent', 'workspace', 'takeover', 'files', 'settings', 'browser', 'hosting', 'knowledge', 'flows', 'toolchain', 'inbox'];
 const AGENT_TABS = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
@@ -123,7 +123,7 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
             const slug = slugsFor(ctx.workspaces).get(r.workspaceId);
             if (!slug) return internal;
             let tab = 'dashboard';
-            if (r.view === 'settings' || r.view === 'github' || r.view === 'terminals') tab = r.view;
+            if (r.view === 'settings' || r.view === 'github' || r.view === 'tynn' || r.view === 'terminals') tab = r.view;
             else if (r.view.startsWith('tab:')) {
                 const designed = tabSlugs(ctx, r.workspaceId).get(r.view.slice(4));
                 if (!designed) return internal;
@@ -232,7 +232,7 @@ function routeOfPage(address: string, ctx: AddressContext): string | null {
     if (!workspaceId) return null;
     const wsQuery = q(keep(['files', 'filter', 'line']));
     if (third === undefined || third === 'dashboard') return `genie://workspace/${workspaceId}${wsQuery}`;
-    if (third === 'settings' || third === 'github' || third === 'terminals') {
+    if (third === 'settings' || third === 'github' || third === 'tynn' || third === 'terminals') {
         const p = keep(['files', 'filter', 'line']);
         p.set('view', third);
         return `genie://workspace/${workspaceId}?${p.toString()}`;

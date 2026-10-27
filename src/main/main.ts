@@ -1,4 +1,6 @@
 import { limitOf } from '../core/shell-limits.js';
+import { readTynnBoard, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
+import type { BoardIds, BoardScope } from '../core/tynn-board.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
@@ -364,6 +366,17 @@ let issueWatchState: IssueWatchSummary['state'] = 'stopped';
 /** What happened lately per Tynn project, newest first, capped — the GitHub panel's "Lately". */
 const issueWatchRecent = new Map<string, IwEvent[]>();
 /** A workspace's Tynn project, from its project.json `tynn.projectId`; `null` = not linked. */
+/** The Tynn tab's door (genie#1295): the pairing's request, the workspace's own project, nothing else. */
+function tynnBoardPorts(): TynnBoardPorts {
+    return {
+        signedIn: () => tynnAccount?.status().signedIn === true,
+        projectFor: (workspaceId) => tynnProjectFor(workspaceId),
+        request: (path, init) => {
+            if (!tynnAccount) return Promise.reject(new Error('Sign in to Tynn first'));
+            return tynnAccount.request(path, init);
+        },
+    };
+}
 function tynnProjectFor(workspaceId: string): string | null {
     const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
     let manifest: string | null = null;
@@ -1909,6 +1922,11 @@ async function boot(): Promise<void> {
     // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
     // host, and the plan for THAT project before anything is written.
     ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
+    // THE TYNN TAB (genie#1295): the workspace's own project's board, through the person's pairing — never an agent's key.
+    ipcMain.handle('genie:workspace-tynn-board', (_event, rawId: unknown, rawScope: unknown) =>
+        (typeof rawId === 'string' ? readTynnBoard(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope) : { ok: false, state: 'error', reason: 'name a workspace' }));
+    ipcMain.handle('genie:workspace-tynn-board-action', (_event, rawId: unknown, rawInput: unknown) =>
+        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnBoardAction(tynnBoardPorts(), rawId, rawInput as { action: string; ids: BoardIds; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
     // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
     // brought and has not registered, and adopting one — read from its AGENT.md, never rewritten. The sacred grant is the
     // linked Tynn project's `sacred_agent_name`; signed out or unlinked grants nothing.
@@ -2129,6 +2147,8 @@ async function boot(): Promise<void> {
                 previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
                 previewAddFromGit: (url, parent) => previewGit(url, parent),
                 tynnProjects: () => listTynnProjects(workspaceOps),
+                tynnBoard: (id, scope) => readTynnBoard(tynnBoardPorts(), id, (scope ?? {}) as BoardScope),
+                tynnBoardAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnBoardAction(tynnBoardPorts(), id, input as { action: string; ids: BoardIds; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
                 tynnOwnerOptions: () => listTynnOwners(workspaceOps),
                 createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },
                 importedAgents: (id) => readImportedAgents(adoptionPorts, id),

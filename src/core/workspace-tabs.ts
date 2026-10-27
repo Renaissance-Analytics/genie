@@ -57,6 +57,8 @@ export type StripItem =
     | { readonly kind: 'designed'; readonly id: string; readonly name: string }
     /** IssueWatch's view (Tynn #806), for a workspace linked to a Tynn project. */
     | { readonly kind: 'github' }
+    /** The workspace's Tynn project, natively (genie#1295): tynn.ai's board, for a workspace linked to one. */
+    | { readonly kind: 'tynn' }
     /** The workspace's files, a tab of their own (beta.35 #41): the tree and the editor take the whole tab. */
     | { readonly kind: 'files' }
     | { readonly kind: 'add' }
@@ -73,6 +75,8 @@ export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: strin
         { kind: 'files' },
         ...openAgents.map((a) => ({ kind: 'agent' as const, id: a.id, name: a.name })),
         ...state.tabs.map((t) => ({ kind: 'designed' as const, id: t.id, name: t.name })),
+        // THE TYNN TAB (genie#1295): only for a workspace linked to a Tynn project — the tab IS that project, no picker.
+        ...(extra.tynn ? [{ kind: 'tynn' as const }] : []),
         // IssueWatch's view (Tynn #806): only for a workspace linked to a Tynn project — the others have nothing to show.
         ...(extra.github ? [{ kind: 'github' as const }] : []),
         { kind: 'add' },

@@ -2,6 +2,8 @@ import type { ActivityFeed } from '../../core/activity-feed.js';
 import { useMinuteTick } from '../use-activity-feeds.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
+import { TynnBoardTab } from './TynnBoardPanel.js';
+import type { TynnBoardHost } from '../../core/tynn-board.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
@@ -146,6 +148,8 @@ export interface WorkspaceProps {
     issueWatch?: IssueWatchPanelView | null | undefined;
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
     onRefreshIssueWatch?: (() => void) | undefined;
+    /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
+    tynnBoard?: TynnBoardHost | undefined;
     /** A Watched repos checkbox (Tynn's switch). Absent = the switches are shown, not settable. */
     onSetIssueWatchRepo?: ((owner: string, repo: string, change: { enabled: boolean } | { includeUpstream: boolean }) => void) | undefined;
     panel?: 'files' | null | undefined;
@@ -196,7 +200,7 @@ function formatHeld(bytes: number): string {
     return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} kB` : `${bytes} B`;
 }
 
-export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
+export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, tynnBoard, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
@@ -631,6 +635,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
                 github={issueWatch?.linked === true}
+                tynn={issueWatch?.linked === true && tynnBoard !== undefined}
                 // Files is the open files (`?files=`); any other tab is a view, and choosing it leaves the files (Shell).
                 onView={(v) => { if (v === 'files') { if (!filesInline) onTogglePanel?.(); } else onViewChange?.(v as WorkspaceView); }}
                 onAdd={() => { const made = addTab(designed); saveTabs(made.state); onViewChange?.(`tab:${made.id}`); }}
@@ -845,6 +850,8 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
             {onScreen === 'terminals' ? terminalsBody : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
             {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></div> : null}
+            {/* THE TYNN TAB (genie#1295): the linked project's board, natively — no user menu, no project picker. */}
+            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><TynnBoardTab workspaceId={workspace.id} host={tynnBoard} /></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);

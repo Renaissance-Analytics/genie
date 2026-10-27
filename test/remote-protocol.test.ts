@@ -76,7 +76,9 @@ describe('the capability table', () => {
         // HOST's GitHub sign-in reaches — owner-only, like the import it feeds.
         // 77 since `host.mkdir` (the folder picker's New folder, 2026-10-22): a write on the host's disk — owner-only.
         // 78 since queued input's Send/Discard: a write scoped to that agent, including workspace guests.
-        expect(REMOTE_METHODS.length).toBe(78);
+        // 80 since the Tynn tab (genie#1295): `workspaces.tynnBoard` (a read) and `workspaces.tynnBoardAction` (a write) —
+        // owner-only on a host (they act as the host's Tynn person), scoped to their workspace.
+        expect(REMOTE_METHODS.length).toBe(80);
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

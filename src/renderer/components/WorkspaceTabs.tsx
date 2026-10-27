@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
+import { TynnLogo } from './TynnLogo.js';
 
 /**
  * A WORKSPACE'S TAB STRIP (Tynn #282, #805): Dashboard · every agent of the workspace · the tabs you designed · + · Settings — +
@@ -36,11 +37,11 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent, planToggle }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, onView, onAdd, onOpenAgent, planToggle }: WorkspaceTabsProps) {
     const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
     return (
         <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
-            {tabStrip(designed, agents, { github }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
+            {tabStrip(designed, agents, { github, tynn }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (
                         <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
@@ -58,11 +59,11 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                         </button>
                     );
                 }
-                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
+                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
                     <button key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
-                        {t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
+                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
                     </button>
                 );
             })}

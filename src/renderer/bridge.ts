@@ -1,4 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { BoardActionInput, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -293,6 +294,10 @@ export interface GenieBridge {
         remove(workspaceId: string): Promise<{ ok: true; agentsForgotten: number; path: string; folderUntouched: true } | { ok: false; reason: string }>;
         /** The repo registry (§6.1): the envelope's repos[]; the host repo cannot be removed. */
         listRepos(workspaceId: string): Promise<{ ok: true; repos: RepoEntry[] } | { ok: false; reason: string }>;
+        /** THE TYNN TAB (genie#1295): the workspace's OWN Tynn project's board at a scope — there is no project argument. Optional: an older host has none. */
+        tynnBoard?(workspaceId: string, scope: BoardScope): ReturnType<TynnBoardHost['read']>;
+        /** One action on that board, by the workspace-UX contract's id (`task.start`, `story.move`…). */
+        tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
