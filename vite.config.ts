@@ -37,6 +37,8 @@ export default defineConfig({
          * (`test/live/*.live.ts`) are named so they stay out of the default run.
          */
         include: ['test/**/*.test.{ts,tsx}'],
+        // Electron's binary is installed, completely, before any worker starts (genie#1260): see test/global-setup.ts.
+        globalSetup: ['test/global-setup.ts'],
         exclude: ['**/node_modules/**', '.patch/**'],
     },
 });
