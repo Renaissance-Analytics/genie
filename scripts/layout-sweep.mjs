@@ -295,8 +295,8 @@ const AGENT_HEADER_PROBE = `
         const crumb = header?.querySelector('[data-crumb]') ?? null;
         const chip = header?.querySelector('[data-provider-chip]') ?? null;
         const pill = header?.querySelector('[data-pill]') ?? null;
-        // The agent's name, found by its words (the seed names it 'atlas'), so the probe needs no hook in the markup.
-        const name = header ? [...header.querySelectorAll('span')].find((s) => s.children.length === 0 && s.textContent === 'atlas') ?? null : null;
+        // The agent's name: its own mark, else (before it had one) the header's one bold span.
+        const name = header?.querySelector('[data-agent-name]') ?? header?.querySelector('span.font-medium') ?? null;
         const buttons = header ? [...header.querySelectorAll('button[data-action]')] : [];
         const box = header ? header.getBoundingClientRect() : null;
         const pinned = document.querySelector('[data-chat="pinned"]');
