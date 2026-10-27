@@ -44,8 +44,12 @@ const OS_WORKSPACE = '__genie__';
 const PAGES = ['dashboard', 'deck', 'hosting', 'settings', 'knowledge', 'flows', 'toolchain', 'inbox', 'browser', 'takeover', 'genie'] as const;
 /** The words after a workspace that are its tabs (and its popped-out file window), not agents or designed tabs. */
 const TABS = ['dashboard', 'settings', 'github', 'tynn', 'terminals', 'files'] as const;
-/** The old heads (`genie://workspace/<id>`…): an address that starts with one is read as it is. */
-const OLD_HEADS = ['dashboard', 'deck', 'agent', 'workspace', 'takeover', 'files', 'settings', 'browser', 'hosting', 'knowledge', 'flows', 'toolchain', 'inbox'];
+/**
+ * The old heads (`genie://workspace/<id>`…): an address that starts with one is read as it is. `flow` is the flow editor
+ * window's own route (`genie://flow/<id>`, genie#1204): without it here the window read its route as "not a route" and
+ * rendered the main shell — a second copy of the app instead of the canvas (genie#1302).
+ */
+const OLD_HEADS = ['dashboard', 'deck', 'agent', 'workspace', 'takeover', 'files', 'flow', 'settings', 'browser', 'hosting', 'knowledge', 'flows', 'toolchain', 'inbox'];
 const AGENT_TABS = ['stream', 'files', 'changes', 'shells', 'terminal', 'activity', 'settings'];
 
 /** Whether a string is an INTERNAL route (the old address form): `genie://workspace/<id>…`, `genie://dashboard`… */
@@ -171,6 +175,11 @@ function addressOfPage(r: Route, internal: string, ctx: AddressContext): string 
         case 'takeover':
             if (r.login) params.set('login', r.login);
             return withQuery(`${ws}/takeover/${r.terminalId}`, params);
+        // The flow editor window keeps its route as it is (genie#1302): it is a window's identity, never a page in the
+        // bar, and main finds an open editor by it (`openFlowEditorWindow`). The default below would have written
+        // `genie://<workstation>/flow`, which names no page, and the window would have fallen back to the main shell.
+        case 'flow':
+            return internal;
         default:
             return `genie://${ws}/${r.surface}`;
     }
