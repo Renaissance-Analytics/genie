@@ -52,12 +52,14 @@ describe('the chat icon on each plan step', () => {
         const PlanColumnView = (await column()).PlanColumnView as View;
         expect(typeof PlanColumnView).toBe('function');
         const html = renderToStaticMarkup(<>{PlanColumnView(viewProps({ onDiscuss: () => {} }))}</>);
+        // CONTROL for the icon-only check below: the same pattern finds a step's words.
+        expect('<span class="min-w-0 flex-1">Run the suite</span>').toMatch(/>[^<]*\S[^<]*</);
         const buttons = html.match(/<button[^>]*data-plan-discuss="[^"]*"[^>]*>[\s\S]*?<\/button>/g) ?? [];
         expect(buttons.length).toBe(3);
         for (const b of buttons) {
             expect(b).toContain('aria-label="Discuss in chat"');
             // Icon only: no words inside the button but the icon's own markup.
-            expect(b.replace(/<[^>]+>/g, '').trim()).toBe('');
+            expect(b).not.toMatch(/>[^<]*\S[^<]*</);
             // Hidden until the step is hovered or the button has keyboard focus.
             expect(b).toMatch(/class="[^"]*\bopacity-0\b/);
             expect(b).toMatch(/class="[^"]*group-hover:opacity-100/);
