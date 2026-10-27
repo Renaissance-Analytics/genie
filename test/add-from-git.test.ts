@@ -55,6 +55,7 @@ function fakes(opts: { exists?: string[]; cloneFails?: string } = {}) {
         },
         registry: {
             workspace: () => null,
+            list: () => [],
             addWorkspace: async (w: { id: string; path: string }) => { calls.push(`addWorkspace:${w.id}:${key(w.path)}`); },
             agentsOf: () => [],
             setAsleep: async () => true,
