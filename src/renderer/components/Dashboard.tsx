@@ -1,11 +1,11 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Icon } from '@particle-academy/react-fancy';
+import { ActivityLight, Icon, Tooltip } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
-import { headroomTitle, type Headroom } from '../../core/headroom.js';
+import { windowDetail, type Headroom } from '../../core/headroom.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
-import { ProviderLogo } from './ProviderLogo.js';
+import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
@@ -714,8 +714,9 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
 }
 
 /**
- * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its share of the binding window left,
- * the full reset time on hover. Buffered in main, so this redraws at most once per provider per buffer.
+ * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its share of the binding window left;
+ * on hover EVERY window the provider reported, with its usage and reset (genie#1268). Buffered in main, so this redraws
+ * at most once per provider per buffer.
  */
 export function RateLimitPills({ limits }: { limits: Readonly<Record<string, Headroom>> }) {
     const providers = Object.keys(limits).sort();
@@ -726,13 +727,31 @@ export function RateLimitPills({ limits }: { limits: Readonly<Record<string, Hea
                 const h = limits[p]!;
                 const tone = h.over || h.leftPct <= 10 ? 'text-[var(--danger)]' : h.leftPct <= 30 ? 'text-[var(--warning)]' : 'text-[var(--fg-2)]';
                 return (
-                    <span key={p} data-rate-limit={p} title={headroomTitle(h)} className="flex items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs">
-                        <ProviderLogo provider={p} size="xs" className="text-[var(--fg-3)]" />
-                        <span className={`font-mono ${tone}`}>{h.over ? 'over' : `${h.leftPct}%`}</span>
-                        <span className="font-mono text-[11px] text-[var(--fg-4)]">{h.window}</span>
-                    </span>
+                    <Tooltip key={p} content={<RateLimitDetail provider={p} limit={h} />} placement="bottom">
+                        {/* The hover's words are the pill's accessible name: a screen reader never sees a tooltip drawn on hover. */}
+                        <span data-rate-limit={p} role="group" tabIndex={0} aria-label={`${providerName(p)} rate limits: ${h.windows.map(windowDetail).join('; ')}`} className="flex items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs">
+                            <ProviderLogo provider={p} size="xs" className="text-[var(--fg-3)]" />
+                            <span className={`font-mono ${tone}`}>{h.over ? 'over' : `${h.leftPct}%`}</span>
+                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{h.window}</span>
+                        </span>
+                    </Tooltip>
                 );
             })}
+        </div>
+    );
+}
+
+/** The pill's hover (genie#1268): the provider's logo and plan, then every window it reported — only reported figures. */
+export function RateLimitDetail({ provider, limit }: { provider: string; limit: Headroom }) {
+    return (
+        <div data-rate-limit-detail={provider} className="flex flex-col gap-1 text-xs">
+            <span className="flex items-center gap-1.5">
+                <ProviderLogo provider={provider} size="sm" />
+                {limit.plan ? <span className="text-[var(--fg-3)]">{limit.plan}</span> : null}
+            </span>
+            {limit.windows.map((w) => (
+                <span key={w.window} data-rate-limit-window={w.window} className="font-mono">{windowDetail(w)}</span>
+            ))}
         </div>
     );
 }
