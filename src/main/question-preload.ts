@@ -1,5 +1,4 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { clipboardBridge } from './clipboard-ipc.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW'S PRELOAD. It exposes `genieQuestion` — the question to show (on load, and pushed when it
@@ -28,4 +27,8 @@ contextBridge.exposeInMainWorld('genieQuestion', {
 });
 
 // The question and its files are rendered Markdown with copy buttons: they write through main (main/clipboard-ipc.ts).
-contextBridge.exposeInMainWorld('genieClipboard', clipboardBridge(ipcRenderer));
+// The channel is core/clipboard-wire.ts CLIPBOARD_WRITE_CHANNEL, written out: a module two preloads import becomes a shared
+// chunk, and a sandboxed preload cannot require it (test/clipboard-main.test.ts holds this copy equal to the constant).
+contextBridge.exposeInMainWorld('genieClipboard', {
+    write: (text: string, html?: string) => ipcRenderer.invoke('genie:clipboard-write', html === undefined ? { text } : { text, html }) as Promise<boolean>,
+});

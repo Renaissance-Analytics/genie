@@ -91,8 +91,39 @@ describe('the IPC: one channel, named once, handled by main and invoked by every
         expect(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8')).toMatch(wired);
         // `genie --doctor` is its own main: its chat has copy buttons too.
         expect(readFileSync(new URL('../src/main/doctor.ts', import.meta.url), 'utf8')).toMatch(wired);
-        for (const f of ['main.ts', 'doctor.ts', 'preload.ts', 'question-preload.ts', 'doctor-preload.ts', 'clipboard-ipc.ts']) {
+        for (const f of ['main.ts', 'doctor.ts', 'clipboard-ipc.ts']) {
             expect(readFileSync(new URL(`../src/main/${f}`, import.meta.url), 'utf8')).not.toContain(`'${CLIPBOARD_WRITE_CHANNEL}'`);
+        }
+    });
+
+    /*
+     * A SANDBOXED PRELOAD CANNOT REQUIRE ANOTHER FILE. The four preloads are one Rollup build with four entries: a module
+     * two of them import becomes a shared chunk each `require()`s — and a sandboxed preload can require only `electron`,
+     * so it throws and the window opens with no bridge at all (this PR's first CI smoke: `window.genie` undefined). So a
+     * preload writes the channel out itself, and this holds every copy equal to the one constant.
+     */
+    const PRELOADS = ['preload.ts', 'question-preload.ts', 'doctor-preload.ts', 'browser-preload.ts'];
+    const valueImports = (f: string) => [...readFileSync(new URL(`../src/main/${f}`, import.meta.url), 'utf8').matchAll(/^import (?!type )[^;]*? from '(\.[^']+)';/gm)].map((m) => m[1]!);
+
+    it('no two preloads import the same module of Genie’s (it would be a shared chunk a sandboxed preload cannot load)', () => {
+        const seen = new Map<string, string>();
+        const shared: string[] = [];
+        for (const f of PRELOADS) {
+            for (const m of valueImports(f)) {
+                const key = new URL(m, new URL(`../src/main/${f}`, import.meta.url)).pathname;
+                if (seen.has(key) && seen.get(key) !== f) shared.push(`${m} (${seen.get(key)} and ${f})`);
+                seen.set(key, f);
+            }
+        }
+        // CONTROL: the scan sees value imports at all (Genie's preload imports FEATURE_CHANNELS).
+        expect(valueImports('preload.ts').length).toBeGreaterThan(0);
+        expect(shared).toEqual([]);
+    });
+
+    it('each preload that exposes genieClipboard writes the channel exactly as the constant has it', () => {
+        for (const f of ['preload.ts', 'question-preload.ts', 'doctor-preload.ts']) {
+            const src = readFileSync(new URL(`../src/main/${f}`, import.meta.url), 'utf8');
+            expect((src.match(/'genie:clipboard-[\w-]+'/g) ?? [])).toEqual([`'${CLIPBOARD_WRITE_CHANNEL}'`]);
         }
     });
 });

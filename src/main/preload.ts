@@ -5,7 +5,6 @@ import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
-import { clipboardBridge } from './clipboard-ipc.js';
 
 type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
 
@@ -364,4 +363,8 @@ const bridge: PreloadBridge = {
 contextBridge.exposeInMainWorld('genie', bridge);
 
 // Every copy button in this window writes through main (main/clipboard-ipc.ts): the page's clipboard can fail silently here.
-contextBridge.exposeInMainWorld('genieClipboard', clipboardBridge(ipcRenderer));
+// The channel is core/clipboard-wire.ts CLIPBOARD_WRITE_CHANNEL, written out: a module two preloads import becomes a shared
+// chunk, and a sandboxed preload cannot require it (test/clipboard-main.test.ts holds this copy equal to the constant).
+contextBridge.exposeInMainWorld('genieClipboard', {
+    write: (text: string, html?: string) => ipcRenderer.invoke('genie:clipboard-write', html === undefined ? { text } : { text, html }) as Promise<boolean>,
+});

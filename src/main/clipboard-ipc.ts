@@ -40,15 +40,10 @@ export async function writeClipboard(raw: unknown, clipboard: ClipboardPort): Pr
     }
 }
 
-/**
- * The page's half, exposed by a preload as `window.genieClipboard` (renderer/clipboard.ts): one method, the text and the
- * HTML, nothing else of Genie — and nothing of the clipboard to READ.
+/*
+ * The page's half is in each preload that needs it (main, question, doctor), written out there: one method,
+ * `genieClipboard.write(text, html?)`, nothing of the clipboard to READ. Not imported from here — see those preloads.
  */
-export function clipboardBridge(ipcRenderer: { invoke(channel: string, ...args: unknown[]): Promise<unknown> }): { write(text: string, html?: string): Promise<boolean> } {
-    return {
-        write: (text, html) => ipcRenderer.invoke(CLIPBOARD_WRITE_CHANNEL, html === undefined ? { text } : { text, html }) as Promise<boolean>,
-    };
-}
 
 export function registerClipboardIpc(
     ipcMain: { handle(channel: string, handler: (event: unknown, raw: unknown) => unknown): void },
