@@ -61,6 +61,8 @@ export class Registry {
     #loaded = false;
     /** The display name for a workspace path — the envelope's project.json name, supplied by the composition root; the folder until then. */
     #namer: (path: string) => string = (path) => folderName(path);
+    /** A workspace's colour (genie#1300: project.json `appearance.color`, main/workspace-color-host.ts); `null` = none yet. */
+    #colorer: (path: string) => string | null = () => null;
 
     constructor(store: Store) {
         this.#store = store;
@@ -118,6 +120,12 @@ export class Registry {
     /** How a workspace is NAMED in every surface: project.json's name, else the folder — never the id (beta.7 showed 26 ULIDs). */
     setWorkspaceNamer(namer: (path: string) => string): void {
         this.#namer = namer;
+        if (this.#loaded) this.#emit();
+    }
+
+    /** Each workspace's COLOUR (genie#1300), from the composition root: carried on its snapshot row when it has one. */
+    setWorkspaceColorer(colorer: (path: string) => string | null): void {
+        this.#colorer = colorer;
         if (this.#loaded) this.#emit();
     }
 
@@ -247,7 +255,7 @@ export class Registry {
             // are none" are different claims, and the Dashboard gives them different surfaces.
             workspaces: this.#loaded
                 // `governs` / `governedBy` appear only when they carry something: every other workspace literal stays exact.
-                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}) }))
+                ? this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#namer(w.path), agentsKnown: true, asleep: w.asleep === true, ...(w.governs && w.governs.length > 0 ? { governs: [...w.governs] } : {}), ...(this.governorOf(w.id) ? { governedBy: this.governorOf(w.id) } : {}), ...(w.defaultAgentId ? { defaultAgentId: w.defaultAgentId } : {}), ...this.#colorOf(w.path) }))
                 : null,
             /*
              * The attention band.
@@ -605,6 +613,12 @@ export class Registry {
     /** Every agent record, for the same. */
     listAgents(): readonly AgentRecord[] {
         return this.#agents;
+    }
+
+    /** `{ color }` when the workspace has one; nothing otherwise, so every other workspace literal stays exact. */
+    #colorOf(path: string): { color?: string } {
+        const color = this.#colorer(path);
+        return color ? { color } : {};
     }
 
     #emit(): void {

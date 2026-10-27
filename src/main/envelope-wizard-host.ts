@@ -3,7 +3,7 @@ import { convertCommitMessage, envelopeRepos, isLocalPathLike, planProblem, type
 import { repoFolderName } from '../core/workspace-model.js';
 import { remoteChoiceProblem, type Published, type RemoteChoice } from '../core/agi-remote.js';
 import type { CreatedRepo } from '../core/github.js';
-import { alreadyNamedReason, envelopeId, makeNewEnvelope, publishNew, registeredEnvFile, resolveTynnLink, stampExisting, type WorkspaceOpsPorts } from './workspace-ops-host.js';
+import { alreadyAtFolder, alreadyNamedReason, envelopeId, makeNewEnvelope, publishNew, registeredEnvFile, resolveTynnLink, stampExisting, workspaceAtFolder, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 
 /**
  * BUILDING A NEW `<slug>.agi` AROUND THE PERSON'S REPOS (Add workspace parity item 7) — the main-process half of
@@ -86,6 +86,9 @@ export async function registerExisting(ops: WorkspaceOpsPorts, path: string): Pr
     if (!(await ops.fs.exists(path)) || !(await ops.fs.entries(path)).includes('project.json')) return { ok: false, reason: `${path} has no project.json; it is not a workspace yet` };
     const id = envelopeId(path);
     if (ops.registry.workspace(id)) return { ok: false, reason: alreadyNamedReason(id) };
+    // One folder is one workspace (genie#485), whichever id another door registered it under.
+    const existing = workspaceAtFolder(ops, path);
+    if (existing) return { ok: false, reason: alreadyAtFolder(path, existing.id) };
     const stamp = await stampExisting(ops, path);
     if (!stamp.ok) return stamp;
     await ops.registry.addWorkspace({ id, path, envFile: registeredEnvFile(ops) });

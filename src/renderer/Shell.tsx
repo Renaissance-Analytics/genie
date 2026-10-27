@@ -5,6 +5,8 @@ import type { MailSignal } from '../core/mail-signals.js';
 import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
+import { WorkspaceColorsContext, workspaceColorMap } from './workspace-colors.js';
+import { folderName } from '../core/workspace-name.js';
 import { Icon } from '@particle-academy/react-fancy';
 import { type DockPanel, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { chatScope, followChat } from '../core/chat-scope.js';
@@ -462,8 +464,13 @@ export function Shell({
     // memoised reply is not re-rendered by every push.
     const refLists = chatRefLists(snapshot.agents, snapshot.workspaces ?? []);
     const chatRefs = useMemo(() => ({ agents: refLists.agents, workspaces: refLists.workspaces }), [refLists.key]);
+    // WORKSPACE COLOURS (genie#1300): every surface below reads its recipient's colour from here.
+    const colorMap = useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]);
+    // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
+    const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
 
     return (
+        <WorkspaceColorsContext.Provider value={colorMap}>
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <TitleBar
                 route={address ?? route}
@@ -478,6 +485,7 @@ export function Shell({
                 onOpenUpdate={() => { setUpdateOpen(true); void updates.notes?.(); }}
                 // THE AGENTINBOX among the header's system icons (beta.33 item 19): it opens and closes the flyout.
                 inbox={featureAsk ? { unread: features.inbox ? features.inbox.unread.length : null, open: inboxOpen, onToggle: () => openInbox(inboxOpen ? null : '') } : undefined}
+                workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
             />
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
             {updateOpen && updateChip(updateState) ? (
@@ -646,6 +654,7 @@ export function Shell({
                                     designed={parseTabs(typeof workspaceOps?.settings?.values?.['workspace_tabs'] === 'string' ? (workspaceOps.settings.values['workspace_tabs'] as string) : '{"tabs":[]}')}
                                     agents={agentTabsOf(snapshot.agents, agentWorkspace.id)}
                                     current={{ kind: 'agent', id: parsed.agentId }}
+                                    color={agentWorkspace.color ?? null}
                                     canDesign={Boolean(workspaceOps?.settings && workspaceOps.settings.values !== null)}
                                     hasSettings={Boolean(workspaceOps?.settings || workspaceOps?.governs || workspaceOps?.repos)}
                                     github={features.issueWatch?.[agentWorkspace.id]?.linked === true}
@@ -875,5 +884,6 @@ export function Shell({
                 </div>
             </div>
         </div>
+        </WorkspaceColorsContext.Provider>
     );
 }

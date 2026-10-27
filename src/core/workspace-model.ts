@@ -83,7 +83,7 @@ export function gitAddPlan(input: { url: string; parent: string; folderExists: b
     return { ok: true, source: 'git', url, path, kind: 'simple-repo', steps: [{ action: `git clone ${url} into ${path}`, path, writes: true }, ...planAdd('simple-repo', path)] };
 }
 
-export const SCHEMA_REVISION = '0.2.0';
+export const SCHEMA_REVISION = '0.3.0';
 const SCHEMA_BASE = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v';
 const SCHEMA_TAIL = '/schemas/workspace/project.schema.json';
 

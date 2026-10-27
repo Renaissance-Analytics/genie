@@ -3,6 +3,7 @@ import { useEffect, useReducer, useState } from 'react';
 import type { OptionTone } from '../../core/approval.js';
 import type { DeckItem } from '../../core/deck.js';
 import { EMPTY_TOASTS, TOAST_DEPTH, toastReducer, toastView, type ToastStackView } from '../../core/approval-toasts.js';
+import { WorkspaceSwatch } from '../workspace-colors.js';
 
 /**
  * THE APPROVAL TOASTS — an agent's gated Genie workflow (a site, a database, a background process, a terminal) answered
@@ -71,6 +72,8 @@ function FrontCard({ item, view, onAnswer, onLater, onOpenDeck, notes, onNote }:
                 <Icon name="circle-help" size="xs" className="shrink-0 text-[var(--warning)]" />
                 <span data-approval-toast-agent="" className="font-semibold text-[var(--fg-1)]">{item.agentName ?? 'An agent'}</span>
                 <span aria-hidden="true">·</span>
+                {/* The workspace's colour beside its name (genie#1300). */}
+                <WorkspaceSwatch color={item.workspaceColor} />
                 <span data-approval-toast-workspace="" className="min-w-0 flex-1 truncate">{workspaceOf(item)}</span>
                 {view.total > 1 ? <span data-approval-toast-position="" className="shrink-0 font-mono">{`${view.position} of ${view.total}`}</span> : null}
             </div>

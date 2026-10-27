@@ -1179,6 +1179,21 @@ check(parsed.length === 0, '34. the console is clean', parsed.join(' | ') || 'no
 
 // A screenshot, for a human to look at. Writing one is not the same as somebody having seen
 // it, and this script does not claim otherwise.
+//
+// 65. SMOKE-DASHBOARD.PNG SHOWS THE DASHBOARD (the owner's checklist, 2026-10-14: it showed the genie AGENT view — the run
+// ends on an agent's page, and the shot was taken wherever it ended). Land on the Dashboard through the rail first, and
+// check that it is what is on screen, so the file is what its name says.
+await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]')?.click(); true`);
+await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]')) && !document.querySelector('[data-surface="agent"]')`, 'the Dashboard, for its screenshot');
+// A first run shows What's new over the page (once per version); closed the way a person closes it, or the shot is of it.
+await cdp.evaluate(`document.querySelector('[data-action="whats-new-close"]')?.click(); true`);
+await waitFor(cdp, `!document.querySelector('[data-whats-new]')`, 'What’s new to close');
+const dashboardShown = await cdp.evaluate(`(() => {
+    const surfaces = [...document.querySelectorAll('[data-surface]')].map((s) => s.getAttribute('data-surface'));
+    return JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), whatsNew: Boolean(document.querySelector('[data-whats-new]')), surfaces });
+})()`);
+const ds = JSON.parse(dashboardShown || '{}');
+check(ds.dashboard === true && ds.agent === false && ds.whatsNew === false, '65. the screenshot named smoke-dashboard.png is taken ON the Dashboard (not an agent’s page, nothing over it)', dashboardShown);
 const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
 if (shot.result?.data) {
     const { writeFileSync } = await import('node:fs');

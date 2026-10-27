@@ -73,6 +73,8 @@ export interface DeckItem {
      * id. Absent when the workspace is not known here; the surfaces then say no workspace rather than print a ULID.
      */
     workspaceName?: string | undefined;
+    /** The workspace's COLOUR (genie#1300, `#rrggbb`), drawn beside its name. Absent = none known. */
+    workspaceColor?: string | undefined;
     /**
      * How many times the asking agent has UPDATED this question (ForceTheQuestion `action: 'update'`). A form keyed by it
      * starts a clean draft when the content changes under it; absent = never updated.

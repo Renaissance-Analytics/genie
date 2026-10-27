@@ -7,6 +7,7 @@ import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import { WORKSPACE_PULSE } from './Sidebar.js';
+import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
@@ -357,9 +358,12 @@ function GroupHeader({
     onLocateRepo,
     lanes,
     pulsed = false,
+    color = null,
 }: {
     /** An agent acted in this workspace and the person has not been there since (genie#1265): the header pulses. */
     pulsed?: boolean;
+    /** The workspace's colour (genie#1300): the header's left edge and a swatch beside its name. `null` = none known. */
+    color?: string | null | undefined;
     group: WorkspaceGroup;
     /** The envelope's name, else the folder — the rail's rule; the id only when nothing else is known. */
     name: string;
@@ -371,8 +375,9 @@ function GroupHeader({
 }) {
     return (
         <>
-            <div className={`relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs${pulsed ? ` ${WORKSPACE_PULSE}` : ''}`} data-workspace-head={group.workspaceId} {...(pulsed ? { 'data-workspace-pulse': 'true', title: 'An agent did something here — open it to see' } : {})}>
+            <div className={`relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs${pulsed ? ` ${WORKSPACE_PULSE}` : ''}${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`} data-workspace-head={group.workspaceId} {...(color ? { 'data-workspace-color': color } : {})} style={wsStyle(color)} {...(pulsed ? { 'data-workspace-pulse': 'true', title: 'An agent did something here — open it to see' } : {})}>
                 <Lanes segments={lanes} />
+                <WorkspaceSwatch color={color} className="mr-1.5" />
                 <span className="font-semibold">{name}</span>
                 <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
                 {group.summary ? <span className="ml-2.5 shrink-0 text-[var(--fg-3)]">{group.summary}</span> : null}
@@ -429,7 +434,7 @@ export interface DashboardProps {
      * which renders the first-run invitation. Collapsing them puts a confident claim about an
      * empty machine on screen before anybody has looked.
      */
-    workspaces: readonly { id: string; path: string; name?: string | undefined; governedBy?: string | null | undefined; asleep?: boolean | undefined }[] | null;
+    workspaces: readonly { id: string; path: string; name?: string | undefined; governedBy?: string | null | undefined; asleep?: boolean | undefined; color?: string | undefined }[] | null;
     onOpenAgent: (agentId: string) => void;
     onAddAgent: (workspaceId: string) => void;
     onAddWorkspace?: (() => void) | undefined;
@@ -519,6 +524,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
     // The census counts every row drawn, genie's included — each count has its row (the mockup's header).
     const chips = summaryChips(all);
     const pathOf = (id: string): string => workspaces?.find((w) => w.id === id)?.path ?? '';
+    const colorOf = (id: string): string | null => workspaces?.find((w) => w.id === id)?.color ?? null;
     // The rail's rule: the envelope's name, else the folder, never the id when a name is known.
     const nameOf = (id: string): string => { const w = workspaces?.find((x) => x.id === id); return w?.name ?? (w?.path ? w.path.replace(/[\\/]+$/, '').split(/[\\/]/).pop() ?? id : id); };
     // The legend belongs to the cannot-see state: it appears when the board holds an agent Genie can only observe or
@@ -692,7 +698,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             ) : null}
             {groups.map((group) => (
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
-                    <GroupHeader pulsed={pulsing?.has(group.workspaceId) === true} group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
+                    <GroupHeader pulsed={pulsing?.has(group.workspaceId) === true} color={colorOf(group.workspaceId)} group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
                     {group.rows.map((row) => (
                         <Fragment key={row.id}>
                             <AgentRowView row={row} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />

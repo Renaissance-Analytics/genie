@@ -14,7 +14,7 @@ import { addWorkspaceFromTynn, listTynnProjects, previewAddFromTynn, type Worksp
 /** What Tynn's row says when a project has no repositories and no envelope. */
 const NOTHING = { isWorkspace: false, repositories: [], envelope: null };
 
-const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/project.schema.json';
+const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json';
 
 function fakes(over: { entries?: Record<string, string[]>; tynn?: () => Promise<unknown[]> } = {}) {
     const entries: Record<string, string[]> = { ...(over.entries ?? {}) };

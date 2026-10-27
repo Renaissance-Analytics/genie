@@ -51,8 +51,8 @@ describe('the Agent view: one Restart (or Start) in every state', () => {
                 expect(html).not.toContain('restart-graceful');
                 expect(html).not.toContain('restart-resume');
             }
-            // Labelled `Restart` — the one word every surface uses.
-            if (s.control === 'restart') expect(render(s.session)).toMatch(/data-action="restart"[^>]*>(?:(?!<\/button>)[\s\S])*Restart<\/button>/);
+            // Labelled `Restart` — the one word every surface uses; in its own label, which a narrow header hides for the icon.
+            if (s.control === 'restart') expect(render(s.session)).toMatch(/data-action="restart"[^>]*>(?:(?!<\/button>)[\s\S])*<span class="@max-\[46rem\]:hidden">Restart<\/span><\/button>/);
         });
     }
 

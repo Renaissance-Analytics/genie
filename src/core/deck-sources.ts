@@ -33,6 +33,8 @@ export interface DeckSourceInput {
     readonly agents: Readonly<Record<string, { name: string; workspaceId: string }>>;
     /** Workspace id → its NAME as the rail says it (core/workspace-name.ts). An id not here gets no name — never the id. */
     readonly workspaceNames?: Readonly<Record<string, string>>;
+    /** Workspace id → its colour (genie#1300), carried beside the name. An id not here gets none. */
+    readonly workspaceColors?: Readonly<Record<string, string>>;
     /**
      * Is the asking agent still WAITING — its session as Genie runs it (or its Take Over terminal): `null` when it has
      * none, `undefined` when LIVENESS IS NOT KNOWN yet (the roster and the session host have not reported once). Only a
@@ -82,9 +84,10 @@ export function deckItemsFrom(input: DeckSourceInput): DeckItem[] {
         const a = input.agents[agentId];
         return { agentId, agentName: a?.name ?? agentId, workspaceId: a?.workspaceId ?? null };
     };
-    const named = (workspaceId: string | null): { workspaceName?: string } => {
+    const named = (workspaceId: string | null): { workspaceName?: string; workspaceColor?: string } => {
         const name = workspaceId === null ? undefined : input.workspaceNames?.[workspaceId];
-        return name === undefined ? {} : { workspaceName: name };
+        const color = workspaceId === null ? undefined : input.workspaceColors?.[workspaceId];
+        return { ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
     };
     const items: DeckItem[] = [];
 

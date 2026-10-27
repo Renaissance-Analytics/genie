@@ -7,6 +7,7 @@ import { questionWindowAction } from '../../core/keys.js';
 import { ageLabel, type DeckItem } from '../../core/deck.js';
 import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../core/question-drafts.js';
 import { QuestionForm } from './QuestionForm.js';
+import { WorkspaceSwatch } from '../workspace-colors.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW'S CONTENT: who asks (and from which workspace — its NAME, as the rail says it, never its id),
@@ -119,7 +120,8 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
         <div data-question-window={item.id} className="flex h-screen flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header style={DRAG} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-4 py-3">
                 <span className="text-[14px] font-semibold">{item.agentName ?? 'An agent'} asks you</span>
-                {item.workspaceName ? <span data-question-workspace={item.workspaceId ?? ''} className="text-[12px] text-[var(--fg-3)]">{item.workspaceName}</span> : null}
+                {/* Which workspace asks, in its colour beside its name (genie#1300). */}
+                {item.workspaceName ? <span data-question-workspace={item.workspaceId ?? ''} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-3)]"><WorkspaceSwatch color={item.workspaceColor} />{item.workspaceName}</span> : null}
                 {item.at > 0 ? <time data-question-age="" dateTime={new Date(item.at).toISOString()} className="text-[12px] text-[var(--fg-4)]">{ageLabel(item.at, now)}</time> : null}
                 {view.waiting > 0 ? <span data-question-waiting={view.waiting} className="ml-auto text-[11px] text-[var(--fg-3)]">{view.waiting} more after this</span> : null}
             </header>
@@ -138,7 +140,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                                 className={`flex min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left text-[12px] ${on ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
                             >
                                 <span className="shrink-0 font-semibold">{q.agentName ?? 'An agent'}</span>
-                                {q.workspaceName ? <span className="shrink-0 text-[var(--fg-3)]">{q.workspaceName}</span> : null}
+                                {q.workspaceName ? <span className="flex shrink-0 items-center gap-1.5 self-center text-[var(--fg-3)]"><WorkspaceSwatch color={q.workspaceColor} />{q.workspaceName}</span> : null}
                                 <span className="min-w-0 flex-1 truncate">{q.title}</span>
                                 {parked.has(q.id) ? <span data-question-parked="" className="shrink-0 text-[11px] text-[var(--fg-4)]">later</span> : null}
                                 {q.at > 0 ? <time dateTime={new Date(q.at).toISOString()} className="shrink-0 text-[11px] text-[var(--fg-4)]">{ageLabel(q.at, now)}</time> : null}

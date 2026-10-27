@@ -182,6 +182,9 @@ import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
 import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
+import { WorkspaceColors } from './workspace-color-host.js';
+import { nodeEnvelopeFs } from './envelope-sites-host.js';
+import { nestGoverned } from '../core/rail-view.js';
 import { issueWatchPanelView, issueWatchSoundKinds, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
 
 /**
@@ -355,6 +358,8 @@ let retryPausedAccount: ((provider: string) => void) | null = null;
 /** The automatic update checks (§7, genie2#91): stopped on quit so no check fires into a closing app. */
 let autoCheckStop: (() => void) | null = null;
 let registry: Registry | null = null;
+/** Each workspace's colour (genie#1300): read from and written to its project.json. */
+let workspaceColors: WorkspaceColors | null = null;
 /**
  * ISSUEWATCH (Tynn #806): the latest entry Tynn sent per project, and the client's state — what `checkIssues` and imDone's
  * count line read for a workspace (its project.json `tynn.projectId`). Filled by the client once it runs.
@@ -593,6 +598,14 @@ function broadcast(channel: string, ...args: unknown[]): void {
  * Genie 2's own data root, which v1 never wrote to. The first release read `~/.genie/genie.db`,
  * found nothing, and reported "nothing to carry over" to an owner with 27 workspaces.
  */
+/** A workspace's colour from its Settings (genie#1300): written to its project.json through Genie's writer. */
+async function setWorkspaceColor(rawId: unknown, color: unknown): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const workspace = typeof rawId === 'string' ? registry?.workspace(rawId) ?? null : null;
+    if (!workspace || !workspaceColors) return { ok: false, reason: 'name a workspace' };
+    if (typeof color !== 'string') return { ok: false, reason: 'name a colour (#rrggbb)' };
+    return workspaceColors.set(workspace.path, color);
+}
+
 /** A workspace's display name from its envelope (project.json `name`), else its folder; read once per path. */
 const manifestNames = new Map<string, string>();
 function workspaceNameFor(path: string): string {
@@ -962,6 +975,27 @@ async function boot(): Promise<void> {
     const theRegistry = new Registry(store);
     registry = theRegistry;
     theRegistry.setWorkspaceNamer(workspaceNameFor);
+    // WORKSPACE COLOURS (genie#1300): every workspace has one — its project.json's `appearance.color`, or a palette colour
+    // Genie writes there (main/workspace-color-host.ts). A pass runs when the estate changes: at once for a workspace
+    // without a colour (one just added), and at most every 5 s otherwise, so an agent's edit of the colour is picked up.
+    const colors = new WorkspaceColors({ fs: nodeEnvelopeFs(), onChanged: () => theRegistry.touch(), log: (line) => console.log(`[genie] ${line}`) });
+    workspaceColors = colors;
+    theRegistry.setWorkspaceColorer((path) => colors.colorOf(path));
+    let colorPassAt = 0;
+    let colorPassQueued = false;
+    theRegistry.subscribe((snapshot) => {
+        const ws = snapshot.workspaces;
+        if (!ws || colorPassQueued) return;
+        if (ws.every((w) => w.color) && Date.now() - colorPassAt < 5_000) return;
+        colorPassQueued = true;
+        setTimeout(() => {
+            colorPassQueued = false;
+            colorPassAt = Date.now();
+            // The rail's order — governed workspaces under their governor — so the colours beside each other differ.
+            const order = nestGoverned(ws, (id) => ws.find((w) => w.id === id)?.governedBy ?? null);
+            void colors.ensure(order.map((w) => ({ id: w.id, path: w.path }))).catch((error: unknown) => console.warn(`[genie] workspace colours: ${error instanceof Error ? error.message : String(error)}`));
+        }, 0);
+    });
     // AN AUTOMATED AGENT WITH AN OPEN PLAN DOES NOT JUST STOP (the owner, 2026-10-21; core/plan-keepalive.ts): a turn that
     // ends with steps left is nudged once after a short grace — never while the person is the next move.
     const keepalive = new PlanKeepalive({
@@ -1892,6 +1926,7 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-set-governs', (_event, raw: unknown, children: unknown) =>
         (typeof raw === 'string' && registry ? registry.setGoverns(raw, Array.isArray(children) ? children.filter((c): c is string => typeof c === 'string') : []) : { ok: false, reason: 'name a workspace' }));
     // THE DEFAULT AGENT (Genie 1's): one of the workspace's own agents, or null.
+    ipcMain.handle('genie:workspace-set-color', (_event, raw: unknown, color: unknown) => setWorkspaceColor(raw, color));
     ipcMain.handle('genie:workspace-set-default-agent', (_event, raw: unknown, agentId: unknown) =>
         (typeof raw === 'string' && registry ? registry.setDefaultAgent(raw, typeof agentId === 'string' && agentId !== '' ? agentId : null) : { ok: false, reason: 'name a workspace' }));
     // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
@@ -2092,6 +2127,8 @@ async function boot(): Promise<void> {
         onWorkspacesChange: (listener) => registry?.subscribe(() => listener()) ?? (() => {}),
         // The rail's namer, so a question in the Deck and its window names the workspace the way the rail does.
         workspaceName: workspaceNameFor,
+        // ...and its colour (genie#1300), so the question window and the approval toasts show it beside the name.
+        workspaceColor: (path) => workspaceColors?.colorOf(path) ?? null,
         // Is the agent that asked still waiting: its live session (session host) or its Take Over terminal. A question
         // whose agent has neither, or whose running session started after it was asked, is STALE on the Deck.
         askerLive: (id) => {
@@ -2178,6 +2215,7 @@ async function boot(): Promise<void> {
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
+                setColor: (id, color) => setWorkspaceColor(id, color),
             },
             agentOps: {
                 restart: (id, kind) => restartAgent(agentOps, id, kind),

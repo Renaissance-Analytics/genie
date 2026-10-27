@@ -43,9 +43,9 @@ const SEPARATOR: FileMenuItem = { id: '-', label: '' };
  * rooted there — and while locked every tree row offers Unlock. Absent where the panel cannot be locked (a code pane).
  */
 /**
- * `export` (genie#1264): Export… saves a FILE to a place on this machine through the OS save dialog — a tree file and an
- * editor tab, never a folder (Genie 1 exported nothing at all). Its own group: it neither acts on the host's screen nor
- * touches the clipboard.
+ * `export` (genie#1264): Export… saves a file to a place on this machine through the OS save dialog — a tree file and an
+ * editor tab, and a folder as a .zip (genie#1288); never empty space (the workspace itself). Genie 1 exported nothing at
+ * all. Its own group: it neither acts on the host's screen nor touches the clipboard.
  */
 export function fileMenuItems(target: FileMenuTarget, available: { readonly external: boolean; readonly reveal: boolean; readonly export?: boolean; readonly edit?: boolean; readonly lock?: { readonly lockedRoot: string | null } }): FileMenuItem[] {
     const edit = available.edit === true && target !== 'tab';
@@ -61,7 +61,7 @@ export function fileMenuItems(target: FileMenuTarget, available: { readonly exte
     const host: FileMenuItem[] = [];
     if (available.external && target !== 'tree-folder') host.push(item('open-external'));
     if (available.reveal) host.push(item('reveal'));
-    const exporting: FileMenuItem[] = available.export === true && target !== 'tree-folder' ? [item('export')] : [];
+    const exporting: FileMenuItem[] = available.export === true ? [item('export')] : [];
     const groups: FileMenuItem[][] = [host, exporting, [item('copy-path'), item('copy-relative-path')]];
     if (edit) {
         groups.unshift([item('new-file'), item('new-folder')]);

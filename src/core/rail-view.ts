@@ -42,6 +42,8 @@ export interface RailWorkspace {
     governedBy?: string | null;
     /** Its default agent (Genie 1's), when one is designated. */
     defaultAgentId?: string;
+    /** Its colour (genie#1300): project.json `appearance.color`, `#rrggbb`. Absent = none known yet. */
+    color?: string;
 }
 
 export interface RailItem {
@@ -57,6 +59,8 @@ export interface RailItem {
     governedBy?: string;
     /** Hibernated. The rail hides these unless the person asks to see them. */
     asleep?: boolean;
+    /** Its colour (genie#1300); absent = none known yet, and no swatch is drawn. */
+    color?: string;
     /** GENIE 1'S ROW (core/rail-indicators.ts): agents mid-turn (`null` = not read yet), and the process / site tones. */
     working?: number | null;
     processes?: ProcessTone;
@@ -114,13 +118,14 @@ export function railWorkspaces(
         const governed = governor !== null ? { governedBy: governor } : {};
         const named = w.name ? { name: w.name } : {};
         const asleep = w.asleep === true ? { asleep: true } : {};
+        const colored = w.color ? { color: w.color } : {};
         const indicators = {
             processes: processTone(runtime.processes, w.id),
             processesTitle: processTitle(runtime.processes, w.id),
             sites: siteTone(runtime.sites, w.id),
             sitesTitle: siteTitle(runtime.sites, w.id),
         };
-        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, working: null, ...indicators, ...named, ...governed, ...asleep };
+        if (!w.agentsKnown) return { id: w.id, path: w.path, count: null, alert: null, working: null, ...indicators, ...named, ...governed, ...asleep, ...colored };
 
         const mine = rows.filter((r) => r.workspaceId === w.id);
         return {
@@ -133,6 +138,7 @@ export function railWorkspaces(
             ...indicators,
             ...governed,
             ...asleep,
+            ...colored,
         };
     });
 }

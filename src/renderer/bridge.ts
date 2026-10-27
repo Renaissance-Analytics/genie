@@ -316,6 +316,8 @@ export interface GenieBridge {
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }>;
         /** Genie 1's default agent: one of this workspace's agents, or `null` for none. */
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Its colour (genie#1300), written to its project.json as `appearance.color`. Optional: an older host has none. */
+        setColor?(workspaceId: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */
@@ -415,7 +417,7 @@ export interface GenieBridge {
          *  not the host (a window driving another machine) — those act on the host's screen. */
         openExternal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         reveal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
-        /** Export… (genie#1264): main opens the OS save dialog and streams the file to the place picked on THIS machine; the
+        /** Export… (genie#1264; a folder as a .zip, genie#1288): main opens the OS save dialog and streams the file to the place picked on THIS machine; the
          *  bytes never cross here. `canceled` = the person closed the dialog. Absent where this window has no host files. */
         export?(workspaceId: string, path: string): Promise<ExportResult>;
         /** The tree's file operations (Tynn #844), confined to the workspace and never overwriting; Delete goes to the host's

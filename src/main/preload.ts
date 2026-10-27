@@ -165,6 +165,7 @@ const bridge: PreloadBridge = {
         },
         setGoverns: (workspaceId, childIds) => ipcRenderer.invoke('genie:workspace-set-governs', workspaceId, [...childIds]) as never,
         setDefaultAgent: (workspaceId, agentId) => ipcRenderer.invoke('genie:workspace-set-default-agent', workspaceId, agentId) as never,
+        setColor: (workspaceId, color) => ipcRenderer.invoke('genie:workspace-set-color', workspaceId, color) as never,
     },
 
     agents: {
