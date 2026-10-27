@@ -56,11 +56,11 @@ describe('main.ts wiring', () => {
 
     it('`--quit` rides the single-instance lock, and a launch that is not `boot` exits without booting, quitting or a window', () => {
         const src = main();
-        // prism-acp's approval hook is run as Node first and never asks for the lock (genie#1235, prism-hook-launch.test.ts).
-        expect(src).toMatch(/: launchDecision\(\{\s*\n\s*argv: process\.argv,\s*\n\s*primary: app\.requestSingleInstanceLock\(asksToQuit\(process\.argv\) \? \{ \.\.\.QUIT_DATA \} : undefined\),\s*\n\s*\}\);/);
+        // prism-acp's approval hook never reaches main: 0.30.0 runs it as Node (genie#1235, prism-hook-runs-as-node.test.ts).
+        expect(src).toMatch(/const launch: LaunchDecision = launchDecision\(\{\s*\n\s*argv: process\.argv,\s*\n\s*primary: app\.requestSingleInstanceLock\(asksToQuit\(process\.argv\) \? \{ \.\.\.QUIT_DATA \} : undefined\),\s*\n\s*\}\);/);
         // EXIT, not quit: a quit would run this process's before-quit, which clears the RUNNING Genie's genie-running file.
-        expect(block(src, "if (launch.kind === 'exit' && hookScript === null)", '\n}\n')).toMatch(/app\.exit\(0\);/);
-        expect(block(src, "if (launch.kind === 'exit' && hookScript === null)", '\n}\n')).not.toMatch(/app\.quit\(/);
+        expect(block(src, "if (launch.kind === 'exit') {", '\n}\n')).toMatch(/app\.exit\(0\);/);
+        expect(block(src, "if (launch.kind === 'exit') {", '\n}\n')).not.toMatch(/app\.quit\(/);
         // Only a boot launch boots; only boot() creates the main window.
         expect(src).toMatch(/if \(launch\.kind === 'boot'\) \{\s*\n\s*app\.whenReady\(\)\.then\(boot\)/);
         expect(src.match(/app\.whenReady\(\)\.then\(boot\)/g)).toHaveLength(1);
