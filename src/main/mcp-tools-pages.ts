@@ -14,7 +14,9 @@ import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tool
  *   Everyone else does not see the tool (prism-mcp-server's per-request `visible`), and the handler checks again.
  * - WHICH PAGES: those showing one of the caller's workspace's sites — never another workspace's page.
  * - WHAT ASKS: a submit, and a click the page marks destructive, wait for the person (`page.submit` / `page.click`,
- *   person-only: an autonomous agent's wait too). Declined: nothing reaches the page. Reading, filling and ordinary
+ *   person-only: autonomy alone does not answer them) — unless the caller's own "May drive pages" switch is on: the
+ *   person's answer, given once (genie#1294, approval-queue.ts `SWITCH_ANSWERS`; the default agent without the switch
+ *   still asks). Declined: nothing reaches the page. Reading, filling and ordinary
  *   clicks do not ask. A page that moved since the agent last looked cancels its action until it describes again.
  *
  * The bridge's own tools (page_describe, page_read, page_set_field, page_click, page_submit, nav_visit, nav_back …) run
@@ -120,7 +122,7 @@ export function pagesTools(deps: PagesToolDeps): Registration[] {
     const tool: Registration = {
         definition: new ToolDefinition(
             'pages',
-            'Drive this workspace’s open Genie site pages — a Genie browser tab or a site panel the person has open. `list` shows them. `call {page, tool, args}` runs a page tool on one: `page_describe` first (it lists the page’s fields and buttons by handle), then `page_read`, `page_set_field {handle, value}`, `page_click {handle}`, `page_submit {handle}`, `nav_visit {url}`, `nav_back`, `nav_forward`, `nav_scroll_to`, `nav_scroll_by`. A submit, or a click that changes or deletes something, asks the person first — always.',
+            'Drive this workspace’s open Genie site pages — a Genie browser tab or a site panel the person has open. `list` shows them. `call {page, tool, args}` runs a page tool on one: `page_describe` first (it lists the page’s fields and buttons by handle), then `page_read`, `page_set_field {handle, value}`, `page_click {handle}`, `page_submit {handle}`, `nav_visit {url}`, `nav_back`, `nav_forward`, `nav_scroll_to`, `nav_scroll_by`. A submit, or a click that changes or deletes something, asks the person first — unless your “May drive pages” switch is on.',
             {
                 type: 'object',
                 properties: {

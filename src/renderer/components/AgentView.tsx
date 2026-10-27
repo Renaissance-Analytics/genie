@@ -1289,18 +1289,18 @@ export function AgentView({
                                                 </label>
                                             ) : null}
                                             {ops && has.has('manage-tabs') ? (
-                                                <label data-settings-row="manage-tabs" className={rowClass} title={`The workspace’s default agent always can. Each change asks you unless ${agent.name} is autonomous.`}>
+                                                <label data-settings-row="manage-tabs" className={rowClass} title={`The workspace’s default agent always can, and asks you for each change unless it is autonomous.`}>
                                                     <span className={labelClass}>May manage workspace tabs</span>
                                                     <span data-manage-tabs={ops.manageTabs ? 'on' : 'off'}><Switch checked={ops.manageTabs === true} onCheckedChange={(checked) => { touch('manage-tabs'); ops.onSetManageTabs?.(checked); }} aria-label={`${agent.name} may manage workspace tabs`} /></span>
-                                                    {help(`${agent.name} can add, arrange and remove this workspace’s tabs and their panels.`)}
+                                                    {help(`With this on, ${agent.name} adds, arranges and removes this workspace’s tabs and their panels without asking you.`)}
                                                     {outcomeFor('manage-tabs')}
                                                 </label>
                                             ) : null}
                                             {ops && has.has('drive-pages') ? (
-                                                <label data-settings-row="drive-pages" className={rowClass} title={`The workspace’s default agent always can. A submit, or a click that changes or deletes something, always asks you first — even when ${agent.name} is autonomous.`}>
+                                                <label data-settings-row="drive-pages" className={rowClass} title={`The workspace’s default agent always can, and asks you before a submit or a click that changes or deletes something.`}>
                                                     <span className={labelClass}>May drive pages</span>
                                                     <span data-drive-pages={ops.drivePages ? 'on' : 'off'}><Switch checked={ops.drivePages === true} onCheckedChange={(checked) => { touch('drive-pages'); ops.onSetDrivePages?.(checked); }} aria-label={`${agent.name} may drive pages`} /></span>
-                                                    {help(`${agent.name} can read this workspace’s Genie site pages, fill their fields and click through them.`)}
+                                                    {help(`${agent.name} can read this workspace’s Genie site pages and fill their fields. With this on, ${agent.name} submits forms and clicks through them without asking you.`)}
                                                     {outcomeFor('drive-pages')}
                                                 </label>
                                             ) : null}

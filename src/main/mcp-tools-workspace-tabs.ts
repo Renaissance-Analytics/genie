@@ -12,7 +12,7 @@ import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tool
  *
  * `list` asks nobody. Every change is checked first — an unknown tab, a cell the layout has not got, a kind Genie has
  * not got, a site this workspace does not serve: refused in words, nobody asked, nothing written — then waits for the
- * person (the approval queue; an Autonomous agent's goes through and is recorded, as with `sites update`), then is
+ * person (the approval queue; an agent whose “May manage workspace tabs” switch is on, or an Autonomous one, goes through and is recorded — genie#1294), then is
  * written to the workspace's `workspace_tabs` setting, which every window reloads at once.
  */
 
@@ -45,7 +45,7 @@ export function workspaceTabsTools(deps: WorkspaceTabsToolDeps): Registration[] 
     const tool: Registration = {
         definition: new ToolDefinition(
             'workspaceTabs',
-            'Manage your workspace’s tabs — the ones the person sees in its tab strip, each a grid of panels (terminal, files, site, artboard, widget). `list` shows the tabs, the layouts, the panel kinds and the sites a site panel can show. `add {name}`, `rename {tab, name}`, `remove {tab}`, `layout {tab, layout}`, `place {tab, cell, kind, ref}` (cell counts from 0; a site panel’s ref is one of the listed sites), `clear {tab, cell}`. Every change asks the person unless you are autonomous.',
+            'Manage your workspace’s tabs — the ones the person sees in its tab strip, each a grid of panels (terminal, files, site, artboard, widget). `list` shows the tabs, the layouts, the panel kinds and the sites a site panel can show. `add {name}`, `rename {tab, name}`, `remove {tab}`, `layout {tab, layout}`, `place {tab, cell, kind, ref}` (cell counts from 0; a site panel’s ref is one of the listed sites), `clear {tab, cell}`. Every change asks the person unless your “May manage workspace tabs” switch is on or you are autonomous.',
             {
                 type: 'object',
                 properties: {
