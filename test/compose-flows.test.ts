@@ -100,6 +100,19 @@ describe('a flow run through the composed services', () => {
         expect(prompted).toEqual(['post the standup']);
     });
 
+    it('a TOOL step that runs before main has handed over Genie’s tools — a run resumed at launch — waits for them, rather than failing', async () => {
+        // Found by the Flows acceptance suite: compose resumes the runs Genie quit under while it composes, and main hands the
+        // flows Genie's tools only after (setFlowToolCaller). A resumed question, issues check or knowledge step — exactly
+        // the tool kinds that are safe to resume — failed at once with "Genie's tools are not ready yet".
+        const f = await services.flows.create({ workspaceId: 'ws-example', name: 'remember', document: doc({ kind: '@genie/knowledge', config: { action: 'add', title: 'T' } }), by: { kind: 'user' } });
+        const calls: string[] = [];
+        const going = services.flowScheduler.runNow(f.id);
+        await new Promise((r) => setTimeout(r, 50));
+        services.setFlowToolCaller(async (_flow, tool) => { calls.push(tool); return { ok: true, result: { ok: true } }; });
+        expect(await going).toMatchObject({ outcome: 'ran' });
+        expect(calls).toEqual(['knowledge']);
+    });
+
     it('a hibernated workspace holds every run back and starts nothing', async () => {
         const f = await services.flows.create({ workspaceId: 'ws-example', name: 'report', document: doc({ kind: 'genie/terminal_run', config: { workspace: 'ws-example', command: 'npm run report' } }), by: { kind: 'user' } });
         asleep = true;

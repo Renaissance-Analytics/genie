@@ -37,11 +37,15 @@ describe('Manual: the person’s Run now', () => {
     it('a second Run now while the first is still going is HELD, never a second copy beside it', async () => {
         const g = genie();
         const id = await save(g, 'slow', [node('t', '@particle-academy/manual_trigger'), node('w', '@particle-academy/wait', { mode: 'duration', duration: '1s' }, 240), logStep('l', 'done', 480)], [edge('t', 'w'), edge('w', 'l')]);
-        const first = runNow(g, id);
+        // `runNow` resolves with the NEXT run recorded for the flow, and the held one is recorded first: the first run's own
+        // record is read from the store.
+        void runNow(g, id).catch(() => {});
         await new Promise((r) => setTimeout(r, 100));
         const second = await runNow(g, id);
         expect(second).toMatchObject({ trigger: 'manual', outcome: 'held', reason: 'the previous run of "slow" is still going; this one was not started beside it' });
-        expect(await first).toMatchObject({ outcome: 'ran', log: ['done'] });
+        const runs = await runsOf(g, id, 2);
+        expect(runs.map((r) => r.outcome)).toEqual(['held', 'ran']);
+        expect(runs[1]).toMatchObject({ log: ['done'] });
     });
 });
 

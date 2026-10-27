@@ -117,6 +117,17 @@ describe('the move (genie/file_move), on a real folder', () => {
         expect(expected).toEqual([join(ws, '.untracked', 'big (2).bin')]);
     });
 
+    it('a file named RELATIVE to the workspace (a manual flow’s "File" setting) is moved from the workspace, not from Genie’s own folder', async () => {
+        // Found by the Flows acceptance suite: the existence check and the rename used the setting as written, so a relative
+        // name was looked for relative to Genie's process directory and the step failed "no longer there".
+        await mkdir(join(ws, 'uploads'));
+        await writeFile(join(ws, 'uploads', 'report.pdf'), 'x');
+        const move = fileMover({ workspacePath: () => ws, expectArrival: () => {} });
+        expect(await move('tynn', 'uploads/report.pdf', 'archive')).toEqual({ from: join(ws, 'uploads', 'report.pdf'), to: join(ws, 'archive', 'report.pdf') });
+        expect(existsSync(join(ws, 'archive', 'report.pdf'))).toBe(true);
+        expect(existsSync(join(ws, 'uploads', 'report.pdf'))).toBe(false);
+    });
+
     it('refuses outside the workspace and an unknown workspace, moving nothing', async () => {
         await writeFile(join(dir, 'outside.bin'), 'x');
         const move = fileMover({ workspacePath: (id) => (id === 'tynn' ? ws : null), expectArrival: () => {} });

@@ -20,7 +20,7 @@ const log = (id: string, message: string, x = 600) => node(id, '@particle-academ
 describe('the run overlay: each node’s outcome, as the canvas draws it', () => {
     const genie = useGenie();
 
-    it('a run that FAILED: ran / failed / not reached, and a branch’s untaken port skipped — and the canvas statuses for each', async () => {
+    it('a run that FAILED: ran / failed / not reached — and the canvas statuses for each', async () => {
         const g = genie();
         const id = await save(g, 'overlay', [
             manual,
@@ -30,9 +30,11 @@ describe('the run overlay: each node’s outcome, as the canvas draws it', () =>
             log('other', 'not taken', 400),
         ], [edge('t', 'b'), edge('b', 'c', 'true'), edge('b', 'other', 'false'), edge('c', 'after')]);
         const run = await runNow(g, id);
-        expect(run).toMatchObject({ outcome: 'failed', nodes: { t: 'ran', b: 'ran', c: 'failed', after: 'not reached', other: 'skipped' } });
+        // The branch's untaken port is not reached either: the engine marks a port's steps skipped as the run walks on past
+        // them, and this run stopped at the failure first (a run that goes on draws them skipped: logic-nodes.accept.ts).
+        expect(run).toMatchObject({ outcome: 'failed', nodes: { t: 'ran', b: 'ran', c: 'failed', after: 'not reached', other: 'not reached' } });
         expect(run.steps).toEqual(expect.arrayContaining([expect.objectContaining({ nodeId: 'c', outcome: 'failed' }), expect.objectContaining({ nodeId: 'after', outcome: 'not reached' })]));
-        expect(viewerStatuses(run.nodes!)).toEqual({ t: 'ok', b: 'ok', c: 'failed', after: 'pending', other: 'skipped' });
+        expect(viewerStatuses(run.nodes!)).toEqual({ t: 'ok', b: 'ok', c: 'failed', after: 'pending', other: 'pending' });
     });
 
     it('a run HELD back: the held step, and the canvas draws it as still running', async () => {
@@ -137,7 +139,6 @@ describe('the save refuses every kind of graph Genie will not hold — nothing s
         { name: 'a required setting missing', nodes: [manual, cmd('c', {})], edges: [edge('t', 'c')], problem: { nodeId: 'c', message: /command/i } },
         { name: 'a required setting that is only spaces', nodes: [manual, cmd('c', { command: '   ' })], edges: [edge('t', 'c')], problem: { nodeId: 'c', message: /command: Command is required/ } },
         { name: 'a file flow templating into a command', nodes: [node('t', 'genie/file_added', { workspace: WS }), cmd('c', { command: 'convert {{in.path}}' })], edges: [edge('t', 'c')], problem: { nodeId: 'c', message: /cannot template values into a command/ } },
-        { name: 'a connection to a node that is not there', nodes: [manual, log('l', 'x')], edges: [edge('t', 'l'), edge('t', 'ghost')], problem: { message: /ghost/ } },
         { name: 'no name', nodes: [manual, log('l', 'x')], edges: [edge('t', 'l')], problem: { message: /name the flow/ }, flowName: '   ' },
     ];
 
@@ -161,6 +162,10 @@ describe('the save refuses every kind of graph Genie will not hold — nothing s
     it('the store’s own door (the one agents’ `flows create` passes) refuses the same graphs', async () => {
         const g = genie();
         await expect(g.services.flows.create({ workspaceId: WS, name: 'hook', document: canvasDocument([manual, node('w', '@particle-academy/webhook_out', { url: 'https://example.com' }, 300)], [edge('t', 'w')]), by: { kind: 'agent', id: 'agent_atlas', name: 'atlas' } })).rejects.toThrow(/node w: .*not a step Genie can run/);
+        // A connection to a node that is not there: the canvas cannot draw one (its hydration drops it), so this is the
+        // agents' door only — a document sent as written.
+        const dangling = { $schema: 'https://particle.academy/schemas/workflow/v1.json', version: 1, graph: { nodes: [manual, log('l', 'x')], edges: [edge('t', 'l'), edge('t', 'ghost')] } };
+        await expect(g.services.flows.create({ workspaceId: WS, name: 'dangling', document: dangling, by: { kind: 'agent', id: 'agent_atlas', name: 'atlas' } })).rejects.toThrow(/ghost/);
         await expect(g.services.flows.create({ workspaceId: WS, name: 'blank', document: canvasDocument([manual, cmd('c', { command: '  ' })], [edge('t', 'c')]), by: { kind: 'user' } })).rejects.toThrow(/Command is required/);
         expect(g.services.flows.list()).toEqual([]);
     });

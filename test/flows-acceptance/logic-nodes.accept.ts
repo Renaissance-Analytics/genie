@@ -1,6 +1,6 @@
-import { describe, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { FlowInFlight } from '../../src/main/flow-store.js';
-import { edge, kindCase, node, runNow, save, trySave, useGenie, type DocEdge, type DocNode, type Genie } from './harness.js';
+import { edge, kindCase, node, runNow, save, TestClock, trySave, useGenie, type DocEdge, type DocNode, type Genie } from './harness.js';
 
 /**
  * THE LOGIC AND OUTPUT NODES (fancy-flow's own kinds, run by Genie's runner): Branch, Switch, Merge, Transform, Variable,
@@ -129,6 +129,34 @@ describe('waiting', () => {
         ], [edge('t', 'x'), edge('x', 'w'), edge('w', 'l')]);
         const run = await f.run();
         expect(run).toMatchObject({ outcome: 'ran', log: ['after the wait: box'], nodes: { w: 'ran', l: 'ran' } });
+        expect(started).toBeGreaterThan(0);
+        expect(done - started).toBeGreaterThanOrEqual(100);
+    });
+});
+
+describe('waiting, on the runner’s clock (genie#1260)', () => {
+    const clock = new TestClock();
+    const onClock = useGenie(() => ({ clock }));
+
+    it('a Wait is over only when the clock the runner reads says its duration has passed — even when that clock is set back meanwhile', async () => {
+        const g = onClock();
+        // genie#1260: on omarchy-test a 50 ms Wait was measured on Date.now as 44 ms. A synchronous stall before the timer
+        // (the case above) does not make it early; the wall clock being corrected under it does — a VM restored from a
+        // snapshot has its clock set right by time sync while it runs. Here the runner's clock is set back 30 ms, once,
+        // while the step waits: the step must still not end before 100 ms have passed ON THAT CLOCK.
+        let started = 0;
+        let done = 0;
+        const real = g.services.flows.markInFlight.bind(g.services.flows);
+        vi.spyOn(g.services.flows, 'markInFlight').mockImplementation(async (id, inFlight) => {
+            if (inFlight?.nodes.w === 'running' && started === 0) {
+                started = clock.now();
+                setTimeout(() => clock.set(clock.now() - 30), 20);
+            }
+            if (inFlight?.nodes.w === 'ran' && done === 0) done = clock.now();
+            return real(id, inFlight);
+        });
+        const f = await flow(g, 'wait', [manual, node('w', '@particle-academy/wait', { mode: 'duration', duration: '100ms' }, 300), log('l', 'after')], [edge('t', 'w'), edge('w', 'l')]);
+        expect(await f.run()).toMatchObject({ outcome: 'ran', log: ['after'] });
         expect(started).toBeGreaterThan(0);
         expect(done - started).toBeGreaterThanOrEqual(100);
     });

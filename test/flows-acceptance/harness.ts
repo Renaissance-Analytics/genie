@@ -213,21 +213,20 @@ export async function startGenie(options: GenieOptions = {}, dir?: string): Prom
     return genie;
 }
 
-let current: Genie | null = null;
-
-/** One Genie per test, shut down and removed after it. */
+/** One Genie per test, shut down and removed after it. Each call has its own, so a nested `useGenie` leaks nothing. */
 export function useGenie(options: () => GenieOptions = () => ({})): () => Genie {
-    beforeEach(async () => { current = await startGenie(options()); });
+    let mine: Genie | null = null;
+    beforeEach(async () => { mine = await startGenie(options()); });
     afterEach(async () => {
-        const g = current;
-        current = null;
+        const g = mine;
+        mine = null;
         if (!g) return;
         await g.shutdown();
         await rm(g.dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     });
     return () => {
-        if (!current) throw new Error('no Genie: useGenie() runs per test');
-        return current;
+        if (!mine) throw new Error('no Genie: useGenie() runs per test');
+        return mine;
     };
 }
 
@@ -280,16 +279,24 @@ export function nextRun(g: Genie, flowId: string, timeoutMs = 20_000): Promise<F
     });
 }
 
-/** The person's Run now (`flows.runNow`, started and not awaited, as the Flows tab does), and the run it recorded. */
+/**
+ * The person's Run now (`flows.runNow`, started and not awaited, as the Flows tab does), and the run it recorded — once the
+ * scheduler has let go of it: a run is recorded a moment BEFORE it leaves the scheduler's in-flight set, and a Run now in
+ * that moment is held as an overlap ("the previous run is still going"), which is right, and not what the next line means.
+ */
 export async function runNow(g: Genie, flowId: string): Promise<FlowRun> {
     const recorded = nextRun(g, flowId);
     await handleFeatureAction(g.services, { kind: 'flows.runNow', flowId });
-    return recorded;
+    const run = await recorded;
+    await g.services.flowScheduler.settled();
+    return run;
 }
 
 /** Waits until `n` runs of a flow are recorded. */
 export async function runsOf(g: Genie, flowId: string, n: number, timeoutMs = 15_000): Promise<readonly FlowRun[]> {
     await vi.waitFor(() => expect(g.services.flows.get(flowId)!.runs.length).toBeGreaterThanOrEqual(n), { timeout: timeoutMs, interval: 25 });
+    // The store holds the run before its run listeners are told (after the write): let the scheduler finish recording it.
+    await g.services.flowScheduler.settled();
     return g.services.flows.get(flowId)!.runs;
 }
 
@@ -319,6 +326,7 @@ export function kindCase(kind: string, title: string, genie: () => Genie, body: 
         const g = genie();
         const mark = g.runs.length;
         await body();
+        await g.services.flowScheduler.settled();
         const canonical = canonicalKind(kind);
         const proof = g.runs.slice(mark).some(({ flowId, run }) => {
             const flow = g.services.flows.get(flowId);
