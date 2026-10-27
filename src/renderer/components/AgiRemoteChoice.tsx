@@ -17,7 +17,12 @@ import type { GithubView } from '../../core/github.js';
  * Both are hook-free, so a test can render and press them.
  */
 
-export type GithubAsk = 'sign-in' | 'install' | 'refresh';
+/**
+ * What the remote choice asks of GitHub: sign in, the install chooser, read again — or `{ approve }`, the page of one
+ * installation that has not granted what creating a repository needs (core/github.ts repoCreateBlocker), where a pending
+ * permission request is approved.
+ */
+export type GithubAsk = 'sign-in' | 'install' | 'refresh' | { readonly approve: number };
 
 const chip = (on: boolean) => `rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${on ? 'border-[var(--violet-400)] bg-[var(--violet-500)]/15 text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`;
 const muted = 'text-xs text-[var(--fg-3)]';
@@ -119,6 +124,12 @@ export function OwnerPicker({ label, field, value, github, why, onOwner, onGithu
                     <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install here…</button>
                 </span>
             ) : null}
+            {chosen?.approve ? (
+                <span className="flex items-center gap-2 text-xs text-[var(--amber-400)]">
+                    <span className="flex-1">{chosen.approve.reason}</span>
+                    <button type="button" data-action="github-approve" onClick={() => onGithub({ approve: chosen.approve!.installationId })} className={button}>Approve on GitHub…</button>
+                </span>
+            ) : null}
         </>
     );
 }
@@ -136,6 +147,7 @@ export interface PublishedViewProps {
 /** Genie 1's partial success: the workspace is made; what did not go to plan, by step, in the service's words. */
 export function PublishedView({ name, path, published, onOpen, onGithub }: PublishedViewProps) {
     const notInstalled = published.problems.find((p) => p.account);
+    const needsApproval = published.problems.find((p) => p.approve)?.approve;
     return (
         <div data-published="" className="flex flex-col gap-3 text-sm">
             <div>
@@ -151,6 +163,7 @@ export function PublishedView({ name, path, published, onOpen, onGithub }: Publi
             </ul>
             <div className="flex items-center justify-end gap-2">
                 {notInstalled ? <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install Genie on {notInstalled.account}…</button> : null}
+                {needsApproval ? <button type="button" data-action="github-approve" onClick={() => onGithub({ approve: needsApproval.installationId })} className={button}>Approve on GitHub…</button> : null}
                 <button type="button" data-action="open-workspace" onClick={onOpen} className="flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)]"><Icon name="check" size="xs" />Open workspace</button>
             </div>
         </div>

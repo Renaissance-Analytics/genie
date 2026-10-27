@@ -7,6 +7,7 @@ import {
     GithubApiError,
     GithubAuthError,
     GithubNotInstalledError,
+    GithubPermissionError,
     GithubRateLimitError,
     accessibleRepoFrom,
     cloneAuthFor,
@@ -21,6 +22,7 @@ import {
     pushAuthFor,
     rateLimitWaitMs,
     refreshOutcomeFrom,
+    repoCreateBlocker,
     v1GithubLogin,
     type AccessibleRepo,
     type CreatedRepo,
@@ -667,10 +669,17 @@ export class GithubAccount implements GithubAccountPort {
      *
      * - 422 "name already exists": the repository an earlier, half-finished run made is read back and handed over as
      *   `created: false` instead of dead-ending the retry (Genie 1).
-     * - 403/404: the App is not installed on that account → GithubNotInstalledError with the install chooser for it.
+     * - Installed there without Administration (write): GithubPermissionError naming that installation, before GitHub is
+     *   asked — the request could only fail. (Tynn's own GitHub App no longer creates an organization's `.agi`, so this
+     *   sign-in is the only thing that does; Tynn, 2026-10-27.)
+     * - 403/404 with the App installed and granted: the person's own access on that account, in GitHub's words.
+     * - 403/404 with no installation known there: the App is not installed → GithubNotInstalledError with the install
+     *   chooser for it (Genie 1, `v0.7.0-beta.342:main/github/api.ts:582-610`).
      */
     async createRepo(opts: CreateRepoOptions): Promise<CreatedRepo> {
         const body = { name: opts.name, private: opts.private, auto_init: false, description: opts.description ?? '' };
+        const installation = this.#installationOn(opts.owner);
+        if (installation && repoCreateBlocker(installation)) throw new GithubPermissionError(installation.account, installation.id, installation.settingsUrl);
         const personal = await this.#isPersonal(opts.owner);
         const path = personal ? '/user/repos' : `/orgs/${encodeURIComponent(opts.owner)}/repos`;
         let json: unknown;
@@ -682,6 +691,8 @@ export class GithubAccount implements GithubAccountPort {
             if (error.status === 422 && /already exists/i.test(error.message)) {
                 json = await this.#call('GET', `/repos/${encodeURIComponent(opts.owner)}/${encodeURIComponent(opts.name)}`);
                 created = false;
+            } else if ((error.status === 403 || error.status === 404) && installation) {
+                throw new GithubApiError(error.status, `You may not create repositories in ${opts.owner} (${error.message}). An owner of ${opts.owner} can allow it.`);
             } else if (error.status === 403 || error.status === 404) {
                 throw await this.#notInstalled(error, opts.owner);
             } else {
@@ -693,10 +704,16 @@ export class GithubAccount implements GithubAccountPort {
         return repo;
     }
 
+    /** The App's installation on `account` as last read from GitHub; `null` when there is none or none was read yet. */
+    #installationOn(account: string): GithubInstallation | null {
+        const lower = account.toLowerCase();
+        return this.#installations?.find((i) => i.account.toLowerCase() === lower) ?? null;
+    }
+
     /** Is `owner` the signed-in person (not an organization)? The installation says so when there is one; else their login. */
     async #isPersonal(owner: string): Promise<boolean> {
         const lower = owner.toLowerCase();
-        const installation = this.#installations?.find((i) => i.account.toLowerCase() === lower);
+        const installation = this.#installationOn(owner);
         if (installation) return !installation.isOrg;
         let login = this.#user?.login ?? null;
         if (!login || login === PLACEHOLDER_LOGIN) {

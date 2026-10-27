@@ -1,4 +1,4 @@
-import type { GithubView } from './github.js';
+import { repoCreateBlocker, type GithubView } from './github.js';
 
 /**
  * WHERE A NEW WORKSPACE'S `<slug>.agi` GOES (Add workspace parity items 10 + 11) — the pure half.
@@ -34,6 +34,8 @@ export interface PublishProblem {
     readonly message: string;
     /** The account the Genie AOS app is not installed on, when that is why GitHub refused — the screen offers the install. */
     readonly account?: string;
+    /** The installation that has not granted Administration (write), when that is why — the screen offers to approve it. */
+    readonly approve?: { readonly installationId: number };
 }
 
 export interface Published {
@@ -56,6 +58,8 @@ export interface OwnerOption {
     readonly login: string;
     readonly personal: boolean;
     readonly installed: boolean | null;
+    /** Installed, but the installation cannot create repositories: why, in one line, and the installation to approve it on. */
+    readonly approve?: { readonly installationId: number; readonly reason: string };
 }
 
 /** GitHub's rule for a user or org name: letters, digits and single dashes, not starting with a dash; at most 39. */
@@ -80,9 +84,16 @@ export function githubOwnerOptions(github: GithubView | null | undefined): Owner
     if (!login) return [];
     const installs = github!.installations;
     const me = login.toLowerCase();
-    const personal: OwnerOption = { login, personal: true, installed: installs === null ? null : installs.some((i) => !i.isOrg && i.account.toLowerCase() === me) };
-    const orgs = (installs ?? []).filter((i) => i.isOrg).map((i): OwnerOption => ({ login: i.account, personal: false, installed: true }));
+    const mine = (installs ?? []).find((i) => !i.isOrg && i.account.toLowerCase() === me);
+    const personal: OwnerOption = { login, personal: true, installed: installs === null ? null : mine !== undefined, ...approval(mine) };
+    const orgs = (installs ?? []).filter((i) => i.isOrg).map((i): OwnerOption => ({ login: i.account, personal: false, installed: true, ...approval(i) }));
     return [personal, ...orgs];
+}
+
+/** `approve` for an installation that cannot create repositories (core/github.ts repoCreateBlocker); nothing when it can. */
+function approval(i: Parameters<typeof repoCreateBlocker>[0] & { readonly id: number } | undefined): Pick<OwnerOption, 'approve'> {
+    const reason = i ? repoCreateBlocker(i) : null;
+    return i && reason ? { approve: { installationId: i.id, reason } } : {};
 }
 
 /** A choice as the window sent it, checked; `null` = not one Genie understands. A pasted URL is trimmed. */
