@@ -10,6 +10,7 @@ import { parseManifest } from '../src/core/plugins.js';
 import { PluginHost } from '../src/main/plugin-host.js';
 import { readArtBoard, reviewArtBoardPost } from '../src/main/artboard-host.js';
 import { runOfficialTool } from '../src/main/official-tools.js';
+import { GENIE_SKILLS } from '../src/main/agent-skills.js';
 
 /**
  * THE OFFICIAL PLUGINS' TOOLS AND PANELS (beta.33 item 14, part two; Genie 1 main/plugins/official.ts + artboard-plugin.ts +
@@ -93,12 +94,39 @@ describe('the ArtBoard: post, show, verdict back to the agent that posted', () =
     });
 
     it('a verdict is written to the board and delivered to the agent that posted, with the comment', async () => {
-        await runOfficialTool({ pluginId: 'ai.genie.artboard', tool: 'post', args: { title: 'Login screen', html: '<h1>Hi</h1>' }, caller: caller(), manifest: manifestOf('ai.genie.artboard') });
+        await runOfficialTool({ pluginId: 'ai.genie.artboard', tool: 'post', args: { title: 'Login screen', html: '<h1>Hi</h1>', askVerdict: true }, caller: caller(), manifest: manifestOf('ai.genie.artboard') });
         const sent: { to: string; text: string }[] = [];
         const r = await reviewArtBoardPost(ws, 'login-screen', { verdict: 'rejected', comment: 'More contrast' }, { send: async (to, text) => { sent.push({ to, text }); }, now: () => '2026-10-20T00:00:00.000Z' });
         expect(r).toEqual({ ok: true, delivered: true });
         expect(sent).toEqual([{ to: 'agent_7', text: expect.stringMatching(/"Login screen" was rejected\. Comment: More contrast.*SAME id \(`login-screen`\)/) }]);
         expect((await readArtBoard(ws)).posts[0]!.review).toEqual({ verdict: 'rejected', comment: 'More contrast', at: '2026-10-20T00:00:00.000Z' });
         expect(await reviewArtBoardPost(ws, 'gone', { verdict: 'approved' }, { send: async () => {}, now: () => '' })).toEqual({ ok: false, error: 'That post is no longer on the board.' });
+    });
+
+    it('a verdict is OPT-IN per post: askVerdict is in the schema, and without it the post just shows (genie#1275)', async () => {
+        const post = manifestOf('ai.genie.artboard').mcpTools.find((t) => t.name === 'post')!;
+        expect((post.inputSchema as { properties: Record<string, { type: string }> }).properties.askVerdict).toMatchObject({ type: 'boolean' });
+        expect(post.description).toMatch(/askVerdict/);
+        // The skill agents read says it too, or they keep asking for a verdict on everything (or on nothing).
+        expect(GENIE_SKILLS.find((k) => k.name === 'genie')!.body).toMatch(/artboard\.post[\s\S]*askVerdict/);
+
+        const shown = await runOfficialTool({ pluginId: 'ai.genie.artboard', tool: 'post', args: { title: 'Palette', html: '<p>x</p>' }, caller: caller(), manifest: manifestOf('ai.genie.artboard') });
+        expect(shown).toMatchObject({ ok: true, result: { text: expect.not.stringMatching(/approve or reject/) } });
+        const asked = await runOfficialTool({ pluginId: 'ai.genie.artboard', tool: 'post', args: { title: 'Login', html: '<p>y</p>', askVerdict: true }, caller: caller(), manifest: manifestOf('ai.genie.artboard') });
+        expect(asked).toMatchObject({ ok: true, result: { text: expect.stringMatching(/approve or reject/) } });
+
+        // Written EXPLICITLY, both ways: on disk, a post with no field is one from before #1275, which asked.
+        const raw = JSON.parse(await readFile(join(ws, '.artboard', 'index.json'), 'utf8')) as { posts: { id: string; askVerdict?: boolean }[] };
+        expect(raw.posts.map((p) => [p.id, p.askVerdict])).toEqual([['login', true], ['palette', false]]);
+        expect((await readArtBoard(ws)).posts.map((p) => [p.id, p.askVerdict])).toEqual([['login', true], ['palette', false]]);
+    });
+
+    it('a post that asked for no verdict cannot be given one: nothing is written and nobody is messaged', async () => {
+        await runOfficialTool({ pluginId: 'ai.genie.artboard', tool: 'post', args: { title: 'Palette', html: '<p>x</p>' }, caller: caller(), manifest: manifestOf('ai.genie.artboard') });
+        const sent: string[] = [];
+        const r = await reviewArtBoardPost(ws, 'palette', { verdict: 'approved' }, { send: async (to) => { sent.push(to); }, now: () => '2026-10-27T00:00:00.000Z' });
+        expect(r).toEqual({ ok: false, error: 'That post did not ask for a verdict.' });
+        expect(sent).toEqual([]);
+        expect((await readArtBoard(ws)).posts[0]!.review).toBeUndefined();
     });
 });

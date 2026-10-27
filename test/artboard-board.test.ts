@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBoard, addPost, BOARD_DIR, BOARD_INDEX, type BoardPost } from '../src/core/artboard.js';
+import { parseBoard, addPost, wantsVerdict, BOARD_DIR, BOARD_INDEX, type BoardPost } from '../src/core/artboard.js';
 
 /**
  * THE BOARD INDEX — what an agent posted, and in what order.
@@ -75,6 +75,27 @@ describe('parseBoard', () => {
         // Positive control: the rejections above pass just as happily against a
         // parser that returns nothing at all.
         expect(parseBoard(JSON.stringify({ posts: [post()] }))).toEqual([post()]);
+    });
+});
+
+describe('a verdict is opt-in per post (genie#1275)', () => {
+    // The owner: "They aren't always used for Approval either." A post says whether it wants a verdict.
+    it('keeps a post that asked for no verdict as one that asked for none', () => {
+        expect(parseBoard(JSON.stringify({ posts: [post({ askVerdict: false })] }))[0]!.askVerdict).toBe(false);
+    });
+
+    it('keeps one that asked for a verdict', () => {
+        expect(parseBoard(JSON.stringify({ posts: [{ ...post(), askVerdict: true }] }))[0]!.askVerdict).toBe(true);
+    });
+
+    it('a post from before the field existed was posted for review, so it still asks', () => {
+        // Genie 1 and Genie 2 until #1275 promised every poster a verdict; the boards on disk are review requests.
+        expect(wantsVerdict(parseBoard(JSON.stringify({ posts: [post()] }))[0]!)).toBe(true);
+        expect(wantsVerdict(post({ askVerdict: false }))).toBe(false);
+    });
+
+    it('junk in the field is not a "no": the post keeps the legacy meaning', () => {
+        expect(wantsVerdict(parseBoard(JSON.stringify({ posts: [{ ...post(), askVerdict: 'no' }] }))[0]!)).toBe(true);
     });
 });
 
