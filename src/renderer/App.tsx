@@ -662,9 +662,11 @@ function DesktopApp({ bridge }: AppProps) {
     };
     useHostRequests(resolvedBridge, features.settings.values, () => featureAct({ kind: 'whatsNew.show' }, 'What’s new did not open'));
     // The add-workspace remote choice's GitHub asks (Add workspace parity 10): sign in where Settings does it, GitHub's own
-    // install chooser, or read the installations again after installing.
+    // install chooser, one installation's page (to approve the permission creating a repository needs), or read the
+    // installations again after installing.
     const githubAsk = (ask: GithubAsk) => {
-        if (ask === 'sign-in') navigate(GITHUB_ROUTE);
+        if (typeof ask === 'object') featureAct({ kind: 'integrations.githubOpen', target: { page: 'installation', installationId: ask.approve } }, 'GitHub’s installation page did not open');
+        else if (ask === 'sign-in') navigate(GITHUB_ROUTE);
         else if (ask === 'install') featureAct({ kind: 'integrations.githubOpen', target: { page: 'install' } }, 'GitHub’s install page did not open');
         else featureAct({ kind: 'integrations.githubRefresh' }, 'GitHub was not read again');
     };

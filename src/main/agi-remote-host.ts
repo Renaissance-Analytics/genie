@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { PublishProblem, Published, RemoteChoice } from '../core/agi-remote.js';
-import { GithubNotInstalledError, type CreatedRepo } from '../core/github.js';
+import { GithubNotInstalledError, GithubPermissionError, type CreatedRepo } from '../core/github.js';
 import type { CreateRepoOptions } from './github-account.js';
 
 /**
@@ -79,6 +79,7 @@ export async function publishEnvelope(ports: AgiRemotePorts, at: { path: string;
                 step: 'github',
                 message: `Genie could not create ${target} on GitHub: ${words(error)}`,
                 ...(error instanceof GithubNotInstalledError ? { account: error.account } : {}),
+                ...(error instanceof GithubPermissionError ? { approve: { installationId: error.installationId } } : {}),
             });
             return { remote: null, repo: null, pushed: false, tynn: linked ? 'no-remote' : 'not-linked', problems };
         }

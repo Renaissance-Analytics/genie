@@ -177,6 +177,16 @@ export function grants(i: Pick<GithubInstallation, 'permissions'>, permission: s
 }
 
 /**
+ * Why the person cannot create a repository under this installation's account, in one line — `null` when they can as far
+ * as the App goes. A GitHub App user token does only what BOTH the person and the installation may, and creating a
+ * repository (`POST /orgs/{org}/repos`, `POST /user/repos`) or a fork needs the installation's Administration (write).
+ * GitHub's own words for it, so the person finds the same name on the approval page.
+ */
+export function repoCreateBlocker(i: Pick<GithubInstallation, 'account' | 'permissions'>): string | null {
+    return grants(i, 'administration', 'write') ? null : `Genie needs Administration (Read and write) on ${i.account} to create repositories there.`;
+}
+
+/**
  * What GitHub's permissions let THIS Genie do, each with why not. Genie 2's GitHub-dependent features, honestly:
  *
  * - Cloning private repositories (Add workspace → from a git URL) over HTTPS with this sign-in: needs Contents (read) on
@@ -346,6 +356,20 @@ export class GithubNotInstalledError extends GithubApiError {
     constructor(readonly account: string, readonly installUrl: string, status: number, githubMessage: string) {
         super(status, `The Genie AOS app is not installed on ${account}, so Genie cannot write there. Install it: ${installUrl} (${githubMessage})`);
         this.name = 'GithubNotInstalledError';
+    }
+}
+
+/**
+ * The App IS installed on `account`, but that installation has not granted what creating a repository needs
+ * ({@link repoCreateBlocker}). Raised before GitHub is asked; the fix is one click — the installation's own page on GitHub,
+ * where a pending permission request is approved. Never "not installed": it is, and sending the person to install it
+ * again was Genie 1's dead end.
+ */
+export class GithubPermissionError extends GithubApiError {
+    readonly code = 'permission_missing';
+    constructor(readonly account: string, readonly installationId: number, readonly settingsUrl: string) {
+        super(0, `Genie needs Administration (Read and write) on ${account} to create repositories there. Approve it on GitHub: ${settingsUrl}`);
+        this.name = 'GithubPermissionError';
     }
 }
 

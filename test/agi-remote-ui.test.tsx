@@ -6,7 +6,7 @@ import { startDraft, type SourceAnalysis } from '../src/core/envelope-plan.js';
 import { signedOutGithubView, type GithubInstallation, type GithubView } from '../src/core/github.js';
 import { NewWorkspaceForm } from '../src/renderer/components/AddWorkspaceModal.js';
 import { WorkspaceStepView } from '../src/renderer/components/AddWorkspaceWizard.js';
-import { PublishedView, RemoteChoiceView } from '../src/renderer/components/AgiRemoteChoice.js';
+import { PublishedView, RemoteChoiceView, type GithubAsk } from '../src/renderer/components/AgiRemoteChoice.js';
 
 /**
  * THE REMOTE CHOICE ON SCREEN (Add workspace parity items 10 + 11): None / GitHub / Paste URL on New and on the wizard's
@@ -25,12 +25,12 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
     return out;
 }
 
-const install = (account: string, isOrg: boolean, id = 1): GithubInstallation => ({ id, account, isOrg, selection: 'all', repoCount: null, repos: null, permissions: { contents: 'write' }, settingsUrl: `https://github.com/settings/installations/${id}` });
+const install = (account: string, isOrg: boolean, id = 1, permissions: GithubInstallation['permissions'] = { contents: 'write', administration: 'write' }): GithubInstallation => ({ id, account, isOrg, selection: 'all', repoCount: null, repos: null, permissions, settingsUrl: `https://github.com/settings/installations/${id}` });
 const signedIn = (installations: GithubInstallation[] | null): GithubView => ({ ...signedOutGithubView(null), status: 'signed-in', user: { login: 'ada', name: 'Ada' }, installations });
 
 function view(choice: RemoteChoice, github: GithubView | null) {
     const chosen: RemoteChoice[] = [];
-    const asked: string[] = [];
+    const asked: GithubAsk[] = [];
     const ui = RemoteChoiceView({ choice, github, folder: 'acme.agi', onChoice: (c) => chosen.push(c), onGithub: (a) => asked.push(a) });
     return { ui, html: renderToStaticMarkup(ui), chosen, asked };
 }
@@ -105,6 +105,32 @@ describe('GitHub: the owner picker and the private toggle', () => {
     });
 });
 
+describe('an account the App may not create repositories in (Administration not granted)', () => {
+    it('the chosen org says why in one line and offers to approve it on that installation — a granted org does not (control)', () => {
+        const asked: unknown[] = [];
+        const github = signedIn([install('ada', false, 1), install('acme-org', true, 2, { contents: 'write' }), install('civic', true, 3)]);
+        const ui = RemoteChoiceView({ choice: { kind: 'github', owner: 'acme-org', private: true }, github, folder: 'acme.agi', onChoice: () => {}, onGithub: (a) => asked.push(a) });
+        const html = renderToStaticMarkup(ui);
+        expect(html).toContain('Administration (Read and write)');
+        expect(html).not.toMatch(/isn(?:'|&#x27;)t installed on/);
+        for (const b of findAll(ui, (p) => p['data-action'] === 'github-approve')) (b.onClick as () => void)();
+        expect(asked).toEqual([{ approve: 2 }]);
+
+        const granted = RemoteChoiceView({ choice: { kind: 'github', owner: 'civic', private: true }, github, folder: 'acme.agi', onChoice: () => {}, onGithub: () => {} });
+        expect(renderToStaticMarkup(granted)).not.toContain('Administration (Read and write)');
+        expect(findAll(granted, (p) => p['data-action'] === 'github-approve')).toHaveLength(0);
+    });
+
+    it('after the build: an approve button for that installation, never an install button', () => {
+        const asked: unknown[] = [];
+        const published: Published = { remote: null, repo: null, pushed: false, tynn: 'not-linked', problems: [{ step: 'github', message: 'Genie needs Administration (Read and write) on acme-org to create repositories there.', approve: { installationId: 22 } }] };
+        const ui = PublishedView({ name: 'Acme', path: '/w/acme.agi', published, onOpen: () => {}, onGithub: (a) => asked.push(a) });
+        expect(findAll(ui, (p) => p['data-action'] === 'github-install')).toHaveLength(0);
+        for (const b of findAll(ui, (p) => p['data-action'] === 'github-approve')) (b.onClick as () => void)();
+        expect(asked).toEqual([{ approve: 22 }]);
+    });
+});
+
 describe('the partial-success screen', () => {
     const published = (problems: Published['problems']): Published => ({ remote: null, repo: null, pushed: false, tynn: 'not-linked', problems });
 
@@ -120,7 +146,7 @@ describe('the partial-success screen', () => {
     });
 
     it('not installed on an account: an install button; Open workspace opens it', () => {
-        const asked: string[] = [];
+        const asked: GithubAsk[] = [];
         let opened = 0;
         const ui = PublishedView({ name: 'Acme', path: '/w/acme.agi', published: published([{ step: 'github', message: 'The Genie AOS app is not installed on acme-org', account: 'acme-org' }]), onOpen: () => { opened++; }, onGithub: (a) => asked.push(a) });
         for (const b of findAll(ui, (p) => p['data-action'] === 'github-install' || p['data-action'] === 'open-workspace')) (b.onClick as () => void)();

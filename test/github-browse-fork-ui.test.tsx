@@ -5,6 +5,7 @@ import { patchRepo, startDraft, type SourceAnalysis } from '../src/core/envelope
 import { signedOutGithubView, type AccessibleRepo, type GithubInstallation, type GithubView, type RepoListing } from '../src/core/github.js';
 import { AddFromGitView, GithubRepoBrowser } from '../src/renderer/components/AddWorkspacePreview.js';
 import { ReposStepView } from '../src/renderer/components/AddWorkspaceWizard.js';
+import type { GithubAsk } from '../src/renderer/components/AgiRemoteChoice.js';
 
 /**
  * ADD WORKSPACE PARITY 8 + 12 ON SCREEN.
@@ -158,7 +159,7 @@ describe('Fork: a third source in the Repos step, into the owner chosen with the
     });
 
     it('the chosen owner without the App: the install is offered right there', () => {
-        const asked: string[] = [];
+        const asked: GithubAsk[] = [];
         const draft = patchRepo({ ...startDraft(analysis, { parent: '/w' }), forkInto: 'ada' }, '.', { source: 'fork' });
         // ada has no installation of her own (only the org has one).
         const ui = ReposStepView({ draft, onPatch: noop, onMode: noop, onPrimary: noop, github: signedIn([install('Example-Org', true, 2)]), onForkInto: noop, onGithub: (a) => asked.push(a) });
