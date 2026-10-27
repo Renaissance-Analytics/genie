@@ -64,6 +64,12 @@ export interface Caller {
     readonly agentName: string;
     readonly workspaceId: string;
     readonly workspacePath: string;
+    /**
+     * `flow`: a FLOW calling as one of its steps (main/flow-tools.ts, genie#1204). A flow the person armed acts with the
+     * PERSON's authority — Genie 1's flows acted "as the USER" (main/flows/store.ts at v0.7.0-beta.342) — so where an
+     * agent's reach is its own (the inbox tiers), a flow's is the person's. Absent = an agent.
+     */
+    readonly kind?: 'flow';
 }
 
 export interface GenieToolsDeps {
@@ -294,8 +300,11 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
         handler: withCaller(async (caller, args) => {
             const me = deps.roster().find((r) => r.id === caller.agentId);
             // One verdict for `list` and `send`: the two tiers, or the target wrote to the caller first.
+            // A FLOW reaches as the person does (genie#1204; Genie 1's genie#761 — AgentInbox refused a flow caller, so a flow
+            // could not reach the agent it was built to wake): every agent. An agent reaches through the two tiers.
             const mayReach = (target: AgentRecord): boolean =>
-                me !== undefined && reachable(me, target, deps.workspaceSetting, { wroteTo: (writer, reader) => deps.inbox.hasWritten(writer, reader) });
+                caller.kind === 'flow' ? reachable(HUMAN, target, deps.workspaceSetting)
+                : me !== undefined && reachable(me, target, deps.workspaceSetting, { wroteTo: (writer, reader) => deps.inbox.hasWritten(writer, reader) });
             const action = str(args.action) ?? '';
             switch (action) {
                 case 'list': {
@@ -331,7 +340,8 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                         recipient = target.id;
                     }
                     const attachments = Array.isArray(args.attachments) ? (args.attachments as unknown[]).filter((a): a is string => typeof a === 'string') : [];
-                    const message = await deps.inbox.send({ from: caller.agentId, to: recipient, text, attachments });
+                    // A flow's message says which flow it is from, first (Genie 1's genie#543: name the task, not the kind).
+                    const message = await deps.inbox.send({ from: caller.agentId, to: recipient, text: caller.kind === 'flow' ? `${caller.agentName}: ${text}` : text, attachments });
                     return ok({ ok: true, delivered: 1, messageId: message.id, attachments: message.attachments });
                 }
                 case 'receive': {

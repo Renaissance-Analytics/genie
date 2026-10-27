@@ -145,6 +145,9 @@ export interface UpdateInput extends QuestionOwner {
     readonly priority?: 'low' | 'normal' | 'high' | 'urgent';
 }
 
+/** How a question left (genie#1204): what a waiting flow branches on. */
+export type QuestionLeft = { readonly kind: 'answered'; readonly answer: Answer } | { readonly kind: 'dismissed'; readonly notes: readonly string[] } | { readonly kind: 'withdrawn' };
+
 export interface Answer {
     /** One array of chosen labels per question, in order. */
     readonly selections: readonly (readonly string[])[];
@@ -321,6 +324,8 @@ export class AttentionStore {
         const q = this.#data.questions.find((x) => x.id === questionId);
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
+        // How it left is known the moment it leaves the queue — before the write — so nothing can look in between.
+        this.#left(questionId, { kind: 'answered', answer });
         await this.#flush();
 
         // Each question, what was chosen, and — right under it — that question's own note. "(no option chosen)" says a
@@ -352,6 +357,7 @@ export class AttentionStore {
         const q = this.#data.questions.find((x) => x.id === questionId);
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
+        this.#left(questionId, { kind: 'dismissed', notes });
         await this.#flush();
         await this.#mailDismissed(q, notes);
     }
@@ -364,6 +370,7 @@ export class AttentionStore {
         const gone = this.#data.questions.filter((q) => questionIds.includes(q.id));
         if (gone.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !gone.includes(q));
+        for (const q of gone) this.#left(q.id, { kind: 'dismissed', notes: [] });
         await this.#flush();
         for (const q of gone) await this.#mailDismissed(q);
         return gone.length;
@@ -378,6 +385,7 @@ export class AttentionStore {
         const old = this.#data.questions.filter((q) => Date.parse(q.askedAt) < cutoff);
         if (old.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !old.includes(q));
+        for (const q of old) this.#left(q.id, { kind: 'dismissed', notes: [] });
         await this.#flush();
         for (const q of old) await this.#mailDismissed(q);
         return old.length;
@@ -391,6 +399,7 @@ export class AttentionStore {
     async withdraw(owner: QuestionOwner, questionId: string): Promise<{ ok: true; questionId: string; withdrawn: true }> {
         this.#owned(owner, questionId);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
+        this.#left(questionId, { kind: 'withdrawn' });
         await this.#flush();
         return { ok: true, questionId, withdrawn: true };
     }
@@ -501,6 +510,31 @@ export class AttentionStore {
     }
 
     readonly #changeListeners = new Set<() => void>();
+    readonly #leaveListeners = new Set<(questionId: string, outcome: QuestionLeft) => void>();
+
+    /**
+     * A question LEFT — answered, dismissed or withdrawn — with how (genie#1204): what a flow waiting on its own
+     * ForceTheQuestion step listens for, to go on down the answer's port. Told after the change is written.
+     */
+    onLeave(listener: (questionId: string, outcome: QuestionLeft) => void): () => void {
+        this.#leaveListeners.add(listener);
+        return () => this.#leaveListeners.delete(listener);
+    }
+
+    #left(questionId: string, outcome: QuestionLeft): void {
+        // Kept a while too: a waiter that looks just after the question left (answered in the same moment it was asked)
+        // still learns how, rather than finding it gone and guessing.
+        this.#recentlyLeft.set(questionId, outcome);
+        if (this.#recentlyLeft.size > 200) this.#recentlyLeft.delete(this.#recentlyLeft.keys().next().value as string);
+        for (const l of this.#leaveListeners) l(questionId, outcome);
+    }
+
+    readonly #recentlyLeft = new Map<string, QuestionLeft>();
+
+    /** How a question that recently left, left (genie#1204); undefined for one still pending or long gone. */
+    leftOutcome(questionId: string): QuestionLeft | undefined {
+        return this.#recentlyLeft.get(questionId);
+    }
 
     /** Something the Deck shows changed: a question asked or answered, a list item, a finished agent. */
     onChange(listener: () => void): () => void {

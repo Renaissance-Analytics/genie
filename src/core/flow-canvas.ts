@@ -151,9 +151,22 @@ const TOOL_KINDS = new Set<string>();
 /** Register Genie's tool kinds (idempotent) and mark them supported: the palette offers them, the door accepts them. */
 export function registerToolKinds(defs: readonly NodeKindDefinition[]): void {
     for (const def of defs) {
-        if (getNodeKind(def.name)?.name !== def.name) registerNodeKind(def);
+        if (getNodeKind(def.name)?.name !== def.name) registerNodeKind(def.name === QUESTION_KIND ? { ...def, outputs: questionPorts } : def);
         TOOL_KINDS.add(def.name);
     }
+}
+
+/** A flow's question (genie#1204). Its ports are a FUNCTION of its settings, so they are set here, on both sides of IPC. */
+export const QUESTION_KIND = '@genie/ForceTheQuestion';
+export const QUESTION_NONE_CHOSEN = 'none chosen';
+export const QUESTION_DISMISSED = 'dismissed';
+
+/** The first question's options, one port each (Genie 1's design, kinds.ts PAUSES); then "none chosen" and "dismissed". */
+export function questionPorts(config: unknown): { id: string }[] {
+    const questions = (config as { questions?: unknown } | null)?.questions;
+    const first = Array.isArray(questions) ? (questions[0] as { options?: unknown } | undefined) : undefined;
+    const labels = Array.isArray(first?.options) ? (first!.options as Array<{ label?: unknown }>).map((o) => (typeof o?.label === 'string' ? o.label : '')).filter((l) => l !== '') : [];
+    return [...new Set([...labels, QUESTION_NONE_CHOSEN, QUESTION_DISMISSED])].map((id) => ({ id }));
 }
 
 /** The registered tool kinds, `@genie/<tool>`. */
@@ -389,4 +402,30 @@ export function flowSummary(document: unknown, nowMs: number): { trigger: string
 /** A new flow's starting canvas: a Manual trigger, so a person can try it before giving it a schedule. */
 export function starterDocument(): FlowDocument {
     return { $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes: [{ id: 'trigger', kind: '@particle-academy/manual_trigger', position: { x: 0, y: 0 } }], edges: [] } } as unknown as FlowDocument;
+}
+
+/**
+ * STEPS SAFE TO RUN AGAIN (genie#1204): what a run Genie quit under may resume FROM. Running one of these twice does
+ * nothing a person would not want done twice:
+ * - the pure logic and data steps, Log and Output, Wait, the annotation — they act on nothing outside the run;
+ * - the triggers — a resumed run replays what fired it;
+ * - the Genie tools Genie 1 itself classed as read-only or idempotent (main/flows/kinds.ts:178-200 at v0.7.0-beta.342,
+ *   `READ_ONLY_TOOLS` / `IDEMPOTENT_TOOLS`): checkIssues, knowledge;
+ * - ForceTheQuestion: asking again rejoins the SAME pending question (main/attention-store.ts `ask`: "a repeat of the same
+ *   question is rejoined, not duplicated"), so the person is not asked twice.
+ * NOT safe: a command, a prompt to an agent, a file move, Add knowledge (`genie/knowledge_add` writes a new memory each
+ * time), and every Genie tool that writes or acts (processes, sites, services, terminals, agentinbox, imDone,
+ * openFileForUser) — any of them may already have done its work, and doing it twice is not Genie's call.
+ */
+export const RESUMABLE_KINDS: readonly string[] = [
+    '@particle-academy/manual_trigger', '@particle-academy/schedule_trigger', 'genie/file_added',
+    '@particle-academy/branch', '@particle-academy/switch_case', '@particle-academy/merge', '@particle-academy/transform', '@particle-academy/variable',
+    '@particle-academy/wait', '@particle-academy/log', '@particle-academy/output', '@particle-academy/note',
+    '@genie/checkIssues', '@genie/knowledge', '@genie/ForceTheQuestion',
+];
+const RESUMABLE = new Set(RESUMABLE_KINDS);
+
+export function safeToRerun(kind: string): boolean {
+    ensureGenieKinds();
+    return RESUMABLE.has(getNodeKind(kind)?.name ?? kind);
 }

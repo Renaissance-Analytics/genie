@@ -52,7 +52,7 @@ const rows = [
     { id: 'flow-mtp9epmt-z9ae9g', app_id: null, title: 'New flow', scope: { kind: 'system' }, graph: { nodes: [node('start', '@particle-academy/manual_trigger', {})], edges: [] } },
     { id: 'flow-mun0imor-zxv9ob', app_id: null, title: '[0L] watch → Learning Review', scope: { kind: 'workspace', workspaceId: WS.id }, graph: watcher },
     { id: 'flow-gapp', app_id: 'app-1', title: 'app flow', scope: { kind: 'gapp', appId: 'app-1' }, graph: { nodes: [node('t', '@particle-academy/manual_trigger', {})], edges: [] } },
-    { id: 'flow-site', app_id: null, title: 'restart the site', scope: { kind: 'workspace', workspaceId: WS.id }, graph: { nodes: [node('t', '@particle-academy/manual_trigger', {}), node('s', '@genie/manageSite', { action: 'restart' })], edges: [{ id: 'e', source: 't', target: 's' }] } },
+    { id: 'flow-site', app_id: null, title: 'set an env var', scope: { kind: 'workspace', workspaceId: WS.id }, graph: { nodes: [node('t', '@particle-academy/manual_trigger', {}), node('s', '@genie/setEnv', { key: 'APP_ENV', value: 'prod' })], edges: [{ id: 'e', source: 't', target: 's' }] } },
     { id: 'flow-elsewhere', app_id: null, title: 'elsewhere', scope: { kind: 'workspace', workspaceId: 'ws-not-in-genie2' }, graph: { nodes: [node('t', '@particle-academy/manual_trigger', {})], edges: [] } },
     { id: 'flow-files', app_id: null, title: 'new files', scope: { kind: 'workspace', workspaceId: WS.id }, graph: { nodes: [node('t', '@genie/event_trigger', { event: 'files:added' }), node('l', '@particle-academy/log', { message: 'a file: {{ t.relPath }}' })], edges: [{ id: 'e', source: 't', target: 'l' }] } },
 ];
@@ -127,7 +127,8 @@ describe("Genie 1's flows, imported once as DISARMED canvas flows", () => {
         const about = (title: string) => record.notes.filter((n) => n.includes(`"${title}"`));
         expect(about('New flow')).toEqual([expect.stringMatching(/machine-wide.*not imported/)]);
         expect(about('app flow')).toEqual([expect.stringMatching(/Genie App.*not imported/)]);
-        expect(about('restart the site')).toEqual([expect.stringMatching(/node s: Genie 1's manageSite step is `sites` in Genie 2, whose settings differ; it was not converted.*not imported/)]);
+        // Genie 1's setEnv has no Genie 2 tool at all (a renamed tool is mapped: test/flow-tool-nodes.test.ts).
+        expect(about('set an env var')).toEqual([expect.stringMatching(/node s: Genie 1's setEnv step has no counterpart in Genie 2's flows.*not imported/)]);
         expect(about('elsewhere')).toEqual([expect.stringMatching(/ws-not-in-genie2 is not in Genie 2.*not imported/)]);
         expect(record).toMatchObject({ sawV1: true, imported: 2 });
     });

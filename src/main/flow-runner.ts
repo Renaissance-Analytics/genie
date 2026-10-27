@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from 'node:path';
-import { runFlow } from '@particle-academy/fancy-flow/engine';
+import { getNodeKind, runFlow, type NodeExecutor } from '@particle-academy/fancy-flow/engine';
 import { canonicalKind, type NodeOutcome } from '../core/flow-canvas.js';
 import { stepLabel } from '../core/flow-reach.js';
 import type { Resolution } from '../core/inbox.js';
@@ -48,12 +48,19 @@ export interface FlowRunnerDeps {
 export interface RunObserver {
     readonly nodes?: (outcomes: Record<string, NodeOutcome>) => void;
     readonly log?: (nodeId: string, line: string) => void;
+    /** Each step's output as it finishes (genie#1204): kept with the run in flight, so a quit can resume after it. */
+    readonly output?: (nodeId: string, value: unknown) => void;
+}
+
+/** Resume a run Genie quit under (genie#1204): the outputs of the steps it had done, handed on, not run again. */
+export interface RunResume {
+    readonly outputs: Readonly<Record<string, unknown>>;
 }
 
 /** The scheduler's `run`: one run of a flow, answering its outcome. Never throws. */
-export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver) => Promise<RunResult> {
+export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigger: Schedule | FileFired | null, observer?: RunObserver, resume?: RunResume) => Promise<RunResult> {
     const now = deps.now ?? Date.now;
-    return async (flow, trigger, observer) => {
+    return async (flow, trigger, observer, resume) => {
         if (deps.asleep(flow.workspaceId)) {
             return { outcome: 'held', reason: `its workspace ${flow.workspaceId} is hibernated; nothing runs there until it is woken` };
         }
@@ -78,6 +85,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
             ...(base.sleep ? { sleep: base.sleep } : {}),
             ...(base.callTool ? { callTool: (tool: string, args: Record<string, unknown>) => watch(base.callTool!(tool, args)) } : {}),
+            ...(base.awaitQuestion ? { awaitQuestion: base.awaitQuestion } : {}),
         };
         const firedAt = new Date(now()).toISOString();
         // The schedule trigger is host-implemented in fancy-flow: it hands its downstream what fired.
@@ -86,7 +94,18 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
         // A file run (genie#1204): its trigger hands the steps after it the file that landed — {{in.path}} and the rest.
         const file = trigger !== null && 'file' in trigger ? trigger.file : null;
         const fileTrig = () => ({ ...(file ?? {}), firedAt });
-        const executors = { ...genieExecutors(ports), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig };
+        const own: Record<string, NodeExecutor> = { ...genieExecutors(ports), '@particle-academy/schedule_trigger': trig, '@particle-academy/manual_trigger': trig, 'genie/file_added': fileTrig };
+        // Every step's output is told as it finishes (genie#1204) — fancy-flow's own logic steps too, through their kinds'
+        // executors — so the run in flight holds what a resume hands on. Keyed by every id a node's kind answers to.
+        const executors: Record<string, NodeExecutor> = { ...own };
+        for (const node of graph.nodes) {
+            const declared = String(((node.data ?? {}) as { kind?: unknown }).kind ?? node.type ?? '');
+            const def = getNodeKind(declared);
+            const base = own[def?.name ?? declared] ?? own[declared] ?? def?.executor;
+            if (!base) continue;
+            const wrapped: NodeExecutor = async (ctx) => { const value = await base(ctx); observer?.output?.(ctx.node.id, value); return value; };
+            for (const id of new Set([declared, def?.name ?? declared, ...(def?.aliases ?? [])])) executors[id] = wrapped;
+        }
         // From the trigger that fired, so another entry point's branch does not run with it; none named → every entry.
         const fired = trigger?.nodeId ?? null;
         const entry = fired !== null && graph.nodes.some((n) => n.id === fired) ? { entryNodes: [fired] } : {};
@@ -127,7 +146,7 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
                     return { nodeId: id, label: stepLabel(data), outcome };
                 });
         try {
-            const result = await runFlow(graph, executors, onEvent as never, { ...entry, run: `${flow.id}:${firedAt}` });
+            const result = await runFlow(graph, executors as never, onEvent as never, { ...entry, run: `${flow.id}:${firedAt}`, ...(resume ? { resumeOutputs: { ...resume.outputs } } : {}) });
             if (result.ok) return finish({ outcome: 'ran' });
             if (step.held !== null) return finish({ outcome: 'held', reason: step.held, steps: stepsOf() });
             return finish({ outcome: 'failed', reason: result.error ?? 'the run failed and the engine gave no reason', steps: stepsOf() });
