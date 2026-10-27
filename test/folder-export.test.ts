@@ -72,7 +72,7 @@ describe('fileExporter — a folder exports as a .zip, streamed by main', () => 
     });
     afterEach(async () => {
         for (const d of [root, downloads, elsewhere]) await rm(d, { recursive: true, force: true });
-    });
+    }, 120_000);
 
     it('the dialog suggests <folder>.zip in Downloads and offers zip; the zip holds the folder, its files byte-for-byte and its empty folders', async () => {
         const dest = join(elsewhere, 'mine.zip');
@@ -141,7 +141,9 @@ describe('fileExporter — a folder exports as a .zip, streamed by main', () => 
         expect(files(await readZip(dest))).toEqual(treeFiles.sort());
     });
 
-    it('a large tree — past the 65,535 entries a plain zip can count — exports every file (ZIP64)', async () => {
+    // Not on Windows: making 66,000 files there took 5 minutes on genie-test-windows (6.5 s on omarchy-test), and what this
+    // proves — ZIP64 records past 65,535 entries — does not depend on the platform. The Windows run covers the paths.
+    it.skipIf(process.platform === 'win32')('a large tree — past the 65,535 entries a plain zip can count — exports every file (ZIP64)', async () => {
         const perDir = 1000;
         const dirs = 66;
         for (let d = 0; d < dirs; d += 1) {
