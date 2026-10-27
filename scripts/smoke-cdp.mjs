@@ -736,6 +736,48 @@ if (!approvalEnabled) {
         const sb = JSON.parse(scrolledBack || '{}');
         check(sb.chatScroll > 4000 && sb.chatTop === 0 && sb.top === 0 && sb.scrollHeight === sb.clientHeight,
             '64a. a long conversation read from its start leaves the window unscrolled: the document cannot scroll (genie#1290)', scrolledBack);
+
+        /*
+         * 64c. THE PLAN PILL FOCUSES THE COMPOSER WITHOUT SCROLLING ANYTHING (genie#1290 follow-up, react-fancy 5.69.0).
+         * A plan step's chat icon puts a pill into this agent's draft with `setDraft(…, { focus: true })` (#1282). Up to
+         * 5.68 that was a bare `focus()`, which scrolls every scrollable ancestor to reveal the composer. The root lock
+         * (#1291) keeps the WINDOW still either way, so this measures the composer's own ancestors instead:
+         *  - a spacer at the top of the composer's nearest scrollable ancestor pushes the composer below that ancestor's
+         *    fold, so a scrolling focus WOULD move it;
+         *  - the icon is clicked (the person's gesture), and the pill landing in the composer with focus is awaited;
+         *  - every ancestor and the document must still be at 0;
+         *  - POSITIVE CONTROL in the same arrangement: a bare `focus()` on the composer DOES scroll that ancestor, so a
+         *    0 above is a measurement, not an arrangement that could not have moved.
+         * Everything is put back afterwards. The seed gives this agent a kept plan (smoke-seed.mjs).
+         */
+        const planSetup = await cdp.evaluate(`(() => {
+            const input = document.querySelector(${JSON.stringify(CHAT_COMPOSER_INPUT)});
+            const icon = document.querySelector('[data-surface="agent"] [data-plan-discuss="1"]');
+            if (!input || !icon) return JSON.stringify({ missing: { input: !input, icon: !icon, steps: document.querySelectorAll('[data-plan-step]').length } });
+            // From Genie's own composer wrapper up: react-fancy's internals are not ours to put a spacer in.
+            let box = document.querySelector('[data-chat-composer]')?.parentElement ?? null;
+            while (box && box !== document.body) { const o = getComputedStyle(box).overflowY; if (o === 'auto' || o === 'scroll' || o === 'hidden') break; box = box.parentElement; }
+            if (!box || box === document.body) return JSON.stringify({ missing: { scrollableAncestor: true } });
+            const spacer = document.createElement('div'); spacer.style.height = '4000px'; spacer.style.flexShrink = '0';
+            box.insertBefore(spacer, box.firstChild); box.scrollTop = 0;
+            document.activeElement?.blur?.();
+            window.__smoke64c = { box, spacer, input };
+            icon.click();
+            return JSON.stringify({ ok: true, box: box.tagName.toLowerCase() + (box.getAttribute('data-chat-draft') !== null ? '[data-chat-draft]' : '') + '.' + String(box.className).split(/\\s+/).slice(0, 3).join('.'), range: box.scrollHeight - box.clientHeight }); })()`);
+        const ps = JSON.parse(planSetup || '{}');
+        const pillIn = ps.ok ? await waitFor(cdp, `(() => { const s = window.__smoke64c; return Boolean(s && s.input.isConnected && (document.querySelector('[data-chat-composer]')?.textContent ?? '').includes('Migrate the accounts') && s.input.contains(document.activeElement)); })()`, 'the plan pill in the composer, focused') : false;
+        const planScroll = await cdp.evaluate(`(() => {
+            const s = window.__smoke64c; if (!s) return '{}';
+            const scrolled = []; for (let el = s.input.parentElement; el; el = el.parentElement) if (el.scrollTop !== 0 || el.scrollLeft !== 0) scrolled.push(el.tagName.toLowerCase() + ':' + el.scrollTop);
+            const after = { boxTop: s.box.scrollTop, docTop: document.scrollingElement.scrollTop, scrolled, focused: s.input.contains(document.activeElement) };
+            s.input.blur(); s.box.scrollTop = 0; s.input.focus();
+            const control = s.box.scrollTop;
+            s.input.blur(); s.spacer.remove(); s.box.scrollTop = 0; delete window.__smoke64c;
+            return JSON.stringify({ ...after, control }); })()`);
+        const pc = JSON.parse(planScroll || '{}');
+        check(ps.ok && ps.range > 0 && pillIn && pc.focused && pc.boxTop === 0 && pc.docTop === 0 && (pc.scrolled ?? []).length === 0 && pc.control > 0,
+            '64c. a plan step’s chat icon puts its pill in the composer, focused, and scrolls nothing; a bare focus() there would (genie#1290, react-fancy 5.69)',
+            `${planSetup} · ${planScroll}`);
     }
 }
 
