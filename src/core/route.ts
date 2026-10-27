@@ -55,8 +55,8 @@ export type DashboardGroup = 'workspace' | 'status';
 export type AgentTab = 'stream' | 'files' | 'changes' | 'shells' | 'terminal' | 'activity' | 'settings';
 export type WorkspacePanel = 'files';
 /** `tab:<id>` is a tab the person designed (Tynn #282, core/workspace-tabs.ts). */
-export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | `tab:${string}`;
-const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github'];
+export type WorkspaceView = 'home' | 'terminals' | 'settings' | 'github' | 'tynn' | `tab:${string}`;
+const WORKSPACE_VIEWS: readonly WorkspaceView[] = ['home', 'terminals', 'settings', 'github', 'tynn'];
 /** A designed tab's id, as `core/workspace-tabs.ts` mints it; anything else in `view=` falls back to the Agents view. */
 const DESIGNED_TAB = /^tab:[A-Za-z0-9-]{1,40}$/;
 function workspaceViewOf(raw: string | null): WorkspaceView {

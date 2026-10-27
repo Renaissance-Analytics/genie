@@ -8,3 +8,6 @@
 # through a checkout. A fresh clone would have broken it, which is the kind of failure that
 # shows up for the next person and not for the author.
 *.sh text eol=lf
+
+# The workspace-UX contract is pinned by its sha256 (genie#1295): its bytes must not change on checkout.
+contracts/* text eol=lf

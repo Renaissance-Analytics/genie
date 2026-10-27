@@ -1531,6 +1531,7 @@ function DesktopApp({ bridge }: AppProps) {
             // Live site panels — this machine's only (a remote bridge has none).
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
+            tynnBoard={resolvedBridge?.workspaces.tynnBoard && resolvedBridge.workspaces.tynnBoardAction ? { read: (id, scope) => resolvedBridge.workspaces.tynnBoard!(id, scope), act: (id, input) => resolvedBridge.workspaces.tynnBoardAction!(id, input) } : undefined}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}

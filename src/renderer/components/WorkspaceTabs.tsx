@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
+import { TynnLogo } from './TynnLogo.js';
 import { wsStyle } from '../workspace-colors.js';
 
 /**
@@ -19,6 +20,8 @@ export interface WorkspaceTabsProps {
     readonly hasSettings: boolean;
     /** The workspace is linked to a Tynn project: its GitHub (IssueWatch) view has something to show (Tynn #806). */
     readonly github?: boolean;
+    /** The workspace is linked to a Tynn project: its Tynn tab (genie#1295). */
+    readonly tynn?: boolean;
     readonly onView: (view: string) => void;
     readonly onAdd: () => void;
     readonly onOpenAgent: (agentId: string) => void;
@@ -40,7 +43,7 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent, planToggle, color = null }: WorkspaceTabsProps) {
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, tynn = false, onView, onAdd, onOpenAgent, planToggle, color = null }: WorkspaceTabsProps) {
     const underline = color ? 'border-[var(--ws)]' : 'border-[var(--fg-1)]';
     const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? `${underline} text-[var(--fg-1)]` : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
     return (
@@ -50,7 +53,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
             style={wsStyle(color)}
             className={`flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
         >
-            {tabStrip(designed, agents, { github }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
+            {tabStrip(designed, agents, { github, tynn }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (
                         <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
@@ -68,11 +71,11 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                         </button>
                     );
                 }
-                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
+                const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
                     <button key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
-                        {t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
+                        {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
                     </button>
                 );
             })}
