@@ -101,16 +101,27 @@ describe('a send clears that chat only, and its files', () => {
 describe('a restored draft never takes the caret (genie#1235)', () => {
     const strip = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
 
-    it('restore is react-fancy’s uncontrolled defaultDraft — read at mount, which never moves focus (5.65.0 contract) — never setDraft, a ref, autoFocus or a focus call', async () => {
+    it('restore is react-fancy’s uncontrolled defaultDraft — read at mount, which never moves focus (5.65.0 contract) — never setDraft, autoFocus or a focus call', async () => {
         const { k } = await keeper({ a_lark: LARK });
         seen.length = 0;
         renderToStaticMarkup(<ChatFlyout thread={A} drafts={k} onSend={() => {}} onClose={() => {}} />);
         const props = seen[0]!;
         expect(props.defaultDraft).toEqual(LARK);
-        for (const p of ['autoFocus', 'draft', 'value', 'ref']) expect(p in props, p).toBe(false);
+        for (const p of ['autoFocus', 'draft', 'value']) expect(p in props, p).toBe(false);
         const flyout = strip('../src/renderer/components/ChatFlyout.tsx');
         expect(flyout).not.toMatch(/\.focus\(|setDraft\(|autoFocus|focus:\s*true/);
         expect(strip('../src/core/chat-draft-keeper.ts')).not.toMatch(/\.focus\(|setDraft\(|focus:\s*true/);
+        /*
+         * genie#1280: each composer now has a ref, used for ONE thing: a plan step's pill, put in on the person's click
+         * (core/plan-pill.ts applyChatInsert, driven by the flyout's `insert` prop). The restore never goes through it. The
+         * only setDraft in the window takes its focus from the insert, and only the click sets that (plan-step-discuss.test).
+         */
+        expect(typeof props.ref).toBe('function');
+        expect(flyout).toMatch(/applyChatInsert\(composerRefs\.current, insert,/);
+        const pill = strip('../src/core/plan-pill.ts');
+        expect(pill.match(/\.setDraft\(/g)?.length).toBe(1);
+        expect(pill).toMatch(/handle\.setDraft\(next, \{ focus: insert\.focus \}\)/);
+        expect(pill).not.toMatch(/\.focus\(/);
     });
 
     it('the react-fancy Genie runs is one whose restore promises not to focus: 5.65.0 or later, defaultDraft and the focus option in its types', () => {
