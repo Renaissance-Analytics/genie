@@ -36,16 +36,6 @@ export function promptAcceptsFor(provider: string): PromptAccepts {
  * prism-acp) or Genie has no driver for the provider: unknown is not "yes", and no turn Stop is offered on it.
  * Read through a record because the field is newer than the types an older prism-acp ships.
  */
-/**
- * Whether an agent's driver REPLAYS a resumed conversation's history (prism-acp `transcriptReplay`: Codex `true`,
- * Claude `false`). Genie keeps its own history, so a resumed session on such a driver does not record the replay
- * (AgentSessionOptions.replaysTranscript). Unknown is `false`: nothing is dropped that was not declared a replay.
- */
-export function transcriptReplayFor(provider: string): boolean {
-    const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
-    return caps !== null && (caps as Readonly<Record<string, unknown>>)['transcriptReplay'] === true;
-}
-
 export function turnCancelFor(provider: string): boolean | null {
     const caps = provider === 'claude' ? CLAUDE_DRIVER_CAPABILITIES : provider === 'codex' ? CODEX_DRIVER_CAPABILITIES : null;
     const declared = caps === null ? undefined : (caps as Readonly<Record<string, unknown>>)['cancel'];
@@ -303,10 +293,18 @@ export function claudeOptionsFor(record: AgentRecord, cwd: string, resumeSession
  * this list, and keeps Codex's default — prism refuses an approval naming a server it was not given, so with no servers
  * there is nothing to approve. The chosen model goes on thread/start and thread/resume; none = Codex's own.
  */
-export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: Record<string, 'approve'>; approvalPolicy?: 'never'; sandbox?: 'danger-full-access' } {
+export function codexOptionsFor(record: AgentRecord, cwd: string, resumeSessionId: string | null, mcpServers: readonly McpServer[]): { cwd: string; resumeSessionId?: string; replayHistory?: false; model?: string; mcpServers?: readonly McpServer[]; mcpToolApproval?: Record<string, 'approve'>; approvalPolicy?: 'never'; sandbox?: 'danger-full-access' } {
     return {
         cwd,
-        ...(resumeSessionId ? { resumeSessionId } : {}),
+        /*
+         * A RESUME FETCHES NO HISTORY (prism-acp 0.31.0 `replayHistory: false`). Genie keeps its own ledger, so the
+         * replayed thread was only ever dropped again (genie#1249) — and the first turn waited for it: prism-acp paged
+         * the whole thread (`thread/turns/list`, `thread/items/list` per turn) before `ready`, up to five minutes for a
+         * long one. Codex keeps the conversation itself; the saved thread is still in the next model request (measured:
+         * test/live/codex-resume-ttft.live.ts). Genie 1 did the same: v0.7.0-beta.342 main/agentinbox/codex-app-server.ts
+         * :77-93 sends `thread/resume { threadId, cwd }` and is ready, with no history fetch.
+         */
+        ...(resumeSessionId ? { resumeSessionId, replayHistory: false as const } : {}),
         ...(record.model ? { model: record.model } : {}),
         ...(mcpServers.length > 0 ? { mcpServers, mcpToolApproval: Object.fromEntries(mcpServers.map((s) => [s.name, 'approve' as const])) } : {}),
         /*
@@ -857,7 +855,6 @@ export class SessionHost {
             runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
-            replaysTranscript: transcriptReplayFor(record.provider),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),

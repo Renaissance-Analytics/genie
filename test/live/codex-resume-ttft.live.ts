@@ -46,6 +46,8 @@ function sse(res: ServerResponse, text: string): void {
     const event = (type: string, data: Record<string, unknown>) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     event('response.created', { response: { id } });
+    // A reasoning item as well as the reply: a real thread's turns hold several items each, and the replay pages items.
+    event('response.output_item.done', { item: { type: 'reasoning', id: `rs_${served}`, summary: [{ type: 'summary_text', text: `thinking about turn ${served}` }] } });
     event('response.output_item.done', { item: { type: 'message', role: 'assistant', id: `msg_${served}`, content: [{ type: 'output_text', text }] } });
     event('response.completed', { response: { id, usage: { input_tokens: 10, input_tokens_details: null, output_tokens: 2, output_tokens_details: null, total_tokens: 12 } } });
     res.end();

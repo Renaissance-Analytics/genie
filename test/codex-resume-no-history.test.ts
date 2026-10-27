@@ -1,6 +1,7 @@
-import { CodexDriver, META_REPLAY } from '@particle-academy/prism-acp';
+import { CodexDriver, META_REPLAY, META_REPLAY_SUMMARY } from '@particle-academy/prism-acp';
 import { describe, expect, it } from 'vitest';
 import type { AgentRecord } from '../src/core/identity.js';
+import { REPLAY_META, REPLAY_SUMMARY_META } from '../src/core/stream-event.js';
 import { codexOptionsFor } from '../src/main/session-host.js';
 
 /**
@@ -20,7 +21,7 @@ const record = { id: 'ag_1', name: 'kai', provider: 'codex', workspaceId: 'w', p
 async function resume(options: ConstructorParameters<typeof CodexDriver>[0]): Promise<{ methods: string[]; updates: Record<string, unknown>[] }> {
     const methods: string[] = [];
     const updates: Record<string, unknown>[] = [];
-    const driver = new CodexDriver(options, { onUpdate: (u) => { updates.push(u as Record<string, unknown>); } } as never, (_o, h) => ({
+    const driver = new CodexDriver(options, { onUpdate: (u: unknown) => { updates.push(u as Record<string, unknown>); } } as never, (_o, h) => ({
         start: async () => {},
         send: (frame) => {
             const f = frame as { id?: number; method?: string; params?: Record<string, unknown> };
@@ -62,6 +63,11 @@ describe('a Codex agent resumed by Genie does not fetch its history', () => {
         expect(methods).not.toContain('thread/turns/list');
         expect(methods).not.toContain('thread/items/list');
         expect(replayed(updates)).toEqual([]);
+    });
+
+    it('Genie reads the replay mark under prism-acp’s own keys (core keeps them as strings: no runtime prism import)', () => {
+        expect(REPLAY_META).toBe(META_REPLAY);
+        expect(REPLAY_SUMMARY_META).toBe(META_REPLAY_SUMMARY);
     });
 
     it('CONTROL: the same fake, with replay left on, IS paged and replayed (the fake can show what the test says is absent)', async () => {

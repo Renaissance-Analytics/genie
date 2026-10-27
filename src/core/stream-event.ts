@@ -229,10 +229,16 @@ function toolStatusOf(value: unknown): ToolStatus | null {
  */
 export const MODEL_META = 'particle.academy/model';
 /**
- * Where prism-acp puts the frame it could not map on its debug `notice` (its exported `META_UNMAPPED_FRAME`): the
- * diagnostics a Codex replay raises per item (`replayed reasoning item had no summary`, `unmapped Codex item: …`).
+ * prism-acp's mark on an update projected from SAVED history rather than produced now (its exported `META_REPLAY`,
+ * 0.31.0): `true` on every replayed update, the replay's own notices included. A live notification that arrives
+ * mid-replay is not marked. Pinned to prism-acp's value in test/codex-resume-no-history.test.ts.
  */
-export const UNMAPPED_FRAME_META = 'particle.academy/unmapped_frame';
+export const REPLAY_META = 'particle.academy/replay';
+/**
+ * The ONE summary a history replay ends with (prism-acp `META_REPLAY_SUMMARY`, 0.31.0), on a marked debug notice:
+ * `{ turns, items, diagnostics, reasons, omittedDiagnostics, complete }`.
+ */
+export const REPLAY_SUMMARY_META = 'particle.academy/replay_summary';
 /** Where prism-acp (0.19.0+) puts a compaction on a `notice` (its exported `META_COMPACTION`): trigger, pre/post tokens. */
 export const COMPACTION_META = 'particle.academy/compaction';
 
