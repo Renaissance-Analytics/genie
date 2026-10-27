@@ -375,6 +375,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const fileActions = {
         external: files.openExternal !== undefined,
         reveal: files.reveal !== undefined,
+        export: files.export !== undefined,
         edit: ops !== null && !single,
         ...(single ? {} : { lock: { lockedRoot: prefs.lockedRoot } }),
         onAction: (action: FileMenuAction, path: string, target: FileMenuTarget = 'tree-file') => {
@@ -382,6 +383,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
                 case 'new-file': case 'new-folder': case 'rename': case 'duplicate': case 'delete': startFileOp(action, path, target); break;
                 case 'open-external': void files.openExternal?.(workspace.id, path).then(say); break;
                 case 'reveal': void files.reveal?.(workspace.id, path).then(say); break;
+                // Export… (genie#1264): a cancel says nothing; a failure says why where a failed save does.
+                case 'export': void files.export?.(workspace.id, path).then((r) => { if (!r.ok && 'reason' in r) setSaveError(r.reason); }, (error: unknown) => setSaveError(error instanceof Error ? error.message : String(error))); break;
                 case 'copy-path': void navigator.clipboard?.writeText(absolutePath(path)); break;
                 case 'copy-relative-path': void navigator.clipboard?.writeText(path); break;
                 case 'close': closeTabs([path]); break;

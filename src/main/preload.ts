@@ -282,6 +282,7 @@ const bridge: PreloadBridge = {
         readMedia: (workspaceId, path) => ipcRenderer.invoke('genie:files-read-media', workspaceId, path) as Promise<never>,
         openExternal: (workspaceId, path) => ipcRenderer.invoke('genie:files-open-external', workspaceId, path) as Promise<never>,
         reveal: (workspaceId, path) => ipcRenderer.invoke('genie:files-reveal', workspaceId, path) as Promise<never>,
+        export: (workspaceId, path) => ipcRenderer.invoke('genie:files-export', workspaceId, path) as Promise<never>,
         create: (workspaceId, path, kind) => ipcRenderer.invoke('genie:files-create', workspaceId, path, kind) as Promise<never>,
         rename: (workspaceId, from, to) => ipcRenderer.invoke('genie:files-rename', workspaceId, from, to) as Promise<never>,
         duplicate: (workspaceId, path) => ipcRenderer.invoke('genie:files-duplicate', workspaceId, path) as Promise<never>,

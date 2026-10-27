@@ -149,6 +149,7 @@ import { killProcess, killProcessAsync, listProcesses, listProcessesAsync } from
 import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
+import { fileExporter } from './file-export.js';
 import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
@@ -1596,6 +1597,18 @@ async function boot(): Promise<void> {
         shell.showItemInFolder(abs);
         return { ok: true };
     });
+    // EXPORT… (genie#1264): the OS save dialog, parented to the window that asked (a popped-out panel too); main streams the
+    // file to the chosen place. Only the workspace and path cross in — the destination comes from the dialog alone.
+    const exporter = fileExporter({
+        files: { absolute: (workspaceId, path) => filesHost?.absolute(workspaceId, path) ?? null },
+        saveDialog: (options, asker) => {
+            const parent = asker instanceof BrowserWindow && !asker.isDestroyed() ? asker : window;
+            return parent && !parent.isDestroyed() ? dialog.showSaveDialog(parent, options) : dialog.showSaveDialog(options);
+        },
+        downloads: () => app.getPath('downloads'),
+    });
+    ipcMain.handle('genie:files-export', (event, workspaceId: unknown, path: unknown) =>
+        typeof workspaceId === 'string' && typeof path === 'string' ? exporter.export(workspaceId, path, BrowserWindow.fromWebContents(event.sender)) : { ok: false, reason: 'bad arguments' });
     // THE TREE'S FILE OPERATIONS (Tynn #844): confined, never overwriting, Delete to the trash — all in the host.
     const fileOp = (run: (host: FilesHost) => Promise<unknown>) => (filesHost ? run(filesHost) : Promise.resolve({ ok: false, reason: 'no files host' }));
     const str = (v: unknown): v is string => typeof v === 'string';

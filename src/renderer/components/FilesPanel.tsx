@@ -84,7 +84,7 @@ export interface FilesPanelProps {
     /** Open a file as its own pane in the workspace grid (§4.6); absent where panes cannot be made (the dock, a popped window). */
     readonly onOpenInPane?: ((path: string) => void) | undefined;
     /** Right-click a tree row or a tab (Tynn #841): what this window can do, and the container's hand. Absent = no menus. */
-    readonly fileActions?: { readonly external: boolean; readonly reveal: boolean; readonly edit?: boolean; readonly onAction: (action: FileMenuAction, path: string, target: FileMenuTarget) => void } | undefined;
+    readonly fileActions?: { readonly external: boolean; readonly reveal: boolean; readonly export?: boolean; readonly edit?: boolean; readonly onAction: (action: FileMenuAction, path: string, target: FileMenuTarget) => void } | undefined;
     /** The board's `All | Changed N` filter: Changed shows the files grouped by who changed them, in the tree's place. */
     readonly filter?: 'all' | 'changed' | undefined;
     readonly onFilter?: ((filter: 'all' | 'changed') => void) | undefined;

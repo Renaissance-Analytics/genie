@@ -20,6 +20,7 @@ import { AgentDetailViews, type AgentWireSubscribe } from '../core/agent-push-wi
 import type { MailLike } from '../core/chat-view.js';
 import type { TreeNode } from '../core/files-panel.js';
 import type { BytesResult, BytesWriteResult, FileOpResult, FilesState, OpenResult, WriteResult } from '../main/files-host.js';
+import type { ExportResult } from '../main/file-export.js';
 import type { RepoEntry } from '../core/repo-registry.js';
 import type { RepoCommit } from '../core/commits.js';
 import type { EnvelopePlan } from '../core/envelope-plan.js';
@@ -404,6 +405,9 @@ export interface GenieBridge {
          *  not the host (a window driving another machine) — those act on the host's screen. */
         openExternal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         reveal?(workspaceId: string, path: string): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Export… (genie#1264): main opens the OS save dialog and streams the file to the place picked on THIS machine; the
+         *  bytes never cross here. `canceled` = the person closed the dialog. Absent where this window has no host files. */
+        export?(workspaceId: string, path: string): Promise<ExportResult>;
         /** The tree's file operations (Tynn #844), confined to the workspace and never overwriting; Delete goes to the host's
          *  trash. Absent on a bridge whose host does not offer them — the menu then does not either. */
         create?(workspaceId: string, path: string, kind: 'file' | 'folder'): Promise<FileOpResult>;
