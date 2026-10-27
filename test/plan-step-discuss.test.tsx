@@ -134,7 +134,7 @@ describe('the pill it makes', () => {
         expect(b.calls.length).toBe(1);
         const d = b.calls[0]!.draft;
         expect(d.v).toBe(1);
-        expect(d.pills).toEqual([{ kind: 'text', id: insert.pill.id, text: 'Plan step: "Write the migration for the accounts table"' }]);
+        expect(d.pills).toEqual([{ kind: 'text', id: insert.pill.id, text: 'Plan step: "Write the migration for the accounts table"', label: 'Write the migration for the accounts…' }]);
         // What was typed stays, the pill follows it, and the caret has room after it.
         expect(d.text).toBe(`about this: ${pasteMarker(insert.pill.id)} `);
         expect(b.calls[0]!.focus).toBe(true);

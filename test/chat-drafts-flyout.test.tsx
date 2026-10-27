@@ -129,7 +129,7 @@ describe('a restored draft never takes the caret (genie#1235)', () => {
         const [major, minor] = pkg.version.split('.').map(Number) as [number, number];
         expect(major > 5 || (major === 5 && minor >= 65), pkg.version).toBe(true);
         const ours = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> };
-        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('5.65.0');
+        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('5.66.0');
     });
 });
 

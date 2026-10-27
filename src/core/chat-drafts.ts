@@ -38,7 +38,11 @@ export interface ChatDraftFile {
     bytes: number;
     ref?: string;
 }
-export type ChatDraftPill = { kind: 'text'; id: string; text: string } | { kind: 'image'; id: string; label: string; file: ChatDraftFile };
+/**
+ * A text pill's `label` (react-fancy 5.66.0, genie#1280) is display only: the pill shows it in place of "Pasted text · N
+ * characters", and a send still expands the pill to its `text`. Kept through a restart like the rest of the pill.
+ */
+export type ChatDraftPill = { kind: 'text'; id: string; text: string; label?: string } | { kind: 'image'; id: string; label: string; file: ChatDraftFile };
 export interface ChatDraft {
     v: 1;
     text: string;
@@ -82,7 +86,8 @@ export function readChatDraft(raw: unknown): ChatDraft | null {
         if (!p || typeof p !== 'object') return null;
         const pill = p as Record<string, unknown>;
         if (pill.kind === 'text' && str(pill.id) && str(pill.text)) {
-            pills.push({ kind: 'text', id: pill.id, text: pill.text });
+            // A label that is not a string is dropped, the pill kept (react-fancy's own rule for a draft it reads).
+            pills.push({ kind: 'text', id: pill.id, text: pill.text, ...(str(pill.label) ? { label: pill.label } : {}) });
             continue;
         }
         const file = pill.kind === 'image' && str(pill.id) && str(pill.label) ? readFileEntry(pill.file) : null;
