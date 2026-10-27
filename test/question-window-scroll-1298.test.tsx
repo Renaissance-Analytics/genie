@@ -9,13 +9,13 @@ import { QuestionApp, type QuestionAppView } from '../src/renderer/components/Qu
  * THE QUESTION WINDOW'S DRAG STRIP STAYS PUT, AND THE NEXT QUESTION SHOWS FROM ITS TOP (genie#1298, the owner on beta.49).
  *
  * 1. "The drag zone scrolls away with the list": the window could only be moved while the list was scrolled to the top.
- *    The drag strip must sit OUTSIDE the one container that scrolls, and that container must be the containing block of
- *    the absolutely positioned "Copied" live regions ContentRenderer puts in every question (react-fancy 5.67+) — the
- *    content scroller was not positioned, so they escaped it, the DOCUMENT grew taller than the window, and any
- *    programmatic scroll (a caret reveal, a focus) carried the whole page, header and all, upward (the genie#1290 cause,
- *    in this window). Genie 1 (v0.7.0-beta.342 renderer/pages/ask.tsx + renderer/styles/globals.css): `.ask-head`
- *    `-webkit-app-region: drag` (its buttons no-drag) above `.ask-body`, the one `overflow-y: auto` region, inside an
- *    `.ask-frame` of `height: 100vh; overflow: hidden`.
+ *    The drag strip must sit OUTSIDE the one container that scrolls the question, and be the window's ONLY app region:
+ *    the queue, the content and the drawer said `-webkit-app-region: no-drag`, regions in the window's drag map that
+ *    live in scrolled content. Every scroller is also `relative`, the containing block of ContentRenderer's absolutely
+ *    positioned "Copied" live regions, so none can grow the document (genie#1290). Genie 1 (v0.7.0-beta.342
+ *    renderer/pages/ask.tsx + renderer/styles/globals.css): `.ask-head` `-webkit-app-region: drag` (no-drag only on its
+ *    buttons and badge) above `.ask-body`, the one `overflow-y: auto` region, with no app region, inside an `.ask-frame`
+ *    of `height: 100vh; overflow: hidden`.
  * 2. "Answering doesn't scroll back to the top": the next queued question kept the scroll offset of the one answered.
  *    The content scroller goes back to the top whenever the question shown changes — by setting its scrollTop, never by
  *    a focus() (genie#1235) or a scrollIntoView, which would scroll the document (genie#1290).
