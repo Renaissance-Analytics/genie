@@ -56,6 +56,7 @@ describe('a resumed session: the replay mark decides, not the clock', () => {
         s.say('I read the project overview earlier.', replay);
         s.markReady();
         await Promise.resolve();
+        s.end(); // closes any open message row, so "not recorded" cannot pass on a row merely not flushed yet
         expect(await messages(s)).toEqual([]);
     });
 
