@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { StreamPrep, prepareStream } from '../src/core/stream-prep.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
@@ -82,7 +83,16 @@ describe('the fold is exactly the full preparation', () => {
                     rows = [...rows];
                     for (let k = 0; k < n; k += 1) rows.push(makeRow(i++, r, open, state));
                 }
-                expect(prep.update(rows), `seed ${seed}, step ${step}, ${rows.length} rows`).toEqual(prepareStream(rows));
+                /*
+                 * Compared with node's isDeepStrictEqual, and through `toEqual` only when they differ, for its diff
+                 * (genie#1273). Measured on omarchy-test: of this case's ~2.1 s, `toEqual` was 1.6 s — the fold 45 ms and the
+                 * full pipeline 186 ms — so a slow machine timed the case out on the matcher, not on the code. The strict
+                 * check is the stronger one (undefined-valued keys and prototypes count), and agreed at all 2,400 steps.
+                 */
+                const folded = prep.update(rows);
+                const full = prepareStream(rows);
+                if (!isDeepStrictEqual(folded, full)) expect(folded, `seed ${seed}, step ${step}, ${rows.length} rows`).toEqual(full);
+                expect(isDeepStrictEqual(folded, full), `seed ${seed}, step ${step}, ${rows.length} rows: not strictly equal`).toBe(true);
             }
         }
     });

@@ -1,13 +1,15 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { RESUMABLE_KINDS, safeToRerun } from '../src/core/flow-canvas.js';
 import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { FlowPorts } from '../src/main/flow-executors.js';
 import { createFlowRunner } from '../src/main/flow-runner.js';
 import { FlowScheduler } from '../src/main/flow-scheduler.js';
 import { FlowStore } from '../src/main/flow-store.js';
+import { runtimeDir } from '../src/main/paths.js';
+import { readJson } from '../src/main/store.js';
 
 /**
  * A RUN GENIE QUIT IN THE MIDDLE OF RESUMES (genie#1204; the owner: "do it better than Genie 1"). Genie 1 neither resumed a
@@ -27,6 +29,15 @@ const n = (id: string, kind: string, config: Record<string, unknown> = {}, x = 0
 const e = (source: string, target: string) => ({ id: `${source}-${target}`, source, target });
 const doc = (nodes: unknown[], edges: unknown[]) => ({ $schema: FLOW_SCHEMA_URL, version: 1, graph: { nodes, edges } });
 
+/**
+ * The in-flight run's steps as the FILE holds them — what the next launch reads. Read straight from flows.json, not through
+ * `FlowStore.open`, which settles an interrupted run as it opens and would write while the first run is still going.
+ */
+async function inFlightOnDisk(home: string, flowId: string): Promise<Readonly<Record<string, string>> | null> {
+    const file = await readJson<{ flows?: Array<{ id: string; inFlight?: { nodes?: Record<string, string> } }> }>(join(runtimeDir(home), 'flows.json'), {});
+    return file.flows?.find((f) => f.id === flowId)?.inFlight?.nodes ?? null;
+}
+
 describe('which steps are safe to run again', () => {
     it('logic, triggers, Wait, Log, Output, checkIssues, knowledge and ForceTheQuestion are; a command, a prompt, a move, a writing tool are not', () => {
         for (const kind of ['branch', 'switch_case', 'merge', 'transform', 'variable', 'wait', 'log', 'output', 'manual_trigger', 'schedule_trigger', 'genie/file_added', '@genie/checkIssues', '@genie/knowledge', '@genie/ForceTheQuestion']) expect(safeToRerun(kind)).toBe(true);
@@ -36,7 +47,7 @@ describe('which steps are safe to run again', () => {
 });
 
 describe('a run Genie quit under', () => {
-    async function interrupted(nodes: unknown[], edges: unknown[], hangAt: 'sleep' | 'command') {
+    async function interrupted(nodes: unknown[], edges: unknown[], hangAt: 'sleep' | 'command', hung: string) {
         const home = await mkdtemp(join(tmpdir(), 'genie2-resume-'));
         const store = await FlowStore.open(home);
         const flow = await store.create({ workspaceId: 'ws', name: 'deploy', by: { kind: 'user' }, document: doc(nodes, edges) });
@@ -51,12 +62,19 @@ describe('a run Genie quit under', () => {
         const first = new FlowScheduler({ store, now: Date.now, schedule: () => () => {}, run: createFlowRunner({ asleep: () => false, ports: () => ports }) });
         void first.runNow(flow.id);
         await atHang;
-        await new Promise((r) => setTimeout(r, 50));
+        /*
+         * WAIT FOR THE DISK, NOT FOR A CLOCK (genie#1273). The run writes its progress as it goes and does not wait for the
+         * write (flow-scheduler `markInFlight`): each write is a temp file, an fsync, a rename and a directory fsync, queued
+         * behind the one before. A fixed 50 ms here was a race — on a loaded test VM the last write (the hung step
+         * `running`) had not landed, so the "next launch" read an earlier step as the one interrupted. What the next launch
+         * reads is the file, so the test waits until the FILE holds the hung step running.
+         */
+        await vi.waitFor(async () => expect((await inFlightOnDisk(home, flow.id))?.[hung]).toBe('running'), { timeout: 4_000, interval: 10 });
         return { home, flowId: flow.id, commands };
     }
 
     it('at a SAFE step (a Wait): the next launch resumes from it — the build is not run again, the wait and the deploy are', async () => {
-        const { home, flowId, commands } = await interrupted([n('t', 'manual_trigger'), n('b', 'genie/terminal_run', { workspace: 'ws', command: 'npm run build' }, 200), n('w', 'wait', { mode: 'duration', duration: '1h' }, 400), n('d', 'genie/terminal_run', { workspace: 'ws', command: 'npm run deploy {{in.input.output}}' }, 600)], [e('t', 'b'), e('b', 'w'), e('w', 'd')], 'sleep');
+        const { home, flowId, commands } = await interrupted([n('t', 'manual_trigger'), n('b', 'genie/terminal_run', { workspace: 'ws', command: 'npm run build' }, 200), n('w', 'wait', { mode: 'duration', duration: '1h' }, 400), n('d', 'genie/terminal_run', { workspace: 'ws', command: 'npm run deploy {{in.input.output}}' }, 600)], [e('t', 'b'), e('b', 'w'), e('w', 'd')], 'sleep', 'w');
         try {
             expect(commands).toEqual(['npm run build']);
             const store = await FlowStore.open(home);
@@ -75,7 +93,7 @@ describe('a run Genie quit under', () => {
     });
 
     it('at an UNSAFE step (a command): recorded STOPPED at it, and nothing runs again', async () => {
-        const { home, flowId } = await interrupted([n('t', 'manual_trigger'), n('s', 'genie/terminal_run', { workspace: 'ws', command: 'npm run long' }, 200), n('k', 'log', { message: 'done' }, 400)], [e('t', 's'), e('s', 'k')], 'command');
+        const { home, flowId } = await interrupted([n('t', 'manual_trigger'), n('s', 'genie/terminal_run', { workspace: 'ws', command: 'npm run long' }, 200), n('k', 'log', { message: 'done' }, 400)], [e('t', 's'), e('s', 'k')], 'command', 's');
         try {
             const store = await FlowStore.open(home);
             const again: string[] = [];

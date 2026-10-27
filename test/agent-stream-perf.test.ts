@@ -74,27 +74,56 @@ function step(i: number): void {
 
 describe('a live session with a 60k-row ledger', () => {
     it('costs the same per event as an empty one: what main reads per event does not rescan the rows', () => {
-        const host = new SessionHost({ userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree, store: memoryStore });
-        const r = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'tynn' });
-        expect(host.start(r, dir)).toEqual({ ok: true });
-        for (let i = 0; host.rowsFor(r.id).length < ROWS; i += 1) step(i);
-        expect(host.rowsFor(r.id).length).toBeGreaterThanOrEqual(ROWS);
-
+        /*
+         * MEASURED AGAINST ITSELF, IN THE SAME RUN (genie#1273). This held the cost to an absolute 2 ms per event. CI's
+         * ubuntu runner reads 0.18 ms and omarchy-test 0.015 ms when the file runs alone — but in a full suite on the VM
+         * (four workers, the VM below normal priority) one 200-event window read 3.6 ms: a stall landing on the window,
+         * not a cost of the code. And a flat cost was never the claim's opposite of "under 2 ms"; it is "not more with a
+         * bigger ledger". So the same events are timed on a 600-row session and a 60,000-row one, interleaved so a stall
+         * cannot favour either, each taken as its BEST batch (interference only ever adds time).
+         */
         // Per event, main read the session three times (the window's detail, the Dashboard's snapshot twice) and the
         // ledger twice (the detail's rows and its turn count).
-        const EVENTS = 200;
-        const t0 = performance.now();
-        for (let i = 0; i < EVENTS; i += 1) {
-            step(ROWS + i);
-            for (let k = 0; k < 3; k += 1) host.probe(r.id);
-            for (let k = 0; k < 2; k += 1) host.ledgerFor(r.id);
+        const live = (rows: number) => {
+            const host = new SessionHost({ userData: dir, driverFor: fakeDriverFor, clock: () => now, processTree: noProcessTree, store: memoryStore });
+            const r = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'tynn' });
+            expect(host.start(r, dir)).toEqual({ ok: true });
+            // Each session keeps its own driver's events: `step` sends to whichever started last, so hold this one's.
+            const mine = events;
+            let i = 0;
+            const event = (scan: boolean) => {
+                events = mine;
+                step(i++);
+                for (let k = 0; k < 3; k += 1) host.probe(r.id);
+                for (let k = 0; k < 2; k += 1) host.ledgerFor(r.id);
+                // The CONTROL's extra reads: the ledger walked once per read, five per event — what the reads did before the fix.
+                if (scan) for (let k = 0; k < 5; k += 1) { let n = 0; for (const row of host.rowsFor(r.id)) if (row.at !== null) n += 1; if (n < 0) throw new Error('unreachable'); }
+            };
+            while (host.rowsFor(r.id).length < rows) { events = mine; step(i++); }
+            expect(host.rowsFor(r.id).length).toBeGreaterThanOrEqual(rows);
+            /** The best of `batches` batches of `per` events: ms per event. */
+            const batch = (per: number, scan: boolean) => { const t0 = performance.now(); for (let k = 0; k < per; k += 1) event(scan); return (performance.now() - t0) / per; };
+            return { host, batch };
+        };
+        const small = live(600);
+        const large = live(ROWS);
+        const best = { small: Infinity, large: Infinity, smallScan: Infinity, largeScan: Infinity };
+        for (let b = 0; b < 8; b += 1) {
+            best.small = Math.min(best.small, small.batch(50, false));
+            best.large = Math.min(best.large, large.batch(50, false));
+            best.smallScan = Math.min(best.smallScan, small.batch(10, true));
+            best.largeScan = Math.min(best.largeScan, large.batch(10, true));
         }
-        const perEvent = (performance.now() - t0) / EVENTS;
-        console.log(`PERF: main-side reads per event at ${ROWS} rows: ${perEvent.toFixed(3)} ms`);
-        // Budget: 2 ms per event, all five reads included — an event every 2 ms would still leave the core mostly idle.
-        // Before the fix each read walked all 60k rows (a delivery read alone builds a map of 15k calls and sorts it).
-        expect(perEvent, `per event ${perEvent.toFixed(2)} ms`).toBeLessThan(2);
-        host.stopAll();
+        const growth = best.large / best.small;
+        const controlGrowth = best.largeScan / best.smallScan;
+        console.log(`PERF: main-side reads per event: ${best.small.toFixed(3)} ms at 600 rows, ${best.large.toFixed(3)} ms at ${ROWS} (x${growth.toFixed(2)}); with the ledger walked per read x${controlGrowth.toFixed(1)}`);
+        // POSITIVE CONTROL: the same gauge, the same events, plus the ledger walked once per read — and the growth shows.
+        expect(controlGrowth, `control growth x${controlGrowth.toFixed(2)}`).toBeGreaterThan(10);
+        // A hundred times the rows, and the same cost per event. Before the fix each read walked all 60k rows (a delivery
+        // read alone built a map of 15k calls and sorted it).
+        expect(growth, `per event x${growth.toFixed(2)} from 600 to ${ROWS} rows`).toBeLessThan(3);
+        small.host.stopAll();
+        large.host.stopAll();
     });
 });
 

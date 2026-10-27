@@ -81,6 +81,30 @@ describe('one composer per chat, keyed by its agent (ChatComposers)', () => {
         expect(onB.map((s) => [s.hidden, s.composer])).toEqual([[true, false], [false, true]]);
     });
 
+    it('a HIDDEN draft is not drawn again when the chat on screen updates — only the composer on screen is (genie#1273)', async () => {
+        /*
+         * The flyout re-renders on every event of the agent on screen (its thread grows), and builds a NEW render function
+         * for the composers each time — the `commands`, meter and placeholder of the chat on screen. Every kept composer
+         * was a direct child of that render, so each event drew EVERY kept PromptInput again: the renderer's per-event
+         * cost grew with the number of chats opened in the session (the owner: "severe UI lag" with many agents).
+         * React skips a child only behind `memo`, by its comparator — so that is where it is asserted: the comparator's
+         * answer for each slot across two renders of the flyout. No memo at all means React draws it again.
+         */
+        const ChatComposers = await composers();
+        const drawn = (active: string | null) => ChatComposers({ chats: ['a_lark', 'a_wren', 'a_kite'], active, children: (c) => <span data-box={c} /> });
+        const inner = (el: ReactElement) => (el.props as { children: ReactElement[] }).children.map((slot) => (slot.props as { children: ReactElement }).children);
+        const redrawn = (before: ReactElement, after: ReactElement) => inner(before).map((prev, i) => {
+            const next = inner(after)[i]!;
+            const type = prev.type as { compare?: ((a: unknown, b: unknown) => boolean) | null };
+            if (prev.type !== next.type || typeof type !== 'object' || typeof type.compare !== 'function') return true;
+            return !type.compare(prev.props, next.props);
+        });
+        // An event on a_kite's chat: the same chats, a new render function. Only a_kite's composer is drawn again.
+        expect(redrawn(drawn('a_kite'), drawn('a_kite'))).toEqual([false, false, true]);
+        // CONTROL — switching to a_lark draws a_lark's composer again (its props were frozen while hidden), and not a_wren's.
+        expect(redrawn(drawn('a_kite'), drawn('a_lark'))).toEqual([true, false, false]);
+    });
+
     it('no chat active (blocked): every kept composer hidden, none carries Genie’s composer handle', async () => {
         const ChatComposers = await composers();
         const s = slots(ChatComposers({ chats: ['a_lark', 'a_wren'], active: null, children: (c) => <span data-box={c} /> }));
