@@ -46,7 +46,13 @@ describe('Genie asks for focus and never opts out of react-fancy’s no-scroll d
         const files = (readdirSync(root, { recursive: true }) as string[]).filter((f) => /\.(ts|tsx)$/.test(f));
         // CONTROL: the scan reads the file that makes the call.
         expect(files.map((f) => f.replace(/\\/g, '/'))).toContain('core/plan-pill.ts');
-        const optedOut = files.filter((f) => /preventScroll\s*:\s*false/.test(readFileSync(join(root, f), 'utf8')));
+        // Code only: block comments and line comments are dropped first, so a note ABOUT the option is not a call.
+        const strip = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, '').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
+        const optsOut = (text: string) => /preventScroll\s*:\s*false/.test(strip(text));
+        // CONTROLS: a note about the option is not a call; the same option written as code is.
+        expect(optsOut('/** a note: preventScroll: false */\n// preventScroll: false\nel.focus();')).toBe(false);
+        expect(optsOut('/** a note */\nel.focus({ preventScroll: false });')).toBe(true);
+        const optedOut = files.filter((f) => optsOut(readFileSync(join(root, f), 'utf8')));
         expect(optedOut).toEqual([]);
     });
 });
