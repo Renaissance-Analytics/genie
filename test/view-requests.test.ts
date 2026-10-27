@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseRoute } from '../src/core/route.js';
-import { arrive, NO_PULSES, pulse, pulsingIds, viewDelivery } from '../src/core/view-requests.js';
+import { arrive, NO_PULSES, pulse, pulsingIds, viewDelivery, viewReaches } from '../src/core/view-requests.js';
 
 /**
  * AN AGENT NEVER MOVES THE PERSON'S VIEW (genie#1265; the owner, 2026-10-27: "when an agent opens a file in the file
@@ -81,5 +81,42 @@ describe('the pulse lasts until the person goes there', () => {
         const a = arrive(opened, 'genie://workspace/fancy');
         expect(a.pulses).toBe(opened);
         expect(arrive(NO_PULSES, 'genie://workspace/tynn').pulses).toBe(NO_PULSES);
+    });
+});
+
+/**
+ * A NAVIGATION REACHES THE MAIN WINDOW ONLY (genie#1302 follow-up). The tray's Settings and Task Manager and Help's What's
+ * new reveal the MAIN window and navigate it. They were broadcast to every window, and every window's renderer obeys
+ * `genie:navigate` by writing its hash: an open flow editor, take-over or file window turned into the main app (a second
+ * copy of it) at the moment the main window came up. A pulse is not a navigation (it moves nothing) and still reaches
+ * every window, as before.
+ */
+describe('which windows a view request reaches', () => {
+    const windows = [
+        { name: 'main', main: true },
+        { name: 'flow editor', main: false },
+        { name: 'take-over', main: false },
+        { name: 'files', main: false },
+    ];
+    const gestures = [
+        { activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' },
+        { activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' },
+        { activation: 'user-gesture', route: 'genie://whats-new', reason: 'menu: What is new' },
+    ] as const;
+
+    it('the person’s gesture navigates the MAIN window (the positive control)', () => {
+        for (const g of gestures) expect(viewReaches(viewDelivery(g), { main: true }), g.reason).toBe(true);
+    });
+
+    it('…and never a flow editor, take-over or files window', () => {
+        for (const g of gestures) {
+            const reached = windows.filter((w) => viewReaches(viewDelivery(g), w)).map((w) => w.name);
+            expect(reached, g.reason).toEqual(['main']);
+        }
+    });
+
+    it('a pulse (an agent’s action) still reaches every window: it moves nothing', () => {
+        const d = viewDelivery({ activation: 'background', workspaceId: 'tynn', reason: 'workspaceTabs' });
+        expect(windows.filter((w) => viewReaches(d, w)).map((w) => w.name)).toEqual(['main', 'flow editor', 'take-over', 'files']);
     });
 });

@@ -20,7 +20,14 @@ const shell = strip(readFileSync(new URL('../src/renderer/Shell.tsx', import.met
 describe('main: one door to the window’s view, and it asks who', () => {
     it('nothing in main broadcasts genie:navigate by hand — every request goes through showToPerson (core/view-requests.ts)', () => {
         expect(main).not.toMatch(/broadcast\('genie:navigate'/);
-        expect(main).toMatch(/function showToPerson\(request: ViewRequest\): void \{\s*const delivery = viewDelivery\(request\);\s*broadcast\(delivery\.channel, delivery\.payload\);/);
+        expect(main).toMatch(/function showToPerson\(request: ViewRequest\): void \{\s*const delivery = viewDelivery\(request\);/);
+    });
+
+    it('showToPerson sends each request only to the windows it reaches: a navigation to the MAIN window, never every window (genie#1302)', () => {
+        const at = main.indexOf('function showToPerson(');
+        const body = main.slice(at, main.indexOf('\n}', at));
+        expect(body).not.toMatch(/broadcast\(/);
+        expect(body).toMatch(/for \(const w of BrowserWindow\.getAllWindows\(\)\) if \(!w\.isDestroyed\(\) && viewReaches\(delivery, \{ main: w === window \}\)\) w\.webContents\.send\(delivery\.channel, delivery\.payload\);/);
     });
 
     it('openFileForUser: the file’s workspace pulses with the file; never a navigation, never the person’s activation', () => {
