@@ -553,7 +553,9 @@ export function ChatFlyout({
                     // At the top with history behind: the next page comes in.
                     else if (el.scrollTop === 0 && behind) showEarlier();
                 }}
-                className="min-h-0 flex-1 overflow-y-auto"
+                // `relative` (genie#1290): the scroller is the containing block of the replies' absolutely positioned "Copied" live
+                // regions (react-fancy's and ChatProse's sr-only spans). Unpositioned, they escaped it and stretched the document.
+                className="relative min-h-0 flex-1 overflow-y-auto"
             >
             <div
                 data-chat-log=""
