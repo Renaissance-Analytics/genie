@@ -88,6 +88,8 @@ export interface LedgerRow {
      * while streaming.
      */
     expandable: boolean;
+    /** Rendered as the chat renders an agent's reply — Markdown and moic's markup (genie#1263). Absent = plain text. */
+    prose?: boolean | undefined;
     /** A thought's WHOLE text, drawn when the row is expanded (the owner: click the thinking line to see the reasoning). */
     full?: string | undefined;
     meta: string | null;
@@ -340,6 +342,8 @@ export function ledgerRow(row: TimedEvent, context: RowContext = {}): LedgerRow 
             return {
                 ...base, icon: 'message-square', tone: 'default', main: row.event.text,
                 clamp: false, expandable: true, lane: 'messages', who,
+                // An agent's or a peer's words are PROSE, drawn with the chat's markup (genie#1263); yours stay as typed.
+                prose: row.event.speaker !== 'you',
             };
         }
 

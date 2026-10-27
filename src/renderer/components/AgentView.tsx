@@ -42,6 +42,9 @@ import { editPathIn, revertEdit } from '../../core/revert-edit.js';
 import type { RepoCommit } from '../../core/commits.js';
 import { agentViewAction, approvalChoice, inspectorOnEnter, isTypingTarget, stepRow, toggleThoughts } from '../../core/keys.js';
 import { Stream } from './Stream.js';
+import type { StreamMarkup } from './StreamRow.js';
+import type { ChatRefs } from '../../core/chat-markup.js';
+import { openFileRoute } from '../../core/files-panel.js';
 import { TurnCards } from './TurnCards.js';
 import { turnCards } from '../../core/turn-cards.js';
 import type { StreamLayout } from '../../core/route.js';
@@ -174,6 +177,8 @@ export interface AgentViewProps {
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
     onNavigate: (route: string) => void;
+    /** The agents and workspaces a message's pills may name (genie#1263); absent = agent and workspace pills are words. */
+    chatRefs?: { agents: ChatRefs['agents']; workspaces: ChatRefs['workspaces'] } | undefined;
     onSelect: (rowId: string | null) => void;
     /** Writes `?lane=` — the selection lives in the route so a filtered view is linkable. */
     onLanes?: ((lanes: readonly StreamFilter[] | null) => void) | undefined;
@@ -271,11 +276,25 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 }
 
 export function AgentView({
-    agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, onSelect, now,
+    agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
+    // A message's pills in the Stream (genie#1263): a file opens in this agent's workspace, an agent or a workspace opens
+    // it — each only on the person's click (genie#1265). Stable across renders (the latest navigate read through a ref),
+    // so a memoised message does not re-render its Markdown on every push.
+    const navigateRef = useRef(onNavigate);
+    navigateRef.current = onNavigate;
+    const streamMarkup = useMemo<StreamMarkup>(() => ({
+        refs: { files: Boolean(agent.workspaceId), agents: chatRefs?.agents ?? [], workspaces: chatRefs?.workspaces ?? [] },
+        onOpen: (t) => {
+            const go = navigateRef.current;
+            if (t.kind === 'file') { if (agent.workspaceId) go(openFileRoute(agent.workspaceId, t.path, t.line)); }
+            else if (t.kind === 'agent') go(`genie://agent/${encodeURIComponent(t.id)}`);
+            else go(`genie://workspace/${encodeURIComponent(t.id)}`);
+        },
+    }), [agent.workspaceId, chatRefs]);
     // THE INDEX COLUMN, collapsible to the turn numbers (core/index-column.ts); the choice outlives the view.
     const indexStore = indexStorage === undefined ? (typeof localStorage === 'undefined' ? null : localStorage) : indexStorage;
     const [indexCollapsed, setIndexCollapsed] = useState(() => readIndexCollapsed(indexStore));
@@ -893,6 +912,7 @@ export function AgentView({
                                     live={session?.running === true && session.turnState === 'working'}
                                     parked={parkedDivider(session, now ?? (() => Date.now()))}
                                     persona={persona}
+                                    markup={streamMarkup}
                                     onChat={() => onNavigate(chatRoute)}
                                     onEditPersona={() => onNavigate(`genie://agent/${agent.id}?tab=files`)}
                                 />
