@@ -24,7 +24,7 @@ import type { Attachment, PromptBlock } from '../src/core/prompt-content.js';
 const seen = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 vi.mock('@particle-academy/react-fancy', async (original) => {
     const real = await original<typeof import('@particle-academy/react-fancy')>();
-    const PromptInput = Object.assign((props: Record<string, unknown>) => { seen.push(props); return (real.PromptInput as unknown as (p: unknown) => unknown)(props); }, real.PromptInput);
+    const PromptInput = (props: Record<string, unknown>) => { seen.push(props); return (real.PromptInput as unknown as { render: (p: unknown, ref: null) => unknown }).render(props, null); };
     return { ...real, PromptInput };
 });
 const { ChatFlyout } = await import('../src/renderer/components/ChatFlyout.js');

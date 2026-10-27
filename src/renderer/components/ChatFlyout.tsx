@@ -11,7 +11,8 @@ import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type Ch
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
-import { keepChat } from '../../core/chat-drafts.js';
+import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
+import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
 import { TurnStop } from './TurnStop.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
@@ -240,6 +241,12 @@ export interface ChatFlyoutProps {
      * composer. Absent = `here` (the doctor window, which has no workspace on screen).
      */
     scope?: ChatScope | undefined;
+    /**
+     * The kept drafts (genie#1261, core/chat-draft-keeper.ts): each chat's composer starts from its own and writes its
+     * changes back, so a draft survives a restart and a reload. `'loading'` = not read yet: no composer is mounted until
+     * it is. Absent = nothing kept (the doctor window, a remote host).
+     */
+    drafts?: ChatDraftKeeper | 'loading' | undefined;
 }
 
 const browserStorage = (): Pick<Storage, 'getItem' | 'setItem'> | null => {
@@ -248,17 +255,25 @@ const browserStorage = (): Pick<Storage, 'getItem' | 'setItem'> | null => {
 
 /**
  * The composer's picks as bytes: react-fancy's `PromptAttachment` carries the `File` the person attached (5.10.0,
- * react-fancy#16). One without a File (restored, not picked) cannot be sent, so it is named in the text that goes,
- * rather than vanishing.
+ * react-fancy#16). One restored from a kept draft before its File came back carries only its `ref` (genie#1261): its bytes
+ * are read from Genie's draft store. One with neither cannot be sent, so it is named in the text that goes, rather than
+ * vanishing.
  */
-async function readAttachments(picked: readonly { name: string; file?: File; type?: string }[]): Promise<Attachment[]> {
-    return Promise.all(picked.map(async (a) => ({ name: a.name, type: a.file?.type ?? a.type ?? '', bytes: a.file ? new Uint8Array(await a.file.arrayBuffer()) : new Uint8Array(0) })));
+async function readAttachments(picked: readonly { name: string; file?: File; type?: string; ref?: string }[], readRef?: (ref: string | undefined) => Promise<Uint8Array | null>): Promise<Attachment[]> {
+    return Promise.all(picked.map(async (a) => {
+        const bytes = a.file ? new Uint8Array(await a.file.arrayBuffer()) : ((await readRef?.(a.ref)) ?? new Uint8Array(0));
+        return { name: a.name, type: a.file?.type ?? a.type ?? '', bytes };
+    }));
 }
+
+/** The stored files a sent message carried (genie#1261): released once the message holds their bytes. */
+const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatMap((a) => (typeof a.ref === 'string' ? [a.ref] : []));
 
 export function ChatFlyout({
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
-    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth,
+    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts,
 }: ChatFlyoutProps) {
+    const keeper = drafts === 'loading' ? undefined : drafts;
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
     const width = dockWidth ?? ownDockWidth;
@@ -679,8 +694,10 @@ export function ChatFlyout({
                 {/*
                  * One composer per chat (genie#1261): the chat on screen shows its own; the others stay mounted, hidden, so
                  * their drafts — text, paste pills, attachments — are there when their chat comes back. A blocked chat
-                 * hides them all and drops none.
+                 * hides them all and drops none. While the kept drafts are still loading none is mounted: one mounted now would
+                 * start empty, and react-fancy reads `defaultDraft` only at mount.
                  */}
+                {drafts !== 'loading' ? (
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
                     <PromptInput
@@ -695,10 +712,28 @@ export function ChatFlyout({
                         previewChars={30}
                         commands={toPromptCmds(commands)}
                         placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
-                        onSubmit={(text, picked) => { void readAttachments(namePastedImages(text, picked)).then((files) => onSend(text, files, chat)); }}
+                        /*
+                         * Its kept draft (genie#1261, core/chat-draft-keeper.ts): it starts from it — `defaultDraft`, read at
+                         * mount, which never moves focus or a caret (genie#1235) — reports each change under its own chat, and
+                         * keeps attachments in Genie's store. A chat with no agent ('') keeps nothing.
+                         */
+                        {...(keeper && chat !== '' ? {
+                            ...(keeper.initial(chat) ? { defaultDraft: keeper.initial(chat)! } : {}),
+                            onDraftChange: (draft: ChatDraft) => keeper.change(chat, draft),
+                            persistAttachment: (file: File) => keeper.persistFile(file),
+                            restoreAttachment: (entry: ChatDraftFile) => keeper.restoreFile(entry),
+                        } : {})}
+                        // Sent with its bytes (a restored attachment's read from the store), then the stored files it carried go.
+                        onSubmit={(text, picked) => {
+                            void readAttachments(namePastedImages(text, picked), keeper ? (ref) => keeper.readRef(ref) : undefined).then((files) => {
+                                keeper?.sent(chat, sentRefs(picked));
+                                onSend(text, files, chat);
+                            });
+                        }}
                     />
                     )}
                 </ChatComposers>
+                ) : null}
             </div>
         </aside>
     );
