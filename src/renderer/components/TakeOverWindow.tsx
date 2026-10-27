@@ -3,6 +3,7 @@ import type { GenieBridge } from '../bridge.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { DESIGN_LOGIN } from '../../core/design-login.js';
 import { providerLogin } from '../../core/provider-login.js';
+import { ProviderLogo } from './ProviderLogo.js';
 
 /**
  * THE TAKE OVER WINDOW — one terminal, nothing else (§1).
@@ -47,7 +48,7 @@ function LoginNotice({ provider }: { provider: string }) {
     const known = providerLogin(provider);
     return (
         <section data-login-notice={provider} className="shrink-0 border-b-2 border-[var(--warning)] bg-[var(--warning)]/15 px-5 py-3 text-[var(--fg-1)]">
-            <h1 className="text-base font-semibold">Log in to {known?.name ?? provider}</h1>
+            <h1 className="flex items-center gap-2 text-base font-semibold"><ProviderLogo provider={provider} size="lg" className="text-[var(--fg-1)]" />Log in</h1>
             {known ? (
                 <ol className="mt-1.5 list-decimal space-y-0.5 pl-5 text-[13px]">
                     <li>Genie is running <code className="font-mono">{known.login}</code> in the terminal below, in a scratch folder of its own.</li>

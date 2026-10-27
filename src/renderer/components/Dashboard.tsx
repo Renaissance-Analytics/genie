@@ -5,6 +5,7 @@ import { Fragment, useEffect, useState } from 'react';
 import { headroomTitle, type Headroom } from '../../core/headroom.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
+import { ProviderLogo } from './ProviderLogo.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
@@ -242,7 +243,7 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
                 <FidelityDot fidelity={row.fidelity} state={row.state} />
                 <span className="truncate font-medium">{row.name}</span>
                 {emoji ? <span data-row-emoji={emoji} className="shrink-0 animate-pulse" aria-label="what it just did">{emoji}</span> : null}
-                <span className="shrink-0 font-mono text-[11px] text-[var(--fg-4)]">{row.provider}</span>
+                <ProviderLogo provider={row.provider} />
             </div>
 
             <div className="flex min-w-0 items-center gap-1.5">
@@ -720,7 +721,7 @@ export function RateLimitPills({ limits }: { limits: Readonly<Record<string, Hea
                 const tone = h.over || h.leftPct <= 10 ? 'text-[var(--danger)]' : h.leftPct <= 30 ? 'text-[var(--warning)]' : 'text-[var(--fg-2)]';
                 return (
                     <span key={p} data-rate-limit={p} title={headroomTitle(h)} className="flex items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs">
-                        <span className="text-[var(--fg-3)]">{p}</span>
+                        <ProviderLogo provider={p} size="xs" className="text-[var(--fg-3)]" />
                         <span className={`font-mono ${tone}`}>{h.over ? 'over' : `${h.leftPct}%`}</span>
                         <span className="font-mono text-[11px] text-[var(--fg-4)]">{h.window}</span>
                     </span>

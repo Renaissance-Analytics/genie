@@ -3,6 +3,7 @@ import type { KeyboardEvent, MouseEvent } from 'react';
 import type { FeedKind } from '../../core/activity-feed.js';
 import type { DashLane, WorkspaceDashboardView } from '../../core/workspace-dashboard.js';
 import { FidelityDot } from './Dashboard.js';
+import { ProviderLogo } from './ProviderLogo.js';
 
 /**
  * THE WORKSPACE DASHBOARD — A LANE PER AGENT (beta.33 item 10; the owner, 2026-10-20: "Each agent should have a full lane
@@ -95,7 +96,7 @@ function Lane({ lane, onOpenAgent, onOpenDeckItem, onStartAgent }: { lane: DashL
                 <div className="flex min-w-0 items-center gap-2">
                     <FidelityDot fidelity={lane.fidelity} state={lane.state} />
                     <span className="truncate text-[13px] font-medium text-[var(--fg-1)]">{lane.name}</span>
-                    <span className="font-mono text-[11px] text-[var(--fg-4)]">{lane.provider}</span>
+                    <ProviderLogo provider={lane.provider} />
                     <span data-lane-state="" className={`ml-auto shrink-0 text-[11px] ${TONE[lane.tone]}`}>
                         {lane.word}
                         {lane.inState ? ` · ${lane.inState}` : null}

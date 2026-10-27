@@ -2,6 +2,7 @@ import { Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { agentSlug } from '../../core/agent-create.js';
 import { ACP_PROVIDERS } from '../../core/engine.js';
+import { ProviderLogo, providerName } from './ProviderLogo.js';
 
 /**
  * NEW AGENT (the owner, 2026-10-23: "it didn't give me any ux to choose name, purpose or anything that genie 1 could
@@ -32,8 +33,6 @@ export interface NewAgentViewProps {
     readonly onCancel: () => void;
 }
 
-const PROVIDER_LABEL: Readonly<Record<string, string>> = { claude: 'Claude', codex: 'Codex' };
-
 export function NewAgentView({ workspaceName, name, purpose, provider, busy, error, onName, onPurpose, onProvider, onCreate, onCancel }: NewAgentViewProps) {
     const slug = agentSlug(name);
     const ready = slug !== '' && purpose.trim() !== '' && provider !== '' && !busy;
@@ -52,9 +51,13 @@ export function NewAgentView({ workspaceName, name, purpose, provider, busy, err
             </label>
             <label className="flex flex-col gap-1">
                 <span className="text-xs font-medium">Starts on</span>
-                <select data-new-agent-field="provider" className={field} value={provider} onChange={(e) => onProvider(e.target.value)}>
-                    {ACP_PROVIDERS.map((p) => <option key={p} value={p}>{PROVIDER_LABEL[p] ?? p}</option>)}
-                </select>
+                {/* The chosen provider's logo beside the picker; the options carry the name, as Genie 1's driver menu did. */}
+                <span className="flex items-center gap-2">
+                    {provider !== '' ? <ProviderLogo provider={provider} size="md" /> : null}
+                    <select data-new-agent-field="provider" className={`${field} min-w-0 flex-1`} value={provider} onChange={(e) => onProvider(e.target.value)}>
+                        {ACP_PROVIDERS.map((p) => <option key={p} value={p}>{providerName(p)}</option>)}
+                    </select>
+                </span>
                 <span className={muted}>You can switch it later. Its model, mode and permissions are in its Settings once it exists.</span>
             </label>
             {error ? <p data-new-agent-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}

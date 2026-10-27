@@ -1,6 +1,7 @@
 import { Icon, Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { importedAgentsOffer, type ImportedAgent } from '../../core/agent-adoption.js';
+import { ProviderLogo } from './ProviderLogo.js';
 
 /**
  * "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's WorkspaceBroughtAgents + ImportedAgents, genie#459). After
@@ -27,7 +28,7 @@ function unregisteredAgentList({ agents, busy, verb, onAct }: { agents: readonly
             {agents.map((a) => (
                 <li key={a.name} data-imported-agent={a.name} className="flex items-start justify-between gap-3 rounded-md border border-[var(--border-1)] px-2.5 py-1.5">
                     <div className="flex min-w-0 flex-col">
-                        <span className="font-mono text-xs font-semibold">{a.name}{a.provider ? <span className="ml-2 font-sans font-normal text-[var(--fg-3)]">{a.provider}</span> : null}</span>
+                        <span className="font-mono text-xs font-semibold">{a.name}{a.provider ? <ProviderLogo provider={a.provider} size="xs" className="ml-2 align-middle" /> : null}</span>
                         <span className={`${muted} font-mono`}>{a.instructions}</span>
                         {a.refusal ? <span data-adopt-refusal="" className="text-xs text-[var(--danger)]">{a.refusal}</span> : null}
                     </div>
@@ -108,7 +109,7 @@ export function AgentRosterView({ registered, onDisk, busy, notice, error, onRea
                 ) : (
                     <ul className="flex flex-wrap gap-1.5">
                         {registered.map((a) => (
-                            <li key={a.id} data-roster-agent={a.name} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 font-mono text-xs">{a.name}<span className="ml-2 font-sans text-[var(--fg-3)]">{a.provider}</span></li>
+                            <li key={a.id} data-roster-agent={a.name} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 font-mono text-xs">{a.name}<ProviderLogo provider={a.provider} size="xs" className="ml-2 align-middle" /></li>
                         ))}
                     </ul>
                 )}

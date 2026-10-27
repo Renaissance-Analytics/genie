@@ -2,7 +2,6 @@ import { useActivityFeeds } from './use-activity-feeds.js';
 import type { Headroom } from '../core/headroom.js';
 import type { MailSignal } from '../core/mail-signals.js';
 import { readChatDockWidth } from '../core/chat-width.js';
-import { providerLogin } from '../core/provider-login.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
 import { formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { Icon } from '@particle-academy/react-fancy';
@@ -824,7 +823,7 @@ export function Shell({
                         // Interrupt and send (item 21): the same Stop-this-turn path; what waits is already with the provider and runs next.
                         onInterruptAndSend={chatTurnStop && chatThread ? () => onCancelTurn?.(chatThread.agentId) : undefined}
                         onResumeLimit={chatThread && onResumeLimit && chatSession?.limit && chatSession.limit.state !== 'open' ? () => onResumeLimit(chatThread.agentId) : undefined}
-                        onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { name: providerLogin(snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '')?.name ?? 'your provider', run: () => onProviderLogin(chatThread.agentId) } : undefined}
+                        onProviderLogin={chatThread && onProviderLogin && chatSession?.signedOut ? { provider: snapshot.agents.find((a) => a.id === chatThread.agentId)?.provider ?? '', run: () => onProviderLogin(chatThread.agentId) } : undefined}
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
                         onDesignLogin={chatThread && onDesignLogin && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
                     />

@@ -7,6 +7,7 @@ import { contextNote, diffHeader, headerActions, personaView, planSteps, process
 import { agentIndex, type IndexLive } from '../../core/agent-index.js';
 import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core/index-column.js';
 import { FidelityDot } from './Dashboard.js';
+import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { Dropdown, Icon, Select, Switch } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
@@ -552,7 +553,7 @@ export function AgentView({
                 {workspace ? <button data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] hover:underline">{workspace.name ?? workspace.id} /</button> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span className="shrink-0 whitespace-nowrap font-medium">{agent.name}</span>
-                <span data-provider-chip={agent.provider} className="shrink-0 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]">{agent.provider} · {agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
+                <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
                 <span className="min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
                 <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
@@ -583,7 +584,8 @@ export function AgentView({
                             onClick={() => onProviderLogin(agent.id)}
                             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
                         >
-                            Log in to {providerLogin(agent.provider)?.name ?? agent.provider}
+                            <ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-1)]" />
+                            Log in
                         </button>
                     ) : null}
                     {/* ACCOUNT PAUSED (the owner, 2026-10-21: a payment failure): put the account right with the provider, then this. */}
@@ -1071,7 +1073,7 @@ export function AgentView({
                                                         the agent starts a NEW conversation there (a provider's conversation is its own). */}
                                                     <section data-rail="provider" data-agent-provider={agent.provider}>
                                                         <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Provider</h3>
-                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: p }))} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
+                                                        <Select list={ACP_PROVIDERS.map((p) => ({ value: p, label: providerName(p) }))} prefix={<ProviderLogo provider={agent.provider} />} value={agent.provider} onValueChange={(to) => { if (to !== agent.provider) { touch('provider'); ops.onSwitchDriver(to); } }} aria-label={`${agent.name}'s provider`} />
                                                         <p className="mt-1 flex min-w-0 items-center text-[11px]">{help('Its name, inbox and history stay; it starts a new conversation on the new provider.')}{outcomeFor('provider')}</p>
                                                     </section>
                                                     {/* MODEL: the PROVIDER's list (prism-acp 0.22), what the agent starts with, and what it runs. Never one Genie made up. */}

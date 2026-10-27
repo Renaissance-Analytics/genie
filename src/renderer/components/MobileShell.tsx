@@ -8,6 +8,7 @@ import type { DeckItem } from '../../core/deck.js';
 import { ledgerRow } from '../../core/stream-view.js';
 import type { AgentDetail } from '../bridge.js';
 import { ApprovalCard } from './ApprovalCard.js';
+import { ProviderLogo } from './ProviderLogo.js';
 
 /**
  * THE PHONE'S SHELL — the minimum to respond to agents, keep them going and set up new work (the owner,
@@ -154,7 +155,7 @@ function AgentsSection({ rows, onOpen, workspaces }: MobileAgentsSection & Named
                                     <button type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left">
                                         <span className="flex items-center gap-2 text-[13px]">
                                             <span className="font-medium">{r.name}</span>
-                                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{r.provider}</span>
+                                            <ProviderLogo provider={r.provider} />
                                             <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{workspaceLabel(workspaces, r.workspaceId)}</span>
                                         </span>
                                         <span className="flex items-baseline gap-2 text-xs">
@@ -240,7 +241,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
             <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
                 <button type="button" data-action="back" onClick={onBack} className="text-xs text-[var(--fg-3)]">← back</button>
                 <span className="text-sm font-semibold">{detail.agent.name}</span>
-                <span className="font-mono text-[11px] text-[var(--fg-4)]">{detail.agent.provider}</span>
+                <ProviderLogo provider={detail.agent.provider} />
                 <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
             </header>
             {detail.refusal ? <p data-refusal className="border-b border-[var(--border-1)] px-4 py-2 text-xs text-[var(--danger)]">{detail.refusal}</p> : null}
