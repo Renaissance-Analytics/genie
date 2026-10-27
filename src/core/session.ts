@@ -14,6 +14,7 @@ import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js'
 import { accountPauseOf, type AccountPause } from './account-pause.js';
 import { designLoginRefused } from './design-login.js';
 import { randomUUID } from 'node:crypto';
+import { providerProblemWords } from './claude-cli-version.js';
 
 /**
  * ONE RUNNING AGENT.
@@ -844,7 +845,8 @@ export class AgentSession {
                      * stack trace is read from the top.
                      */
                     if (this.#failure === null) {
-                        this.#failure = problem;
+                        // prism-acp's refusal of an old Claude Code becomes what to do (core/claude-cli-version.ts).
+                        this.#failure = providerProblemWords(problem);
                         this.#failedAt = this.#now();
                     }
                 },
@@ -959,7 +961,8 @@ export class AgentSession {
                     } else if (crashed) {
                         this.#turnState = 'failed';
                         // The provider's own reason (`authentication_failed`, `overloaded`…) says more than the CLI's generic one.
-                        this.#failure = outcome.failure?.reason ?? outcome.raw;
+                        const reason = outcome.failure?.reason ?? outcome.raw;
+                        this.#failure = reason === null ? null : providerProblemWords(reason);
                         this.#failedAt = this.#now();
                     } else {
                         this.#turnState = 'idle';

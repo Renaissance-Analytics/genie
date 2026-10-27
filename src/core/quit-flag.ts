@@ -43,20 +43,13 @@ export function launchDecision(input: { readonly argv: readonly string[]; readon
     return { kind: 'boot' };
 }
 
-/**
- * PRISM-ACP'S APPROVAL HOOK LAUNCHING GENIE (genie#1235). prism-acp writes Claude's PreToolUse hook as
- * `"<process.execPath>" "<private dir>/approve.cjs"`, and inside Genie `process.execPath` is Genie.exe. Since genie#1188
- * every Claude agent's Bash and PowerShell call runs that hook. Launched without ELECTRON_RUN_AS_NODE it was a second
- * Genie: the running one revealed and focused its window on every shell call, and the script never ran.
- *
- * The hook launch is known by what only it carries: prism-acp's channel in its environment (socket AND token) and the
- * hook script as an argument. Returns that script, or `null` for any other launch. Decided BEFORE the single-instance
- * lock is asked for: asking alone notifies the running Genie.
+/*
+ * PRISM-ACP'S APPROVAL HOOK (genie#1235). Before prism-acp 0.30.0 Claude's PreToolUse hook launched Genie.exe on
+ * approve.cjs WITHOUT ELECTRON_RUN_AS_NODE: a second Genie, which raised the running one's window on every shell call
+ * (main.ts recognised that launch, genie#1237). From 0.30.0 the hook sets ELECTRON_RUN_AS_NODE=1 for its own process, so
+ * Electron runs the script as Node and no hook launch reaches main at all (test/prism-hook-runs-as-node.test.ts). The rule
+ * below stays as defence in depth: whatever runs Genie.exe on a script, it never raises Genie.
  */
-export function prismHookScript(argv: readonly string[], env: Readonly<Record<string, string | undefined>>): string | null {
-    if (!env.PRISM_ACP_APPROVAL_SOCKET || !env.PRISM_ACP_APPROVAL_TOKEN) return null;
-    return argv.slice(1).find((a) => /(^|[\\/])approve\.cjs$/i.test(a)) ?? null;
-}
 
 /** A launch argument that is a script: never something a person launches Genie with. */
 const SCRIPT_ARG = /\.(c|m)?js$/i;
