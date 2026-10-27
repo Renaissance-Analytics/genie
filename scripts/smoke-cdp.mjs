@@ -1183,6 +1183,8 @@ check(parsed.length === 0, '34. the console is clean', parsed.join(' | ') || 'no
 // 65. SMOKE-DASHBOARD.PNG SHOWS THE DASHBOARD (the owner's checklist, 2026-10-14: it showed the genie AGENT view — the run
 // ends on an agent's page, and the shot was taken wherever it ended). Land on the Dashboard through the rail first, and
 // check that it is what is on screen, so the file is what its name says.
+await cdp.evaluate(`document.querySelector('[data-nav="genie://dashboard"]')?.click(); true`);
+await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]')) && !document.querySelector('[data-surface="agent"]')`, 'the Dashboard, for its screenshot');
 const dashboardShown = await cdp.evaluate(`(() => {
     const surfaces = [...document.querySelectorAll('[data-surface]')].map((s) => s.getAttribute('data-surface'));
     return JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), surfaces });

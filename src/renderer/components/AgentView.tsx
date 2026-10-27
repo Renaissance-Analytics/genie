@@ -586,13 +586,17 @@ export function AgentView({
     return (
         <div ref={rootRef} data-surface="agent" data-agent={agent.id} className="relative flex h-full min-h-0 flex-col">
             {/* Header, the way the board writes it: `{workspace} /` · fidelity dot · name · provider chip · pill · actions. */}
-            <div data-view-header="" className="flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+            <div data-view-header="" className="@container flex h-11 shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-5">
+                {/* THE TITLE PIECES, one cluster that shrinks and clips (the owner's checklist, 2026-10-14: at 1024px with the chat
+                    pinned the header is ~286px, and the crumb squeezed to nothing while the rest spilled past the header). The
+                    path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
+                <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
                 {/* Back to its workspace (Tynn #805): the crumb is a link. */}
-                {workspace ? <button data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] hover:underline">{workspace.name ?? workspace.id} /</button> : null}
+                {workspace ? <button data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] hover:underline">{workspace.name ?? workspace.id} /</button> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                <span className="shrink-0 whitespace-nowrap font-medium">{agent.name}</span>
+                <span data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium">{agent.name}</span>
                 <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
-                <span className="min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
+                <span className="min-w-0 shrink-[1000] truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
                 <span data-pill={pill.word} {...(pill.title ? { title: pill.title } : {})} className={`flex shrink-0 items-center gap-1.5 whitespace-nowrap text-xs ${PILL_TONE[pill.tone]}`}>
                     <span className="size-1.5 rounded-full bg-current" />
@@ -601,13 +605,16 @@ export function AgentView({
                         and reads as work in progress. */}
                     {pill.elapsed ? <span className="font-mono tabular-nums">{pill.elapsed}</span> : null}
                 </span>
+                </div>
 
-                <div className="ml-auto flex items-center gap-1">
+                {/* The actions never wrap; in a header narrower than 46rem their words give way to the icon (the name stays in
+                    aria-label and title). */}
+                <div className="ml-auto flex shrink-0 items-center gap-1">
                     {/* START, when it is not running (the owner: there was no way to start the genie agent). */}
                     {actions.start && onStart ? (
-                        <button type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                        <button type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} aria-label="Start" className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                             <Icon name="play" size="xs" />
-                            Start
+                            <span className="@max-[46rem]:hidden">Start</span>
                         </button>
                     ) : null}
                     {/* STOP THIS TURN, while a turn runs that can be stopped: the TURN ends, the agent keeps running. Ending the
@@ -683,11 +690,13 @@ export function AgentView({
                         // finished Conversation UI ship unreachable.
                         data-nav={chatRoute}
                         onClick={() => onNavigate(chatRoute)}
-                        className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
+                        aria-label="Chat"
+                        title="Chat (⌘J)"
+                        className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="message-square" size="xs" />
-                        Chat
-                        <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘J</span>
+                        <span className="@max-[46rem]:hidden">Chat</span>
+                        <span className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘J</span>
                     </button>
                     )}
 
@@ -697,18 +706,20 @@ export function AgentView({
                         type="button"
                         data-action="take-over"
                         onClick={() => onTakeOver(agent.id)}
-                        className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
+                        aria-label="Take over"
+                        title="Take over (⌘⇧T)"
+                        className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="square-terminal" size="xs" />
-                        Take over
-                        <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
+                        <span className="@max-[46rem]:hidden">Take over</span>
+                        <span className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘⇧T</span>
                     </button>
                     ) : null}
                     {/* In the error state (the board): the Take Over window IS the terminal. */}
                     {actions.openTerminal && onTakeOver ? (
-                        <button type="button" data-action="open-terminal" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                        <button type="button" data-action="open-terminal" aria-label="Open terminal" title="Open terminal" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                             <Icon name="square-terminal" size="xs" />
-                            Open terminal
+                            <span className="@max-[46rem]:hidden">Open terminal</span>
                         </button>
                     ) : null}
                     {ops && menu.length > 0 ? (
@@ -721,12 +732,13 @@ export function AgentView({
                                     data-action="restart"
                                     title="Restart — same conversation; anything not yet delivered to it is sent once it is up"
                                     onClick={() => ops.onRestart('graceful')}
+                                    aria-label="Restart"
                                     className={actions.openTerminal
-                                        ? 'flex items-center gap-1.5 rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-1 text-xs font-medium text-white hover:bg-[var(--primary-hover)]'
-                                        : 'flex items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]'}
+                                        ? 'flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--primary-hover)] bg-[var(--primary)] px-2 py-1 text-xs font-medium text-white hover:bg-[var(--primary-hover)]'
+                                        : 'flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]'}
                                 >
                                     <Icon name="rotate-ccw" size="xs" />
-                                    Restart
+                                    <span className="@max-[46rem]:hidden">Restart</span>
                                 </button>
                             ) : null}
                             <Dropdown placement="bottom-end">
