@@ -13,7 +13,9 @@ import type { ChatDraft } from './chat-drafts.js';
  * restart would lose the pill.
  *
  * FOCUS: the click is the person's gesture, so the insert they asked for focuses the composer (`focus: true`). Nothing
- * else ever does (genie#1235): an insert carries `focus` explicitly, and only the click sets it.
+ * else ever does (genie#1235): an insert carries `focus` explicitly, and only the click sets it. That focus scrolls
+ * nothing: react-fancy 5.69.0 defaults `setDraft(…, { focus: true })` to `preventScroll: true` (genie#1290), and Genie
+ * relies on that default — it never passes `preventScroll: false` (test/plan-pill-no-scroll.test.ts, smoke check 64c).
  *
  * Pure: the pure core imports no UI package, so the handle and the marker are described here by shape.
  */
