@@ -104,6 +104,22 @@ body,
     margin: 0;
 }
 
+/*
+ * THE WINDOW ITSELF NEVER SCROLLS (genie#1290), as Genie 1 had it (v0.7.0-beta.342 renderer/styles/globals.css:
+ * `html, body { height: 100%; overflow: hidden }`). A desktop shell has no document scroll: every pane owns its own.
+ * `hidden` on html stops the wheel; it does not stop a programmatic scroll (a focus(), a scrollIntoView), which is how
+ * beta.48's shell ended up scrolled into blank white. body and #root CLIP: a clip box is no scroll container at all,
+ * and whatever escapes a pane cannot grow the document.
+ */
+html {
+    overflow: hidden;
+}
+
+body,
+#root {
+    overflow: clip;
+}
+
 body {
     background: var(--bg-0);
     color: var(--fg-1);

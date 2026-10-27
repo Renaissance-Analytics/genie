@@ -1094,7 +1094,7 @@ function DesktopApp({ bridge }: AppProps) {
             if (action === 'toggle-chat') {
                 // The chat cannot close (2026-10-19): its key takes you TO it — the composer, ready to type.
                 e.preventDefault();
-                document.querySelector<HTMLElement>('[data-chat-composer] [contenteditable="true"], [data-chat-composer] textarea, [data-chat-composer] [role="textbox"]')?.focus();
+                document.querySelector<HTMLElement>('[data-chat-composer] [contenteditable="true"], [data-chat-composer] textarea, [data-chat-composer] [role="textbox"]')?.focus({ preventScroll: true });
                 return;
             }
             if (action !== 'toggle-files') return;

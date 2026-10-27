@@ -523,7 +523,7 @@ export function AgentView({
                 }
                 case 'find': {
                     e.preventDefault();
-                    findRef.current?.focus();
+                    findRef.current?.focus({ preventScroll: true });
                     return;
                 }
                 case 'toggle-thoughts': {
