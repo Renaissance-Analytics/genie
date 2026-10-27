@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { META_REPLAY, META_REPLAY_SUMMARY } from '@particle-academy/prism-acp';
 import { afterAll, describe, expect, it } from 'vitest';
 import { chatMessages, type ChatDetail } from '../src/core/chat-view.js';
 import { mintAgentId } from '../src/core/identity.js';
@@ -12,13 +13,14 @@ import { activityRows, type TimedEvent } from '../src/core/stream-view.js';
 import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
 
 /**
- * A CODEX RESUME DOES NOT WRITE ITS HISTORY INTO THE LEDGER AGAIN (genie#1249). On `thread/resume` prism-acp's
- * CodexDriver pages the whole thread (`thread/turns/list` + `thread/items/list`) and emits every item as a session
- * update, before its `ready` resolves. Genie already dropped the replayed messages, thoughts, tools and plans
- * (test/codex-replay-not-recorded.test.ts), but not the compactions (`compaction_update` → a divider) nor the debug
- * notices the replay raises per item (`replayed reasoning item had no summary`, `unmapped Codex item: webSearch`).
- * Measured on the owner's miapa ledger (7c4304bb…jsonl, run 11b978e0, resumed 23:12:16 UTC): 16+ compaction dividers
- * and 3,036 `replayed …` notices in five minutes, and nothing else — every restart appended the history again.
+ * A CODEX RESUME DOES NOT WRITE ITS HISTORY INTO THE LEDGER AGAIN (genie#1249). Measured on the owner's miapa ledger
+ * (7c4304bb…jsonl, run 11b978e0, resumed 23:12:16 UTC): 16+ compaction dividers and 3,036 `replayed reasoning item had
+ * no summary` notices in five minutes, and nothing else — every restart appended the history again.
+ *
+ * Since prism-acp 0.31.0 Genie resumes Codex with `replayHistory: false` (test/codex-resume-no-history.test.ts), so no
+ * history arrives. Should a driver replay anyway, every replayed update carries `_meta["particle.academy/replay"]`
+ * (META_REPLAY) and the replay ends with ONE summary notice (META_REPLAY_SUMMARY: turns, items, complete…): the marked
+ * rows are not recorded, and the summary is said once.
  *
  * And the views tolerate what is already on disk: compaction dividers repeated with nothing between them but debug
  * notices are ONE compaction, in the Stream and in the chat.
@@ -27,7 +29,7 @@ import { openAgentThread, openDurableStore } from '../src/core/thread-store.js';
 const dirs: string[] = [];
 afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true }); });
 const noTree: ProcessTree = { snapshot: () => [], killTree: (p) => ({ killed: p.length, refused: false }) };
-const UNMAPPED = 'particle.academy/unmapped_frame';
+const marked = { _meta: { [META_REPLAY]: true } };
 
 function open() {
     const dir = mkdtempSync(join(tmpdir(), 'genie2-replay-1249-'));
@@ -41,76 +43,80 @@ function open() {
     };
     const store = openDurableStore(dir);
     const id = mintAgentId();
-    const session = new AgentSession({
-        agentId: id, cwd: dir, store, driverFactory: factory, processTree: noTree,
-        resumeSessionId: 'thread-7c4304bb', replaysTranscript: true,
-    });
+    const session = new AgentSession({ agentId: id, cwd: dir, store, driverFactory: factory, processTree: noTree, resumeSessionId: 'thread-7c4304bb' });
     session.start();
     const send = (update: Record<string, unknown>) => events.onUpdate?.(update);
-    // prism-acp 0.27.0 codex/driver.js #mapItem, exactly as it emits a replayed item.
-    const replayCompaction = () => send({ sessionUpdate: 'compaction_update', status: 'completed' });
-    const replayReasoningNoSummary = (n: number) => send({
-        sessionUpdate: 'notice', notice: { level: 'debug', message: 'replayed reasoning item had no summary' },
-        _meta: { [UNMAPPED]: { reason: 'replayed reasoning item had no summary', frame: { type: 'reasoning', id: `rs_${n}`, summary: [], content: [] } } },
+    // prism-acp 0.31.0 codex/driver.js: every update #mapItem emits for a replayed item, marked.
+    const replayCompaction = (n: number) => send({ sessionUpdate: 'compaction_update', status: 'completed', itemId: `cmp_${n}`, ...marked });
+    const replayThought = (n: number) => send({ sessionUpdate: 'agent_thought_chunk', messageId: `rs_${n}`, content: { type: 'text', text: 'an earlier thought' }, ...marked });
+    const replayTool = (id: string) => send({ sessionUpdate: 'tool_call', toolCallId: id, title: 'Run command', kind: 'execute', status: 'completed', rawInput: { command: 'ls' }, ...marked });
+    const replayMessage = (text: string) => send({ sessionUpdate: 'agent_message_chunk', messageId: 'msg_1', content: { type: 'text', text }, ...marked });
+    const summary = (s: { turns: number; items: number; complete: boolean }) => send({
+        sessionUpdate: 'notice', notice: { level: 'debug', message: s.complete ? 'Codex history replay finished' : 'Codex history replay stopped' },
+        _meta: { [META_REPLAY]: true, [META_REPLAY_SUMMARY]: { ...s, diagnostics: 3, reasons: [{ reason: 'replayed reasoning item had no summary', count: 3 }], omittedDiagnostics: 0 } },
     });
-    const replayUnmapped = () => send({
-        sessionUpdate: 'notice', notice: { level: 'debug', message: 'unmapped Codex item: webSearch' },
-        _meta: { [UNMAPPED]: { reason: 'unmapped Codex item: webSearch', frame: { type: 'webSearch', id: 'ws_1' } } },
-    });
-    const replayThought = (text: string) => send({ sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } });
-    const replayTool = (id: string) => send({ sessionUpdate: 'tool_call', toolCallId: id, title: 'Run command', kind: 'execute', status: 'completed', rawInput: { command: 'ls' } });
-    const replayMessage = (text: string) => send({ sessionUpdate: 'agent_message_chunk', messageId: 'msg_1', content: { type: 'text', text } });
     const rows = async () => {
         await session.settled();
         return (await openAgentThread(store, id).messages()).map((r) => r.message as StreamEvent);
     };
-    return { session, send, replayCompaction, replayReasoningNoSummary, replayUnmapped, replayThought, replayTool, replayMessage, markReady, rows,
+    return { session, send, replayCompaction, replayThought, replayTool, replayMessage, summary, markReady, rows,
         end: () => events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null }) };
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 describe('a resumed Codex thread whose history holds N compactions and M reasoning items (genie#1249)', () => {
-    it('adds no compaction or reasoning rows, and at most one notice', async () => {
+    it('adds no compaction, reasoning, tool or message rows — and says the replay ONCE, from its summary', async () => {
         const s = open();
         const N = 7, M = 40;
         for (let i = 0; i < M; i += 1) {
-            if (i % 6 === 0 && i / 6 < N) s.replayCompaction();
-            s.replayReasoningNoSummary(i);
-            if (i % 10 === 0) { s.replayThought('an earlier thought'); s.replayTool(`exec-${i}`); s.replayMessage('an earlier reply'); s.replayUnmapped(); }
+            if (i % 6 === 0 && i / 6 < N) s.replayCompaction(i);
+            s.replayThought(i);
+            if (i % 10 === 0) { s.replayTool(`exec-${i}`); s.replayMessage('an earlier reply'); }
         }
+        s.summary({ turns: 12, items: 61, complete: true });
         s.markReady();
         await settle();
         const rows = await s.rows();
         expect(rows.filter((r) => r.kind === 'divider')).toEqual([]);
         expect(rows.filter((r) => r.kind === 'think' || r.kind === 'tool' || r.kind === 'message')).toEqual([]);
-        expect(rows.filter((r) => r.kind === 'notice').length).toBeLessThanOrEqual(1);
+        const notices = rows.filter((r) => r.kind === 'notice');
+        expect(notices).toHaveLength(1);
+        expect(notices[0]).toMatchObject({ kind: 'notice', level: 'debug' });
+        expect((notices[0] as { message: string }).message).toMatch(/replayed 12 turns \(61 items\)/);
     });
 
-    it('still records the replay window’s readings about NOW: the model the resumed thread runs on (control)', async () => {
+    it('a replay that stopped early says so', async () => {
+        const s = open();
+        s.summary({ turns: 3, items: 9, complete: false });
+        s.markReady();
+        await settle();
+        const notices = (await s.rows()).filter((r) => r.kind === 'notice');
+        expect(notices).toHaveLength(1);
+        expect((notices[0] as { message: string }).message).toMatch(/stopped before the end/);
+    });
+
+    it('still records a reading about NOW that arrives during the replay: the model the resumed thread runs on (control)', async () => {
         const s = open();
         s.send({ sessionUpdate: 'notice', notice: { level: 'debug', message: 'model' }, _meta: { 'particle.academy/model': 'gpt-6.1-sol' } });
-        s.replayCompaction();
-        s.replayReasoningNoSummary(1);
+        s.replayCompaction(1);
         s.markReady();
         await settle();
         const notices = (await s.rows()).filter((r) => r.kind === 'notice');
         expect(notices.some((n) => n.kind === 'notice' && n.model === 'gpt-6.1-sol')).toBe(true);
     });
 
-    it('a REAL compaction after the resume still records, and so does a live debug notice (control)', async () => {
+    it('a REAL compaction after the resume still records (control)', async () => {
         const s = open();
-        s.replayCompaction();
-        s.replayCompaction();
+        s.replayCompaction(1);
+        s.replayCompaction(2);
         s.markReady();
         await settle();
         s.session.prompt('carry on', 'you');
-        s.replayReasoningNoSummary(99); // the same shape, live now: recorded as ever
         s.send({ sessionUpdate: 'compaction_update', status: 'completed' });
         s.end();
         const rows = await s.rows();
         expect(rows.filter((r) => r.kind === 'divider')).toHaveLength(1);
-        expect(rows.some((r) => r.kind === 'notice' && r.message === 'replayed reasoning item had no summary')).toBe(true);
     });
 });
 

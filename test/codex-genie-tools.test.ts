@@ -104,6 +104,6 @@ describe('Codex runs Genie’s tools without asking — every server Genie passe
     });
 
     it('keeps what it carried: cwd, resume, model, the servers', () => {
-        expect(codexOptionsFor(record({ model: 'gpt-5' } as never), '/w', 'thr_1', genie)).toEqual({ cwd: '/w', resumeSessionId: 'thr_1', model: 'gpt-5', mcpServers: genie, mcpToolApproval: { genie: 'approve' } });
+        expect(codexOptionsFor(record({ model: 'gpt-5' } as never), '/w', 'thr_1', genie)).toEqual({ cwd: '/w', resumeSessionId: 'thr_1', replayHistory: false, model: 'gpt-5', mcpServers: genie, mcpToolApproval: { genie: 'approve' } });
     });
 });
