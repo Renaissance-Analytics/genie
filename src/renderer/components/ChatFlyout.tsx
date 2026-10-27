@@ -14,6 +14,7 @@ import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
 import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
+import { applyChatInsert, type ChatInsert, type DraftHandle } from '../../core/plan-pill.js';
 import { TurnStop } from './TurnStop.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 
@@ -257,6 +258,13 @@ export interface ChatFlyoutProps {
      * it is. Absent = nothing kept (the doctor window, a remote host).
      */
     drafts?: ChatDraftKeeper | 'loading' | undefined;
+    /**
+     * A pill to put into a chat's draft (genie#1280: a plan step's chat icon, core/plan-pill.ts). Applied once that chat's
+     * composer is mounted, then reported through `onInserted`. Focuses the composer only when the insert says so (the
+     * person's click); nothing else here moves focus (genie#1235).
+     */
+    insert?: ChatInsert | null | undefined;
+    onInserted?: ((seq: number) => void) | undefined;
 }
 
 const browserStorage = (): Pick<Storage, 'getItem' | 'setItem'> | null => {
@@ -281,7 +289,7 @@ const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatM
 
 export function ChatFlyout({
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
-    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
     const keeper = drafts === 'loading' ? undefined : drafts;
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
@@ -396,6 +404,20 @@ export function ChatFlyout({
     const [chats, setChats] = useState<readonly string[]>(() => keepChat([], activeChat));
     const keptChats = keepChat(chats, activeChat);
     if (keptChats !== chats) setChats(keptChats);
+    /**
+     * EACH CHAT'S COMPOSER, BY ITS AGENT (genie#1280): react-fancy 5.65's `PromptInputHandle`, so a pill can be put into
+     * one chat's draft. An insert waits until its chat's composer is mounted; it is applied once (`applied`), and kept
+     * through the keeper because `setDraft` does not fire `onDraftChange`.
+     */
+    const composerRefs = useRef(new Map<string, DraftHandle>());
+    const applied = useRef<number | null>(null);
+    useEffect(() => {
+        if (!insert || drafts === 'loading' || applied.current === insert.seq) return;
+        const keep = keeper && insert.agentId !== '' ? (agentId: string, draft: ChatDraft) => keeper.change(agentId, draft) : undefined;
+        if (!applyChatInsert(composerRefs.current, insert, keep)) return;
+        applied.current = insert.seq;
+        onInserted?.(insert.seq);
+    }, [insert, drafts, keeper, keptChats, onInserted]);
 
     return (
         <aside
@@ -723,6 +745,7 @@ export function ChatFlyout({
                 <ChatComposers chats={keptChats} active={activeChat}>
                     {(chat) => (
                     <PromptInput
+                        ref={(handle: DraftHandle | null) => { if (handle) composerRefs.current.set(chat, handle); else composerRefs.current.delete(chat); }}
                         {...(contextUsage
                             ? { budgetTokens: contextUsage.size, usedTokens: contextUsage.used, meter: 'near-limit' as const }
                             // The type requires a budget; with the meter hidden it is never drawn, and nothing is made up.

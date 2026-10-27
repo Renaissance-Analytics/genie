@@ -43,7 +43,8 @@ import { answeringFor, refusalFor, type ApprovalAnswering, type ApprovalRefusal 
 import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
@@ -417,6 +418,19 @@ export function Shell({
         setPlanOpen(open);
         writePlanOpen(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })(), open);
     };
+    /**
+     * A PLAN STEP INTO THE CHAT (genie#1280): its chat icon puts the step into that agent's draft as a pill. The click is the
+     * person's, so the composer is focused after the insert; nothing automatic does that (genie#1235). On an agent's page
+     * the chat is already that agent's (core/chat-scope.ts chatSubjectFor); from anywhere else the click opens the agent.
+     */
+    const [chatInsert, setChatInsert] = useState<ChatInsert | null>(null);
+    const insertSeq = useRef(Date.now());
+    const discussStep = (agentId: string, step: string): void => {
+        insertSeq.current += 1;
+        setChatInsert(planStepInsert(agentId, step, insertSeq.current));
+        if (chatThread?.agentId !== agentId && !(parsed.surface === 'agent' && parsed.agentId === agentId)) onNavigate(`genie://agent/${encodeURIComponent(agentId)}`);
+    };
+    const onInserted = useCallback((seq: number) => setChatInsert((now) => (now?.seq === seq ? null : now)), []);
     const [chatDockWidth, setChatDockWidth] = useState(() => readChatDockWidth(typeof window === 'undefined' ? null : (() => { try { return window.localStorage; } catch { return null; } })()));
 
     /**
@@ -647,6 +661,8 @@ export function Shell({
                             <AgentView
                                 chatRefs={chatRefs}
                                 planOpen={planOpen}
+                                onPlanCollapse={() => setPlanColumn(false)}
+                                onDiscussStep={(step) => discussStep(agentDetail.agent.id, step)}
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
                                 rows={agentDetail.rows}
@@ -819,6 +835,8 @@ export function Shell({
                     <ChatFlyout
                         thread={chatThread}
                         drafts={chatDrafts}
+                        insert={chatInsert}
+                        onInserted={onInserted}
                         onWindowLines={onChatWindowLines}
                         dockWidth={chatDockWidth}
                         onDockWidth={setChatDockWidth}
