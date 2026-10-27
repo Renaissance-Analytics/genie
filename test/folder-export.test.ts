@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, symlink, writeFile } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import yauzl from 'yauzl';
+import { open as openZip, type Entry } from 'yauzl';
 import { FILE_SIZE_CAP } from '../src/core/files-panel.js';
 import { fileExporter, type SaveDialog } from '../src/main/file-export.js';
 import { FilesHost, IGNORED_NAMES } from '../src/main/files-host.js';
@@ -26,12 +26,12 @@ type ZipEntry = { readonly dir: boolean; readonly link: boolean; readonly data: 
 /** Every entry in a zip, by name — read with yauzl, an independent reader (the writer is yazl). */
 function readZip(path: string): Promise<Map<string, ZipEntry>> {
     return new Promise((resolve, reject) => {
-        yauzl.open(path, { lazyEntries: true, strictFileNames: true }, (error, zip) => {
+        openZip(path, { lazyEntries: true, strictFileNames: true }, (error, zip) => {
             if (error || !zip) return reject(error ?? new Error('no zip'));
             const out = new Map<string, ZipEntry>();
             zip.on('error', reject);
             zip.on('end', () => resolve(out));
-            zip.on('entry', (entry: yauzl.Entry) => {
+            zip.on('entry', (entry: Entry) => {
                 const type = (entry.externalFileAttributes >>> 16) & 0o170000;
                 if (entry.fileName.endsWith('/')) { out.set(entry.fileName, { dir: true, link: false, data: Buffer.alloc(0) }); zip.readEntry(); return; }
                 zip.openReadStream(entry, (e, stream) => {
