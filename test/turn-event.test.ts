@@ -64,7 +64,7 @@ describe('a prompt opens a TURN in the ledger', () => {
         expect(rows.filter((r) => r.kind === 'turn')).toHaveLength(2);
 
         // The thread keeps the structure a resumed session is drawn from. Every row written, then counted (not polled
-        // against a 1 s clock: prism-harness 0.7.0 writes asynchronously, and a loaded machine missed it).
+        // against a 1 s clock: prism-harness writes asynchronously since 0.7.0, and a loaded machine missed it).
         await session.settled();
         // Turn 1 ended cleanly, so its `finished` row is in the thread too (beta.33 item 10); turn 2 is still running.
         expect(await openAgentThread(store, id).count()).toBe(5);

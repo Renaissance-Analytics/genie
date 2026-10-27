@@ -59,7 +59,7 @@ describe('agent thread durability', () => {
          * Asserted here by going around the front door: write through the agent helper, then
          * read through prism-harness's own `Thread` at `threadKeyFor` — the one key function —
          * and require the row to be there. If a second key shape is ever introduced, the writer
-         * and this reader stop agreeing and this fails. (prism-harness 0.7.0 keeps a thread's
+         * and this reader stop agreeing and this fails. (prism-harness, since 0.7.0, keeps a thread's
          * rows in an append-only log beside the payload, so the raw `get` of the key is no longer
          * where the rows are; the Thread at that key is.)
          */
