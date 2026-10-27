@@ -1,6 +1,7 @@
 import { createReadStream, createWriteStream } from 'node:fs';
 import { lstat, readdir, readlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { ZipFile } from 'yazl';
 import { IGNORED_NAMES } from './files-host.js';
@@ -30,13 +31,15 @@ export async function zipFolder(source: string, top: string, out: string, skip: 
     const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
     const skipped = new Set(skip.map(norm));
     const zip = new ZipFile();
+    // yazl's typings call it a NodeJS.ReadableStream; it is a stream.PassThrough, which can be destroyed.
+    const output = zip.outputStream as Readable;
     // `wx`: the output name is the caller's alone — never over something that happens to be there.
-    const written = pipeline(zip.outputStream, createWriteStream(out, { flags: 'wx' }));
+    const written = pipeline(output, createWriteStream(out, { flags: 'wx' }));
     // The write failing (disk full, the folder unwritable) stops the walk at its next step rather than after the whole tree.
     let failed: unknown = null;
     written.catch((error: unknown) => { failed = error; });
     // A file that cannot be read mid-archive is emitted on the ZipFile; it ends the write, and the caller removes the part.
-    zip.on('error', (error: Error) => zip.outputStream.destroy(error));
+    zip.on('error', (error: Error) => output.destroy(error));
     try {
         const stack: Array<{ abs: string; rel: string }> = [{ abs: source, rel: top }];
         while (stack.length > 0) {
@@ -67,7 +70,7 @@ export async function zipFolder(source: string, top: string, out: string, skip: 
         }
         zip.end();
     } catch (error) {
-        zip.outputStream.destroy(error instanceof Error ? error : new Error(String(error)));
+        output.destroy(error instanceof Error ? error : new Error(String(error)));
         await written.catch(() => {});
         throw error;
     }
