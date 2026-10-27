@@ -54,6 +54,11 @@ describe('resolveBoard', () => {
         expect(got.posts[0]!.review?.verdict).toBe('rejected');
     });
 
+    it('says, on every displayable post, whether it asks for a verdict (genie#1275)', () => {
+        const got = resolveBoard([post({ id: 'show', askVerdict: false }), post({ id: 'ask', askVerdict: true }), post({ id: 'legacy' })], deps());
+        expect(got.posts.map((p) => [p.id, p.askVerdict])).toEqual([['show', false], ['ask', true], ['legacy', true]]);
+    });
+
     it('DROPS a post whose file is gone, and says how many', () => {
         // Not rendered as an empty card: an empty card claims the agent posted
         // nothing, which is a different statement and a wrong one.

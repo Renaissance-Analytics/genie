@@ -45,7 +45,7 @@ Genie's MCP server (\`genie\`) comes with your session. Its tools:
 - Keep your steps short. Run long commands — test suites, builds, servers — in the background (your shell's background option, or \`processes\`) and check on them, rather than in one long step: messages from the person reach you only between your steps, so while one command runs they wait.
 - \`knowledge\` for the workstation's knowledge graph.
 - \`thumbsUp\` to say you are ready.
-- The official plugins' tools, while their plugin is on: \`ai.genie.artboard.post\` to put something you MADE (a rendered mockup, an image) in front of the person for approve / reject — the verdict and comment arrive in your inbox; \`ai.genie.presentation.createDeck\` and \`ai.genie.spreadsheet.createWorkbook\` to make a .pptx or an .xlsx. Markdown, Word, spreadsheet and slide files open in Genie's own editors.
+- The official plugins' tools, while their plugin is on: \`ai.genie.artboard.post\` to put something you MADE (a rendered mockup, an image) in front of the person; add \`askVerdict: true\` only when you need them to approve or reject it before you go on, and the verdict and comment arrive in your inbox (without it the card just shows the artifact); \`ai.genie.presentation.createDeck\` and \`ai.genie.spreadsheet.createWorkbook\` to make a .pptx or an .xlsx. Markdown, Word, spreadsheet and slide files open in Genie's own editors.
 
 Workspace rules are in \`RULES.md\`; they may be stricter than this.
 `,

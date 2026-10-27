@@ -61,6 +61,13 @@ export interface BoardPost {
      * Absent for a post nothing is waiting on (hand-written, or imported).
      */
     agentId?: string;
+    /**
+     * Whether the poster wants a verdict (genie#1275 — the owner: "They aren't always used for Approval either.").
+     * `false`: the card just shows the artifact. ABSENT means a post from before the field existed: Genie 1 and Genie 2
+     * until #1275 promised every poster a verdict, so those still ask (read it through {@link wantsVerdict}). The tool
+     * always writes it, so absence never comes from a new post.
+     */
+    askVerdict?: boolean;
     /** The human's decision, once made. Absent means "not reviewed yet", which
      *  is what the panel shows as awaiting review. */
     review?: Review;
@@ -121,6 +128,7 @@ function toPost(raw: unknown): BoardPost | null {
     };
     if (typeof r.note === 'string' && r.note) post.note = r.note;
     if (typeof r.agentId === 'string' && r.agentId) post.agentId = r.agentId;
+    if (typeof r.askVerdict === 'boolean') post.askVerdict = r.askVerdict;
     const rev = r.review;
     if (typeof rev === 'object' && rev !== null) {
         const v = (rev as Record<string, unknown>).verdict;
@@ -133,6 +141,11 @@ function toPost(raw: unknown): BoardPost | null {
         }
     }
     return post;
+}
+
+/** Whether a post asks for Approve / Reject. Only an explicit `false` says no; see {@link BoardPost.askVerdict}. */
+export function wantsVerdict(post: Pick<BoardPost, 'askVerdict'>): boolean {
+    return post.askVerdict !== false;
 }
 
 /** PURE. Read the index. Never throws — junk, an absent file read as '', or a
@@ -211,6 +224,8 @@ export interface DisplayPost {
     kind: 'html' | 'image';
     createdAt: string;
     note?: string;
+    /** Resolved: true shows Approve / Reject and the comment box; false shows the artifact only. */
+    askVerdict: boolean;
     review?: BoardPost['review'];
     html?: string;
     src?: string;
@@ -262,6 +277,7 @@ export function resolveBoard(posts: BoardPost[], deps: ResolveDeps): ResolvedBoa
             title: post.title,
             kind: post.kind,
             createdAt: post.createdAt,
+            askVerdict: wantsVerdict(post),
             ...(post.note ? { note: post.note } : {}),
             ...(post.review ? { review: post.review } : {}),
         };

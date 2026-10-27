@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { BOARD_DIR, BOARD_INDEX, applyVerdict, parseBoard, resolveBoard, verdictMessage, type ResolvedBoard, type Review } from '../core/artboard.js';
+import { BOARD_DIR, BOARD_INDEX, applyVerdict, parseBoard, resolveBoard, verdictMessage, wantsVerdict, type ResolvedBoard, type Review } from '../core/artboard.js';
 
 /**
  * THE ARTBOARD, HOST SIDE (beta.33 item 14, Tynn #784; Genie 1 main/artboard/wire.ts + host.ts). The panel asks for the
@@ -41,6 +41,9 @@ export async function reviewArtBoardPost(root: string, postId: string, review: {
     const board = await boardPosts(root);
     const post = board.find((p) => p.id === postId);
     if (!post) return { ok: false, error: 'That post is no longer on the board.' };
+    // Its card offers no verdict; one arriving anyway (a stale panel, a hand-made call) would message an agent that
+    // never asked for one (genie#1275).
+    if (!wantsVerdict(post)) return { ok: false, error: 'That post did not ask for a verdict.' };
     const comment = review.comment?.trim();
     const full: Review = { verdict: review.verdict, at: deps.now(), ...(comment ? { comment } : {}) };
     await writeFile(join(root, BOARD_DIR, BOARD_INDEX), JSON.stringify({ posts: applyVerdict(board, postId, full) }, null, 2));
