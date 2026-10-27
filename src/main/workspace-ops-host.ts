@@ -95,9 +95,34 @@ const alreadyNamed = (id: string) => `There is already a workspace named ${id}. 
 /** The root of a drive or of the filesystem: a plain folder now, and never a workspace. */
 const isRoot = (path: string) => /^(?:[A-Za-z]:)?[\\/]*$/.test(path.trim());
 
+/**
+ * A folder as a comparable key: forward slashes, no trailing slash; a Windows path (a drive letter) in one case, since
+ * Windows does not tell `C:\Work` from `c:\work`. A POSIX path keeps its case — there those are two folders.
+ */
+const folderKey = (path: string): string => {
+    const p = path.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+    return /^[A-Za-z]:/.test(p) ? p.toLowerCase() : p;
+};
+
+/**
+ * ONE FOLDER IS ONE WORKSPACE (genie#485): the workspace Genie already has at this folder, whatever its id. The doors
+ * name a folder differently — "Add a folder" by its name (`tynn.agi`), Tynn's import, New and the envelope wizard
+ * without `.agi` (`tynn`) — so checking only the door's own id let one folder become two rows, the second with none of
+ * the first's agents.
+ */
+export function workspaceAtFolder(ports: Pick<WorkspaceOpsPorts, 'registry'>, path: string): { id: string } | null {
+    const key = folderKey(path);
+    return ports.registry.list().find((w) => folderKey(w.path) === key) ?? null;
+}
+
+/** The refusal for a folder that is already a workspace (see `workspaceAtFolder`). */
+export const alreadyAtFolder = (path: string, id: string): string => `${path} is already the workspace ${id}. Open that workspace instead.`;
+
 export async function previewAddWorkspace(ports: WorkspaceOpsPorts, path: string, id: string = basename(path)): Promise<AddPreview> {
     if (isRoot(path)) return { ok: false, reason: `${path} is a whole drive; pick a folder on it` };
     if (ports.registry.workspace(id)) return { ok: false, reason: alreadyNamed(id) };
+    const existing = workspaceAtFolder(ports, path);
+    if (existing) return { ok: false, reason: alreadyAtFolder(path, existing.id) };
     const exists = await ports.fs.exists(path);
     const kind = classifyFolder({ exists, entries: exists ? await ports.fs.entries(path) : [] });
     try {
