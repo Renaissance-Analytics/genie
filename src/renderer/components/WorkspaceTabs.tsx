@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
+import { wsStyle } from '../workspace-colors.js';
 
 /**
  * A WORKSPACE'S TAB STRIP (Tynn #282, #805): Dashboard · every agent of the workspace · the tabs you designed · + · Settings — +
@@ -26,6 +27,11 @@ export interface WorkspaceTabsProps {
      * opens and hides it") — given only on an agent's page that HAS the column; absent = no button.
      */
     readonly planToggle?: { readonly open: boolean; readonly onToggle: () => void } | undefined;
+    /**
+     * The workspace's colour (genie#1300): the strip's left edge, and the underline of the tab on screen — the workspace
+     * view or the agent — so the agent you are on is shown in its workspace's colour. Absent/`null` = drawn as before.
+     */
+    readonly color?: string | null | undefined;
 }
 
 const STATE_DOT: Record<string, string> = {
@@ -34,10 +40,16 @@ const STATE_DOT: Record<string, string> = {
     broken: 'bg-[var(--danger)]',
 };
 
-export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent, planToggle }: WorkspaceTabsProps) {
-    const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? 'border-[var(--fg-1)] text-[var(--fg-1)]' : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
+export function WorkspaceTabs({ designed, agents, current, canDesign, hasSettings, github = false, onView, onAdd, onOpenAgent, planToggle, color = null }: WorkspaceTabsProps) {
+    const underline = color ? 'border-[var(--ws)]' : 'border-[var(--fg-1)]';
+    const tab = (on: boolean) => `border-b-2 px-3 text-[12px] ${on ? `${underline} text-[var(--fg-1)]` : 'border-transparent text-[var(--fg-3)] hover:text-[var(--fg-1)]'}`;
     return (
-        <nav data-workspace-tabs="" className="flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3">
+        <nav
+            data-workspace-tabs=""
+            {...(color ? { 'data-workspace-color': color } : {})}
+            style={wsStyle(color)}
+            className={`flex h-8 shrink-0 items-stretch overflow-x-auto border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
+        >
             {tabStrip(designed, agents, { github }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (

@@ -18,7 +18,7 @@ import { Sidebar } from '../src/renderer/components/Sidebar.js';
 import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import { WorkspaceColorPicker } from '../src/renderer/components/WorkspaceColorPicker.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
-import { WorkspaceColorsContext, workspaceColorMap } from '../src/renderer/workspace-colors.js';
+import { WorkspaceColorsContext, workspaceColorMap, type WorkspaceColorMap } from '../src/renderer/workspace-colors.js';
 
 /**
  * A WORKSPACE'S COLOUR, WHEREVER YOU COULD MISTAKE WHO YOU ARE ADDRESSING (genie#1300). The owner: "We need workspace
@@ -94,7 +94,7 @@ describe('the workspace tab strip and its agent tabs', () => {
 });
 
 describe('the chat: its header and its composer edge', () => {
-    const colors = { workspaces: { tynn: TEAL }, agents: { a1: TEAL } };
+    const colors: WorkspaceColorMap = { workspaces: { tynn: TEAL }, agents: { a1: TEAL } };
     const chat = (agentColors = colors) => renderToStaticMarkup(
         <WorkspaceColorsContext.Provider value={agentColors}>
             <ChatFlyout thread={{ agentId: 'a1', name: 'kai', fidelity: 'declared', unread: null, messages: [] }} onSend={noop} onClose={noop} />
@@ -126,10 +126,9 @@ describe('AgentInbox threads', () => {
         threads: inboxThreads(mail, (p) => names[p] ?? p), peers: [], thread: null, openKey: null, query: '', filter: 'all', now: T, uncollected: 0, unread: 1, draft: '',
         onQuery: noop, onFilter: noop, onOpenThread: noop, onLoadOlder: noop, onDraft: noop, onSend: noop, onDownload: noop, onMarkAllRead: noop, onDelete: noop, onClose: noop,
     };
+    // The view is hook-free (tests press it from its element tree): the flyout hands it the window's agent colours.
     const html = renderToStaticMarkup(
-        <WorkspaceColorsContext.Provider value={{ workspaces: {}, agents: { agent_kai: TEAL, agent_wren: PINK } }}>
-            <Drawer open onClose={noop} attach="container"><InboxFlyoutView {...props} /></Drawer>
-        </WorkspaceColorsContext.Provider>,
+        <Drawer open onClose={noop} attach="container"><InboxFlyoutView {...props} agentColors={{ agent_kai: TEAL, agent_wren: PINK }} /></Drawer>,
     );
 
     it('each agent in a thread row carries its own workspace\'s colour, beside its name', () => {
@@ -153,7 +152,7 @@ describe('a question, an approval and a toast name their source\'s colour', () =
     });
 
     it('the approval toast', () => {
-        const item = { ...base, id: 'appr_1', source: 'approval', title: 'Start a site', workspaceColor: TEAL,
+        const item = { ...base, id: 'appr_1', source: 'agent-question', title: 'Start a site', workspaceColor: TEAL,
             answer: { kind: 'inline', options: [{ id: 'allow', label: 'Allow', tone: 'ok' }, { id: 'deny', label: 'Deny', tone: 'bad' }] } } as unknown as DeckItem;
         const view = toastView(toastReducer(EMPTY_TOASTS, { kind: 'items', items: [item], dnd: false }), [item]);
         const html = renderToStaticMarkup(<ApprovalToastStack view={view} onAnswer={noop} onLater={noop} onFront={noop} onEngage={noop} />);
@@ -177,7 +176,7 @@ describe('the Dashboard\'s workspace rows', () => {
     });
     it('each workspace\'s header is edged in its colour, beside its name', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[row('kai', 'tynn'), row('wren', 'fancy')]} genie={null} onOpenAgent={noop} onAddAgent={noop}
-            workspaces={[{ id: 'tynn', name: 'Tynn', path: '/w/tynn', agentsKnown: true, color: TEAL }, { id: 'fancy', name: 'Fancy', path: '/w/fancy', agentsKnown: true, color: PINK }]} />);
+            workspaces={[{ id: 'tynn', name: 'Tynn', path: '/w/tynn', color: TEAL }, { id: 'fancy', name: 'Fancy', path: '/w/fancy', color: PINK }]} />);
         expect(html).toMatch(/data-workspace-head="tynn"[^>]*data-workspace-color="#0891b2"[\s\S]*Tynn/);
         expect(html).toMatch(/data-workspace-head="fancy"[^>]*data-workspace-color="#db2777"[\s\S]*Fancy/);
     });

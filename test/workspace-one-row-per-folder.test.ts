@@ -13,7 +13,7 @@ import { addWorkspace, previewAddWorkspace, type WorkspaceOpsPorts } from '../sr
  * door refuses a folder Genie already has, whatever id it is under — saying which workspace to open — and writes nothing.
  */
 
-const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/project.schema.json';
+const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json';
 
 function fakes(registered: Array<{ id: string; path: string }>, folders: Record<string, string[]>) {
     const rows = [...registered];

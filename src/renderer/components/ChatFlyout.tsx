@@ -17,6 +17,7 @@ import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
 import { applyChatInsert, type ChatInsert, type DraftHandle } from '../../core/plan-pill.js';
 import { TurnStop } from './TurnStop.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
+import { WorkspaceSwatch, useAgentColor, wsStyle } from '../workspace-colors.js';
 
 /**
  * THE CHAT FLYOUT — the only place a human types to an agent.
@@ -397,6 +398,8 @@ export function ChatFlyout({
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
     const addressee = thread ? (elsewhere ? `${thread.name} — in ${elsewhere}` : thread.name) : null;
+    // The agent's workspace COLOUR (genie#1300): beside its name in the header, and down the composer's edge.
+    const color = useAgentColor(thread?.agentId);
     /**
      * ONE DRAFT PER CHAT (genie#1261, core/chat-drafts.ts): every chat typed in keeps its own composer, so a half-typed
      * message stays with the chat it was typed in. Updated during render — the documented "adjust state while rendering"
@@ -444,7 +447,8 @@ export function ChatFlyout({
                 onKeyDown={keyResize}
                 className="absolute inset-y-0 left-0 z-30 w-1.5 -translate-x-1/2 cursor-col-resize hover:bg-[var(--accent)]/40 focus-visible:bg-[var(--accent)]/40 focus-visible:outline-none"
             />
-            <div className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3">
+            <div data-chat-header="" className="flex h-9 shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3">
+                <WorkspaceSwatch color={color} />
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium">
                     {thread ? thread.name : 'genie'}
                 </span>
@@ -716,7 +720,11 @@ export function ChatFlyout({
                 </div>
             ) : null}
 
-            <div className="shrink-0 border-t border-[var(--border-1)] p-2">
+            <div
+                {...(color ? { 'data-composer-edge': color } : {})}
+                style={wsStyle(color)}
+                className={`shrink-0 border-t border-[var(--border-1)] p-2${color ? ' border-l-4 border-l-[var(--ws)]' : ''}`}
+            >
                 {/*
                  * `PromptInput` — *"the chat composer every AI app rebuilds"*: auto-growing,
                  * slash commands, @-mentions, drop-to-attach, keyboard submit, live token

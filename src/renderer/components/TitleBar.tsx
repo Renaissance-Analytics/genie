@@ -11,6 +11,7 @@ import { FEATURE_ICONS } from '../../core/rail-view.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
+import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 
 /**
  * THE TITLE BAR — 36px, and the only chrome that is on every surface.
@@ -72,9 +73,14 @@ export interface TitleBarProps {
      * yet (no count, never a 0). Absent = this window has no AgentInbox to open.
      */
     inbox?: { unread: number | null; open: boolean; onToggle: () => void } | undefined;
+    /**
+     * The workspace on screen (genie#1300): its name with its colour, and the bar's lower edge in that colour, so which
+     * workspace you are in is never in doubt. Absent = not in a workspace; `color: null` = none known yet (named, no swatch).
+     */
+    workspace?: { name: string; color: string | null } | null | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -112,7 +118,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
             // The bar is the window's drag region (the OS title bar is hidden); every control inside
             // opts out below. The right padding is the width of the native window buttons the overlay
             // draws there on Windows/Linux — zero where there is no overlay.
-            className="flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 [-webkit-app-region:drag]"
+            className="relative flex h-9 shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 [-webkit-app-region:drag]"
             // The measured space the native buttons take, plus the bar's own padding: nothing sits under them.
             data-controls-inset={controlsInset}
             style={{ paddingRight: `calc(${controlsInset}px + 10px)` }}
@@ -174,6 +180,14 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                     </Tooltip>
                 ) : null}
             </div>
+
+            {workspace ? (
+                <span data-title-workspace={workspace.name} className="flex min-w-0 shrink-0 items-center gap-1.5 text-[12px] font-medium text-[var(--fg-2)]">
+                    <WorkspaceSwatch color={workspace.color} />
+                    <span className="truncate">{workspace.name}</span>
+                </span>
+            ) : null}
+            {workspace?.color ? <span aria-hidden="true" data-title-edge="" style={wsStyle(workspace.color)} className="pointer-events-none absolute inset-x-0 bottom-0 h-0.5 bg-[var(--ws)]" /> : null}
 
             <span data-route className="truncate font-mono text-[11px] text-[var(--fg-4)]">
                 {route}

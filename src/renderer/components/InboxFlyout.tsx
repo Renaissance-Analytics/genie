@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useContext, useEffect, useRef, useState } from 'react';
+import { WorkspaceColorsContext, WorkspaceSwatch } from '../workspace-colors.js';
 import { Badge, Button, ContentRenderer, Drawer, Icon, Input, Modal, Select, Textarea } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
@@ -64,6 +65,8 @@ export interface InboxFlyoutViewProps {
     onMarkAllRead: () => void;
     onDelete: (key: string) => void;
     onClose: () => void;
+    /** Agent id → its workspace's colour (genie#1300), drawn beside its name on a thread. Absent = none. */
+    agentColors?: Readonly<Record<string, string>> | undefined;
 }
 
 const FILTER_LABEL: Record<ThreadFilter, string> = { all: 'All', unread: 'Unread', waiting: 'Waiting', stale: 'Stale' };
@@ -73,6 +76,7 @@ const otherOf = (a: string, b: string): string => (a === HUMAN ? b : a);
 
 /** Hook-free: everything on screen comes in as props, so a test can render and press it. */
 export function InboxFlyoutView(p: InboxFlyoutViewProps) {
+    const agentColors = p.agentColors ?? {};
     const shown = filterThreads(p.threads, { filter: p.filter, query: p.query, now: p.now });
     const counts = filterCounts(p.threads, p.now);
     const summary = p.openKey ? p.threads.find((t) => t.key === p.openKey) ?? null : null;
@@ -131,6 +135,8 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                     className={`flex w-full flex-col gap-0.5 border-b border-[var(--border-1)] px-3 py-2 text-left hover:bg-[var(--bg-2)] ${t.key === p.openKey ? 'bg-[var(--bg-2)]' : ''}`}
                                 >
                                     <span className="flex items-center gap-2 text-[13px]">
+                                        {/* Each agent's workspace colour beside its name (genie#1300): whose thread this is. */}
+                                        {(t.withHuman ? [t.a === HUMAN ? t.b : t.a] : [t.a, t.b]).map((id) => <WorkspaceSwatch key={id} color={agentColors[id]} />)}
                                         <span className={t.unread > 0 ? 'font-semibold text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}>{t.withHuman ? (t.a === HUMAN ? t.bName : t.aName) : `${t.aName} ⇄ ${t.bName}`}</span>
                                         {t.withHuman ? null : <Icon name="lock" size="xs" className="text-[var(--fg-4)]" />}
                                         {t.attachments > 0 ? <Icon name="paperclip" size="xs" className="text-[var(--fg-4)]" /> : null}
@@ -256,6 +262,7 @@ function download(name: string, base64: string): void {
 
 /** The flyout with its state: search, filter, the open thread (re-read when its summary moves — a push, never a poll). */
 export function InboxFlyout({ value, inbox, compose, loadThread, send, attachment, markAllRead, deleteThread, onNavigate }: InboxFlyoutProps) {
+    const colors = useContext(WorkspaceColorsContext);
     const [query, setQuery] = useState('');
     const [filter, setFilter] = useState<ThreadFilter>('all');
     const [thread, setThread] = useState<InboxThreadView | null>(null);
@@ -316,6 +323,7 @@ export function InboxFlyout({ value, inbox, compose, loadThread, send, attachmen
     return (
         <Drawer open onClose={() => onNavigate(null)} side="right" attach="container" className="w-[min(1040px,92%)] bg-[var(--surface)] text-[var(--fg-1)]" data-inbox-drawer="">
             <InboxFlyoutView
+                agentColors={colors.agents}
                 threads={threads}
                 peers={inbox?.peers ?? []}
                 thread={openKey && thread?.key === openKey ? thread : null}
