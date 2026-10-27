@@ -53,8 +53,9 @@ describe('the Settings tab shows it, after "May manage workspace tabs"', () => {
         expect(render(opsFor(false))).toMatch(/data-drive-pages="off"[^>]*>(?:(?!<\/span>)[\s\S])*?role="switch" aria-checked="false"/);
         expect(on).toContain('May drive pages');
         // genie#1294: the switch IS the person's answer — the row no longer promises an ask it does not make.
-        expect(on).not.toMatch(/always asks you/);
-        expect(on).toMatch(/With this on, kai submits forms and clicks through them without asking you/);
+        const row = on.match(/<label data-settings-row="drive-pages"[\s\S]*?<\/label>/)?.[0] ?? '';
+        expect(row).toMatch(/With this on, kai submits forms and clicks through them without asking you/);
+        expect(row).not.toMatch(/always asks you/);
         expect(on.indexOf('data-drive-pages')).toBeGreaterThan(on.indexOf('data-manage-tabs'));
     });
 
