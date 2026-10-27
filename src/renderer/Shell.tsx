@@ -89,6 +89,8 @@ export interface ShellProps {
     /** What the title bar shows: the ADDRESS (genie://{workstation}/{workspace-slug}/{tab}, core/address.ts); the route when absent. */
     address?: string | undefined;
     snapshot: GenieSnapshot;
+    /** Every chat's kept draft (genie#1261, core/chat-draft-keeper.ts), handed to the chat; `'loading'` until read. */
+    chatDrafts?: import('../core/chat-draft-keeper.js').ChatDraftKeeper | 'loading' | undefined;
     /** What each agent just did with Genie, for its Dashboard row (genie#1209). */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
     /** The workspaces an agent acted in that the person has not visited since (genie#1265): their rows pulse. */
@@ -277,6 +279,7 @@ export function Shell({
     route,
     address,
     snapshot,
+    chatDrafts,
     rowEmoji,
     pulsingWorkspaces,
     rateLimits,
@@ -809,6 +812,7 @@ export function Shell({
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
                     <ChatFlyout
                         thread={chatThread}
+                        drafts={chatDrafts}
                         onWindowLines={onChatWindowLines}
                         dockWidth={chatDockWidth}
                         onDockWidth={setChatDockWidth}

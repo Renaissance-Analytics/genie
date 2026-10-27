@@ -91,6 +91,7 @@ import { ActivityFeeds } from './activity-feeds.js';
 import type { ActivityFeed } from '../core/activity-feed.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
+import { ChatDraftStore, MAX_DRAFT_FILE_BYTES } from './chat-draft-store.js';
 import { composeServices, type ComposedServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
@@ -1080,6 +1081,27 @@ async function boot(): Promise<void> {
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
+    /*
+     * EVERY CHAT'S UNSENT DRAFT (genie#1261, main/chat-draft-store.ts), kept here so it survives a restart and a reload —
+     * Genie 1 kept its part-typed answers in main the same way (v0.7.0-beta.342 main/ask/force-question.ts:1118, 1181-1217).
+     * Opened only once the roster is in, so a prune never reads a registry not loaded yet as "every agent deleted"; then a
+     * deleted agent's draft and files go on the change that removes it. Answered before any window exists.
+     */
+    const drafts = await ChatDraftStore.open(genieHome());
+    const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
+    const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
+    await drafts.prune(draftAgents()).catch(pruneFailed);
+    registry.subscribe(() => { void drafts.prune(draftAgents()).catch(pruneFailed); });
+    ipcMain.handle('genie:chat-drafts-load', () => drafts.all());
+    ipcMain.handle('genie:chat-drafts-save', (_event, agentId: unknown, draft: unknown) => {
+        // Only an agent Genie has: a draft for one already deleted would never be pruned.
+        if (typeof agentId !== 'string' || (draft !== null && !theRegistry.find(agentId as AgentId))) return undefined;
+        return drafts.save(agentId, draft);
+    });
+    ipcMain.handle('genie:chat-drafts-put-file', (_event, bytes: unknown) =>
+        bytes instanceof Uint8Array && bytes.byteLength <= MAX_DRAFT_FILE_BYTES ? drafts.putFile(bytes) : null);
+    ipcMain.handle('genie:chat-drafts-read-file', (_event, ref: unknown) => drafts.readFile(ref));
+    ipcMain.handle('genie:chat-drafts-release', (_event, refs: unknown) => (Array.isArray(refs) ? drafts.release(refs) : undefined));
     // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.

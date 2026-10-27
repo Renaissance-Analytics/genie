@@ -39,7 +39,7 @@
     "@particle-academy/prism-harness": "0.7.0",
     "@particle-academy/prism-mcp": "^0.3.0",
     "@particle-academy/prism-mcp-server": "0.3.1",
-    "@particle-academy/react-fancy": "5.59.0",
+    "@particle-academy/react-fancy": "5.65.0",
     "electron-updater": "^6.8.9",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"

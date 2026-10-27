@@ -9,6 +9,7 @@ import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
+import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
@@ -149,6 +150,28 @@ function useFeatures(bridge: GenieBridge | undefined): [FeatureData, (data: Feat
         return () => { live = false; off(); };
     }, [bridge]);
     return [data, setData];
+}
+
+/**
+ * EVERY CHAT'S KEPT DRAFT (genie#1261, core/chat-draft-keeper.ts): read from this machine's main once per bridge, and
+ * `'loading'` until then, so no composer mounts before its draft is there to start from. A pending write is flushed when
+ * the page goes (a reload, a quit), so the last words typed are not lost to the debounce. A bridge with no drafts (a
+ * remote host) keeps none.
+ */
+function useChatDrafts(bridge: GenieBridge | undefined): ChatDraftKeeper | 'loading' | undefined {
+    const port = bridge?.chatDrafts;
+    const keeper = useMemo(() => (port ? new ChatDraftKeeper(port, { setTimer: (fn, ms) => setTimeout(fn, ms), clearTimer: (t) => clearTimeout(t as ReturnType<typeof setTimeout>) }) : undefined), [port]);
+    const [loaded, setLoaded] = useState<ChatDraftKeeper | null>(null);
+    useEffect(() => {
+        if (!keeper) return undefined;
+        let live = true;
+        void keeper.load().then(() => { if (live) setLoaded(keeper); });
+        const flush = (): void => keeper.flush();
+        window.addEventListener('pagehide', flush);
+        return () => { live = false; window.removeEventListener('pagehide', flush); keeper.flush(); };
+    }, [keeper]);
+    if (!keeper) return undefined;
+    return loaded === keeper ? keeper : 'loading';
 }
 
 function useSnapshot(bridge: GenieBridge | undefined): GenieSnapshot {
@@ -589,6 +612,7 @@ function DesktopApp({ bridge }: AppProps) {
     const panelHost = useMemo(() => ({ repo: resolvedBridge?.repo, artboard: resolvedBridge?.artboard, files: resolvedBridge?.files }), [resolvedBridge]);
     // An alert's own sound file is read by main, by key (Tynn #766 B2): the one player asks through this bridge.
     useEffect(() => { if (resolvedBridge) setCustomSoundLoader((key) => resolvedBridge.features.soundData(key)); }, [resolvedBridge]);
+    const keptDrafts = useChatDrafts(resolvedBridge);
     // An alert's toast (genie#1211): Genie in front → its own, bottom-left, clear of the chat; behind → the OS notification.
     const [alertToasts, setAlertToasts] = useState<readonly AlertToast[]>([]);
     const dismissAlert = useCallback((id: string) => setAlertToasts((prev) => prev.filter((t) => t.id !== id)), []);
@@ -1358,6 +1382,7 @@ function DesktopApp({ bridge }: AppProps) {
             route={route}
             address={shownAddress}
             snapshot={snapshot}
+            chatDrafts={keptDrafts}
             workspaceFaults={workspaceFaults}
             onLocateRepo={locateRepo}
             servable={SERVABLE}
