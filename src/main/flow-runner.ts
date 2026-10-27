@@ -84,6 +84,8 @@ export function createFlowRunner(deps: FlowRunnerDeps): (flow: FlowRecord, trigg
             addKnowledge: (input) => watch(base.addKnowledge(input)),
             ...(base.moveFile ? { moveFile: (workspaceId: string, from: string, to: string) => watch(base.moveFile!(workspaceId, from, to)) } : {}),
             ...(base.sleep ? { sleep: base.sleep } : {}),
+            // A Wait counts on the run's own clock (genie#1260).
+            now,
             ...(base.callTool ? { callTool: (tool: string, args: Record<string, unknown>) => watch(base.callTool!(tool, args)) } : {}),
             ...(base.awaitQuestion ? { awaitQuestion: base.awaitQuestion } : {}),
         };

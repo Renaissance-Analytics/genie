@@ -29,10 +29,23 @@ export interface FlowPorts {
     moveFile?(workspaceId: string, from: string, toFolder: string): Promise<{ from: string; to: string | null }>;
     /** fancy-flow's Wait, for a duration (genie#1204): injected so a test need not wait in real time; a timer otherwise. */
     sleep?(ms: number): Promise<void>;
+    /** The run's clock (the runner's `now`): a Wait with no `sleep` is over only when THIS clock says so (genie#1260). */
+    now?(): number;
     /** A `@genie/<tool>` step (genie#1204, main/flow-tools.ts): the tool's own handler, called as the flow. */
     callTool?(tool: string, args: Record<string, unknown>): Promise<{ ok: true; result: unknown } | { ok: false; error: string }>;
     /** A flow's question waits for the person (genie#1204, main/flow-tools.ts `questionWaiter`). Absent = it goes on at once. */
     awaitQuestion?(questionId: string, waitMs: number): Promise<QuestionOutcome>;
+}
+
+/**
+ * A Wait's duration, on the run's own clock (genie#1260): over only once `now()` has moved `ms` past where it was when the
+ * step began. A timer runs on the monotonic clock; the run reads the wall clock, and the two part when the wall clock is
+ * corrected under a running Genie (time sync, a VM restored from a snapshot) — a 50 ms Wait was measured ending at 44 ms.
+ * So the timer is topped up until the run's clock agrees. A clock set FORWARD ends it as soon as the timer fires.
+ */
+async function waitAtLeast(ms: number, now: () => number): Promise<void> {
+    const until = now() + ms;
+    for (let left = ms; left > 0; left = until - now()) await new Promise<void>((r) => setTimeout(r, left));
 }
 
 /** Every string in a step's settings rendered against its inputs; other values as they are. */
@@ -157,7 +170,7 @@ export function genieExecutors(ports: FlowPorts): ExecutorRegistry {
             const config = configOf(ctx);
             const ms = (config.mode ?? 'duration') === 'duration' ? waitMs(config.duration) : null;
             if (ms === null) ctx.abort(`Wait needs a duration Genie can wait (5s, 10m, 1h, up to 24h); it has "${String(config.duration ?? '')}"`);
-            await (ports.sleep ?? ((t: number) => new Promise<void>((r) => setTimeout(r, t))))(ms!);
+            await (ports.sleep ?? ((t: number) => waitAtLeast(t, ports.now ?? Date.now)))(ms!);
             const inputs = ctx.inputs as Record<string, unknown>;
             return { waited: 'duration', duration: ms, input: inputs.in ?? inputs };
         },

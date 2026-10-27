@@ -174,6 +174,8 @@ export function timeZoneProblem(timezone: string | undefined): string | null {
 }
 
 const SEARCH_LIMIT_YEARS = 5;
+/** More than any daylight-saving jump there is (most are 1 h; a few zones have used 2 h). */
+const GAP_LOOKBACK_MS = 3 * 60 * 60 * 1000;
 
 /**
  * The first instant strictly after `fromMs` whose wall-clock reading matches, on the zone's wall clock
@@ -186,8 +188,13 @@ export function nextCronAfter(expr: string, fromMs: number, timezone: string | u
     const p = parseCron(expr);
     if (!p) return null;
 
-    // Walk the WALL clock with the UTC getters (the encoding above), from the minute after `from`'s reading.
-    const t = new Date(zone.wall(fromMs));
+    // Walk the WALL clock with the UTC getters (the encoding above), from the minute after the reading of `from` LESS
+    // `GAP_LOOKBACK_MS`. A time in the spring gap (02:30 when 02:00 jumps to 03:00) runs at its normalised instant, 03:30 —
+    // which the wall reads only AFTER 02:30 has gone by. Walking from `from`'s own reading (03:10, say) passed 02:30
+    // already, so a plan made between the jump and 03:30 (a launch, an edit, any re-plan) lost that day's run to the next.
+    // Starting earlier changes nothing else: every match at or before `from` is skipped below, and wall order is instant
+    // order (the repeated autumn hour maps to its first occurrence only).
+    const t = new Date(zone.wall(fromMs - GAP_LOOKBACK_MS));
     t.setUTCSeconds(0, 0);
     t.setUTCMinutes(t.getUTCMinutes() + 1);
     const limit = t.getTime() + SEARCH_LIMIT_YEARS * 366 * DAY_MS;

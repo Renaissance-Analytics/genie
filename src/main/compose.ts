@@ -663,6 +663,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
     ensureFlowToolKinds();
     let flowToolCall: FlowToolCall | null = null;
+    let handFlowTools: (call: FlowToolCall) => void = () => {};
+    const flowToolsReady = new Promise<FlowToolCall>((resolve) => { handFlowTools = resolve; });
     const flows = await FlowStore.open(input.userData, now);
     // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
     if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
@@ -1010,7 +1012,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
                 moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
                 // Genie's tools as steps (genie#1204): late-bound — main builds the tools after composing (setFlowToolCaller).
-                callTool: (tool, args) => (flowToolCall ? flowToolCall(flow, tool, args) : Promise.resolve({ ok: false as const, error: 'Genie’s tools are not ready yet; the step did not run' })),
+                // A step that comes before main has handed them over WAITS for them: the runs Genie quit under resume while
+                // this composes (below), and failing there failed exactly the tool steps that are safe to resume (a
+                // question, an issues check, knowledge) — found by the Flows acceptance suite.
+                callTool: async (tool, args) => (flowToolCall ?? (await flowToolsReady))(flow, tool, args),
                 // A flow's question holds the run until the person answers (genie#1204).
                 awaitQuestion: questionWaiter(attention),
             }),
@@ -1222,7 +1227,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
-        setFlowToolCaller: (call) => { flowToolCall = call; },
+        setFlowToolCaller: (call) => { flowToolCall = call; handFlowTools(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             down ??= (async () => {

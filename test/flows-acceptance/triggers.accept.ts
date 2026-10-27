@@ -3,7 +3,7 @@ import { appendFile, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { defaultConfigFor, getNodeKind } from '@particle-academy/fancy-flow/engine';
 import { describe, expect, it } from 'vitest';
-import { flowSummary } from '../../src/core/flow-canvas.js';
+import { ensureGenieKinds, flowSummary } from '../../src/core/flow-canvas.js';
 import { flowReach } from '../../src/core/flow-reach.js';
 import { SCHEDULE_PRESETS, nextRunWords } from '../../src/core/flow-schedule.js';
 import { arm, disarm, edge, kindCase, nextRun, node, runNow, runsOf, save, TestClock, useGenie, WS, type Genie } from './harness.js';
@@ -17,6 +17,7 @@ import { arm, disarm, edge, kindCase, nextRun, node, runNow, runsOf, save, TestC
 
 /** A Schedule node as the PALETTE drops it — the kind's own defaults, which the canvas fills in — with the person's cron. */
 function scheduleNode(id: string, cron: string, extra: Record<string, unknown> = {}) {
+    ensureGenieKinds(); // as the editor window does before its canvas mounts (FlowEditorWindow.tsx)
     return node(id, '@particle-academy/schedule_trigger', { ...defaultConfigFor(getNodeKind('@particle-academy/schedule_trigger')!), cron, ...extra });
 }
 const logStep = (id: string, message: string, x = 240) => node(id, '@particle-academy/log', { level: 'info', message }, x);
