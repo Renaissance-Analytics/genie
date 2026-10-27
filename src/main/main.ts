@@ -114,7 +114,7 @@ import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-resid
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
-import { latestIndex, runUpdate, type CommandRunner } from './toolchain-prober.js';
+import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
@@ -2807,6 +2807,38 @@ async function boot(): Promise<void> {
         fetchText: httpFetch.text,
         progress: (step) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); },
     });
+    // EACH LANGUAGE'S DEFAULT, set: the `current/<lang>` link repointed, then put first on the PATH Genie gives everything it
+    // starts from now on (main/toolchain-defaults.ts). Shared by Toolchain's "make default" and an update (genie#1306).
+    const setLanguageDefault = (lang: Parameters<typeof setDefault>[0], version: string | null) => {
+        const platform = process.platform as Platform;
+        const linkPorts = { platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(platform) };
+        const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : l === 'dotnet' ? managedDotnet(dotnetVersionsPorts()) : l === 'rust' ? managedRust(rustVersionsPorts()) : l === 'ruby' ? managedRuby(rubyVersionsPorts()) : l === 'java' ? managedJava(javaVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
+        const outcome = setDefault(lang, version, { ...linkPorts, managed });
+        if (outcome.kind !== 'refused') restoreDefaultsEnv({ ...linkPorts, env: processEnv });
+        return outcome;
+    };
+    const busyLine = (step: string | null) => { featureState = { ...featureState, toolchainBusy: step }; pushFeatures(); };
+    /**
+     * UPDATING A LANGUAGE (genie#1306): Genie's own installer for it — the same one "Install" runs, checksum-verified, into
+     * Genie's toolchain — then its default moved to the new version. Never a package manager: on the owner's machine every
+     * language was a Genie-managed install, and `winget upgrade` answered "no installed package" (0x8A150014). Each
+     * installer step is the row's step and the busy line.
+     */
+    const languageUpdates = (row?: (step: string | null) => void): LanguageUpdatePorts => {
+        const progress = (step: string | null) => { busyLine(step); if (step) row?.(step); };
+        return {
+            install: async (tool, version) => {
+                if (tool === 'php') return installPhpVersion(version, true, { ...phpVersionsPorts(), progress });
+                if (tool === 'go') return installGoVersion(version, true, { ...goVersionsPorts(), progress });
+                if (tool === 'python') return installPythonVersion(version, true, { ...pythonVersionsPorts(), progress });
+                const outcome = await installNodeVersion(version, true, { ...nodeVersionsPorts(), progress });
+                if (outcome.kind === 'installed' && process.platform === 'win32') preferGenieNode(toolchainOps(), outcome.dir);
+                return outcome;
+            },
+            setDefault: (tool, version) => setLanguageDefault(tool, version),
+            progress: (step) => { busyLine(step); if (step) row?.(step); },
+        };
+    };
     const featurePorts: FeaturePorts = {
         ...processPorts(),
         openInBrowser: openInBrowserFor('user-gesture'),
@@ -2818,13 +2850,15 @@ async function boot(): Promise<void> {
         mainErrors,
         toolchain: {
             probe: () => probeToolsLive(latestFor),
-            update: async (tool) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, null),
+            update: async (tool, version, progress) => runUpdate(tool, { platform: process.platform as Platform, packageManager: await packageManager() }, longRunner, version ?? null, languageUpdates(progress)),
+            // The row's in-progress state, pushed: which update, and its step (genie#1306).
+            updating: (row) => { featureState = { ...featureState, toolchainUpdating: row }; pushFeatures(); },
             now: Date.now,
             // THE UPDATE GUARD's input, read at the moment of the click: running sessions with their provider, Genie-run
             // processes with their command, running service engines by name.
             activity: async () => ({
                 sessions: (registry?.listAgents() ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ label: a.name, provider: a.provider })),
-                processes: composed.supervisor.list().filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => ({ label: p.name, command: composed.supervisor.command(p.id) ?? '' })),
+                processes: composed.supervisor.list().filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => ({ id: p.id, label: p.name, command: composed.supervisor.command(p.id) ?? '' })),
                 engines: (await composed.engineStatuses()).filter((e) => e.status === 'running').map((e) => e.instance.containerName ?? `${e.instance.engine} ${e.instance.version}`),
             }),
             install: (tool, consent) => installTool(tool, consent, toolchainOps()),
@@ -2866,14 +2900,7 @@ async function boot(): Promise<void> {
             // Each language's default: the `current/<lang>` link, applied to Genie's PATH at once (and at every launch).
             defaults: {
                 list: () => listDefaults({ platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform) }),
-                set: (lang, version) => {
-                    const platform = process.platform as Platform;
-                    const linkPorts = { platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(platform) };
-                    const managed = (l: typeof lang): string[] => (l === 'node' ? managedNode(nodeVersionsPorts()) : l === 'go' ? managedGo(goVersionsPorts()) : l === 'python' ? managedPython(pythonVersionsPorts()) : l === 'dotnet' ? managedDotnet(dotnetVersionsPorts()) : l === 'rust' ? managedRust(rustVersionsPorts()) : l === 'ruby' ? managedRuby(rubyVersionsPorts()) : l === 'java' ? managedJava(javaVersionsPorts()) : managedPhp(phpVersionsBase())).map((m) => m.version);
-                    const outcome = setDefault(lang, version, { ...linkPorts, managed });
-                    if (outcome.kind !== 'refused') restoreDefaultsEnv({ ...linkPorts, env: processEnv });
-                    return outcome;
-                },
+                set: (lang, version) => setLanguageDefault(lang, version),
             },
             // Genie's own Go (main/go-versions.ts) — same busy line. Its default is `defaults` above.
             go: {

@@ -17,11 +17,12 @@ const RECIPE = PHP_RECIPES.find((r) => r.version === V)!;
 const FILE = phpZipName(RECIPE);
 const ZIP = new TextEncoder().encode('the official php 8.4.27 nts zip bytes');
 const sha = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
-const sumsWith = (hash: string) => [
-    `${'a'.repeat(64)} *php-8.3.36-nts-Win32-vs16-x64.zip`,
-    `${hash} *${FILE}`,
-    `${'b'.repeat(64)} *php-debug-pack-${V}-nts-Win32-vs17-x64.zip`,
-].join('\n');
+const RELEASES_JSON = 'https://windows.php.net/downloads/releases/releases.json';
+/** windows.php.net's releases.json (its shape, genie#1306): each line's current build, the NTS x64 zip with its sha256. */
+const releasesWith = (hash: string) => JSON.stringify({
+    '8.3': { version: '8.3.36', 'nts-vs16-x64': { zip: { path: 'php-8.3.36-nts-Win32-vs16-x64.zip', sha256: 'a'.repeat(64) } } },
+    '8.4': { version: V, 'ts-vs17-x64': { zip: { path: `php-${V}-Win32-vs17-x64.zip`, sha256: 'b'.repeat(64) } }, 'nts-vs17-x64': { zip: { path: FILE, sha256: hash } } },
+});
 
 /** An in-memory filesystem that counts writes. */
 function fakeFs(initial: string[] = []) {
@@ -62,7 +63,8 @@ function winPorts(opts: { published?: string; rootZip?: boolean; reports?: strin
             if (url.includes('/archives/') ? opts.rootZip !== false : opts.rootZip === false) return { ok: false, error: 'HTTP 404' };
             return { ok: true, body: ZIP };
         },
-        fetchText: async (url): Promise<Fetched<string>> => { fetched.push(url); return { ok: true, body: sumsWith(opts.published ?? sha(ZIP)) }; },
+        // releases.json at the release root; archives/ publishes no checksum file (HTTP 404, measured 2026-10-27).
+        fetchText: async (url): Promise<Fetched<string>> => { fetched.push(url); return url === RELEASES_JSON ? { ok: true, body: releasesWith(opts.published ?? sha(ZIP)) } : { ok: false, error: 'HTTP 404' }; },
         run: async (binary, args) => {
             ran.push([binary, args]);
             if (binary === 'powershell.exe') {
@@ -132,7 +134,7 @@ describe('install — only with consent, and only a zip that matches the publish
         const { ports, disk, fetched, ran } = winPorts();
         const r = await installPhpVersion(V, true, ports);
         expect(r).toEqual({ kind: 'installed', version: V, dir: join(ROOT, V) });
-        expect(fetched).toEqual([`https://windows.php.net/downloads/releases/${FILE}`, 'https://windows.php.net/downloads/releases/sha256sum.txt']);
+        expect(fetched).toEqual([RELEASES_JSON, `https://windows.php.net/downloads/releases/${FILE}`]);
         expect(disk.counts.writeBytes).toBe(1);
         expect(disk.files.has(join(ROOT, V, 'php.ini'))).toBe(true);
         expect(disk.files.has(join(ROOT, V, 'php-cgi.exe'))).toBe(true);
@@ -151,20 +153,20 @@ describe('install — only with consent, and only a zip that matches the publish
         expect((await listPhpVersions(ports)).managed).toEqual([]);
     });
 
-    it('a zip the checksums file does not list is not trusted either', async () => {
+    it('a build releases.json gives no sha256 for is not trusted either', async () => {
         const { ports, disk } = winPorts();
-        const r = await installPhpVersion(V, true, { ...ports, fetchText: async () => ({ ok: true, body: `${'a'.repeat(64)} *php-other.zip` }) });
-        expect(r).toMatchObject({ kind: 'not-installed', reason: expect.stringMatching(/lists no sha256/) });
+        const r = await installPhpVersion(V, true, { ...ports, fetchText: async () => ({ ok: true, body: JSON.stringify({ '8.4': { version: V, 'nts-vs17-x64': { zip: { path: FILE } } } }) }) });
+        expect(r).toMatchObject({ kind: 'not-installed', reason: expect.stringMatching(/no x64 NTS zip with a sha256/) });
         expect(disk.counts.writeBytes).toBe(0);
     });
 
-    it('a release moved to archives/: the zip AND its checksum are read from archives/', async () => {
+    it('a build moved to archives/: the zip is read from archives/, its checksum still from releases.json (genie#1306)', async () => {
         const { ports, fetched } = winPorts({ rootZip: false });
         expect((await installPhpVersion(V, true, ports)).kind).toBe('installed');
         expect(fetched).toEqual([
+            RELEASES_JSON,
             `https://windows.php.net/downloads/releases/${FILE}`,
             `https://windows.php.net/downloads/releases/archives/${FILE}`,
-            'https://windows.php.net/downloads/releases/archives/sha256sum.txt',
         ]);
     });
 

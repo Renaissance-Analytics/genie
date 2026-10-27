@@ -10,8 +10,8 @@ import { join } from 'node:path';
  *
  * - the **NTS** build (`php-<v>-nts-Win32-<vs>-x64.zip`), not Genie 1's thread-safe one: Genie 1 switched to ZTS only
  *   because FrankenPHP loads PHP as a library (genie#669); Genie 2 serves PHP through `php-cgi` alone (site-manager.ts).
- * - the zip is **checked against the sha256 windows.php.net publishes** beside it (`sha256sum.txt` in the same
- *   directory) before a byte of it is unpacked. Genie 1 never checked the PHP zip (it checked only its PECL redis
+ * - the zip is **checked against the sha256 windows.php.net publishes** for its current build (`releases.json`,
+ *   genie#1306 — {@link phpWindowsBuild}) before a byte of it is unpacked. Genie 1 never checked the PHP zip (it checked only its PECL redis
  *   archive, `php-extensions.ts`).
  * - the **pin is honoured, or the start fails saying why**. An unpinned site runs the PHP on this machine's PATH, as it
  *   does today (installed and repaired by T1/T2); a pinned one runs a Genie-managed version, and only one.
@@ -57,13 +57,52 @@ export function phpZipName(recipe: PhpRecipe): string {
 }
 
 /**
- * Where a version's zip may be. A current release lives at the root and MOVES to `archives/` when a patch supersedes it
- * (Genie 1's `assetFor`: "try both rather than rot on release day"). Each place publishes its own `sha256sum.txt`, and
- * the checksum is read from the SAME place the zip came from.
+ * Where a build's zip may be: the release directory while it is current, `archives/` once it is superseded (Genie 1's
+ * `assetFor`: "try both rather than rot on release day"). The CHECKSUM never comes from archives/: windows.php.net
+ * publishes no `sha256sum.txt` there (HTTP 404, measured 2026-10-27 — genie#1306: the owner's install failed on exactly
+ * that), only `releases.json` / `sha256sum.txt` in the release directory, for the current build of each line.
  */
-export function phpDownloadSources(recipe: PhpRecipe): Array<{ zipUrl: string; sumsUrl: string }> {
-    const file = phpZipName(recipe);
-    return ['https://windows.php.net/downloads/releases/', 'https://windows.php.net/downloads/releases/archives/'].map((base) => ({ zipUrl: `${base}${file}`, sumsUrl: `${base}sha256sum.txt` }));
+export function phpBuildUrls(file: string): string[] {
+    return ['https://windows.php.net/downloads/releases/', 'https://windows.php.net/downloads/releases/archives/'].map((base) => `${base}${file}`);
+}
+
+/** windows.php.net's own index of its CURRENT builds: per line, each build's zip with its sha256. */
+export const PHP_WINDOWS_RELEASES_JSON = 'https://windows.php.net/downloads/releases/releases.json';
+
+export type PhpWindowsBuild = { readonly file: string; readonly sha256: string } | { readonly missing: string };
+
+const NTS_X64 = /^nts-vs[0-9]+-x64$/;
+const ZIP_NAME = /^php-[0-9A-Za-z._-]+[.]zip$/;
+const SHA256 = /^[0-9a-fA-F]{64}$/;
+
+/**
+ * THE BUILD windows.php.net publishes for `version` (NTS, x64), from its `releases.json`: the file and its sha256. A line's
+ * build can be a RE-ISSUE — `8.4.27-1`, `php-8.4.27-1-nts-Win32-vs17-x64.zip` (the PHP2Shell builds were rebuilt on
+ * 2026-10-26 and the originals archived) — and it is the same PHP 8.4.27. A version that is not its line's current
+ * build has no published checksum, so it is `missing`, with the words why: never a guess, never unverified.
+ */
+export function phpWindowsBuild(json: string, version: string): PhpWindowsBuild {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(json);
+    } catch {
+        return { missing: "windows.php.net's releases.json could not be parsed" };
+    }
+    const line = version.split('.').slice(0, 2).join('.');
+    const entry = (parsed as Record<string, unknown> | null)?.[line] as Record<string, unknown> | undefined;
+    if (!entry || typeof entry !== 'object') return { missing: `windows.php.net lists no PHP ${line} build` };
+    const listed = typeof entry['version'] === 'string' ? entry['version'] : '';
+    if (listed !== version && !listed.startsWith(`${version}-`)) {
+        return { missing: `windows.php.net's current PHP ${line} build is ${listed || 'unnamed'}, not ${version}; an archived build has no published checksum` };
+    }
+    for (const [key, build] of Object.entries(entry)) {
+        if (!NTS_X64.test(key)) continue;
+        const zip = (build as { zip?: { path?: unknown; sha256?: unknown } } | null)?.zip;
+        if (typeof zip?.path === 'string' && typeof zip.sha256 === 'string' && SHA256.test(zip.sha256) && ZIP_NAME.test(zip.path)) {
+            return { file: zip.path, sha256: zip.sha256.toLowerCase() };
+        }
+    }
+    return { missing: `windows.php.net lists no x64 NTS zip with a sha256 for PHP ${listed}` };
 }
 
 /**

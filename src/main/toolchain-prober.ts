@@ -1,4 +1,5 @@
 import { HOST_TOOLS, parseVersionOutput, planUpdate, platformArgv, repairOutcome, toolStatus, type PackageManager, type Platform, type RepairOutcome, type ToolStatus } from '../core/toolchain.js';
+import { LANGUAGE_LABEL, genieUpdates, installableVersions, updateChoices, type LanguageTool } from '../core/toolchain-update.js';
 import { latestFromBrewOutdated, latestFromNodeIndex, latestFromNpmOutdated, latestFromWingetUpgrade, phpLatestFromReleases } from '../core/toolchain-indexes.js';
 
 /**
@@ -45,7 +46,9 @@ export async function probeTools(run: CommandRunner, latest: LatestIndex, platfo
             } catch {
                 idx = null;
             }
-            return toolStatus({ tool: tool.name, installed, latest: idx?.version ?? null, source: idx?.source ?? null });
+            // A language Genie installs itself here (genie#1306): which versions it can move to — the patch first.
+            const choices = installed !== null && genieUpdates(tool.name, platform) ? updateChoices(tool.name, installed) : undefined;
+            return toolStatus({ tool: tool.name, installed, latest: idx?.version ?? null, source: idx?.source ?? null, ...(choices ? { choices } : {}) });
         }),
     );
 }
@@ -103,12 +106,31 @@ function argv(command: string, platform: Platform): [string, string[]] {
     return platformArgv(binary!, args, platform);
 }
 
+/**
+ * genie#1306 — what updating a LANGUAGE needs: Genie's own installer for it (checksum-verified, into its own directory)
+ * and the `current/<lang>` default link. `progress` is the row's step, shown while it runs.
+ */
+export interface LanguageUpdatePorts {
+    install(tool: LanguageTool, version: string): Promise<{ readonly kind: 'installed' | 'already-installed' } | { readonly kind: 'refused' | 'not-installed'; readonly reason: string }>;
+    setDefault(tool: LanguageTool, version: string): { readonly kind: 'set' | 'cleared' } | { readonly kind: 'refused'; readonly reason: string };
+    progress?(step: string | null): void;
+}
+
+/**
+ * THE UPDATE. A language Genie manages on this OS (php, node, python, go) — given `languages` — is Genie's own install of
+ * the target version, then the default switched to it, then MEASURED: `<lang>` must answer the new version. It never
+ * runs a package manager: the owner's languages were Genie-managed, and `winget upgrade` answered "no installed package"
+ * (Genie 1, v0.7.0-beta.342 toolchain-adapters.ts engineToolFor: a language goes through the engine installer). With no
+ * version asked for, the patch in the installed line is the target. Every other tool keeps its package-manager plan.
+ */
 export async function runUpdate(
     tool: string,
     where: { platform: Platform; packageManager: PackageManager | null },
     run: CommandRunner,
     wanted: string | null,
+    languages?: LanguageUpdatePorts,
 ): Promise<RepairOutcome | { kind: 'refused'; reason: string }> {
+    if (languages && genieUpdates(tool, where.platform)) return updateLanguage(tool, where.platform, run, wanted, languages);
     const plan = planUpdate({ tool, ...where });
     if ('refused' in plan) return { kind: 'refused', reason: plan.refused };
     const def = HOST_TOOLS.find((t) => t.name === tool)!;
@@ -123,4 +145,37 @@ export async function runUpdate(
     }
     const after = await probeInstalled(def, run, where.platform);
     return repairOutcome({ tool, wanted, before, after, exitCode });
+}
+
+const sentence = (text: string): string => text.replace(/[. ]+$/, '');
+
+async function updateLanguage(tool: LanguageTool, platform: Platform, run: CommandRunner, wanted: string | null, ports: LanguageUpdatePorts): Promise<RepairOutcome | { kind: 'refused'; reason: string }> {
+    const label = LANGUAGE_LABEL[tool];
+    const def = HOST_TOOLS.find((t) => t.name === tool)!;
+    const offered = installableVersions(tool);
+    if (wanted !== null && !offered.includes(wanted)) return { kind: 'refused', reason: `Genie has no installer for ${label} ${wanted}; this release installs ${offered.join(', ')}` };
+    const before = await probeInstalled(def, run, platform);
+    const choices = before === null ? null : updateChoices(tool, before);
+    const target = wanted ?? choices?.patch ?? choices?.upgrade ?? null;
+    if (target === null) return { kind: 'refused', reason: `${label} ${before} is the newest Genie installs; there is nothing to update to` };
+    const say = (step: string | null) => ports.progress?.(step);
+    try {
+        say(`Downloading and verifying ${label} ${target}`);
+        const installed = await ports.install(tool, target);
+        if (installed.kind === 'refused' || installed.kind === 'not-installed') {
+            return { kind: 'unchanged', installed: before, reason: `${label} ${target} could not be installed: ${sentence(installed.reason)}` };
+        }
+        say(`Switching ${tool} to ${target}`);
+        const set = ports.setDefault(tool, target);
+        if (set.kind === 'refused') return { kind: 'unchanged', installed: before, reason: `${label} ${target} is installed, but it could not be made the default: ${sentence(set.reason)}` };
+        say(`Checking that ${tool} answers ${target}`);
+        const after = await probeInstalled(def, run, platform);
+        if (after === null) return { kind: 'unverified', reason: `${label} ${target} is installed and is the default, but ${tool} did not answer afterwards` };
+        if (after !== target) {
+            return { kind: 'unchanged', installed: after, reason: `${label} ${target} is installed and is Genie's default, but ${tool} still answers ${after}: another ${label} comes first on PATH` };
+        }
+        return { kind: 'repaired', from: before, to: after };
+    } finally {
+        say(null);
+    }
 }

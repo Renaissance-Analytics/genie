@@ -28,19 +28,19 @@ describe('agent CLIs — refused only for the sessions running THAT CLI', () => 
     });
 });
 
-describe('node — refused while ANY session or Genie-run node process is up', () => {
-    it('a session of either provider blocks it', () => {
-        expect(updateRisk('node', { ...IDLE, sessions: [{ label: 'nova', provider: 'codex' }] }, { installed: true })).toMatchObject({ risk: 'blocked', affected: ['nova'] });
+describe('node — WARNED (genie#1306: a new Node installs beside the old) while ANY session or Genie-run node process is up', () => {
+    it('a session of either provider is named in the warning — never a refusal', () => {
+        expect(updateRisk('node', { ...IDLE, sessions: [{ label: 'nova', provider: 'codex' }] }, { installed: true })).toMatchObject({ risk: 'warn', affected: ['nova'] });
     });
 
-    it('a site’s vite dev server blocks it; its php-cgi worker and Caddy do not (control)', () => {
+    it('a site’s vite dev server is named; its php-cgi worker and Caddy are not (control)', () => {
         const processes = [
             { label: 'shop.gen dev server', command: 'npx vite --port 4101' },
             { label: 'app.gen php worker', command: 'php-cgi -b 127.0.0.1:4102' },
             { label: 'app.gen server', command: '/opt/genie/caddy run --config /x/Caddyfile' },
         ];
         const r = updateRisk('node', { ...IDLE, processes }, { installed: true });
-        expect(r).toMatchObject({ risk: 'blocked', affected: ['shop.gen dev server'] });
+        expect(r).toMatchObject({ risk: 'warn', affected: ['shop.gen dev server'] });
         expect(r.risk !== 'safe' && r.reason).toContain('shop.gen dev server is running on Node');
         expect(updateRisk('node', { ...IDLE, processes: processes.slice(1) }, { installed: true })).toEqual({ risk: 'safe' });
     });
