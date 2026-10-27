@@ -55,6 +55,10 @@ describe('Schedule: the scheduler’s timer fires an armed flow', () => {
     // Each test starts minutes from any schedule here being due, so nothing fires before the test puts the clock there.
     const genie = useGenie(() => { clock.set(local(2026, 10, 27, 10, 2, 30)); return { clock }; });
 
+    it('CONTROL: "local time" here is New York (vitest.flows.config.mts sets TZ), not UTC — or the local-time cases prove nothing', () => {
+        expect(new Date(Date.parse('2026-10-11T13:00:00Z')).getHours()).toBe(9);
+    });
+
     /** Arm, then put the clock `leadMs` before `due` and let the scheduler plan from there. */
     async function armAt(g: Genie, flowId: string, due: number, leadMs = 400): Promise<void> {
         await arm(g, flowId);
