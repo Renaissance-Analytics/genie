@@ -24,6 +24,10 @@ import type { StreamEvent } from './stream-event.js';
  * Taking durability without the runtime is therefore the **intended seam**, not a
  * workaround: nothing in the store path knows who runs the loop. There is **no ACP-backed
  * thread adapter planned**, so the ACP-update → message mapping is ours permanently.
+ *
+ * So a change confined to `AgentRuntime` does not reach Genie. 0.8.0 is one: a model step that finishes
+ * `error`/`unknown` now ends the run with `model_step_failed` instead of invoking its tools, and nothing here
+ * runs model steps. `Thread`, `FileSessionStore` and `SessionStore` are unchanged from 0.7.0.
  */
 
 /**
