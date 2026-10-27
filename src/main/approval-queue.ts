@@ -55,8 +55,26 @@ const VERBS: Record<string, string> = {
     'page.click': 'click something that changes or deletes on a page',
 };
 
-/** Actions an agent's autonomy never approves for it: each waits for the person. */
+/** Actions an agent's autonomy never approves for it: each waits for the person — unless a switch below answers it. */
 export const PERSON_ONLY_ACTIONS: readonly string[] = ['agents.create', 'page.submit', 'page.click'];
+
+/**
+ * A PERMISSION SWITCH THE PERSON TURNED ON IS THEIR ANSWER (genie#1294; the owner, 2026-10-27: an agent with "May manage
+ * workspace tabs" and "May drive pages" on was still asked every time it drove a site). Each action here goes through,
+ * recorded, for an agent whose switch is on — and only its own actions: drive pages answers no tab change, manage tabs
+ * no page submit, and no switch answers creating an agent or another tool's action. Without the switch it still asks —
+ * the workspace's default agent too: it has the TOOL regardless, not the answer.
+ *
+ * Genie 1 had no agent page-driving tool (an agent drove a browser through its own Playwright MCP, outside Genie). Its
+ * gates were switches the person set, and one set to "don't ask" went straight through (v1 a2ae5e8,
+ * main/mcp/host-tools.ts `approveTerminalAction`: `if (!workspaceTerminalApproval(ws.id)) return true; // gate OFF →
+ * straight through`) — never an ask the person's own setting could not turn off.
+ */
+export const SWITCH_ANSWERS: Readonly<Record<string, 'drivePages' | 'manageTabs'>> = {
+    'page.submit': 'drivePages',
+    'page.click': 'drivePages',
+    'workspace.tabs': 'manageTabs',
+};
 
 export class ApprovalQueue {
     readonly #now: () => number;
@@ -66,17 +84,22 @@ export class ApprovalQueue {
     #n = 0;
     readonly #listeners = new Set<() => void>();
     readonly #autoApproved: ((caller: Caller, action: string) => boolean) | undefined;
+    readonly #granted: ((caller: Caller, action: string) => boolean) | undefined;
     #auto: AutoApproved[] = [];
 
     /**
      * `autoApproved`: whether this caller's actions run WITHOUT the person (Tynn #801, an autonomous agent). Such a
      * request is allowed at once, parks nothing on the Deck, and is RECORDED (`autoApproved()`, the latest 50) so the
      * person can see what it did.
+     *
+     * `granted`: whether this caller's own permission switch answers this action (`SWITCH_ANSWERS`, genie#1294). Read at
+     * each ask, so a switch turned off asks again at once. Allowed and recorded the same way, person-only actions included.
      */
-    constructor(options: { now?: () => number; timeoutMs?: number; autoApproved?: (caller: Caller, action: string) => boolean } = {}) {
+    constructor(options: { now?: () => number; timeoutMs?: number; autoApproved?: (caller: Caller, action: string) => boolean; granted?: (caller: Caller, action: string) => boolean } = {}) {
         this.#now = options.now ?? Date.now;
         this.#timeoutMs = options.timeoutMs ?? 30 * 60_000;
         this.#autoApproved = options.autoApproved;
+        this.#granted = options.granted;
     }
 
     /** What autonomous agents did without asking, oldest first — the latest 50. */
@@ -103,7 +126,9 @@ export class ApprovalQueue {
 
     gate(caller: Caller, action: string, detail: string): Promise<Verdict> {
         // NEVER AUTO-APPROVED, whatever the agent's autonomy: creating an agent is the person's decision (the owner, 2026-10-19).
-        if (!PERSON_ONLY_ACTIONS.includes(action) && this.#autoApproved?.(caller, action) === true) {
+        // A permission switch answers only the actions it names (SWITCH_ANSWERS) — never agents.create.
+        const switched = Object.hasOwn(SWITCH_ANSWERS, action) && this.#granted?.(caller, action) === true;
+        if (switched || (!PERSON_ONLY_ACTIONS.includes(action) && this.#autoApproved?.(caller, action) === true)) {
             this.#auto = [...this.#auto, { agentId: caller.agentId, agentName: caller.agentName, action, detail, at: this.#now() }].slice(-50);
             this.#changed();
             return Promise.resolve('allowed');

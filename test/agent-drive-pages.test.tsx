@@ -14,8 +14,8 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
  * "MAY DRIVE PAGES" — A PER-AGENT SWITCH (browser rebuild step 7; the owner, FTQ q_82269ca5, 2026-10-21: "add its own
  * switch"). Agents read, fill, click and submit Genie site pages through fancy's navigation bridge; the workspace's
  * default agent may always; any other agent only when this switch is on, in its Settings beside "May manage workspace
- * tabs". Submits and destructive clicks always ask the person, whoever the agent is. This row is the switch, kept and
- * carried to every window; the page tool that reads it is the next row.
+ * tabs". Submits and destructive clicks ask the person unless this switch is on (genie#1294: the switch is their answer;
+ * the default agent without it still asks). This row is the switch, kept and carried to every window.
  */
 
 const src = (p: string) => readFileSync(p, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*\/\/.*$/, '')).join('\n');
@@ -47,12 +47,15 @@ describe('the Settings tab shows it, after "May manage workspace tabs"', () => {
     const opsFor = (drivePages: boolean) => ({ mode: 'automated', accessScope: 'self', autoApprove: false, onMode: () => {}, onSetAutoApprove: () => {}, manageTabs: false, onSetManageTabs: () => {}, drivePages, onSetDrivePages: () => {}, onRestart: () => {}, onDelete: () => {} }) as never;
     const render = (ops: unknown) => renderToStaticMarkup(<AgentView agent={AGENT} session={session} rows={[]} tab="settings" settingsSection="permissions" lanes={null} at={null} selectedId={null} turns={1} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={ops as never} />);
 
-    it('on and off, in the owner’s words, after the tabs switch; it says submits always ask', () => {
+    it('on and off, in the owner’s words, after the tabs switch; it says that with it on, submits do not ask (genie#1294)', () => {
         const on = render(opsFor(true));
         expect(on).toMatch(/data-drive-pages="on"[^>]*>(?:(?!<\/span>)[\s\S])*?role="switch" aria-checked="true"/);
         expect(render(opsFor(false))).toMatch(/data-drive-pages="off"[^>]*>(?:(?!<\/span>)[\s\S])*?role="switch" aria-checked="false"/);
         expect(on).toContain('May drive pages');
-        expect(on).toMatch(/always asks you/);
+        // genie#1294: the switch IS the person's answer — the row no longer promises an ask it does not make.
+        const row = on.match(/<label data-settings-row="drive-pages"[\s\S]*?<\/label>/)?.[0] ?? '';
+        expect(row).toMatch(/With this on, kai submits forms and clicks through them without asking you/);
+        expect(row).not.toMatch(/always asks you/);
         expect(on.indexOf('data-drive-pages')).toBeGreaterThan(on.indexOf('data-manage-tabs'));
     });
 

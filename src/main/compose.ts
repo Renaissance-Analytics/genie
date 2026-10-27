@@ -45,7 +45,7 @@ import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
-import { ApprovalQueue } from './approval-queue.js';
+import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
 import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
 import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
@@ -808,7 +808,15 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const frontDoorPort = await frontDoor.listen(input.frontDoorPort ?? 0);
 
     // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
-    const approvals = new ApprovalQueue({ now, autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true) });
+    // A permission switch the person turned on answers its own actions the same way (genie#1294, SWITCH_ANSWERS).
+    const approvals = new ApprovalQueue({
+        now,
+        autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
+        granted: (caller, action) => {
+            const flag = SWITCH_ANSWERS[action];
+            return flag !== undefined && (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
+        },
+    });
 
     const hostName = input.hostName ?? hostname();
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.

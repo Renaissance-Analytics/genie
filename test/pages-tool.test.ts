@@ -12,8 +12,9 @@ import type { Caller } from '../src/main/mcp-tools.js';
  * - The `pages` tool: the workspace's default agent, or one whose "May drive pages" switch is on (#1077) — hidden from
  *   everyone else, and refused in words by the handler too.
  * - Which pages: only those showing one of the caller's workspace's sites (counted against another workspace's page).
- * - A submit, and a click the page marks destructive, wait for the person — ALWAYS, an autonomous agent included
- *   (person-only approvals). Declined: nothing reaches the page. Reading, filling and ordinary clicks do not ask.
+ * - A submit, and a click the page marks destructive, wait for the person — an autonomous agent included (person-only
+ *   approvals) — unless the agent's own "May drive pages" switch is on (genie#1294, test/permission-switch-approvals).
+ *   Declined: nothing reaches the page. Reading, filling and ordinary clicks do not ask.
  *
  * The page here is a fake TRANSPORT answering fancy's remote adapter (describe / setField / click / submit …), and the
  * tool runs fancy's real bridge over it — so what is checked is the whole path the agent's call takes.
@@ -165,7 +166,7 @@ describe('driving a page', () => {
     });
 });
 
-describe('the person always confirms — autonomy does not reach it', () => {
+describe('autonomy alone does not answer a submit — only the "May drive pages" switch does (genie#1294)', () => {
     it('page.submit and page.click are person-only', () => {
         expect(PERSON_ONLY_ACTIONS).toEqual(expect.arrayContaining(['page.submit', 'page.click']));
     });
