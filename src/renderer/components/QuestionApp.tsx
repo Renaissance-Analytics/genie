@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { ContentRenderer } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { FileViewer } from '@particle-academy/fancy-code';
@@ -6,6 +6,7 @@ import { extractFileRefs, splitByExistence, type AskFileRef } from '../../core/a
 import { questionWindowAction } from '../../core/keys.js';
 import { ageLabel, type DeckItem } from '../../core/deck.js';
 import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../core/question-drafts.js';
+import { resetScrollOnQuestionChange } from '../../core/question-scroll.js';
 import { QuestionForm } from './QuestionForm.js';
 
 /**
@@ -22,6 +23,18 @@ import { QuestionForm } from './QuestionForm.js';
  * long ago, what it asks — and the person picks which to answer, in any order (Genie 1's queue strip, genie
  * renderer/pages/ask.tsx). One put off with Later is still listed, marked. Each question's form starts from the draft
  * kept for it, so moving between them, or another agent asking meanwhile, loses nothing typed.
+ *
+ * ## The handle never scrolls; the next question starts at its top (genie#1298)
+ *
+ * The owner, beta.49: the drag zone scrolled away with the list, so the window moved only while it was scrolled to the
+ * top. Genie 1's layout (v0.7.0-beta.342 renderer/pages/ask.tsx, renderer/styles/globals.css): `.ask-head` is the drag
+ * region (its buttons no-drag) ABOVE `.ask-body`, the one `overflow-y: auto` region, in an `.ask-frame` of `height: 100vh;
+ * overflow: hidden`. Here the same: the header strip (`data-question-drag`) sits outside the content scroller
+ * (`data-question-scroll`), the window clips, and every scroller is `relative` — the containing block of the absolutely
+ * positioned "Copied" live regions ContentRenderer puts in each question. Unpositioned, they escaped the scroller and made
+ * the DOCUMENT taller than the window, so a caret reveal or a focus scrolled the whole page, header and all (the
+ * genie#1290 cause, in this window). When the question shown changes, the scroller goes back to its top
+ * (core/question-scroll.ts) — by its scrollTop, never by moving focus.
  */
 export interface QuestionAppView {
     readonly item: DeckItem;
@@ -78,7 +91,7 @@ function DrawerBody({ path, text, line }: { path: string; text: string; line: nu
                     <button type="button" data-action="question-drawer-source" onClick={() => setSource((v) => !v)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[11px]">{source ? 'Read' : 'Source'}</button>
                 </div>
             ) : null}
-            <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
+            <div className="relative min-h-0 flex-1 overflow-auto px-3 pb-3">
                 {prose ? <ContentRenderer clipboardWriter={genieClipboardWriter} value={text} format="markdown" lineSpacing={1.6} className="text-[13px]" /> : <FileViewer filename={path} value={text} readOnly {...(line ? { line } : {})} theme="auto" />}
             </div>
         </div>
@@ -107,17 +120,28 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     });
-    if (!view) return <div data-question-window="empty" className="h-screen bg-[var(--bg-0)]" />;
-    const queue = view.queue && view.queue.length > 0 ? view.queue : [view.item];
-    const activeId = activeQuestion({ picked, shown: view.item.id, queue: queue.map((q) => q.id) });
-    const item = queue.find((q) => q.id === activeId) ?? view.item;
+    const queue = view ? (view.queue && view.queue.length > 0 ? view.queue : [view.item]) : [];
+    const activeId = view ? activeQuestion({ picked, shown: view.item.id, queue: queue.map((q) => q.id) }) : null;
+    const item = view ? queue.find((q) => q.id === activeId) ?? view.item : null;
+    const shownId = item?.id ?? null;
+    // Another question shown (the next after an answer, or one picked): its content starts at the top (genie#1298).
+    // Before paint, so the old offset is never seen; scrollTop only — no focus, no document scroll.
+    const scrollRef = useRef<HTMLElement | null>(null);
+    const shownRef = useRef<string | null>(null);
+    useLayoutEffect(() => {
+        if (shownId === null) return;
+        resetScrollOnQuestionChange(scrollRef.current, shownRef.current, shownId);
+        shownRef.current = shownId;
+    }, [shownId]);
+    if (!view || !item) return <div data-question-window="empty" className="h-screen bg-[var(--bg-0)]" />;
     const parked = new Set(view.parked ?? []);
     // A draft written for an earlier revision of the question is not this form's: an updated question starts clean.
     const kept = drafts?.[item.id] ?? view.drafts?.[item.id];
     const draft = kept && (kept.revision ?? 0) === (item.revision ?? 0) ? kept : undefined;
     return (
-        <div data-question-window={item.id} className="flex h-screen flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
-            <header style={DRAG} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-4 py-3">
+        <div data-question-window={item.id} className="flex h-screen flex-col overflow-hidden bg-[var(--bg-0)] text-[var(--fg-1)]">
+            {/* THE HANDLE: fixed above the scroller, never inside it (genie#1298). Nothing in it is interactive. */}
+            <header data-question-drag="" style={DRAG} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-4 py-3">
                 <span className="text-[14px] font-semibold">{item.agentName ?? 'An agent'} asks you</span>
                 {item.workspaceName ? <span data-question-workspace={item.workspaceId ?? ''} className="text-[12px] text-[var(--fg-3)]">{item.workspaceName}</span> : null}
                 {item.at > 0 ? <time data-question-age="" dateTime={new Date(item.at).toISOString()} className="text-[12px] text-[var(--fg-4)]">{ageLabel(item.at, now)}</time> : null}
@@ -125,7 +149,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
             </header>
             {queue.length > 1 ? (
                 // THE QUEUE: every question asked, from every agent — pick any. Not draggable: these are buttons.
-                <nav style={NO_DRAG} data-question-queue={queue.length} aria-label="Questions waiting for you" className="flex max-h-[30%] shrink-0 flex-col gap-1 overflow-y-auto border-b border-[var(--border-1)] px-3 py-2">
+                <nav style={NO_DRAG} data-question-queue={queue.length} aria-label="Questions waiting for you" className="relative flex max-h-[30%] shrink-0 flex-col gap-1 overflow-y-auto border-b border-[var(--border-1)] px-3 py-2">
                     {queue.map((q) => {
                         const on = q.id === item.id;
                         return (
@@ -148,7 +172,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                 </nav>
             ) : null}
             <div className="flex min-h-0 flex-1">
-            <main style={NO_DRAG} className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3">
+            <main ref={scrollRef} data-question-scroll="" style={NO_DRAG} className="relative min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3">
                 <QuestionFiles item={item} existing={existing} open={drawer?.path ?? null} {...(onOpenFile ? { onOpen: onOpenFile } : {})} />
                 {/* Keyed by the question AND its revision: another question, or this one updated by its agent, is another form.
                     Its draft comes back from the window's drafts (by question id), so returning to it loses nothing. */}
