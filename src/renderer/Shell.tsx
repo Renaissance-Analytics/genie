@@ -316,6 +316,7 @@ export function Shell({
     activity,
     filesPopped = [],
     readCommits,
+    tynnBoard,
     onPopOutFiles,
     onBringBackFiles,
     onPauseAgent,
