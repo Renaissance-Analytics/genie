@@ -374,18 +374,19 @@ if (typeof agentRow === 'string') {
     check(s.tab === true && s.active === true, '18. the Stream tab is present and selected');
     check(s.body !== null, '19. the Stream body renders — an empty state, not nothing', String(s.body));
 
-    // 54. THE HEADER PER THE BOARD (re-audit, 2026-10-12): `{workspace} /` breadcrumb, the provider chip (`claude · ACP`),
-    // the pill in the board's words (`Turn N · running` / `Idle` / `No turns yet` / `Not started` / `Broken · …`), and the
+    // 54. THE HEADER PER THE BOARD (re-audit, 2026-10-12): `{workspace} /` breadcrumb, the provider chip (the provider's
+    // LOGO, named for hover and screen readers, then `ACP` — genie#1266: no provider word), the pill in the board's words (`Turn N · running` / `Idle` / `No turns yet` / `Not started` / `Broken · …`), and the
     // chords on Take over and Chat. One right column at most (never the old 420px Inspector beside a 260px rail).
     const header = await cdp.evaluate(`JSON.stringify({
         crumb: Boolean(document.querySelector('[data-crumb]')),
         chip: document.querySelector('[data-provider-chip]')?.textContent ?? null,
+        logo: document.querySelector('[data-provider-chip] [data-provider-logo] svg') ? (document.querySelector('[data-provider-chip] [data-provider-logo]')?.getAttribute('aria-label') ?? '') : null,
         pill: document.querySelector('[data-pill]')?.getAttribute('data-pill') ?? null,
         chords: (document.querySelector('[data-action="take-over"]')?.textContent ?? '').includes('⌘⇧T') && (document.querySelector('[data-action="chat"]')?.textContent ?? '').includes('⌘J'),
         columns: document.querySelectorAll('[data-right-column]').length,
     })`);
     const h = JSON.parse(header || '{}');
-    check(h.crumb && /· ACP$/.test(h.chip ?? '') && /^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.columns <= 1, '54. the Agent view header is the board\'s: breadcrumb, provider chip, pill in turns, chords, one right column', header);
+    check(h.crumb && (h.chip ?? '').trim() === 'ACP' && Boolean(h.logo) &&/^(Turn \d+ · |Idle$|No turns yet$|Not started$|Broken · )/.test(h.pill ?? '') && h.chords && h.columns <= 1, '54. the Agent view header is the board\'s: breadcrumb, provider chip, pill in turns, chords, one right column', header);
 
     // 51. EVERY TAB HAS A BODY (board audit, 2026-10-12: only Stream had one). Files mounts the workspace's one file
     // panel for the agent's workspace; Changes lists this agent's changed files or says there are none. Then back to
@@ -565,7 +566,8 @@ const codexRow = approvalEnabled
     ? await cdp.evaluate(`
     (() => {
         const rows = [...document.querySelectorAll('[data-agent]')];
-        const row = rows.find((r) => r.textContent && r.textContent.includes('codex'));
+        // The row shows the provider as its LOGO now (genie#1266), so the word is no longer in its text.
+        const row = rows.find((r) => r.querySelector('[data-provider-logo="codex"]'));
         return row ? row.getAttribute('data-agent') : null;
     })()
 `)
