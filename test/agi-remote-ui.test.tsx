@@ -6,7 +6,7 @@ import { startDraft, type SourceAnalysis } from '../src/core/envelope-plan.js';
 import { signedOutGithubView, type GithubInstallation, type GithubView } from '../src/core/github.js';
 import { NewWorkspaceForm } from '../src/renderer/components/AddWorkspaceModal.js';
 import { WorkspaceStepView } from '../src/renderer/components/AddWorkspaceWizard.js';
-import { PublishedView, RemoteChoiceView } from '../src/renderer/components/AgiRemoteChoice.js';
+import { PublishedView, RemoteChoiceView, type GithubAsk } from '../src/renderer/components/AgiRemoteChoice.js';
 
 /**
  * THE REMOTE CHOICE ON SCREEN (Add workspace parity items 10 + 11): None / GitHub / Paste URL on New and on the wizard's
@@ -30,7 +30,7 @@ const signedIn = (installations: GithubInstallation[] | null): GithubView => ({ 
 
 function view(choice: RemoteChoice, github: GithubView | null) {
     const chosen: RemoteChoice[] = [];
-    const asked: string[] = [];
+    const asked: GithubAsk[] = [];
     const ui = RemoteChoiceView({ choice, github, folder: 'acme.agi', onChoice: (c) => chosen.push(c), onGithub: (a) => asked.push(a) });
     return { ui, html: renderToStaticMarkup(ui), chosen, asked };
 }
@@ -146,7 +146,7 @@ describe('the partial-success screen', () => {
     });
 
     it('not installed on an account: an install button; Open workspace opens it', () => {
-        const asked: string[] = [];
+        const asked: GithubAsk[] = [];
         let opened = 0;
         const ui = PublishedView({ name: 'Acme', path: '/w/acme.agi', published: published([{ step: 'github', message: 'The Genie AOS app is not installed on acme-org', account: 'acme-org' }]), onOpen: () => { opened++; }, onGithub: (a) => asked.push(a) });
         for (const b of findAll(ui, (p) => p['data-action'] === 'github-install' || p['data-action'] === 'open-workspace')) (b.onClick as () => void)();
