@@ -1179,6 +1179,16 @@ check(parsed.length === 0, '34. the console is clean', parsed.join(' | ') || 'no
 
 // A screenshot, for a human to look at. Writing one is not the same as somebody having seen
 // it, and this script does not claim otherwise.
+//
+// 65. SMOKE-DASHBOARD.PNG SHOWS THE DASHBOARD (the owner's checklist, 2026-10-14: it showed the genie AGENT view — the run
+// ends on an agent's page, and the shot was taken wherever it ended). Land on the Dashboard through the rail first, and
+// check that it is what is on screen, so the file is what its name says.
+const dashboardShown = await cdp.evaluate(`(() => {
+    const surfaces = [...document.querySelectorAll('[data-surface]')].map((s) => s.getAttribute('data-surface'));
+    return JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), surfaces });
+})()`);
+const ds = JSON.parse(dashboardShown || '{}');
+check(ds.dashboard === true && ds.agent === false, '65. the screenshot named smoke-dashboard.png is taken ON the Dashboard (not an agent’s page)', dashboardShown);
 const shot = await cdp.send('Page.captureScreenshot', { format: 'png' });
 if (shot.result?.data) {
     const { writeFileSync } = await import('node:fs');
