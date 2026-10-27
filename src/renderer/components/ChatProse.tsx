@@ -7,9 +7,11 @@ import { copyToClipboard, genieClipboardWriter } from '../clipboard.js';
 /**
  * AN AGENT'S PROSE, WITH MOIC'S MARKUP (genie#1263) — used by the chat and by the Stream's message rows.
  *
- * The reply is prepared (`core/chat-markup.ts`: a half-written tail held back, forbidden UI removed, the model's own
- * internal links stripped, Genie's pills and file links added, each block put where react-fancy lifts it) and drawn by
- * ONE react-fancy ContentRenderer (5.67.0), sanitised by default:
+ * The reply is prepared (`core/chat-markup.ts`: while it arrives, a half-written pill or non-block tag held back; forbidden
+ * UI removed, the model's own internal links stripped, Genie's pills and file links added, each block put where
+ * react-fancy lifts it) and drawn by ONE react-fancy ContentRenderer (5.68.0), sanitised by default. A reply still
+ * arriving is drawn with `streaming="progressive"`: react-fancy holds a partial block tag or fence marker, and draws an
+ * open block as its card and an open fence as code (no copy button until it closes), filling in.
  *
  * - code blocks and tables get react-fancy's own copy buttons (on by default), written through Genie's clipboard writer
  *   — main's clipboard, checked (`renderer/clipboard.ts`); Genie draws none of its own, so there is one per block;
@@ -110,15 +112,20 @@ export interface ChatProseProps {
     text: string;
     /** What pills may open; absent = none (every pill is its words, every destination disappears). */
     refs?: ChatRefs | undefined;
+    /**
+     * The reply is still arriving (`core/chat-view.ts` arrivingMessageId): react-fancy draws it progressively. Absent or
+     * `false` = finished, drawn whole — react-fancy's contract is `streaming={done ? false : "progressive"}`.
+     */
+    streaming?: boolean | undefined;
     className?: string | undefined;
 }
 
 /** Memoised on its text and refs: a busy agent's push re-renders only the reply that grew (ChatFlyout's ChatReply). */
-export const ChatProse = memo(function ChatProse({ text, refs = NO_REFS, className = '' }: ChatProseProps) {
-    const value = useMemo(() => liftChatBlocks(prepareChatMarkdown(text, refs)), [text, refs]);
+export const ChatProse = memo(function ChatProse({ text, refs = NO_REFS, streaming = false, className = '' }: ChatProseProps) {
+    const value = useMemo(() => liftChatBlocks(prepareChatMarkdown(text, refs, streaming), streaming), [text, refs, streaming]);
     return (
         <div data-chat-prose="" className="flex min-w-0 flex-col" onClick={stopCopyClick}>
-            <ContentRenderer value={value} format="markdown" lineSpacing={1.5} extensions={CHAT_BLOCKS} clipboardWriter={genieClipboardWriter} className={`${className} ${PILLS} ${TABLES}`} />
+            <ContentRenderer value={value} format="markdown" lineSpacing={1.5} extensions={CHAT_BLOCKS} streaming={streaming ? 'progressive' : false} clipboardWriter={genieClipboardWriter} className={`${className} ${PILLS} ${TABLES}`} />
         </div>
     );
 });

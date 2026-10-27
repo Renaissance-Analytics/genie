@@ -10,6 +10,8 @@ import type { Pause } from '../../core/files-popout.js';
 import type { PanelPrefs } from '../../core/files-panel-prefs.js';
 import { EditorWand } from './EditorWand.js';
 import { EditorCursor, WordWrapSync } from './EditorSync.js';
+import { CopyAnnounce } from './CopyText.js';
+import type { CopyState } from './ChatProse.js';
 
 /**
  * THE WORKSPACE FILE PANEL (§4.3). ONE per workspace. A 220px tree, tabs, the viewer; a footer naming
@@ -116,6 +118,11 @@ export interface FilesPanelProps {
     readonly unsaved?: readonly string[] | undefined;
     /** Git's state of each changed file (Genie 1's tree colours). */
     readonly git?: Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>> | undefined;
+    /**
+     * The last Copy path / Copy relative path (the right-click menu), through main's clipboard (CopyText): announced either
+     * way, and a failure also said on screen — a menu item has no button of its own to say it. Absent = none yet.
+     */
+    readonly copied?: CopyState | undefined;
 }
 
 /** A plugin tab as the panel draws it: the editor body the container built, and its save. */
@@ -196,7 +203,7 @@ function marksOf(state: FilesPanelState | null): Map<string, { count: number | n
     return marks;
 }
 
-export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [], prefs, onPrefs, baseline, theme, unsaved = [], git = {} }: FilesPanelProps) {
+export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelect, onCloseTab, onPin, onClose, edit, onPopOut, onShowDiff, blindDiff, popped = false, paused = [], single, onOpenInPane, filter = 'all', onFilter, treeError = null, line = null, expanded, onExpandedChange, fileActions, active: activeProp, pluginTabs = [], prefs, onPrefs, baseline, theme, unsaved = [], git = {}, copied }: FilesPanelProps) {
     const rows = { unsaved: new Set(unsaved), git };
     const wordWrap = prefs?.wordWrap === true;
     const treeHidden = prefs?.treeHidden === true;
@@ -350,6 +357,10 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             <button type="button" data-action="save-file" onClick={edit.onSave} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button>
                         ) : null}
                     </div>
+                    {fileActions || copied !== undefined ? <CopyAnnounce state={copied ?? 'idle'} /> : null}
+                    {copied === 'failed' ? (
+                        <p data-copy-path="failed" className="m-3 rounded-lg border border-[var(--danger)] p-2 text-xs">Copy failed: the path did not reach the clipboard.</p>
+                    ) : null}
                     {edit?.saveError && !edit.conflict ? (
                         <p data-save-error="" className="m-3 rounded-lg border border-[var(--danger)] p-2 text-xs">Not saved: {edit.saveError}</p>
                     ) : null}

@@ -36,6 +36,8 @@ describe('the process-ended block', () => {
         expect(html).not.toContain('data-action="restart-resume"');
         expect(html.split('data-action="restart"').length - 1).toBe(1);
         expect(html).toContain('data-action="copy-log"');
+        // Copied through main, and the outcome ANNOUNCED beside it: a failed copy is never silent (clipboard-buttons.test).
+        expect(html).toMatch(/data-action="copy-log"[^>]*>Copy log<\/button><span data-copy-announce=""[^>]*role="status"/);
     });
 
     it('absent while the session is working — and with no log the block still names the reason', () => {

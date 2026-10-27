@@ -60,6 +60,8 @@ describe('Integrations', () => {
         const html = render({ ...integrations, tynn: { ...integrations.tynn, signInUrl: url, message: 'Tynn answered 422: That sign-in code is not valid.' } });
         expect(html).toContain(`data-tynn-sign-in-url="${url.replace(/&/g, '&amp;')}"`);
         expect(html).toMatch(/No browser on this machine\?/);
+        // Its Copy goes through main, the outcome announced beside it (clipboard-buttons.test).
+        expect(html).toMatch(/data-action="tynn-copy-sign-in-url"[\s\S]*?<\/button><span data-copy-announce=""[^>]*role="status"/);
         expect(html).toMatch(/data-tynn-message[^>]*>Tynn answered 422: That sign-in code is not valid\.</);
     });
 
@@ -124,6 +126,8 @@ describe('Settings → GitHub', () => {
         expect(html).toContain('data-github-status="signing-in"');
         expect(html).toMatch(/data-github-code="WDJB-MJHT"[^>]*>WDJB-MJHT</);
         expect(html).toContain('data-action="github-copy-code"');
+        // Copied through main, the outcome announced beside it (clipboard-buttons.test).
+        expect(html).toMatch(/data-action="github-copy-code"[\s\S]*?<\/button><span data-copy-announce=""[^>]*role="status"/);
         expect(html).toContain('data-action="github-open-device"');
         expect(html).toContain('github.com/login/device');
         expect(html).toContain('data-action="github-cancel"');

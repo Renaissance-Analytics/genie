@@ -111,9 +111,9 @@ describe('the label survives the draft round trip (genie#1279)', () => {
 });
 
 describe('the react-fancy Genie runs has text-pill labels', () => {
-    it('pinned (5.67.0 since its ContentRenderer copy buttons), and installed at 5.66 or later', () => {
+    it('pinned (5.68.0 since its progressive streaming and Editor copy props), and installed at 5.66 or later', () => {
         const ours = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> };
-        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('5.67.0');
+        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('5.68.0');
         const pkg = JSON.parse(readFileSync(new URL('../node_modules/@particle-academy/react-fancy/package.json', import.meta.url), 'utf8')) as { version: string };
         const [major, minor] = pkg.version.split('.').map(Number) as [number, number];
         expect(major > 5 || (major === 5 && minor >= 66), pkg.version).toBe(true);

@@ -47,6 +47,7 @@ import type { StreamMarkup } from './StreamRow.js';
 import type { ChatRefs } from '../../core/chat-markup.js';
 import { openFileRoute } from '../../core/files-panel.js';
 import { TurnCards } from './TurnCards.js';
+import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 import { turnCards } from '../../core/turn-cards.js';
 import type { StreamLayout } from '../../core/route.js';
 
@@ -279,6 +280,17 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
                 />
             ) : null}
         </div>
+    );
+}
+
+/** The process-ended block's `Copy log`: through main's clipboard, and it says whether the copy landed (CopyText). */
+function CopyLogButton({ text }: { text: string }) {
+    const { state, copy } = useCopyText();
+    return (
+        <>
+            <button type="button" data-action="copy-log" data-copy-state={state} onClick={() => { void copy(text); }} className={`flex h-[26px] items-center rounded-lg px-2.5 text-[12px] hover:bg-[var(--bg-2)] ${state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>{copyWords(state, 'Copy log')}</button>
+            <CopyAnnounce state={state} />
+        </>
     );
 }
 
@@ -1506,7 +1518,7 @@ export function AgentView({
                                 {/* No Restart of its own (genie#1238): the header's Restart is the one, in the same view. */}
                                 {/* The board's `Open terminal` in the block: a Take Over window on this agent — the same door the header offers, where the reader is looking. */}
                                 {onTakeOver ? <button type="button" data-action="open-terminal-rail" onClick={() => onTakeOver(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</button> : null}
-                                <button type="button" data-action="copy-log" onClick={() => { void navigator.clipboard?.writeText([ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')); }} className="flex h-[26px] items-center rounded-lg px-2.5 text-[12px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Copy log</button>
+                                <CopyLogButton text={[ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')} />
                             </div>
                         </section>
                     ) : null}

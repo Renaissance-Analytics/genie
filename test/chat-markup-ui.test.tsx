@@ -13,12 +13,16 @@ import { ledgerRow } from '../src/core/stream-view.js';
  */
 const REFS = { agents: [{ id: 'ag_1', name: 'atlas' }], workspaces: [{ id: 'ws_1', name: 'tynn.ai' }] };
 
-const thread = (text: string): ChatThread => ({
+const thread = (text: string, arriving = false): ChatThread => ({
     agentId: 'a1', name: 'atlas', fidelity: 'declared', unread: null,
     messages: [{ id: 'm1', from: 'atlas', who: 'agent', text, delivered: true }],
+    ...(arriving ? { arriving: 'm1' } : {}),
 });
 const chat = (text: string, extra: Partial<Parameters<typeof ChatFlyout>[0]> = {}) =>
     renderToStaticMarkup(<ChatFlyout thread={thread(text)} onSend={() => {}} {...extra} />);
+/** The same reply, still ARRIVING: the thread names it (core/chat-view.ts `arriving`). */
+const arriving = (text: string, extra: Partial<Parameters<typeof ChatFlyout>[0]> = {}) =>
+    renderToStaticMarkup(<ChatFlyout thread={thread(text, true)} onSend={() => {}} {...extra} />);
 
 /** react-fancy's copy region: drawn only while its copy buttons are on (5.67.0, ContentRenderer `copyButtons`). */
 const LIVE = /data-react-fancy-content-renderer-live=""/g;
@@ -109,10 +113,74 @@ describe('<result>, <highlight>, <followup>', () => {
     });
 
     it('a reply still arriving shows its card filling in — never a raw "<result"', () => {
-        expect(chat('Draft:\n\n<result>\nDear Ana,')).toContain('data-chat-result=""');
-        const partial = chat('Draft:\n\n<resul');
+        expect(arriving('Draft:\n\n<result>\nDear Ana,')).toContain('data-chat-result=""');
+        const partial = arriving('Draft:\n\n<resul');
         expect(partial).not.toContain('&lt;resul');
         expect(partial).not.toContain('<resul');
+    });
+
+    it('FINISHED but never closed, the block is still its card', () => {
+        expect(chat('Draft:\n\n<result>\nDear Ana,')).toContain('data-chat-result=""');
+    });
+});
+
+describe('a reply still ARRIVING is drawn by react-fancy progressively (5.68 `streaming="progressive"`)', () => {
+    /*
+     * `streaming={done ? false : "progressive"}` (react-fancy's migration): the reply the thread names as arriving is drawn
+     * progressively, every other reply whole. What fancy holds back now (a partial chat-block tag, a partial close, a fence
+     * marker) Genie no longer cuts; what fancy would show (a pill, any other partial tag) Genie still holds.
+     */
+    const ROOT_PROGRESSIVE = /data-react-fancy-content-renderer=""[^>]*data-streaming="true"[^>]*data-streaming-mode="progressive"|data-streaming="true"[^>]*data-streaming-mode="progressive"[^>]*data-react-fancy-content-renderer=""/;
+
+    it('the arriving reply’s renderer streams progressively; CONTROL: a finished reply’s does not stream at all', () => {
+        expect(arriving('Working on it')).toMatch(/data-streaming-mode="progressive"/);
+        expect(arriving('Working on it')).toMatch(/data-streaming="true"/);
+        const done = chat('Done.');
+        expect(done).not.toContain('data-streaming');
+    });
+
+    it('a partial "<result" never shows raw — held by react-fancy, not cut by Genie', () => {
+        for (const tail of ['<', '<resul', '<result title="Do', '<highlight']) {
+            const html = arriving(`Here:\n\n${tail}`);
+            expect(html).toMatch(ROOT_PROGRESSIVE);
+            expect(html).not.toContain('&lt;');
+            expect(html).toContain('Here:');
+        }
+    });
+
+    it('a partial tag fancy would show (`<butto`) is still held by Genie: never raw', () => {
+        const html = arriving('Here:\n\n<butto');
+        expect(html).not.toContain('&lt;butto');
+        expect(html).toContain('Here:');
+    });
+
+    it('an OPEN <result> shows its card with the body so far, at the start of a line or mid-line', () => {
+        for (const md of ['Draft:\n\n<result>\nDear **Ana**,\n\nThanks for', 'Ready. <result>Dear **Ana**, thanks for']) {
+            const html = arriving(md);
+            expect(html).toMatch(/data-chat-result=""[\s\S]*<strong>Ana<\/strong>/);
+            expect(html).not.toContain('&lt;result');
+            expect(html).not.toContain('&lt;/result');
+        }
+    });
+
+    it('a partial CLOSE of an open <result> never shows raw, and the body above it still shows', () => {
+        const html = arriving('<result>\nDear **Ana**\n</res');
+        expect(html).toMatch(/data-chat-result=""[\s\S]*<strong>Ana<\/strong>/);
+        expect(html).not.toContain('&lt;/res');
+    });
+
+    it('a partial pill is held back; CONTROL: the same text finished shows its words', () => {
+        expect(arriving('Ask [agent:atlas|At', { refs: REFS })).not.toContain('[agent:atlas');
+        expect(chat('Ask [agent:atlas|At', { refs: REFS })).toContain('[agent:atlas|At');
+    });
+
+    it('an open fence shows as code so far (its copy button is react-fancy’s to hold until the fence closes)', () => {
+        for (const md of ['Run:\n\n```bash\nnpm ci\nnpm te', '<result>\nRun:\n\n```bash\nnpm ci\nnpm te']) {
+            const html = arriving(md);
+            expect(html).toMatch(ROOT_PROGRESSIVE);
+            expect(html).toMatch(/<pre>[\s\S]*?class="language-bash"[\s\S]*?npm ci\nnpm te[\s\S]*?<\/pre>/);
+            expect(html).not.toContain('```');
+        }
     });
 });
 
@@ -182,6 +250,15 @@ describe('the Stream draws an agent’s prose with the same markup', () => {
         expect(count(html, LIVE)).toBe(1);
         expect(html).not.toContain('data-copy="code"');
         expect(html).toContain('data-chat-result=""');
+    });
+
+    it('an agent message row still arriving streams progressively: its open <result> is a card already', () => {
+        const r = row('agent', 'Done.\n\n<result>\n**ok** so');
+        const html = renderToStaticMarkup(<StreamRow row={r} selected={false} streaming onSelect={() => {}} />);
+        expect(html).toContain('data-streaming-mode="progressive"');
+        expect(html).toMatch(/data-chat-result=""[\s\S]*<strong>ok<\/strong>/);
+        // CONTROL: the same row, finished, is not streamed.
+        expect(renderToStaticMarkup(<StreamRow row={r} selected={false} onSelect={() => {}} />)).not.toContain('data-streaming');
     });
 
     it('CONTROL: your own message stays as you typed it', () => {

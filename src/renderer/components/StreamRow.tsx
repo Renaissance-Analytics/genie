@@ -34,6 +34,8 @@ export interface StreamRowProps {
     selected: boolean;
     /** The thought still arriving while the turn runs (the board's `Thinking…` row). */
     live?: boolean | undefined;
+    /** A prose row whose words are still arriving: drawn progressively (react-fancy 5.68, ChatProse `streaming`). */
+    streaming?: boolean | undefined;
     /** The stream cursor is on this row (`j`/`k`) — a focus, drawn as a ring; not the Inspector's selection. */
     cursor?: boolean | undefined;
     /** A thought opened to its whole text (click toggles it). */
@@ -52,7 +54,7 @@ export interface StreamMarkup {
     onOpen: (target: ChatLinkTarget) => void;
 }
 
-export function StreamRow({ row, selected, live = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
+export function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
     const time = timeOf(row.at);
 
     return (
@@ -108,7 +110,7 @@ export function StreamRow({ row, selected, live = false, cursor = false, expande
                     } : undefined}
                 >
                     {row.who ? <span data-who={row.who.tone} className={`font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
-                    <ChatProse text={row.main} refs={markup?.refs} className="text-[13px] text-[var(--fg-1)]" />
+                    <ChatProse text={row.main} refs={markup?.refs} streaming={streaming} className="text-[13px] text-[var(--fg-1)]" />
                 </div>
             ) : (
             <span

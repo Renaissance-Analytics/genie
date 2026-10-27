@@ -16,6 +16,7 @@ import { openOrError, settle } from '../../core/files-reads.js';
 import { ancestorsOf, revealFor, treeFromLoaded } from '../../core/files-tree-lazy.js';
 import type { GenieBridge } from '../bridge.js';
 import { FileOpModal } from './FileOpModal.js';
+import { useCopyText } from './CopyText.js';
 import { FilesPanel, type FilesEdit, type FilesPanelState, type OpenFile, type PluginTabView } from './FilesPanel.js';
 
 /**
@@ -281,6 +282,8 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
     const closeTabs = (paths: readonly string[]) => askClose(paths, () => { for (const t of paths) closeTab(t); });
     // A save that fails without a conflict is SAID (Tynn #840): it used to vanish, leaving a dirty buffer and no reason.
     const [saveError, setSaveError] = useState<string | null>(null);
+    // Copy path / Copy relative path (the right-click menu): what the last one did, for the panel to say.
+    const pathCopy = useCopyText();
     const save = (expected: string | null) => {
         const buffer = open?.ok ? bench.buffers[open.path] : undefined;
         if (!open?.ok || buffer === undefined) return;
@@ -385,8 +388,9 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
                 case 'reveal': void files.reveal?.(workspace.id, path).then(say); break;
                 // Export… (genie#1264): a cancel says nothing; a failure says why where a failed save does.
                 case 'export': void files.export?.(workspace.id, path).then((r) => { if (!r.ok && 'reason' in r) setSaveError(r.reason); }, (error: unknown) => setSaveError(error instanceof Error ? error.message : String(error))); break;
-                case 'copy-path': void navigator.clipboard?.writeText(absolutePath(path)); break;
-                case 'copy-relative-path': void navigator.clipboard?.writeText(path); break;
+                // Through main's clipboard, and the panel says whether it landed (CopyText).
+                case 'copy-path': void pathCopy.copy(absolutePath(path)); break;
+                case 'copy-relative-path': void pathCopy.copy(path); break;
                 case 'close': closeTabs([path]); break;
                 case 'close-others': closeTabs(tabs.filter((t) => t !== path)); break;
                 case 'close-all': closeTabs(tabs); break;
@@ -409,7 +413,7 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             node: <PluginEditorBody key={`${t}:${p.rev}`} pluginId={p.editor.pluginId} fancyExport={p.editor.fancyEditor.export} workspaceId={workspace.id} path={t} files={files} onDirtyChange={(d) => act({ kind: 'plugin-dirty', path: t, dirty: d })} registerSave={(fn) => { pluginSaves.current.set(t, fn); }} />,
         }];
     });
-    const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={(t) => closeTabs([t])} onPin={onPin} onClose={() => askClose(tabs, onClose)} prefs={prefs} onPrefs={changePrefs} theme={theme} unsaved={dirty} git={git} {...(open?.ok && bench.texts[open.path]?.ok ? { baseline: (bench.texts[open.path] as { text: string }).text } : {})} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
+    const panel = <FilesPanel active={bench.active} pluginTabs={pluginTabs} workspace={workspace} tree={tree} state={state} tabs={tabs} open={shown} pinned={pinned} onSelect={select} onCloseTab={(t) => closeTabs([t])} onPin={onPin} onClose={() => askClose(tabs, onClose)} prefs={prefs} onPrefs={changePrefs} theme={theme} unsaved={dirty} git={git} {...(open?.ok && bench.texts[open.path]?.ok ? { baseline: (bench.texts[open.path] as { text: string }).text } : {})} edit={edit} onShowDiff={onShowDiff} blindDiff={blindDiff} onPopOut={onPopOut} popped={popped} paused={paused} single={single} onOpenInPane={onOpenInPane} fileActions={fileActions} copied={pathCopy.state} filter={filter} onFilter={pickFilter} treeError={treeError} {...(lazy ? { expanded, onExpandedChange: (ids: readonly string[]) => setExpanded(ids) } : {})} line={shown?.ok && shown.path === routeFile ? routeLine : null} />;
     return (
         <>
             {panel}

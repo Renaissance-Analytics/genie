@@ -59,6 +59,8 @@ export interface ChatThread {
     loaded?: boolean | undefined;
     /** Ledger rows lie before these messages (`core/chat-view.ts` chatTailStart): more history pages in on request. */
     earlier?: boolean | undefined;
+    /** The message still arriving (`core/chat-view.ts` arrivingMessageId): drawn progressively. Absent = all finished. */
+    arriving?: string | null | undefined;
 }
 
 const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
@@ -74,9 +76,10 @@ export function GenieMark() {
  * MEMOISED on its text: the chat re-rendered EVERY reply's Markdown on every push of a busy agent, which is many a second
  * (the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all"). Only the reply that grew renders again.
  */
-const ChatReply = memo(function ChatReply({ text, refs }: { text: string; refs: ChatRefs }) {
+const ChatReply = memo(function ChatReply({ text, refs, streaming = false }: { text: string; refs: ChatRefs; streaming?: boolean }) {
     // With moic's markup (genie#1263, components/ChatProse.tsx): copy buttons on code and tables, <result> cards, pills.
-    return <ChatProse text={text} refs={refs} className="text-[13px] text-[var(--fg-2)]" />;
+    // `streaming`: this reply is still arriving (the thread's `arriving`), drawn progressively by react-fancy 5.68.
+    return <ChatProse text={text} refs={refs} streaming={streaming} className="text-[13px] text-[var(--fg-2)]" />;
 });
 
 function clock(at: number): string {
@@ -621,7 +624,7 @@ export function ChatFlyout({
                                     {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
                                 </summary>
                                 <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
-                                    <ChatReply text={m.text} refs={replyRefs} />
+                                    <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
                                 </div>
                             </details>
                         );
@@ -680,7 +683,7 @@ export function ChatFlyout({
                         <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
                             {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
-                            <ChatReply text={m.text} refs={replyRefs} />
+                            <ChatReply text={m.text} refs={replyRefs} streaming={m.id === thread?.arriving} />
                         </div>
                     );
                 })}

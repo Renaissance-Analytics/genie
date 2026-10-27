@@ -30,6 +30,7 @@ import { PROCESS_SCHEDULE_PRESETS, describeSchedule, formatLastRun, formatNextRu
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -2051,7 +2052,8 @@ export function mcpToolsList(tools: readonly { name: string; description: string
  * link stays on screen for a machine without a browser. There is no token to type. Signed in: who, and Sign out.
  */
 function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integrations']>['tynn']; onAction: SurfaceProps['onAction'] }) {
-    const [copied, setCopied] = useState(false);
+    // Copied through main's clipboard, and it says whether it landed (CopyText).
+    const link = useCopyText();
     return (
         <div data-tynn-sign-in="" className="flex flex-col gap-2 text-sm">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -2071,7 +2073,8 @@ function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integra
                             <span className="text-xs text-[var(--fg-3)]">No browser on this machine? Copy this link, open it on any device, sign in, then paste the code below.</span>
                             <div className="flex min-w-0 items-center gap-1.5">
                                 <span className="flex-1 truncate font-mono text-xs text-[var(--fg-3)]" title={tynn.signInUrl}>{tynn.signInUrl}</span>
-                                <Button type="button" variant="ghost" size="xs" onClick={() => { void navigator.clipboard?.writeText(tynn.signInUrl ?? ''); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? 'Copied' : 'Copy'}</Button>
+                                <Button type="button" data-action="tynn-copy-sign-in-url" variant="ghost" size="xs" onClick={() => { void link.copy(tynn.signInUrl ?? ''); }}>{copyWords(link.state, 'Copy')}</Button>
+                                <CopyAnnounce state={link.state} />
                             </div>
                         </div>
                     ) : null}
@@ -2169,7 +2172,8 @@ function TynnBlock({ integrations, onAction }: { integrations: FeatureData['inte
  * what main read from GitHub (main/github-account.ts); the token never reaches this window.
  */
 function GithubBlock({ integrations, onAction }: { integrations: FeatureData['integrations']; onAction: SurfaceProps['onAction'] }) {
-    const [copied, setCopied] = useState(false);
+    // Copied through main's clipboard, and it says whether it landed (CopyText).
+    const codeCopy = useCopyText();
     if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
     const gh = integrations.github;
     const message = gh.message ? <p data-github-message="" className="text-xs text-[var(--danger)]">{gh.message}</p> : null;
@@ -2182,7 +2186,8 @@ function GithubBlock({ integrations, onAction }: { integrations: FeatureData['in
                 <p>Enter this code on GitHub’s page — it opened in your browser:</p>
                 <div className="flex items-center gap-3">
                     <span data-github-code={code} className="select-all rounded-md border border-[var(--border-1)] px-3 py-1.5 font-mono text-2xl tracking-widest">{code}</span>
-                    <Button type="button" data-action="github-copy-code" variant="ghost" size="sm" onClick={() => { void navigator.clipboard?.writeText(code); setCopied(true); setTimeout(() => setCopied(false), 1500); }}>{copied ? 'Copied' : 'Copy'}</Button>
+                    <Button type="button" data-action="github-copy-code" variant="ghost" size="sm" onClick={() => { void codeCopy.copy(code); }}>{copyWords(codeCopy.state, 'Copy')}</Button>
+                    <CopyAnnounce state={codeCopy.state} />
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                     <Button type="button" data-action="github-open-device" size="sm" onClick={() => open({ page: 'device' })}>Open GitHub again</Button>
