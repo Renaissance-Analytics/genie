@@ -324,8 +324,9 @@ export class AttentionStore {
         const q = this.#data.questions.find((x) => x.id === questionId);
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
-        await this.#flush();
+        // How it left is known the moment it leaves the queue — before the write — so nothing can look in between.
         this.#left(questionId, { kind: 'answered', answer });
+        await this.#flush();
 
         // Each question, what was chosen, and — right under it — that question's own note. "(no option chosen)" says a
         // note answered it instead; the overall Note line is only there when an overall note was given.
@@ -356,8 +357,8 @@ export class AttentionStore {
         const q = this.#data.questions.find((x) => x.id === questionId);
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
-        await this.#flush();
         this.#left(questionId, { kind: 'dismissed', notes });
+        await this.#flush();
         await this.#mailDismissed(q, notes);
     }
 
@@ -369,8 +370,8 @@ export class AttentionStore {
         const gone = this.#data.questions.filter((q) => questionIds.includes(q.id));
         if (gone.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !gone.includes(q));
-        await this.#flush();
         for (const q of gone) this.#left(q.id, { kind: 'dismissed', notes: [] });
+        await this.#flush();
         for (const q of gone) await this.#mailDismissed(q);
         return gone.length;
     }
@@ -384,8 +385,8 @@ export class AttentionStore {
         const old = this.#data.questions.filter((q) => Date.parse(q.askedAt) < cutoff);
         if (old.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !old.includes(q));
-        await this.#flush();
         for (const q of old) this.#left(q.id, { kind: 'dismissed', notes: [] });
+        await this.#flush();
         for (const q of old) await this.#mailDismissed(q);
         return old.length;
     }
@@ -398,8 +399,8 @@ export class AttentionStore {
     async withdraw(owner: QuestionOwner, questionId: string): Promise<{ ok: true; questionId: string; withdrawn: true }> {
         this.#owned(owner, questionId);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
-        await this.#flush();
         this.#left(questionId, { kind: 'withdrawn' });
+        await this.#flush();
         return { ok: true, questionId, withdrawn: true };
     }
 
