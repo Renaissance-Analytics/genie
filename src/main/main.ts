@@ -79,7 +79,7 @@ import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
-import { prepareProcessTree } from '@particle-academy/prism-acp';
+import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
@@ -965,13 +965,27 @@ async function boot(): Promise<void> {
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
     // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
     // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
-    // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained.
-    await prepareProcessTree({ directory: join(runtimeDir(genieHome()), 'prism-supervisor') }).catch((error: unknown) => {
+    // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
+    // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
+    // never what a running process was started from.
+    const supervisor = await prepareGenieSupervisor(runtimeDir(genieHome())).catch((error: unknown) => {
         const why = error instanceof Error ? error.message : String(error);
         lifecycleLog(`containment unready reason=${why}`);
         console.error(`[genie] agents cannot start contained: ${why}`);
         mainErrors.record('containment-unready', error);
+        return null;
     });
+    if (supervisor !== null) {
+        void removeStaleSupervisorBuilds(runtimeDir(genieHome()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
+            (sweep) => {
+                for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
+                for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
+                for (const path of sweep.failed) lifecycleLog(`supervisor stale kept reason=remove-failed path=${path}`);
+                if (sweep.unread) lifecycleLog('supervisor stale kept reason=process-listing-unread');
+            },
+            (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
+        );
+    }
     host = new SessionHost({
         userData: genieHome(),
         // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
