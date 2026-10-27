@@ -49,8 +49,8 @@ describe('the Deck\'s items', () => {
     it('a question names its workspace\'s colour beside its name; an unknown workspace carries none', () => {
         const items = deckItemsFrom({
             questions: [
-                { id: 'q1', agentId: 'a1', askedAt: new Date(1).toISOString(), questions: [{ header: 'Pick', question: 'Which?', options: [] }] },
-                { id: 'q2', agentId: 'a2', askedAt: new Date(2).toISOString(), questions: [{ header: 'Pick', question: 'Which?', options: [] }] },
+                { id: 'q1', agentId: 'a1', agentName: 'kai', workspaceId: 'tynn', askedAt: new Date(1).toISOString(), questions: [{ header: 'Pick', question: 'Which?', options: [] }] },
+                { id: 'q2', agentId: 'a2', agentName: 'wren', workspaceId: 'gone', askedAt: new Date(2).toISOString(), questions: [{ header: 'Pick', question: 'Which?', options: [] }] },
             ] as never,
             userList: [],
             unreadDms: [],
