@@ -30,7 +30,9 @@
  * silently ignores an unexpected frame would make a protocol change look like a UI bug.
  */
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 // Opt-in protocol-test journal: public method names only, never frame params or credentials.
 const methodLogIndex = process.argv.indexOf('--record-methods');
@@ -76,6 +78,47 @@ const STUB_REPLY = [
     '**Migrated:** users',
     '</result>',
 ].join('\n');
+
+/**
+ * THE REPLY ARRIVES IN TWO PIECES (smoke check 33d, react-fancy 5.68 `streaming="progressive"`): first everything up to
+ * the middle of the <result> body (`**Migrated:** us`), as `item/agentMessage/delta` frames the way Codex streams a
+ * reply; then, once the smoke has looked at the card mid-stream, the rest and the completed item. The smoke says it has
+ * looked by creating STREAM_RELEASE (it runs on the same machine as this stub); without it the rest follows after
+ * STREAM_HOLD_MS anyway, so a harness that never looks is not held up for ever.
+ */
+const STREAM_CUT = STUB_REPLY.indexOf('users\n</result>') + 'us'.length;
+// The same name as smoke-cdp.mjs's (it is a file both processes see, not an import: importing this script would run it).
+const STREAM_RELEASE = join(tmpdir(), 'genie-stub-codex-stream-release');
+const STREAM_HOLD_MS = 45_000;
+const MESSAGE_ID = 'stub_msg_0001';
+
+function delta(text) {
+    send({ jsonrpc: '2.0', method: 'item/agentMessage/delta', params: { threadId: THREAD_ID, turnId: TURN_ID, itemId: MESSAGE_ID, delta: text } });
+}
+
+function streamReply() {
+    rmSync(STREAM_RELEASE, { force: true });
+    const head = STUB_REPLY.slice(0, STREAM_CUT);
+    // Two chunks, cut mid-table, as a model's tokens arrive: the renderer sees the text grow.
+    const mid = head.indexOf('| users');
+    delta(head.slice(0, mid));
+    delta(head.slice(mid));
+    note(`reply streamed up to ${JSON.stringify(head.slice(-24))}; holding for the smoke`);
+    const since = Date.now();
+    const timer = setInterval(() => {
+        const released = existsSync(STREAM_RELEASE);
+        if (!released && Date.now() - since < STREAM_HOLD_MS) return;
+        clearInterval(timer);
+        rmSync(STREAM_RELEASE, { force: true });
+        note(released ? 'released by the smoke: the rest of the reply' : 'not released in time: the rest of the reply anyway');
+        delta(STUB_REPLY.slice(STREAM_CUT));
+        send({
+            jsonrpc: '2.0',
+            method: 'item/completed',
+            params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'agentMessage', id: MESSAGE_ID, text: STUB_REPLY } },
+        });
+    }, 100);
+}
 
 /** The approval we park, once, on the first turn. */
 let askedOnce = false;
@@ -149,12 +192,9 @@ function handle(frame) {
     if (method === undefined && id !== undefined) {
         note(`approval answered: ${JSON.stringify(result ?? error)}`);
         // Then a REPLY in Genie's chat markup (genie#1263), so the smoke can see react-fancy's copy buttons in a real
-        // window: one code block, one table, one <result>. An agentMessage item, as Codex's App Server sends one.
-        send({
-            jsonrpc: '2.0',
-            method: 'item/completed',
-            params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'agentMessage', id: 'stub_msg_0001', text: STUB_REPLY } },
-        });
+        // window: one code block, one table, one <result>. STREAMED, as Codex's App Server sends one (`streamReply`), so the
+        // smoke also sees the <result> card while its body is still arriving.
+        streamReply();
         return;
     }
 

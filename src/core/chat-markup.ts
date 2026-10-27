@@ -105,21 +105,41 @@ function outsideCode(md: string, fn: (text: string) => string, links = false): s
 }
 
 /**
- * A REPLY STILL ARRIVING: hold back whatever is half-written at its end — a tag whose `>` has not come yet (`<resul`,
- * `</result`, `<highlight cl`) and a pill whose `]` has not (`[file:src/co`). An open block or fence is fine as it is:
- * the parser draws it as its card or code block, filling in. Complete text is returned exactly as it was.
+ * A REPLY STILL ARRIVING: hold back what is half-written at its end that react-fancy would SHOW. Applied only while the
+ * reply arrives (`prepareChatMarkdown(…, streaming)`); a finished reply is drawn whole.
  *
- * Not react-fancy's `streaming` (5.67.0): it holds back an open block or fence ENTIRELY until it closes — #1277's card and
- * code block fill in as they arrive instead — it knows nothing of pills, and it needs to be told when a reply has
- * finished, which ChatProse is not (a reply is its text; a finished one that ends oddly would never render whole).
+ * react-fancy 5.68 `streaming="progressive"` (ChatProse) now does most of this itself: it holds a partial tag that could
+ * still become one of its registered tags (`<`, `</`, `<resul`, `<result title="Do`, `</res` — Genie's blocks are
+ * registered), a partial fence marker and a fence opener line still arriving, and it draws an open block as its card and an
+ * open fence as code, filling in. What it does not hold, and Genie does:
+ *
+ * - a pill or destination whose `]` has not come (`[file:src/co`) — fancy knows nothing of pills;
+ * - a partial tag that cannot become a chat block (`<butto`, `<div cl`) — to fancy a `<` that cannot become a registered
+ *   tag is prose, so it would flash raw until its `>` came and Genie's sanitising removed or kept it.
+ *
+ * Complete text is returned exactly as it was.
  */
 export function streamSafe(md: string): string {
     if (!md) return md;
     // Ends inside an open fence: what arrives is code, and a `<` in code is not a tag.
     if (fences(md).open !== null) return md;
-    return md
-        .replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?$|<\/?$/, '')
-        .replace(/\[[A-Za-z][\w-]*:[^\]\n]*$/, '');
+    let out = md;
+    const tag = /<\/?(?:([A-Za-z][\w-]*)(\s[^<>]*)?)?$/.exec(out);
+    if (tag && !fancyHoldsPartialTag(tag[0], tag[1] ?? '', tag[2] ?? '')) out = out.slice(0, tag.index);
+    return out.replace(/\[[A-Za-z][\w-]*:[^\]\n]*$/, '');
+}
+
+/**
+ * Whether react-fancy 5.68 holds this partial tag back itself while streaming (its `partialTagAt`, for Genie's registered
+ * block names): `<` or `</` alone; a block's name followed by nothing or by whitespace (attributes arriving); the start
+ * of a block's name. Fancy looks at the last LINE only, so a partial tag that spans a line break is Genie's to hold.
+ */
+function fancyHoldsPartialTag(tag: string, name: string, rest: string): boolean {
+    if (tag.includes('\n')) return false;
+    const n = name.toLowerCase();
+    if (n === '') return rest === '';
+    if ((BLOCKS as readonly string[]).includes(n)) return rest === '' || /^\s/.test(rest);
+    return rest === '' && BLOCKS.some((b) => b.startsWith(n));
 }
 
 /**
@@ -232,11 +252,12 @@ export function chatLinkTarget(href: string): ChatLinkTarget | null {
 }
 
 /**
- * The whole pipeline, in the order that keeps it safe: hold back a half-written tail, remove forbidden UI, strip the
- * model's own internal links, THEN add Genie's (pills, then file references in prose — `core/chat-file-links.ts`).
+ * The whole pipeline, in the order that keeps it safe: hold back a half-written tail (only while the reply is still
+ * `streaming`), remove forbidden UI, strip the model's own internal links, THEN add Genie's (pills, then file references in
+ * prose — `core/chat-file-links.ts`).
  */
-export function prepareChatMarkdown(md: string, refs: ChatRefs = NO_REFS): string {
-    let out = streamSafe(md ?? '');
+export function prepareChatMarkdown(md: string, refs: ChatRefs = NO_REFS, streaming = false): string {
+    let out = streaming ? streamSafe(md ?? '') : (md ?? '');
     out = stripForbiddenTags(out);
     out = stripInternalLinks(out);
     out = linkChatRefs(out, refs);
@@ -272,17 +293,20 @@ function stripBlockTags(md: string): string {
 /**
  * GENIE'S BLOCK RULES, IN THE SHAPE REACT-FANCY LIFTS. `<result>`, `<highlight>` and `<followup>` are react-fancy
  * `markdown: true` extensions (ChatProse): fancy lifts such a tag out of the Markdown and renders its body — but only when
- * the opening tag STARTS A LINE and has a matching close, and it nests them up to depth 8. Genie's rules (#1277) differ,
- * so the text is rewritten first:
+ * the opening tag STARTS A LINE and has a matching close, and it nests them up to depth 8. Both conditions are deliberate in
+ * react-fancy and stay (5.68 docs), and `streaming="progressive"` does not relax them. Genie's rules (#1277) differ, so
+ * the text is rewritten first:
  *
  * - a block may start mid-line (`Ready. <result>…`) — it is put on lines of its own;
- * - a block still arriving has no close yet — it is closed (and an open fence in it first), so its card fills in;
+ * - a block with no close yet: while the reply is still `streaming` it is left OPEN — react-fancy's progressive mode closes
+ *   it (and an open fence in it) itself and draws the card filling in, with no copy button on the half-arrived fence; in a
+ *   FINISHED reply it is closed here (an open fence in it first), so it is still its card;
  * - ONE level: a block tag inside a block loses its tag and keeps its words; a stray close does too;
  * - case-insensitive, never inside code; attributes are not carried (Genie's blocks take none).
  *
  * Text with no block tag is returned exactly as it was. Code blocks and tables are left alone: they are fancy's.
  */
-export function liftChatBlocks(md: string): string {
+export function liftChatBlocks(md: string, streaming = false): string {
     const text = md ?? '';
     const hits = tagsOutsideCode(text);
     if (hits.length === 0) return text;
@@ -306,7 +330,14 @@ export function liftChatBlocks(md: string): string {
         }
         prose(text.slice(at, open.index));
         let body = trimLines(stripBlockTags(text.slice(open.end, close ? close.index : text.length)));
-        // Still arriving inside a fence: close the fence, or the block's own close would be code.
+        if (!close && streaming) {
+            // Still arriving: react-fancy closes it, and holds a partial close at the end (`</res`), which closing it here
+            // would move into the middle of the body.
+            parts.push(`<${open.name}>\n${body}`);
+            at = text.length;
+            break;
+        }
+        // Finished but never closed, ending inside a fence: close the fence, or the block's own close would be code.
         const fence = close ? null : fences(body).open;
         if (fence !== null) body += `\n${fence}`;
         parts.push(`<${open.name}>\n${body}\n</${open.name}>`);

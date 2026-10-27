@@ -72,6 +72,28 @@ describe('1 — the session and the host never hold the words (the measurement)'
         expect(seen).toEqual([['Running '], ['Running the suite '], ['Running the suite now.']]);
         off();
     });
+
+    it('while it grows, the thread names it as ARRIVING (react-fancy 5.68 draws it progressively); a tool call after it ends that', () => {
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'moic' });
+        expect(host.start(record, dir)).toEqual({ ok: true });
+        host.prompt(record.id, 'run the tests', 'you');
+        const toAcp = new ClaudeToAcp();
+        const feed = (frame: Record<string, unknown>): void => { for (const u of toAcp.frame(frame)) events.onUpdate?.(u as Record<string, unknown>); };
+        const thread = () => chatThreadFrom({ agent: { id: record.id, name: 'moic', provider: 'claude', fidelity: 'declared' }, session: host.probe(record.id), rows: host.ledgerFor(record.id) }, record.id, [], () => 0);
+
+        feed({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_1', usage: {} } } });
+        feed({ type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
+        feed({ type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Draft:\n\n<result>\nDear Ana' } } });
+        const mid = thread();
+        const reply = mid.messages.find((m) => m.who === 'agent');
+        expect(reply?.text).toBe('Draft:\n\n<result>\nDear Ana');
+        expect(mid.arriving).toBe(reply?.id);
+
+        // The agent moves on to a tool: the reply is finished, drawn whole.
+        feed({ type: 'stream_event', event: { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} } } });
+        feed({ type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'npm test' } }] } });
+        expect(thread().arriving).toBeNull();
+    });
 });
 
 describe('2 — the chat follows a reply as it grows', () => {

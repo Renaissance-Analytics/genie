@@ -105,6 +105,8 @@ describe('the Share dialog (its form; Fancy’s Modal portals, so it is not rend
         const html = renderToStaticMarkup(<ShareWorkspaceForm {...base} minted={{ id: 'inv_1', url: 'https://tynn.example.com/i/abc', capability: 'control', whole: false, workspaceIds: ['w_tynn'], expiresAt: null }} />);
         expect(html).toContain('https://tynn.example.com/i/abc');
         expect(html).toContain('data-action="copy-share-link"');
+        // Copied through main, the outcome announced beside it (clipboard-buttons.test).
+        expect(html).toMatch(/data-action="copy-share-link"[^>]*>Copy<\/button><span data-copy-announce=""[^>]*role="status"/);
     });
 
     it('the links that reach it, each revocable; a problem in words', () => {

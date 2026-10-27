@@ -65,11 +65,21 @@ describe('liftChatBlocks — Genie’s block rules, written so react-fancy lifts
     });
 });
 
-describe('streamSafe — a reply still arriving never shows a half-written tag', () => {
-    it('a partial opening tag at the end is held back (moic: "<result" must never flash raw)', () => {
-        for (const tail of ['<', '<r', '<resul', '<result', '<result ', '</res', '</result', '<highlight cl']) {
-            expect(streamSafe(`Here:\n\n${tail}`)).toBe('Here:\n\n');
+describe('streamSafe — what react-fancy does NOT hold back while a reply arrives (5.68 `streaming="progressive"`)', () => {
+    /*
+     * react-fancy 5.68 holds back, while streaming, a partial tag that could still become one of its REGISTERED tags (`<`,
+     * `</`, `<res`, `<result title="Do`, `</res`), a partial fence marker and a fence opener line still arriving. It shows
+     * any other `<` (a `<` that cannot become a registered tag is prose to it), and it knows nothing of Genie's pills. So
+     * Genie holds back only those: a partial pill, and a partial tag that is not the start of a chat block.
+     */
+    it('a partial CHAT-BLOCK tag is left for react-fancy to hold (Genie no longer cuts it)', () => {
+        for (const tail of ['<', '</', '<r', '<resul', '<result', '<result ', '</res', '</result', '<highlight cl', '<follow']) {
+            expect(streamSafe(`Here:\n\n${tail}`)).toBe(`Here:\n\n${tail}`);
         }
+    });
+
+    it('a partial tag react-fancy would SHOW (not the start of a chat block) is still held back by Genie', () => {
+        for (const tail of ['<butto', '<div cl', '</spa', '<approval', '<b']) expect(streamSafe(`Here:\n\n${tail}`)).toBe('Here:\n\n');
     });
 
     it('an unfinished pill or destination at the end is held back', () => {
@@ -78,17 +88,28 @@ describe('streamSafe — a reply still arriving never shows a half-written tag',
         expect(streamSafe('Ask [agent:atlas|At')).toBe('Ask ');
     });
 
-    it('an OPEN block with no close yet is closed, so it renders as its card, filling in (not as raw text)', () => {
-        expect(liftChatBlocks(streamSafe('Draft:\n\n<result>\nDear Ana,\n\nThanks for'))).toBe('Draft:\n\n<result>\nDear Ana,\n\nThanks for\n</result>');
+    it('while ARRIVING, an open block is put on its own lines and left OPEN: react-fancy closes it and draws its card', () => {
+        expect(liftChatBlocks('Draft:\n\n<result>\nDear Ana,\n\nThanks for', true)).toBe('Draft:\n\n<result>\nDear Ana,\n\nThanks for');
+        expect(liftChatBlocks('Ready. <result>Dear', true)).toBe('Ready. \n\n<result>\nDear');
     });
 
-    it('an open block ending inside an open fence closes the fence first (or its close would be code)', () => {
-        expect(liftChatBlocks(streamSafe('<result>\n```ts\nconst a'))).toBe('<result>\n```ts\nconst a\n```\n</result>');
+    it('while ARRIVING, an open fence in an open block is left open: react-fancy draws it as code with NO copy button yet', () => {
+        // Closed here, the fence would be a finished code block to react-fancy, with a copy button on half a block.
+        expect(liftChatBlocks('<result>\n```ts\nconst a', true)).toBe('<result>\n```ts\nconst a');
+    });
+
+    it('while ARRIVING, a partial close inside an open block stays at the END, where react-fancy holds it', () => {
+        expect(liftChatBlocks('<result>\nbody\n</res', true)).toBe('<result>\nbody\n</res');
+    });
+
+    it('FINISHED but never closed: the block is closed (and its fence first), so it is still its card', () => {
+        expect(liftChatBlocks('Draft:\n\n<result>\nDear Ana,\n\nThanks for')).toBe('Draft:\n\n<result>\nDear Ana,\n\nThanks for\n</result>');
+        expect(liftChatBlocks('<result>\n```ts\nconst a')).toBe('<result>\n```ts\nconst a\n```\n</result>');
     });
 
     it('an open fence is left as it is: it renders as code while it arrives', () => {
         const md = '```ts\nconst a = 1;\nconst b';
-        expect(liftChatBlocks(streamSafe(md))).toBe(md);
+        expect(liftChatBlocks(streamSafe(md), true)).toBe(md);
     });
 
     it('CONTROL: complete text is left exactly as it was (a finished reply loses nothing)', () => {
@@ -206,5 +227,11 @@ describe('prepareChatMarkdown — the whole pipeline, in the order that keeps it
     it('file references in prose still become links (chat-file-links), when files can open', () => {
         expect(prepareChatMarkdown('Fixed src/core/route.ts.', REFS)).toContain('[src/core/route.ts](#file:src/core/route.ts)');
         expect(prepareChatMarkdown('Fixed src/core/route.ts.', { ...REFS, files: false })).not.toContain('#file:');
+    });
+
+    it('a half-written pill is held back only while the reply ARRIVES; a finished reply is drawn whole', () => {
+        const words = { ...REFS, files: false };
+        expect(prepareChatMarkdown('Ask [agent:atlas|At', words, true)).toBe('Ask ');
+        expect(prepareChatMarkdown('Ask [agent:atlas|At', words)).toBe('Ask [agent:atlas|At');
     });
 });

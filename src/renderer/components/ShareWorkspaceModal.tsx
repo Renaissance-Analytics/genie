@@ -1,6 +1,7 @@
 import { Modal, Select } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import type { ShareLink } from '../../main/tynn-share-links.js';
+import { CopyAnnounce, copyWords, useCopyText } from './CopyText.js';
 
 /**
  * SHARE THIS WORKSPACE THROUGH TYNN (Tynn #839; Genie 1's ShareWorkspaceModal, v1 inventory rows 111-116). Control or
@@ -46,7 +47,8 @@ export function ShareWorkspaceForm({ workspaceName, links, minted, problem, busy
     const [capability, setCapability] = useState<'control' | 'readonly'>('control');
     const [days, setDays] = useState<number>(7);
     const [whole, setWhole] = useState(false);
-    const [copied, setCopied] = useState(false);
+    // Copied through main's clipboard, and it says whether it landed (CopyText).
+    const linkCopy = useCopyText();
     return (
                 <div data-share-form="" className="flex flex-col gap-4 text-sm">
                     <p className="text-[var(--fg-3)]">Whoever opens the link signs in to Tynn and reaches this machine over the Tynn relay — only what the link allows.</p>
@@ -63,12 +65,13 @@ export function ShareWorkspaceForm({ workspaceName, links, minted, problem, busy
                             <span className="font-medium">Reaches</span>
                             <Select aria-label="Reaches" list={[{ value: 'workspace', label: `${workspaceName} only` }, { value: 'whole', label: 'The whole workstation' }]} value={whole ? 'whole' : 'workspace'} onValueChange={(v) => setWhole(v === 'whole')} />
                         </label>
-                        <button type="button" data-action="mint-share-link" disabled={busy} onClick={() => { setCopied(false); onMint({ capability, expiresInDays: days, whole }); }} className={button}>Create link</button>
+                        <button type="button" data-action="mint-share-link" disabled={busy} onClick={() => { linkCopy.reset(); onMint({ capability, expiresInDays: days, whole }); }} className={button}>Create link</button>
                     </div>
                     {minted?.url ? (
                         <div data-share-minted="" className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] px-3 py-2">
                             <code className="min-w-0 flex-1 truncate font-mono text-xs">{minted.url}</code>
-                            <button type="button" data-action="copy-share-link" onClick={() => { void navigator.clipboard?.writeText(minted.url!).then(() => setCopied(true)); }} className={button}>{copied ? 'Copied' : 'Copy'}</button>
+                            <button type="button" data-action="copy-share-link" data-copy-state={linkCopy.state} onClick={() => { void linkCopy.copy(minted.url!); }} className={button}>{copyWords(linkCopy.state, 'Copy')}</button>
+                            <CopyAnnounce state={linkCopy.state} />
                             <span className="basis-full text-xs text-[var(--fg-3)]">Shown this once — Tynn keeps no copy you can read back. {linkWords(minted)}.</span>
                         </div>
                     ) : null}

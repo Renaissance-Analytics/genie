@@ -680,7 +680,27 @@ if (!approvalEnabled) {
          * button turns "copied" only when main wrote the clipboard through Electron and read the same text back.
          */
         const PROSE = `[...document.querySelectorAll('[data-chat] [data-chat-prose]')].find((p) => p.querySelector('[data-chat-result]'))`;
-        const replied = await waitFor(cdp, `Boolean(${PROSE}?.querySelector('[data-react-fancy-content-copy="table"]'))`, 'the reply with its copy buttons in the chat');
+
+        /*
+         * 33d. A <result> STILL ARRIVING IS ITS CARD ALREADY (react-fancy 5.68 `streaming="progressive"`, #1277's behaviour).
+         * The stub streams the reply and holds it mid-body (`**Migrated:** us`) until this check creates its release file.
+         * Mid-stream: the card is drawn with the body so far, no `<result` shows as text, the reply's renderer streams
+         * progressively (Genie told it the reply is still arriving), and the code block that DID finish has its copy button.
+         */
+        const { writeFileSync: writeRelease } = await import('node:fs');
+        const { tmpdir } = await import('node:os');
+        const { join: joinPath } = await import('node:path');
+        const midCard = await waitFor(cdp, `(() => { const r = ${PROSE}?.querySelector('[data-chat-result]'); return Boolean(r && r.textContent.includes('Migrated:') && !r.textContent.includes('users')); })()`, 'the <result> card mid-stream');
+        const mid = await cdp.evaluate(`(() => { const p = ${PROSE}; if (!p) return '{}'; const root = p.querySelector('[data-react-fancy-content-renderer]'); return JSON.stringify({
+            mode: root?.getAttribute('data-streaming-mode') ?? null, body: p.querySelector('[data-chat-result]')?.textContent ?? null,
+            raw: /<\\/?result/.test(p.textContent), code: p.querySelectorAll('[data-react-fancy-content-copy="code"]').length }); })()`);
+        // Release the rest of the reply whatever happened above: the checks after this one need the whole of it.
+        writeRelease(joinPath(tmpdir(), 'genie-stub-codex-stream-release'), '');
+        const m = JSON.parse(mid || '{}');
+        check(midCard && m.mode === 'progressive' && m.raw === false && m.code === 1 && /Migrated:\s*us$/.test((m.body ?? '').trim()),
+            '33d. a streamed <result> shows its card MID-STREAM (react-fancy progressive), never a raw tag', mid);
+
+        const replied = await waitFor(cdp, `Boolean(${PROSE}?.querySelector('[data-react-fancy-content-copy="table"]')) && (${PROSE}?.querySelector('[data-chat-result]')?.textContent ?? '').includes('users')`, 'the whole reply with its copy buttons in the chat');
         const blocks = await cdp.evaluate(`(() => { const p = ${PROSE}; if (!p) return '{}'; const n = (s) => p.querySelectorAll(s).length; return JSON.stringify({
             pre: n('pre'), tables: n('table'), code: n('[data-react-fancy-content-copy="code"]'), table: n('[data-react-fancy-content-copy="table"]'),
             result: n('[data-copy="result"]'), genieCodeOrTable: n('[data-copy="code"], [data-copy="table"]'), live: n('[data-react-fancy-content-renderer-live]') }); })()`);

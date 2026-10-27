@@ -81,3 +81,43 @@ describe('chatThreadFrom — the transcript', () => {
         expect(thread).toMatchObject({ agentId: 'a1', name: 'atlas', messages: [], context: null });
     });
 });
+
+describe('chatThreadFrom — the reply STILL ARRIVING (react-fancy 5.68 `streaming="progressive"`)', () => {
+    /*
+     * react-fancy draws a reply that is still arriving progressively (an open <result> as its card with the body so far,
+     * an open fence as code with no copy button) and a finished one whole: `streaming={done ? false : "progressive"}`.
+     * So the chat must know WHICH reply is still arriving: the agent's last words while its turn is working and nothing
+     * has happened since (a tool call, a turn boundary, your message). Everything else is finished.
+     */
+    const reply = (id: string, text = 'Here is the <result>\nbody so') => ev(id, { kind: 'message', speaker: 'agent', peerName: null, text });
+
+    it('the agent’s last message while its turn works is the one arriving', () => {
+        const d = detail([ev('e1', { kind: 'message', speaker: 'you', peerName: null, text: 'go' }), reply('e2')]);
+        expect(chatThreadFrom(d, 'a1', [], () => 0).arriving).toBe('e2');
+    });
+
+    it('rows that say nothing new (usage, a debug notice) do not end it', () => {
+        const d = detail([reply('e2'), ev('u1', { kind: 'usage' } as never), ev('n1', { kind: 'notice', level: 'debug', message: 'x' } as never)]);
+        expect(chatThreadFrom(d, 'a1', [], () => 0).arriving).toBe('e2');
+    });
+
+    it('a thought still arriving is the thinking row', () => {
+        const d = detail([reply('e2'), ev('t1', { kind: 'think', text: 'hmm', tokens: null } as never)]);
+        expect(chatThreadFrom(d, 'a1', [], () => 0).arriving).toBe('t1');
+    });
+
+    it('FINISHED: a tool call after it, the turn not working, no session, or your message last: nothing is arriving', () => {
+        const tool = ev('x1', { kind: 'tool', toolCallId: 'c1', title: 'ls', toolKind: 'execute', status: 'pending', rawInput: {} } as never);
+        expect(chatThreadFrom(detail([reply('e2'), tool]), 'a1', [], () => 0).arriving).toBeNull();
+        expect(chatThreadFrom(detail([reply('e2')], session({ turnState: 'idle' } as never)), 'a1', [], () => 0).arriving).toBeNull();
+        expect(chatThreadFrom(detail([reply('e2')], session({ running: false })), 'a1', [], () => 0).arriving).toBeNull();
+        expect(chatThreadFrom(detail([reply('e2')], null), 'a1', [], () => 0).arriving).toBeNull();
+        expect(chatThreadFrom(detail([reply('e2'), ev('e3', { kind: 'message', speaker: 'you', peerName: null, text: 'hm' })]), 'a1', [], () => 0).arriving).toBeNull();
+        expect(chatThreadFrom(null, 'a1', [rowOf({})], () => 0).arriving).toBeNull();
+    });
+
+    it('a PEER’s message is delivered whole: never arriving', () => {
+        const d = detail([ev('e4', { kind: 'message', speaker: 'peer', peerName: 'wren', text: 'drop the <resul' })]);
+        expect(chatThreadFrom(d, 'a1', [], () => 0).arriving).toBeNull();
+    });
+});

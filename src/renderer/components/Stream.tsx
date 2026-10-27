@@ -136,6 +136,8 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
     // The live thought: the LAST row of the whole stream (not of the filtered view) while the turn runs.
     const last = rows.at(-1);
     const liveId = live && last && last.event.kind === 'think' ? last.id : null;
+    // The agent's words still arriving, the same way: drawn progressively (react-fancy 5.68), every other prose row whole.
+    const arrivingId = live && last && last.event.kind === 'message' && last.event.speaker === 'agent' ? last.id : null;
 
     /**
      * The empty state.
@@ -209,7 +211,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} streaming={row.id === arrivingId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} />
                 )}
             />
 

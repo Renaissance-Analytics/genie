@@ -8,6 +8,7 @@ import {
 import { useCodeEditor } from '@particle-academy/fancy-code';
 import { Button } from '@particle-academy/react-fancy';
 import { clampWandX, sameAnchor, type WandAnchor } from '../../core/wand-anchor.js';
+import { CopyAnnounce, copyText, copyWords } from './CopyText.js';
 
 /**
  * EditorWand — a selection-anchored floating toolbar for the Code editor.
@@ -30,8 +31,8 @@ interface WandAction {
     id: string;
     label: string;
     title: string;
-    /** Run the action. Receives the current selection text. */
-    run: (selection: string) => void | Promise<void>;
+    /** Run the action. Receives the current selection text. `false` = it failed: the pill stays and says so. */
+    run: (selection: string) => void | boolean | Promise<void | boolean>;
     /** Hide the pill after running (default true). */
     hideAfter?: boolean;
 }
@@ -116,6 +117,8 @@ export function EditorWand() {
     const wandRef = useRef<HTMLDivElement>(null);
     const [pos, setPos] = useState<WandAnchor | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
+    /** The action that just failed (only Copy can): its button and the live region say so until the pill goes. */
+    const [failed, setFailed] = useState<string | null>(null);
 
     const hide = useCallback(() => {
         setPos(null);
@@ -221,13 +224,8 @@ export function EditorWand() {
             id: 'copy',
             label: 'Copy',
             title: 'Copy selection',
-            run: async (sel) => {
-                try {
-                    await navigator.clipboard.writeText(sel);
-                } catch {
-                    /* clipboard unavailable — silent */
-                }
-            },
+            // Through main's clipboard, read back (CopyText): a copy that did not land keeps the pill open, saying so.
+            run: (sel) => copyText(sel),
         },
         {
             id: 'paste',
@@ -258,10 +256,15 @@ export function EditorWand() {
         async (action: WandAction) => {
             const sel = getSelection();
             setBusy(action.id);
+            setFailed(null);
+            let failedNow = false;
             try {
-                await action.run(sel);
+                failedNow = (await action.run(sel)) === false;
             } finally {
-                if (action.hideAfter === false) {
+                if (failedNow) {
+                    setBusy(null);
+                    setFailed(action.id);
+                } else if (action.hideAfter === false) {
                     setBusy(null);
                     // Re-measure: Select All grows the selection, so the pill
                     // should re-anchor rather than vanish. Through the same
@@ -275,6 +278,8 @@ export function EditorWand() {
         },
         [getSelection, scheduleMeasure, hide],
     );
+    // A failure is said until the pill goes away; a pill that comes back starts clean.
+    useEffect(() => { if (!pos) setFailed(null); }, [pos]);
 
     if (!pos) return null;
 
@@ -290,9 +295,10 @@ export function EditorWand() {
             <span className="px-1 text-[var(--accent)]" aria-hidden>✦</span>
             {actions.map((a) => (
                 <Button key={a.id} size="xs" variant="ghost" title={a.title} disabled={busy !== null} onClick={() => void onAction(a)}>
-                    {busy === a.id ? '…' : a.label}
+                    {busy === a.id ? '…' : failed === a.id && a.id === 'copy' ? copyWords('failed', a.label) : a.label}
                 </Button>
             ))}
+            <CopyAnnounce state={failed === 'copy' ? 'failed' : 'idle'} />
         </div>
     );
 }

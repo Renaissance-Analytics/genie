@@ -117,7 +117,9 @@ the corrupt file.
   those copies through its own writer or switch them off. Genie is not affected today
   (`DocumentEditor`'s `readOnly` is never set, so its `Editor` is always in edit mode); a
   read-only document would get copy buttons on the page's clipboard, which can fail silently
-  in a sandboxed Electron window.
+  in a sandboxed Electron window. **Resolved in `5.68.0`**, which forwards all three:
+  `DocumentEditor` passes `clipboardWriter={genieClipboardWriter}`, and a source guard
+  (`test/clipboard-guard.test.ts`) holds every `Editor` that can be in view mode to it.
 
 ## D7 — Packaging, and what the audit noise means
 

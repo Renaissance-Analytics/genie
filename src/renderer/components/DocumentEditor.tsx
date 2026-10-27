@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Badge, Drawer, Editor } from '@particle-academy/react-fancy';
 import { frontMatterPill } from '../../core/front-matter.js';
 import { FrontMatterDrawer } from './FrontMatterDrawer.js';
+import { genieClipboardWriter } from '../clipboard.js';
 
 /**
  * THE DOCUMENT PLUGIN'S EDITOR (beta.33 item 14; Genie 1 renderer/components/Plugins/DocumentEditor.tsx). The owner: "why am
@@ -40,7 +41,9 @@ export function DocumentEditor({ value, onChange, frontMatter, onFrontMatterChan
     const pill = frontMatterPill(frontMatter ?? null);
 
     const editor = (
-        <Editor value={value} onChange={onChange} valueFormat="markdown" outputFormat="markdown" mode={readOnly ? 'view' : 'edit'} className="flex min-h-0 flex-1 flex-col rounded-none border-0">
+        // Read-only, react-fancy 5.68 renders it through ContentRenderer with a copy button on each code block and table, and
+        // forwards the writer: every copy goes through main's clipboard (renderer/clipboard.ts), as the chat's do.
+        <Editor value={value} onChange={onChange} valueFormat="markdown" outputFormat="markdown" mode={readOnly ? 'view' : 'edit'} clipboardWriter={genieClipboardWriter} className="flex min-h-0 flex-1 flex-col rounded-none border-0">
             {readOnly ? null : <Editor.Toolbar actions={ACTIONS} showSourceToggle />}
             <Editor.Content className="min-h-0 flex-1 overflow-y-auto" />
         </Editor>

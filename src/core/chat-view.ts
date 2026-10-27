@@ -111,6 +111,8 @@ export interface ChatThreadView {
     loaded: boolean;
     /** Rows of the ledger lie before these messages ({@link chatTailStart}): earlier history, which pages in on request. */
     earlier: boolean;
+    /** The message still arriving ({@link arrivingMessageId}), drawn progressively; `null` = every message is finished. */
+    arriving: string | null;
 }
 
 /** The slice of an agent's detail the thread reads (structurally `AgentDetail`, without binding core to the bridge). */
@@ -291,16 +293,49 @@ export function chatThreadFrom(detail: ChatDetail | null, subjectId: string, row
     const own = detail !== null && (detail.agent.id === subjectId || detail.agent.id === row?.id || detail.agent.name === subjectId);
     if (!own) detail = null;
     const start = detail && lines !== undefined ? chatTailStart(detail.rows, lines) : 0;
+    const messages = detail ? tailMessages(detail, rows, start) : [];
     return {
         agentId: subjectId,
         name: detail?.agent.name ?? row?.name ?? subjectId,
         fidelity: detail?.agent.fidelity ?? row?.fidelity ?? 'declared',
         unread: null,
-        messages: detail ? tailMessages(detail, rows, start) : [],
+        messages,
         context: detail ? chatContext(detail) : null,
         loaded: detail !== null,
         earlier: start > 0,
+        arriving: detail ? arrivingMessageId(detail, messages) : null,
     };
+}
+
+/** Rows that say nothing new about the conversation: they arrive beside a reply without ending it. */
+function quiet(e: StreamEvent): boolean {
+    return e.kind === 'usage' || e.kind === 'prompt_delivery' || e.kind === 'unknown' || (e.kind === 'notice' && e.level === 'debug');
+}
+
+/**
+ * THE MESSAGE STILL ARRIVING (react-fancy 5.68 `streaming="progressive"`): the agent's words — a reply or a thought — that
+ * are the last thing in its ledger while its turn is working. react-fancy draws that one progressively (an open <result>
+ * as its card with the body so far, an open fence as code with no copy button yet) and every other message whole, which
+ * is its contract: `streaming={done ? false : "progressive"}`. Anything after it that says something (a tool call, a
+ * turn boundary, your message) means it is finished; so does a turn that is not working. A peer's message is delivered
+ * whole and never arrives.
+ */
+export function arrivingMessageId(detail: ChatDetail, messages: readonly ChatMessage[]): string | null {
+    const s = detail.session;
+    if (!s || !s.running || s.turnState !== 'working') return null;
+    let at = detail.rows.length - 1;
+    while (at >= 0 && quiet(detail.rows[at]!.event)) at -= 1;
+    const last: TimedEvent | undefined = detail.rows[at];
+    if (!last) return null;
+    const e = last.event;
+    const id = last.id;
+    if (e.kind === 'message' && e.speaker === 'agent') return messages.some((m) => m.id === id && m.who === 'agent') ? id : null;
+    if (e.kind === 'think') {
+        // Thoughts in a row are one message, under the first one's id: the thinking row last in the thread holds it.
+        const thought = [...messages].reverse().find((m) => m.who === 'thinking');
+        return thought?.id ?? null;
+    }
+    return null;
 }
 
 /** The OS agent's address in a route (`chat=genie`); its minted id resolves from the name. */
