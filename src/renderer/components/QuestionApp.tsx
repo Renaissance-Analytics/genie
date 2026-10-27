@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
 import { ContentRenderer } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { FileViewer } from '@particle-academy/fancy-code';
@@ -6,6 +6,7 @@ import { extractFileRefs, splitByExistence, type AskFileRef } from '../../core/a
 import { questionWindowAction } from '../../core/keys.js';
 import { ageLabel, type DeckItem } from '../../core/deck.js';
 import { activeQuestion, type QuestionDraft, type QuestionDrafts } from '../../core/question-drafts.js';
+import { resetScrollOnQuestionChange } from '../../core/question-scroll.js';
 import { QuestionForm } from './QuestionForm.js';
 import { WorkspaceSwatch } from '../workspace-colors.js';
 
@@ -23,6 +24,20 @@ import { WorkspaceSwatch } from '../workspace-colors.js';
  * long ago, what it asks — and the person picks which to answer, in any order (Genie 1's queue strip, genie
  * renderer/pages/ask.tsx). One put off with Later is still listed, marked. Each question's form starts from the draft
  * kept for it, so moving between them, or another agent asking meanwhile, loses nothing typed.
+ *
+ * ## The handle never scrolls; the next question starts at its top (genie#1298)
+ *
+ * The owner, beta.49: the drag zone scrolled away with the list, so the window moved only while it was scrolled to the
+ * top. Genie 1's layout (v0.7.0-beta.342 renderer/pages/ask.tsx, renderer/styles/globals.css): `.ask-head` is the drag
+ * region (its buttons no-drag) ABOVE `.ask-body`, the one `overflow-y: auto` region, in an `.ask-frame` of `height: 100vh;
+ * overflow: hidden`; `no-drag` only on the controls INSIDE a drag strip (`.ask-head button`, `.ask-queued`), never on
+ * `.ask-body`. Here the same: the header strip (`data-question-drag`) is the one app region, outside the content scroller
+ * (`data-question-scroll`); the window clips. The queue, the content and the drawer used to say `-webkit-app-region:
+ * no-drag` — regions in the window's drag map that live in scrolled content, the one thing that changed with the scroll
+ * position. Nothing outside the strip carries an app region now, as in Genie 1. Every
+ * scroller is `relative`, the containing block of ContentRenderer's absolutely positioned "Copied" live regions, so none
+ * can grow the document (genie#1290). When the question shown changes, the scroller goes back to its top
+ * (core/question-scroll.ts) — by its scrollTop, never by moving focus.
  */
 export interface QuestionAppView {
     readonly item: DeckItem;
@@ -79,15 +94,19 @@ function DrawerBody({ path, text, line }: { path: string; text: string; line: nu
                     <button type="button" data-action="question-drawer-source" onClick={() => setSource((v) => !v)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[11px]">{source ? 'Read' : 'Source'}</button>
                 </div>
             ) : null}
-            <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
+            <div className="relative min-h-0 flex-1 overflow-auto px-3 pb-3">
                 {prose ? <ContentRenderer clipboardWriter={genieClipboardWriter} value={text} format="markdown" lineSpacing={1.6} className="text-[13px]" /> : <FileViewer filename={path} value={text} readOnly {...(line ? { line } : {})} theme="auto" />}
             </div>
         </div>
     );
 }
 
+/**
+ * The one app region in this window: the header strip. Nothing else says `no-drag` — nothing outside the strip needs
+ * exempting from a drag, and a region in scrolled content is one the scroll can move (genie#1298). An interactive control
+ * ever put IN the strip says `no-drag` itself (Genie 1's `.ask-head button`).
+ */
 const DRAG = { WebkitAppRegion: 'drag' } as CSSProperties;
-const NO_DRAG = { WebkitAppRegion: 'no-drag' } as CSSProperties;
 
 export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismiss, picked = null, onPick, drafts, onDraft, now = Date.now(), existing = null, drawer = null, onOpenFile, onCloseFile }: QuestionAppProps) {
     // ESC IS LATER (Tynn #759; Genie 1's "PARK, never kill"): the question stays in Pending Questions with its draft;
@@ -108,17 +127,28 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     });
-    if (!view) return <div data-question-window="empty" className="h-screen bg-[var(--bg-0)]" />;
-    const queue = view.queue && view.queue.length > 0 ? view.queue : [view.item];
-    const activeId = activeQuestion({ picked, shown: view.item.id, queue: queue.map((q) => q.id) });
-    const item = queue.find((q) => q.id === activeId) ?? view.item;
+    const queue = view ? (view.queue && view.queue.length > 0 ? view.queue : [view.item]) : [];
+    const activeId = view ? activeQuestion({ picked, shown: view.item.id, queue: queue.map((q) => q.id) }) : null;
+    const item = view ? queue.find((q) => q.id === activeId) ?? view.item : null;
+    const shownId = item?.id ?? null;
+    // Another question shown (the next after an answer, or one picked): its content starts at the top (genie#1298).
+    // Before paint, so the old offset is never seen; scrollTop only — no focus, no document scroll.
+    const scrollRef = useRef<HTMLElement | null>(null);
+    const shownRef = useRef<string | null>(null);
+    useLayoutEffect(() => {
+        if (shownId === null) return;
+        resetScrollOnQuestionChange(scrollRef.current, shownRef.current, shownId);
+        shownRef.current = shownId;
+    }, [shownId]);
+    if (!view || !item) return <div data-question-window="empty" className="h-screen bg-[var(--bg-0)]" />;
     const parked = new Set(view.parked ?? []);
     // A draft written for an earlier revision of the question is not this form's: an updated question starts clean.
     const kept = drafts?.[item.id] ?? view.drafts?.[item.id];
     const draft = kept && (kept.revision ?? 0) === (item.revision ?? 0) ? kept : undefined;
     return (
-        <div data-question-window={item.id} className="flex h-screen flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
-            <header style={DRAG} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-4 py-3">
+        <div data-question-window={item.id} className="flex h-screen flex-col overflow-hidden bg-[var(--bg-0)] text-[var(--fg-1)]">
+            {/* THE HANDLE: fixed above the scroller, never inside it (genie#1298). Nothing in it is interactive. */}
+            <header data-question-drag="" style={DRAG} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-4 py-3">
                 <span className="text-[14px] font-semibold">{item.agentName ?? 'An agent'} asks you</span>
                 {/* Which workspace asks, in its colour beside its name (genie#1300). */}
                 {item.workspaceName ? <span data-question-workspace={item.workspaceId ?? ''} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-3)]"><WorkspaceSwatch color={item.workspaceColor} />{item.workspaceName}</span> : null}
@@ -126,8 +156,8 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                 {view.waiting > 0 ? <span data-question-waiting={view.waiting} className="ml-auto text-[11px] text-[var(--fg-3)]">{view.waiting} more after this</span> : null}
             </header>
             {queue.length > 1 ? (
-                // THE QUEUE: every question asked, from every agent — pick any. Not draggable: these are buttons.
-                <nav style={NO_DRAG} data-question-queue={queue.length} aria-label="Questions waiting for you" className="flex max-h-[30%] shrink-0 flex-col gap-1 overflow-y-auto border-b border-[var(--border-1)] px-3 py-2">
+                // THE QUEUE: every question asked, from every agent — pick any. Not a drag region, and no app region at all.
+                <nav data-question-queue={queue.length} aria-label="Questions waiting for you" className="relative flex max-h-[30%] shrink-0 flex-col gap-1 overflow-y-auto border-b border-[var(--border-1)] px-3 py-2">
                     {queue.map((q) => {
                         const on = q.id === item.id;
                         return (
@@ -150,7 +180,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                 </nav>
             ) : null}
             <div className="flex min-h-0 flex-1">
-            <main style={NO_DRAG} className="min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3">
+            <main ref={scrollRef} data-question-scroll="" className="relative min-h-0 min-w-0 flex-1 overflow-y-auto px-4 py-3">
                 <QuestionFiles item={item} existing={existing} open={drawer?.path ?? null} {...(onOpenFile ? { onOpen: onOpenFile } : {})} />
                 {/* Keyed by the question AND its revision: another question, or this one updated by its agent, is another form.
                     Its draft comes back from the window's drafts (by question id), so returning to it loses nothing. */}
@@ -170,7 +200,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
             </main>
             {/* GENIE 1'S FILE DRAWER: the file the question names, beside it (the window widens for it, question-drawer.ts). */}
             {drawer ? (
-                <aside data-question-drawer={drawer.path} style={NO_DRAG} className="flex min-h-0 w-[520px] max-w-[60%] shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
+                <aside data-question-drawer={drawer.path} className="flex min-h-0 w-[520px] max-w-[60%] shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
                     <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3 py-2 text-[12px]">
                         <span className="min-w-0 flex-1 truncate font-mono" title={drawer.path}>{drawer.path}</span>
                         <button type="button" data-action="question-drawer-close" onClick={() => onCloseFile?.()} title="Close (Esc)" className="rounded-md border border-[var(--border-1)] px-2 py-0.5">Close</button>
