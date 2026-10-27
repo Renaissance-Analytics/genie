@@ -142,6 +142,13 @@ writeFileSync(
                 lastUsedAt: null,
                 mode: 'manual',
                 accessScope: 'none',
+                // A KEPT PLAN (identity.ts `plan`), so the Active Plan column has steps whose chat icon the smoke can click
+                // (check 64c, the plan pill focusing the composer without scrolling anything).
+                plan: [
+                    { content: 'Read the migration brief', status: 'completed' },
+                    { content: 'Migrate the accounts table', status: 'in_progress' },
+                    { content: 'Run the suite', status: 'pending' },
+                ],
             },
         ],
         null,
