@@ -1,4 +1,4 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
+import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
@@ -11,6 +11,7 @@ import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type Ch
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
+import { keepChat } from '../../core/chat-drafts.js';
 import { TurnStop } from './TurnStop.js';
 
 /**
@@ -194,7 +195,11 @@ export interface ChatFlyoutProps {
     approvalRefusal?: string | null | undefined;
     /** `note`: the person's words with the answer (beta.33 item 16), delivered to the agent; absent = none. */
     onAnswerApproval?: ((optionId: string, note?: string) => void) | undefined;
-    onSend: (text: string, attachments?: readonly Attachment[]) => void;
+    /**
+     * `agentId`: the chat the message was typed in (genie#1261) — each chat has its own composer, and reading the
+     * attachments is async, so the chat on screen by the time it is sent may be another.
+     */
+    onSend: (text: string, attachments?: readonly Attachment[], agentId?: string) => void;
     /** Absent = no close button (the doctor window: the chat is the page, not a panel). */
     onClose?: (() => void) | undefined;
     /**
@@ -346,6 +351,16 @@ export function ChatFlyout({
     const elsewhere = scope?.kind === 'elsewhere' ? scope.workspace : null;
     const blocked = scope?.kind === 'blocked' ? scope.reason : null;
     const addressee = thread ? (elsewhere ? `${thread.name} — in ${elsewhere}` : thread.name) : null;
+    /**
+     * ONE DRAFT PER CHAT (genie#1261, core/chat-drafts.ts): every chat typed in keeps its own composer, so a half-typed
+     * message stays with the chat it was typed in. Updated during render — the documented "adjust state while rendering"
+     * pattern — so the chat's own composer is there on the first frame it is shown; `keepChat` returns the same list
+     * once it is in, so this settles in one pass.
+     */
+    const activeChat = blocked ? null : thread?.agentId ?? '';
+    const [chats, setChats] = useState<readonly string[]>(() => keepChat([], activeChat));
+    const keptChats = keepChat(chats, activeChat);
+    if (keptChats !== chats) setChats(keptChats);
 
     return (
         <aside
@@ -658,13 +673,14 @@ export function ChatFlyout({
                         <Icon name="circle-alert" size="xs" />
                         <span>{blocked}</span>
                     </div>
-                ) : (
-                /*
-                 * `data-chat-composer`: Genie's own handle on the composer, and only on it (never on the notice above). The
-                 * smoke finds the composer by it — with paste pills on, react-fancy 5.39.0's input is a `contenteditable`
-                 * `role="textbox"`, not a `<textarea>`, so a selector for the library's element broke the day it changed.
-                 */
-                <div data-chat-composer="">
+                ) : null}
+                {/*
+                 * One composer per chat (genie#1261): the chat on screen shows its own; the others stay mounted, hidden, so
+                 * their drafts — text, paste pills, attachments — are there when their chat comes back. A blocked chat
+                 * hides them all and drops none.
+                 */}
+                <ChatComposers chats={keptChats} active={activeChat}>
+                    {(chat) => (
                     <PromptInput
                         {...(contextUsage
                             ? { budgetTokens: contextUsage.size, usedTokens: contextUsage.used, meter: 'near-limit' as const }
@@ -677,11 +693,33 @@ export function ChatFlyout({
                         previewChars={30}
                         commands={toPromptCmds(commands)}
                         placeholder={!thread ? 'Message this agent' : mailOnly ? `send to ${thread.name}'s inbox${elsewhere ? ` — in ${elsewhere}` : ''}` : approval ? `Reply to ${addressee}, or answer with A / D` : `Message ${addressee}`}
-                        onSubmit={(text, picked) => { void readAttachments(namePastedImages(text, picked)).then((files) => onSend(text, files)); }}
+                        onSubmit={(text, picked) => { void readAttachments(namePastedImages(text, picked)).then((files) => onSend(text, files, chat)); }}
                     />
-                </div>
-                )}
+                    )}
+                </ChatComposers>
             </div>
         </aside>
+    );
+}
+
+/**
+ * The kept composers (genie#1261), one per chat in ONE list keyed by the chat's agent: a chat never changes slot, so a
+ * switch only flips `hidden` and moves Genie's handle, and React keeps every instance — the way Genie 1 kept each
+ * terminal panel mounted-hidden by its id (v0.7.0-beta.342 `renderer/lib/terminal-grid-layout.ts`).
+ *
+ * `data-chat-composer` — Genie's own handle on the composer, and only on the one on screen (never on the blocked
+ * notice, never on a hidden draft). The smoke and the focus shortcut find the composer by it — with paste pills on,
+ * react-fancy's input is a `contenteditable` `role="textbox"`, not a `<textarea>`, so a selector for the library's
+ * element broke the day it changed. `data-chat-draft` names whose draft each one holds.
+ */
+export function ChatComposers({ chats, active, children }: { chats: readonly string[]; active: string | null; children: (chat: string) => ReactNode }) {
+    return (
+        <>
+            {chats.map((chat) => (
+                <div key={chat} data-chat-draft={chat} hidden={chat !== active} {...(chat === active ? { 'data-chat-composer': '' } : {})}>
+                    {children(chat)}
+                </div>
+            ))}
+        </>
     );
 }
