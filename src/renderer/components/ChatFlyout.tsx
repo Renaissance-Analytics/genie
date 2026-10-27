@@ -13,6 +13,7 @@ import type { ChatScope } from '../../core/chat-scope.js';
 import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat } from '../../core/chat-drafts.js';
 import { TurnStop } from './TurnStop.js';
+import { ProviderLogo, providerName } from './ProviderLogo.js';
 
 /**
  * THE CHAT FLYOUT — the only place a human types to an agent.
@@ -222,7 +223,7 @@ export interface ChatFlyoutProps {
     /** Present = the agent's provider login is held for its rate limit: `Resume now` on the context line (Tynn #794). */
     onResumeLimit?: (() => void) | undefined;
     /** Signed out: `Log in` on the context line, with the provider's name. */
-    onProviderLogin?: { name: string; run: () => void } | undefined;
+    onProviderLogin?: { provider: string; run: () => void } | undefined;
     /** Its account paused by the provider: `Try again` on the context line, for every agent on that login. */
     onAccountRetry?: (() => void) | undefined;
     /** A tool was refused for want of Claude Design's login (#1081): `Log in to Claude Design` on the context line. */
@@ -431,11 +432,12 @@ export function ChatFlyout({
                         <button
                             type="button"
                             data-action="provider-login"
-                            title={`Open the ${onProviderLogin.name} login in a window of its own`}
+                            title={`Open the ${providerName(onProviderLogin.provider)} login in a window of its own`}
                             onClick={() => onProviderLogin.run()}
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
                         >
-                            Log in to {onProviderLogin.name}
+                            <ProviderLogo provider={onProviderLogin.provider} size="xs" className="text-[var(--fg-1)]" />
+                            Log in
                         </button>
                     ) : null}
                     {onAccountRetry ? (

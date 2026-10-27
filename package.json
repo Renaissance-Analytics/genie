@@ -21,6 +21,7 @@
   "dependencies": {
     "@particle-academy/agent-integrations": "0.47.1",
     "@particle-academy/dark-slide": "0.19.0",
+    "@particle-academy/fancy-brand-icons": "0.4.0",
     "@particle-academy/fancy-code": "0.15.0",
     "@particle-academy/fancy-diff": "^0.5.1",
     "@particle-academy/fancy-file-commons": "^0.3.0",

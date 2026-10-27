@@ -182,7 +182,8 @@ describe('the window’s notice', () => {
     it('LOUD: what is running, and every step, for a known provider', () => {
         const html = renderToStaticMarkup(<TakeOverWindow terminalId="t1" terminals={NO_TERMINALS} login="claude" />);
         expect(html).toContain('data-login-notice="claude"');
-        expect(html).toContain('Log in to Claude Code');
+        // The heading is the provider's LOGO and `Log in` (genie#1266); its name is the logo's accessible name.
+        expect(html).toMatch(/<h1[^>]*><span[^>]*aria-label="Claude Code"[^>]*data-provider-logo="claude"[\s\S]*?<\/span>Log in<\/h1>/);
         expect(html).toContain('claude auth login');
         expect(html).toMatch(/browser/i);
         expect(html).toMatch(/close this window/i);
@@ -191,7 +192,9 @@ describe('the window’s notice', () => {
     it('for a provider Genie has no login for: the steps to do it by hand in its own CLI', () => {
         const html = renderToStaticMarkup(<TakeOverWindow terminalId="t1" terminals={NO_TERMINALS} login="aider" />);
         expect(html).toContain('data-login-notice="aider"');
-        expect(html).toMatch(/Log in to aider/);
+        expect(html).toMatch(/<h1[^>]*><span[^>]*aria-label="aider"[^>]*data-provider-logo="aider"[\s\S]*?<\/span><\/span>Log in<\/h1>/);
+        // The steps still name it: they are sentences, and a person types its command from them.
+        expect(html).toMatch(/Genie has opened aider in the terminal below/);
         expect(html).toMatch(/login command/i);
     });
 

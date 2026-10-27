@@ -29,6 +29,7 @@ import { flowSummary } from '../../core/flow-canvas.js';
 import { PROCESS_SCHEDULE_PRESETS, describeSchedule, formatLastRun, formatNextRun } from '../../core/scheduled-task.js';
 import { canCheckNow, updateStatusLine } from '../../core/update-status.js';
 import type { UpdateState } from '../bridge.js';
+import { ProviderLogo } from './ProviderLogo.js';
 
 /**
  * THE FEATURE SURFACES — Knowledge, Flows, Hosting, Toolchain, Inbox, Settings, Browser.
@@ -1600,7 +1601,7 @@ export interface ProviderStatus {
     readonly onLogin?: ((agentId: string) => void) | undefined;
 }
 
-function ProvidersBlock({ providers, onNavigate }: { providers: readonly ProviderStatus[] | undefined; onNavigate: SurfaceProps['onNavigate'] }) {
+export function ProvidersBlock({ providers, onNavigate }: { providers: readonly ProviderStatus[] | undefined; onNavigate: SurfaceProps['onNavigate'] }) {
     if (providers === undefined) return <Skeletons rows={2} />;
     return (
         <ul className="divide-y divide-[var(--border-1)]">
@@ -1609,7 +1610,7 @@ function ProvidersBlock({ providers, onNavigate }: { providers: readonly Provide
                 const login = p.onLogin;
                 return (
                     <li key={p.provider} data-provider={p.provider} className="flex flex-wrap items-center gap-3 py-2 text-sm">
-                        <span className="font-medium">{p.name}</span>
+                        <ProviderLogo provider={p.provider} size="md" className="text-[var(--fg-1)]" />
                         {p.installed === null ? <span className="text-[var(--fg-3)]">not checked yet</span> : p.installed ? <Badge variant="soft" size="sm">{p.version ?? 'installed'}</Badge> : <span className="text-[var(--warning)]">not installed</span>}
                         {out ? <span data-provider-signed-out={p.provider} className="text-[var(--danger)]">signed out ({out.agentName})</span> : null}
                         <span className="ml-auto flex items-center gap-2">

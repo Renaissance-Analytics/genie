@@ -6,7 +6,7 @@ import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentV
 
 /**
  * THE AGENT VIEW'S HEADER AND RIGHT COLUMN PER THE BOARD. Header: `{workspace} /` breadcrumb, the fidelity dot, the
- * name, a provider chip (`claude · ACP` / `aider · pty`), the pill in the board's words, then the actions with their
+ * name, a provider chip (the logo, then `ACP` / `pty`; genie#1266), the pill in the board's words, then the actions with their
  * chords (`Take over ⌘⇧T`, `Chat ⌘J`), `Stop this turn` while a turn runs that can be stopped, one `Restart` while it has a session (genie#1238). Right column: ONE 380px
  * panel holding the Inspector (when a row is selected) above Plan / Context / Cost — not a 420px Inspector beside a
  * 260px rail.
@@ -25,10 +25,11 @@ describe('the header', () => {
         const html = render();
         expect(html).toMatch(/data-crumb="tynn"[^>]*>Tynn\.ai \//);
         expect(html).toContain('data-fidelity="declared"');
-        expect(html).toMatch(/data-provider-chip="claude"[^>]*>claude · ACP</);
+        // The provider is its LOGO, then the engine (genie#1266): no provider word.
+        expect(html).toMatch(/data-provider-chip="claude"[^>]*><span[^>]*data-provider-logo="claude"[\s\S]*?<\/svg><\/span>ACP</);
         expect(html).toContain('data-pill="Turn 14 · running"');
         const observed = render({ agent: { ...agent, fidelity: 'observed', provider: 'aider' }, session: null, tab: 'activity', takeOver: { terminalId: 't', startedAt: 0, lastOutputAt: 1_000_000 - 10_000, bursts: [] } });
-        expect(observed).toMatch(/data-provider-chip="aider"[^>]*>aider · pty</);
+        expect(observed).toMatch(/data-provider-chip="aider"[^>]*><span[^>]*aria-label="aider"[^>]*data-provider-logo="aider"[^>]*><span[^>]*>A<\/span><\/span>pty</);
         expect(observed).toContain('data-pill="Active · last output 10s ago"');
     });
 
