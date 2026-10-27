@@ -25,7 +25,7 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
     return out;
 }
 
-const install = (account: string, isOrg: boolean, id = 1): GithubInstallation => ({ id, account, isOrg, selection: 'all', repoCount: null, repos: null, permissions: { contents: 'write' }, settingsUrl: `https://github.com/settings/installations/${id}` });
+const install = (account: string, isOrg: boolean, id = 1, permissions: GithubInstallation['permissions'] = { contents: 'write', administration: 'write' }): GithubInstallation => ({ id, account, isOrg, selection: 'all', repoCount: null, repos: null, permissions, settingsUrl: `https://github.com/settings/installations/${id}` });
 const signedIn = (installations: GithubInstallation[] | null): GithubView => ({ ...signedOutGithubView(null), status: 'signed-in', user: { login: 'ada', name: 'Ada' }, installations });
 
 function view(choice: RemoteChoice, github: GithubView | null) {
@@ -102,6 +102,32 @@ describe('GitHub: the owner picker and the private toggle', () => {
         const { ui, asked } = view({ kind: 'github', owner: 'ada', private: true }, gh);
         for (const b of findAll(ui, (p) => p['data-action'] === 'github-install-other' || p['data-action'] === 'github-refresh')) (b.onClick as () => void)();
         expect(asked.sort()).toEqual(['install', 'refresh']);
+    });
+});
+
+describe('an account the App may not create repositories in (Administration not granted)', () => {
+    it('the chosen org says why in one line and offers to approve it on that installation — a granted org does not (control)', () => {
+        const asked: unknown[] = [];
+        const github = signedIn([install('ada', false, 1), install('acme-org', true, 2, { contents: 'write' }), install('civic', true, 3)]);
+        const ui = RemoteChoiceView({ choice: { kind: 'github', owner: 'acme-org', private: true }, github, folder: 'acme.agi', onChoice: () => {}, onGithub: (a) => asked.push(a) });
+        const html = renderToStaticMarkup(ui);
+        expect(html).toContain('Administration (Read and write)');
+        expect(html).not.toMatch(/isn(?:'|&#x27;)t installed on/);
+        for (const b of findAll(ui, (p) => p['data-action'] === 'github-approve')) (b.onClick as () => void)();
+        expect(asked).toEqual([{ approve: 2 }]);
+
+        const granted = RemoteChoiceView({ choice: { kind: 'github', owner: 'civic', private: true }, github, folder: 'acme.agi', onChoice: () => {}, onGithub: () => {} });
+        expect(renderToStaticMarkup(granted)).not.toContain('Administration (Read and write)');
+        expect(findAll(granted, (p) => p['data-action'] === 'github-approve')).toHaveLength(0);
+    });
+
+    it('after the build: an approve button for that installation, never an install button', () => {
+        const asked: unknown[] = [];
+        const published: Published = { remote: null, repo: null, pushed: false, tynn: 'not-linked', problems: [{ step: 'github', message: 'Genie needs Administration (Read and write) on acme-org to create repositories there.', approve: { installationId: 22 } }] };
+        const ui = PublishedView({ name: 'Acme', path: '/w/acme.agi', published, onOpen: () => {}, onGithub: (a) => asked.push(a) });
+        expect(findAll(ui, (p) => p['data-action'] === 'github-install')).toHaveLength(0);
+        for (const b of findAll(ui, (p) => p['data-action'] === 'github-approve')) (b.onClick as () => void)();
+        expect(asked).toEqual([{ approve: 22 }]);
     });
 });
 

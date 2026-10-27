@@ -11,7 +11,7 @@ import { cloneAuthFor, pushAuthFor, signedOutGithubView, type GithubInstallation
  */
 
 const install = (over: Partial<GithubInstallation> & { account: string }): GithubInstallation => ({
-    id: 1, isOrg: false, selection: 'all', repoCount: null, repos: null, permissions: { contents: 'write', metadata: 'read' }, settingsUrl: 'https://github.com/settings/installations/1', ...over,
+    id: 1, isOrg: false, selection: 'all', repoCount: null, repos: null, permissions: { contents: 'write', metadata: 'read', administration: 'write' }, settingsUrl: 'https://github.com/settings/installations/1', ...over,
 });
 
 const signedIn = (installations: GithubInstallation[] | null, login = 'ada'): GithubView => ({
@@ -53,6 +53,18 @@ describe('the owner picker', () => {
 
     it('installations not read yet: the person, installed unknown (null) — never a guessed "not installed"', () => {
         expect(githubOwnerOptions(signedIn(null))).toEqual([{ login: 'ada', personal: true, installed: null }]);
+    });
+
+    it('an account whose installation lacks Administration (write) says so in one line, with the installation to approve it on — and a granted one does not (control)', () => {
+        const opts = githubOwnerOptions(signedIn([
+            install({ id: 1, account: 'ada' }),
+            install({ id: 2, account: 'acme-org', isOrg: true, permissions: { contents: 'write', metadata: 'read' }, settingsUrl: 'https://github.com/organizations/acme-org/settings/installations/2' }),
+        ]));
+        const org = opts.find((o) => o.login === 'acme-org')!;
+        expect(org).toMatchObject({ installed: true, approve: { installationId: 2 } });
+        expect(org.approve!.reason).toContain('Administration (Read and write)');
+        expect(org.approve!.reason).not.toContain('\n');
+        expect('approve' in opts.find((o) => o.login === 'ada')!).toBe(false);
     });
 
     it('signed out: nobody to pick', () => {

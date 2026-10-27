@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { GithubApiError, GithubAuthError, GithubNotInstalledError, githubErrorMessage, githubInstallUrl, pollOutcomeFrom, rateLimitWaitMs, refreshOutcomeFrom } from '../src/core/github.js';
+import { GithubApiError, GithubAuthError, GithubNotInstalledError, GithubPermissionError, githubErrorMessage, githubInstallUrl, pollOutcomeFrom, rateLimitWaitMs, refreshOutcomeFrom } from '../src/core/github.js';
 import { GithubAccount, type GithubAccountPorts, type GithubCipher } from '../src/main/github-account.js';
 
 /**
@@ -191,6 +191,62 @@ describe('not installed on that account: the error carries the install URL for i
         expect(error).toMatchObject({ account: 'ada', installUrl: 'https://github.com/apps/genie-aos/installations/new' });
         expect(githubInstallUrl(7)).toBe('https://github.com/apps/genie-aos/installations/new?suggested_target_id=7');
         expect(githubInstallUrl(null)).toBe('https://github.com/apps/genie-aos/installations/new');
+    });
+});
+
+/**
+ * AN ORGANIZATION'S `<slug>.agi`, AS THE PERSON (Tynn, 2026-10-27). Tynn no longer creates repositories: its GitHub App
+ * dropped Administration, so an organization's container is the client's to make — with the person's own sign-in, exactly
+ * as Genie 1 did (`v0.7.0-beta.342:main/github/api.ts:582-610`, createRepo: `POST /orgs/{owner}/repos` with the device-flow
+ * user token; a 403/404 read as "not installed"). A GitHub App user token can do only what BOTH the person and the App's
+ * installation on that account may: creating a repository needs the installation's Administration (write). Genie 1 could
+ * not tell that apart from "not installed" and sent the person to the install page for an app already installed.
+ */
+describe('an organization repository, created as the person', () => {
+    const installed = (permissions: Record<string, string>) => ({
+        'GET https://api.github.com/user/installations?per_page=100': { status: 200, body: { total_count: 1, installations: [{ id: 22, account: { login: 'Example-Org', type: 'Organization' }, repository_selection: 'all', permissions }] } },
+        'GET https://api.github.com/user/installations/22/repositories?per_page=1': { status: 200, body: { total_count: 3, repositories: [] } },
+    });
+
+    it('POST /orgs/{org}/repos goes with the person’s own user token — no installation token anywhere', async () => {
+        await signedIn();
+        const gh = fakeGithub({ ...installed({ metadata: 'read', contents: 'write', administration: 'write' }), 'POST https://api.github.com/orgs/Example-Org/repos': { status: 201, body: REPO('Example-Org', 'acme.agi') } });
+        const account = await open(gh).account;
+        await account.refresh();
+        const repo = await account.createRepo({ owner: 'Example-Org', name: 'acme.agi', private: true });
+        expect(repo).toMatchObject({ fullName: 'Example-Org/acme.agi', created: true });
+        const posts = gh.calls.filter((c) => c.method === 'POST');
+        expect(posts.map((c) => c.url)).toEqual(['https://api.github.com/orgs/Example-Org/repos']);
+        expect(posts[0]!.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+        expect(gh.calls.some((c) => c.url.includes('/access_tokens'))).toBe(false);
+    });
+
+    it('installed without Administration (write): refused BEFORE GitHub is asked, one line, the fix is that installation’s page', async () => {
+        await signedIn();
+        const gh = fakeGithub(installed({ metadata: 'read', contents: 'write' }));
+        const account = await open(gh).account;
+        await account.refresh();
+        const error = await account.createRepo({ owner: 'Example-Org', name: 'acme.agi', private: true }).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(GithubPermissionError);
+        expect(error).not.toBeInstanceOf(GithubNotInstalledError);
+        expect(error).toMatchObject({ code: 'permission_missing', account: 'Example-Org', installationId: 22, settingsUrl: 'https://github.com/organizations/Example-Org/settings/installations/22' });
+        expect((error as Error).message).toMatch(/Administration \(Read and write\)/);
+        expect((error as Error).message).not.toContain('\n');
+        expect(gh.calls.filter((c) => c.method === 'POST')).toEqual([]);
+    });
+
+    it('installed AND granted, GitHub still refuses: the person’s own access on the org, in GitHub’s words — not "not installed"', async () => {
+        await signedIn();
+        const gh = fakeGithub({ ...installed({ metadata: 'read', contents: 'write', administration: 'write' }), 'POST https://api.github.com/orgs/Example-Org/repos': { status: 403, body: { message: 'You need admin access to the organization before adding a repository to it.' } } });
+        const account = await open(gh).account;
+        await account.refresh();
+        const error = await account.createRepo({ owner: 'Example-Org', name: 'acme.agi', private: true }).catch((e: unknown) => e);
+        expect(error).toBeInstanceOf(GithubApiError);
+        expect(error).not.toBeInstanceOf(GithubNotInstalledError);
+        expect(error).not.toBeInstanceOf(GithubPermissionError);
+        expect((error as Error).message).toContain('You need admin access to the organization before adding a repository to it.');
+        expect((error as Error).message).toContain('Example-Org');
+        expect((error as Error).message).not.toContain('\n');
     });
 });
 

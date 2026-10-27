@@ -6,7 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RemoteChoice } from '../src/core/agi-remote.js';
 import { buildPlan, startDraft, type SourceAnalysis } from '../src/core/envelope-plan.js';
-import { GithubApiError, GithubNotInstalledError, type CreatedRepo } from '../src/core/github.js';
+import { GithubApiError, GithubNotInstalledError, GithubPermissionError, type CreatedRepo } from '../src/core/github.js';
 import { publishEnvelope, type AgiRemotePorts } from '../src/main/agi-remote-host.js';
 import { nodeEnvelopePorts } from '../src/main/envelope-fs.js';
 import { buildEnvelope, readSource } from '../src/main/envelope-wizard-host.js';
@@ -183,6 +183,18 @@ describe('None: off-grid is first-class — no remote, no GitHub, no Tynn', () =
 });
 
 describe('partial success: the workspace exists and is registered whatever GitHub, git or Tynn say', () => {
+    it('GitHub refuses for a missing Administration grant: the problem names the installation to approve it on — not an install', async () => {
+        const f: Fakes = { created: [], tynnCalls: [] };
+        const refused = new GithubPermissionError('acme-org', 22, 'https://github.com/organizations/acme-org/settings/installations/22');
+        const r = await createWorkspace(ops(remotePorts(f, { createRepo: async () => { throw refused; } })), 'perm', parent, { kind: 'github', owner: 'acme-org', private: true });
+        expect(r).toMatchObject({ ok: true, id: 'perm' });
+        const published = (r as unknown as { published: { problems: Array<{ step: string; message: string; account?: string; approve?: { installationId: number } }> } }).published;
+        expect(published.problems).toHaveLength(1);
+        expect(published.problems[0]).toMatchObject({ step: 'github', approve: { installationId: 22 } });
+        expect(published.problems[0]!.account).toBeUndefined();
+        expect(published.problems[0]!.message).toContain('Administration (Read and write)');
+    }, 60_000);
+
     it('GitHub refuses (not installed): no remote, registered, and the problem is GitHub’s step in GitHub’s words', async () => {
         const f: Fakes = { created: [], tynnCalls: [] };
         const refused = new GithubNotInstalledError('acme-org', 'https://github.com/apps/genie-aos/installations/new?suggested_target_id=42', 404, 'GitHub answered 404: Not Found');
