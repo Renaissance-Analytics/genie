@@ -1,5 +1,5 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
-import type { Headroom } from '../core/headroom.js';
+import { rateLimitAlert, type Headroom } from '../core/headroom.js';
 import type { MailSignal } from '../core/mail-signals.js';
 import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
@@ -504,6 +504,8 @@ export function Shell({
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
                     onAddWorkspace={onAddWorkspace}
                     onOpenBrowser={onOpenBrowser}
+                    // A provider limit running low lights the Dashboard row, from any page (genie#1268).
+                    rateLimitAlert={rateLimitAlert(rateLimits ?? {})}
                 />
 
                 <main className="min-w-0 flex-1 overflow-auto">

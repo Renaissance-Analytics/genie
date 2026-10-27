@@ -110,7 +110,7 @@ describe('every place Genie shows a provider wears its logo, not its name', () =
     });
 
     it('the rate-limit pills: one logo per provider, then its share left and window', () => {
-        const h = (leftPct: number, window: string): Headroom => ({ plan: null, window, leftPct, resetsAtMs: 0, over: false });
+        const h = (leftPct: number, window: string): Headroom => ({ plan: null, window, leftPct, resetsAtMs: 0, over: false, windows: [{ window, usedPct: 100 - leftPct, leftPct, resetsAtMs: 0, over: false }] });
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(80, '5h'), codex: h(97, '7d') }} />);
         expect(html).toMatch(/data-rate-limit="claude"[\s\S]*?data-provider-logo="claude"/);
         expect(html).toMatch(/data-rate-limit="codex"[\s\S]*?data-provider-logo="codex"/);

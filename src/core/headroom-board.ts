@@ -9,11 +9,17 @@ import type { Headroom } from './headroom.js';
 export class HeadroomBoard {
     readonly #shown = new Map<string, { room: Headroom; at: number }>();
 
-    /** A provider's reading: shown (true) unless that provider's last shown reading is younger than `bufferMs`. */
+    /**
+     * A provider's reading: shown (true) unless that provider's last shown reading is younger than `bufferMs`. A shown
+     * reading KEEPS every window an earlier one reported that it did not repeat (genie#1268: every reported limit, not
+     * only the latest frame's); a window it does repeat takes the new figure.
+     */
     offer(provider: string, room: Headroom, nowMs: number, bufferMs: number): boolean {
         const last = this.#shown.get(provider);
         if (last && nowMs < last.at + bufferMs) return false;
-        this.#shown.set(provider, { room, at: nowMs });
+        const named = new Set(room.windows.map((w) => w.window));
+        const kept = last ? last.room.windows.filter((w) => !named.has(w.window)) : [];
+        this.#shown.set(provider, { room: kept.length === 0 ? room : { ...room, windows: [...room.windows, ...kept] }, at: nowMs });
         return true;
     }
 

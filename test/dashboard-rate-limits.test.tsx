@@ -21,7 +21,10 @@ import { RateLimitPills } from '../src/renderer/components/Dashboard.js';
  * kept in MAIN, before anything reaches the window: an ignored reading costs one comparison and sends nothing.
  */
 
-const h = (leftPct: number, window = '5h'): Headroom => ({ plan: null, window, leftPct, resetsAtMs: Date.UTC(2026, 9, 26, 14, 0, 0), over: false });
+const h = (leftPct: number, window = '5h'): Headroom => {
+    const resetsAtMs = Date.UTC(2026, 9, 26, 14, 0, 0);
+    return { plan: null, window, leftPct, resetsAtMs, over: false, windows: [{ window, usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false }] };
+};
 const T0 = 1_000_000;
 const MIN = 60_000;
 
@@ -79,7 +82,8 @@ describe('a reading in an agent’s stream reaches the host’s owner with its p
 describe('in the header', () => {
     it('one pill per provider, its share left and window, the reset on hover', () => {
         const html = renderToStaticMarkup(<RateLimitPills limits={{ claude: h(62), codex: h(97, '7d') }} />);
-        expect(html).toMatch(/data-rate-limit="claude"[^>]*title="Resets [^"]+"/);
+        // The hover card and the pill’s accessible name list every reported window with its reset (genie#1268, rate-limit-detail).
+        expect(html).toMatch(/data-rate-limit="claude"[^>]*aria-label="Claude Code rate limits: 5h window: 38% used · 62% left · resets [^"]+"/);
         expect(html).toContain('62%');
         expect(html).toMatch(/data-rate-limit="codex"/);
         expect(html).toContain('97%');

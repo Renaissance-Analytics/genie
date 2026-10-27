@@ -45,7 +45,7 @@ describe('the row', () => {
     it('reads the board\'s line, the plan first when the provider named it', () => {
         expect(headroomLine(headroomOf([t('c', read(claude))])!)).toBe('38% of 5h window left · resets 4:00 PM');
         expect(headroomLine(headroomOf([t('a', read(codex))])!)).toBe('pro · 60% of 5h window left · resets 6:30 PM');
-        expect(headroomLine({ plan: null, window: '5h', leftPct: 0, resetsAtMs: at(16, 0), over: true })).toBe('over the 5h window · resets 4:00 PM');
+        expect(headroomLine({ plan: null, window: '5h', leftPct: 0, resetsAtMs: at(16, 0), over: true, windows: [{ window: '5h', usedPct: 108, leftPct: 0, resetsAtMs: at(16, 0), over: true }] })).toBe('over the 5h window · resets 4:00 PM');
     });
 });
 

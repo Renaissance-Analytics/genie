@@ -1,5 +1,6 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { useState } from 'react';
+import type { RateLimitAlert } from '../../core/headroom.js';
 import { deckBadge, filterRail, type RailItem, type RailSurface } from '../../core/rail-view.js';
 import { folderName } from '../../core/workspace-name.js';
 
@@ -71,6 +72,24 @@ export interface SidebarProps {
      * person has not visited since — its row pulses (Genie 1's attention-row-glow) instead of the view moving there.
      */
     pulsing?: ReadonlySet<string> | undefined;
+    /**
+     * A PROVIDER RATE LIMIT RUNNING LOW (genie#1268): a dot on the Dashboard row, where the limits are shown — yellow at
+     * 30% or less left, red at 10% or less (core/headroom.ts `rateLimitAlert`). Absent or `null` = no dot.
+     */
+    rateLimitAlert?: RateLimitAlert | null | undefined;
+}
+
+/** The rate-limit dot: static (nothing to reduce for reduced motion), named for a screen reader and on hover. */
+function RateLimitDot({ alert, compact }: { alert: RateLimitAlert; compact: boolean }) {
+    return (
+        <span
+            data-rate-limit-dot={alert.level}
+            role="img"
+            aria-label={alert.label}
+            title={alert.label}
+            className={`${compact ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-2'} shrink-0 rounded-full ${alert.level === 'danger' ? 'bg-[var(--danger)]' : 'bg-[var(--warning)]'}`}
+        />
+    );
 }
 
 /**
@@ -165,7 +184,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
@@ -218,7 +237,11 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         {badge !== null ? <span data-deck-dot="" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
                     </NavRow>
                 ) : null}
-                {has('dashboard') ? <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact /> : null}
+                {has('dashboard') ? (
+                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label={rateLimitAlert ? `Dashboard · ${rateLimitAlert.label}` : 'Dashboard'} onNavigate={onNavigate} compact>
+                        {rateLimitAlert ? <RateLimitDot alert={rateLimitAlert} compact /> : null}
+                    </NavRow>
+                ) : null}
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
@@ -303,7 +326,9 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     icon="layout-list"
                     label="Dashboard"
                     onNavigate={onNavigate}
-                />
+                >
+                    {rateLimitAlert ? <RateLimitDot alert={rateLimitAlert} compact={false} /> : null}
+                </NavRow>
             ) : null}
 
             {/*

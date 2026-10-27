@@ -68,7 +68,7 @@ describe('every surface says it that way, with the hover', () => {
     });
 
     it("the plan window's reset", () => {
-        const h = { plan: 'pro', window: '5h', leftPct: 60, resetsAtMs: at(18, 30), over: false };
+        const h = { plan: 'pro', window: '5h', leftPct: 60, resetsAtMs: at(18, 30), over: false, windows: [{ window: '5h', usedPct: 40, leftPct: 60, resetsAtMs: at(18, 30), over: false }] };
         expect(headroomLine(h)).toBe('pro · 60% of 5h window left · resets 6:30 PM');
         expect(headroomTitle(h)).toBe('Resets Sunday, October 25, 2026 at 6:30 PM');
     });
