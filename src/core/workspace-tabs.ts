@@ -66,7 +66,7 @@ export type StripItem =
  * Dashboard, the agents you opened (Tynn #805 — agents open INSIDE their workspace, as in Genie 1), the designed tabs in
  * the order made, +, Settings — + always just before Settings, Settings always last.
  */
-export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = [], extra: { github?: boolean } = {}): StripItem[] {
+export function tabStrip(state: TabsState, openAgents: ReadonlyArray<{ id: string; name: string }> = [], extra: { github?: boolean; tynn?: boolean } = {}): StripItem[] {
     return [
         { kind: 'dashboard' },
         // FILES, ITS OWN TAB (the owner, 2026-10-21: the panel docked beside the dashboard was "garbage"): always there.

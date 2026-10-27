@@ -1,0 +1,126 @@
+{
+  "contract": "workspace-ux",
+  "version": "0.1.0-draft",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Proposed home: Civicognita/shared-schemas (genie#1295). Until that lands, this file is mirrored byte-for-byte into each repo and pinned by sha256.",
+  "placeholders": {
+    "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
+    "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
+  },
+  "api": {
+    "base": "/api/v1/projects/{projectId}",
+    "credential": "the Genie pairing token (gpk_), never an agent's MCP key",
+    "scope": "genie:board",
+    "refusal": "404 for every refusal (no scope, no access, wrong project, role may not write)",
+    "invalid": "422 with errors.status naming why"
+  },
+  "surfaces": [
+    {
+      "id": "board",
+      "title": "Board",
+      "tynn": { "page": "v2/Project/Kanban", "route": "board", "pageAccess": "work" },
+      "data": {
+        "api": { "method": "GET", "path": "/board" },
+        "query": ["version", "story", "level", "features[]", "product"],
+        "levels": {
+          "versions": { "scope": "none", "columns": ["draft", "accepted", "active", "review"] },
+          "stories": { "scope": "version", "columns": ["backlog", "blocked", "in_progress", "qa", "done"] },
+          "tasks": { "scope": "story", "columns": ["backlog", "blocked", "doing", "qa", "done"] }
+        },
+        "fields": {
+          "version": ["id", "number", "title", "status", "story_count", "stories_done", "task_count", "tasks_done"],
+          "story": ["id", "story_number", "title", "status", "order", "task_count", "tasks_done", "claimed_by", "can_start", "can_move_to_qa", "version_active"],
+          "task": ["id", "task_number", "title", "status", "order", "story_id", "claimed_by", "can_start", "version_active"]
+        },
+        "drag": { "versions": false, "stories": true, "tasks": true, "override": "shift" },
+        "transitions": {
+          "story": {
+            "backlog": ["in_progress", "blocked"],
+            "in_progress": ["qa", "blocked", "backlog"],
+            "qa": ["done", "in_progress", "blocked", "backlog"],
+            "blocked": ["backlog", "in_progress", "qa", "archived"],
+            "done": ["archived", "in_progress", "backlog"],
+            "archived": []
+          },
+          "task": {
+            "backlog": ["doing", "blocked"],
+            "doing": ["qa", "blocked", "backlog"],
+            "qa": ["done", "doing", "blocked", "backlog"],
+            "blocked": ["backlog", "doing", "qa", "archived"],
+            "done": ["archived", "doing", "backlog"],
+            "archived": []
+          }
+        },
+        "quickActions": {
+          "version": {
+            "draft": { "verb": "accept" },
+            "accepted": { "verb": "start" },
+            "active": { "verb": "review" },
+            "review": { "verb": "release" },
+            "vip": { "verb": "release" },
+            "rejected": { "verb": "restart" }
+          },
+          "story": {
+            "backlog": { "verb": "start", "guard": "can_start" },
+            "in_progress": { "verb": "ready", "guard": "can_move_to_qa" },
+            "qa": { "verb": "done" },
+            "blocked": { "verb": "restart" }
+          },
+          "task": {
+            "backlog": { "verb": "start", "guard": "can_start" },
+            "doing": { "verb": "ready", "guard": "version_active" },
+            "qa": { "verb": "done", "guard": "version_active" },
+            "blocked": { "verb": "restart" }
+          }
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "the board is being read" },
+        { "id": "empty-column", "what": "a column with no cards says so" },
+        { "id": "drill-down", "what": "a version opens its stories, a story its tasks, and the person can go back up a level" },
+        { "id": "illegal-drop", "what": "a drop onto a column the card cannot reach does not move it" },
+        { "id": "override-armed", "what": "holding Shift while dragging lets the person drop anywhere" },
+        { "id": "transition-refused", "what": "a refused step shows the reason the state machine gave" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "version.accept", "web": "POST versions.accept", "api": { "method": "POST", "path": "/versions/{versionId}/accept" }, "to": "accepted" },
+        { "id": "version.start", "web": "POST versions.start", "api": { "method": "POST", "path": "/versions/{versionId}/start" }, "to": "active" },
+        { "id": "version.review", "web": "POST versions.review", "api": { "method": "POST", "path": "/versions/{versionId}/review" }, "to": "review" },
+        { "id": "version.release", "web": "POST versions.release", "api": { "method": "POST", "path": "/versions/{versionId}/release" }, "to": "released" },
+        { "id": "version.restart", "web": "POST versions.restart", "api": { "method": "POST", "path": "/versions/{versionId}/restart" }, "to": "draft" },
+        { "id": "version.delete", "web": "DELETE versions.destroy", "api": { "method": "DELETE", "path": "/versions/{versionId}" } },
+        { "id": "version.create", "web": "POST versions.store", "api": null },
+        { "id": "version.edit", "web": "PATCH versions.update", "api": null },
+
+        { "id": "story.start", "web": "POST stories.start", "api": { "method": "POST", "path": "/stories/{storyId}/start" }, "to": "in_progress" },
+        { "id": "story.ready", "web": "POST stories.ready", "api": { "method": "POST", "path": "/stories/{storyId}/ready" }, "to": "qa" },
+        { "id": "story.done", "web": "POST stories.done", "api": { "method": "POST", "path": "/stories/{storyId}/done" }, "to": "done" },
+        { "id": "story.restart", "web": "POST stories.restart", "api": { "method": "POST", "path": "/stories/{storyId}/restart" }, "to": "backlog" },
+        { "id": "story.block", "web": "POST stories.block", "api": { "method": "POST", "path": "/stories/{storyId}/block" }, "to": "blocked" },
+        { "id": "story.move", "web": "POST stories.move", "api": { "method": "POST", "path": "/stories/{storyId}/move" } },
+        { "id": "story.delete", "web": "DELETE stories.destroy", "api": { "method": "DELETE", "path": "/stories/{storyId}" } },
+        { "id": "story.create", "web": "POST stories.store", "api": null },
+        { "id": "story.edit", "web": "PATCH stories.update", "api": null },
+        { "id": "story.claim", "web": "POST stories.claim", "api": null },
+        { "id": "story.unclaim", "web": "POST stories.release", "api": null },
+        { "id": "story.assign", "web": "POST stories.assign", "api": null },
+
+        { "id": "task.start", "web": "POST tasks.start", "api": { "method": "POST", "path": "/tasks/{taskId}/start" }, "to": "doing" },
+        { "id": "task.ready", "web": "POST tasks.ready", "api": { "method": "POST", "path": "/tasks/{taskId}/ready" }, "to": "qa" },
+        { "id": "task.done", "web": "POST tasks.done", "api": { "method": "POST", "path": "/tasks/{taskId}/done" }, "to": "done" },
+        { "id": "task.restart", "web": "POST tasks.restart", "api": { "method": "POST", "path": "/tasks/{taskId}/restart" }, "to": "backlog" },
+        { "id": "task.block", "web": "POST tasks.block", "api": { "method": "POST", "path": "/tasks/{taskId}/block" }, "to": "blocked" },
+        { "id": "task.move", "web": "POST tasks.move", "api": { "method": "POST", "path": "/tasks/{taskId}/move" } },
+        { "id": "task.delete", "web": "DELETE tasks.destroy", "api": { "method": "DELETE", "path": "/tasks/{taskId}" } },
+        { "id": "task.create", "web": "POST tasks.store", "api": null },
+        { "id": "task.edit", "web": "PATCH tasks.update", "api": null },
+        { "id": "task.claim", "web": "POST tasks.claim", "api": null },
+        { "id": "task.unclaim", "web": "POST tasks.release", "api": null },
+        { "id": "task.assign", "web": "POST tasks.assign", "api": null },
+
+        { "id": "board.claimants", "web": "GET claimants", "api": null }
+      ]
+    }
+  ]
+}

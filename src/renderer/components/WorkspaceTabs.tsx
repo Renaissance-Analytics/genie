@@ -18,6 +18,8 @@ export interface WorkspaceTabsProps {
     readonly hasSettings: boolean;
     /** The workspace is linked to a Tynn project: its GitHub (IssueWatch) view has something to show (Tynn #806). */
     readonly github?: boolean;
+    /** The workspace is linked to a Tynn project: its Tynn tab (genie#1295). */
+    readonly tynn?: boolean;
     readonly onView: (view: string) => void;
     readonly onAdd: () => void;
     readonly onOpenAgent: (agentId: string) => void;
