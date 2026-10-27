@@ -3,7 +3,7 @@ import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { lastTurnOf, openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
-import { toStreamEvent, UNMAPPED_FRAME_META, type NoticeMail, type StreamEvent } from './stream-event.js';
+import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -245,12 +245,6 @@ export interface AgentSessionOptions {
     /** Resume this provider-side conversation instead of starting a fresh one. */
     resumeSessionId?: string | null;
     /**
-     * The driver REPLAYS the conversation's history when it resumes, before its `ready` resolves (prism-acp's
-     * `transcriptReplay` capability: Codex yes, Claude no). Genie keeps its own history, so those replayed rows are not
-     * recorded again (test/codex-replay-not-recorded.test.ts).
-     */
-    replaysTranscript?: boolean;
-    /**
      * Notified for every ledger row, so a surface can render without re-reading the thread.
      *
      * `meta.replacesLast` means this row SUPERSEDES the one emitted immediately before it: the
@@ -346,10 +340,6 @@ export class AgentSession {
     #held = false;
     /** A non-allowed rate-limit reading arrived during the turn now running. */
     #limitThisTurn = false;
-    /** A resumed thread's history being replayed by the driver, before its `ready` (AgentSessionOptions.replaysTranscript). */
-    #replaying = false;
-    /** How many replayed updates `#replaying` dropped: said in one notice when the replay ends (genie#1249). */
-    #replayed = 0;
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
@@ -1092,21 +1082,8 @@ export class AgentSession {
         const ready = this.#driver.ready;
         if (ready !== undefined) {
             this.#starting = true;
-            // A resumed thread whose driver replays it: what arrives before `ready` is that replay (2026-10-23 — a
-            // resumed Codex agent wrote its whole past into the ledger again: as `peer` rows under prism-acp 0.24.0, as
-            // agent messages under 0.24.1). Genie already holds that history; the replay is not recorded twice.
-            this.#replaying = Boolean(this.#options.resumeSessionId) && this.#options.replaysTranscript === true;
-            this.#replayed = 0;
             const done = (): void => {
                 this.#starting = false;
-                // What the replay held, said ONCE (genie#1249): a resumed miapa wrote 16 compaction dividers and 3,036
-                // `replayed reasoning item had no summary` notices into its ledger, and every restart did it again.
-                if (this.#replaying && this.#replayed > 0) {
-                    const n = this.#replayed;
-                    void this.#emitRow({ kind: 'notice', level: 'debug', message: `Resumed the thread: the provider replayed ${n} item${n === 1 ? '' : 's'} of its history; not recorded again (already in this history).`, headroom: null, model: null, estimate: null });
-                }
-                this.#replaying = false;
-                this.#replayed = 0;
                 this.#changed();
             };
             ready.then(() => { done(); this.#flushAfterTurn(); }, done);
@@ -1539,14 +1516,20 @@ export class AgentSession {
             this.#changed();
         }
 
-        const event = toStreamEvent(update);
-        if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
-        // The provider replaying a resumed thread's history (see `#replaying`): not recorded again. Notices that read
-        // NOW (the model, a rate-limit reading, an MCP server coming up) still are — they are about now, not the past.
-        if (this.#replaying && isReplayedHistory(event, update)) {
-            this.#replayed += 1;
+        // SAVED HISTORY, REPLAYED (genie#1249): Genie already holds it, so it is not recorded again. Known by prism-acp's
+        // mark (0.31.0 `META_REPLAY`), never by when it arrives: until 0.31.0 the replay was unmarked and Genie dropped
+        // what came before `ready` on a resumed Codex session — which also dropped a LIVE notification arriving
+        // mid-replay. Genie resumes Codex with `replayHistory: false` (session-host `codexOptionsFor`), so normally no
+        // replay comes at all; one that does is said ONCE, from its summary (a resumed miapa had written 16 compaction
+        // dividers and 3,036 `replayed reasoning item had no summary` notices, on every restart).
+        const replay = replayOf(update);
+        if (replay !== null) {
+            if (replay.summary !== null) void this.#emitRow({ kind: 'notice', level: 'debug', message: replay.summary, headroom: null, model: null, estimate: null });
             return;
         }
+
+        const event = toStreamEvent(update);
+        if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
@@ -1705,19 +1688,19 @@ export interface PromptContext {
  * Genie notice, the mail it told about. Absent fields are left off, never written empty.
  */
 /**
- * WHAT A RESUMED THREAD'S REPLAY CARRIES THAT GENIE ALREADY HOLDS (genie#1249). prism-acp's CodexDriver replays the
- * thread on `thread/resume` (`#replayHistory` → `#mapItem(item, true)`) with no mark on the updates, so the replay is
- * known by WHEN it arrives (before `ready`) and by WHAT it is: the history's own rows — messages, thoughts, tools,
- * plans and compactions — and the debug diagnostics its items raise (prism-acp's unmapped-frame notice: `replayed
- * reasoning item had no summary`, `unmapped Codex item: webSearch`). A notice that reads NOW (the model, a rate limit,
- * an MCP server's startup) is not history and is kept.
+ * A REPLAYED UPDATE (genie#1249), by prism-acp's mark (`REPLAY_META`): `null` when the update is not history. `summary` is
+ * the one sentence Genie says for the whole replay, from the summary notice that ends it (`REPLAY_SUMMARY_META`); every
+ * other replayed update says nothing.
  */
-function isReplayedHistory(event: StreamEvent, update: Record<string, unknown>): boolean {
-    if (event.kind === 'message' || event.kind === 'think' || event.kind === 'tool' || event.kind === 'plan' || event.kind === 'divider') return true;
-    if (event.kind !== 'notice' || event.level !== 'debug') return false;
-    if (event.model != null || event.headroom != null || event.estimate != null || event.tasks !== undefined || event.task !== undefined) return false;
+function replayOf(update: Record<string, unknown>): { summary: string | null } | null {
     const meta = update['_meta'];
-    return typeof meta === 'object' && meta !== null && UNMAPPED_FRAME_META in meta;
+    if (typeof meta !== 'object' || meta === null || (meta as Record<string, unknown>)[REPLAY_META] !== true) return null;
+    const s = (meta as Record<string, unknown>)[REPLAY_SUMMARY_META];
+    if (typeof s !== 'object' || s === null) return { summary: null };
+    const { turns, items, complete } = s as { turns?: unknown; items?: unknown; complete?: unknown };
+    const count = (n: unknown, one: string) => `${typeof n === 'number' ? n : '?'} ${one}${n === 1 ? '' : 's'}`;
+    const ended = complete === false ? '; it stopped before the end' : '';
+    return { summary: `Resumed the thread: the provider replayed ${count(turns, 'turn')} (${count(items, 'item')}) of its history${ended}; not recorded again (already in this history).` };
 }
 
 function promptRow(text: string, by: string | null, sent: { attachments: readonly string[] } | null, context: PromptContext): StreamEvent {
