@@ -277,10 +277,10 @@ export function repairOutcome(input: { tool: string; wanted: string | null; befo
     const { tool, wanted, before, after, exitCode } = input;
     if (after === null) return { kind: 'unverified', reason: `${tool} could not be probed after the update; the result is unknown` };
     if (before !== null && compareVersions(after, before) === 0) {
-        return { kind: 'unchanged', installed: after, reason: `the update command ${exitWords(exitCode)}, and ${tool} still reports ${after}; nothing was changed` };
+        return { kind: 'unchanged', installed: after, reason: `the update command ${exitWords(exitCode)} but ${tool} still reports ${after}; nothing was changed` };
     }
     const notes: string[] = [];
-    if (exitCode !== 0) notes.push(`the command ${exitWords(exitCode)}, but ${tool} now reports ${after}`);
+    if (exitCode !== 0) notes.push(`the command ${exitWords(exitCode)} but ${tool} now reports ${after}`);
     if (wanted !== null && compareVersions(after, wanted) !== 0) notes.push(`wanted ${wanted}; the manager installed ${after}`);
     return { kind: 'repaired', from: before, to: after, ...(notes.length > 0 ? { note: notes.join('; ') } : {}) };
 }

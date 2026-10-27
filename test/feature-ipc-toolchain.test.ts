@@ -174,10 +174,11 @@ describe('a refused or failed toolchain action is SAID on its row (the person sa
     });
 
     it('two tools refused at once: each row keeps its own reason (counted: two, one per tool)', async () => {
-        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }], processes: [{ label: 'shop.gen dev server', command: 'npm run dev' }] };
+        // Two agent CLIs, each with a session on it (node is a warning since genie#1306, not a refusal).
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }, { label: 'nova', provider: 'codex' }] };
         const first = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
-        const second = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, { ...scanned(), ...toolchainStateFrom(first.toolchain) }, ports());
-        expect(second.toolchain!.refusals!.map((r) => r.tool)).toEqual(['claude-code', 'node']);
+        const second = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'codex' }, { ...scanned(), ...toolchainStateFrom(first.toolchain) }, ports());
+        expect(second.toolchain!.refusals!.map((r) => r.tool)).toEqual(['claude-code', 'codex']);
     });
 
     it('an install that ran and FAILED (not-installed) is said on the row too, verbatim; the result line still says it', async () => {
