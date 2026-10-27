@@ -90,6 +90,59 @@ jobs:
           grep -q "280px" "$css"
           grep -q "30px" "$css"
 
+  # THE FLOWS ACCEPTANCE SUITE (`npm run verify:flows`, test/flows-acceptance/): every trigger and every node kind the
+  # canvas offers, end to end through the real scheduler and runner. Not in `npm test` — the owner (2026-10-27): "only when
+  # we make changes to flows" — so it runs when a change touches Flows, and only then.
+  #
+  # The job ALWAYS runs and decides for itself, rather than an `on.paths` filter: a required check whose workflow is filtered
+  # out never reports, and a PR that touches no flow would wait on it for ever. So it is required, it reports on every PR,
+  # and it runs the suite exactly when one of these changed (test/flows-acceptance-ci.test.ts holds the list):
+  #   - any file under src/ whose name says flow (src/**/flow*, FlowEditorWindow.tsx, v1-flows.ts, mcp-tools-flows.ts),
+  #     and what flows are built from: core/cron.ts (the schedule), core/file-trigger.ts (the file trigger);
+  #   - the suite itself and its config;
+  #   - the fancy-flow dependency (its line in package.json or its version in package-lock.json).
+  flows:
+    name: flows acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: did this change touch Flows?
+        id: changed
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          # A push that created the branch, or a base this checkout cannot see: run it rather than guess.
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo "no base to compare with; running the suite"
+            echo "flows=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed="$(git diff --name-only "$BASE" HEAD)"
+          echo "$changed"
+          flows=false
+          if printf '%s\n' "$changed" | grep -qE '^src/(.*/)?[^/]*[Ff]low[^/]*$|^src/core/(cron|file-trigger)\.ts$|^test/flows-acceptance/|^vitest\.flows\.config\.mts$'; then flows=true; fi
+          if git diff "$BASE" HEAD -- package.json | grep -qE '^[+-].*"@particle-academy/fancy-flow"'; then flows=true; fi
+          if git diff "$BASE" HEAD -- package-lock.json | grep -qE '^[+-].*fancy-flow-[0-9]'; then flows=true; fi
+          echo "flows=$flows" >> "$GITHUB_OUTPUT"
+          echo "Flows changed: $flows"
+
+      - uses: actions/setup-node@v4
+        if: steps.changed.outputs.flows == 'true'
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+        if: steps.changed.outputs.flows == 'true'
+
+      - run: npm run verify:flows
+        if: steps.changed.outputs.flows == 'true'
+
   # THE UNIT SUITE ON WINDOWS, because the release runs it there. release.yml's Windows publish job
   # runs `npm test` before it builds, and until this job existed nothing on main ever had: beta.35's
   # Windows release failed on a CRLF checkout and beta.37's on a 5 s budget real git needed more of
