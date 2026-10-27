@@ -1,3 +1,4 @@
+import type { WorkstationRole } from '../core/workstation-role.js';
 import type { TailscaleStatus } from '../main/tailscale-cli.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
@@ -177,8 +178,8 @@ export type TynnRelayState =
 
 /** Whether this machine is registered with Tynn as a workstation, and with which Tynn; or why not. */
 export type TynnWorkstationState =
-    | { readonly registered: true; readonly host: string; readonly workstationId: string; readonly relay?: TynnRelayState | undefined }
-    | { readonly registered: false; readonly reason: string };
+    | { readonly registered: true; readonly host: string; readonly workstationId: string; readonly relay?: TynnRelayState | undefined; readonly role?: WorkstationRole | null | undefined }
+    | { readonly registered: false; readonly reason: string; readonly role?: WorkstationRole | null | undefined };
 
 /** §6.9 as the Settings surface sees it. `lastSync` is the most recent config sync's four results. */
 export interface IntegrationsSection {

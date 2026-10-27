@@ -42,7 +42,8 @@ const thumbprint = (jwk: { crv: string; kty: string; x: string }) =>
 function mintGrant(claims: Record<string, unknown>, key: KeyObject = tynnKey.privateKey, kid = 'tynn-1'): string {
     const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
     const head = b64({ alg: 'EdDSA', typ: 'wsgrant+jwt', kid });
-    const body = b64({ aud: WS_ID, exp: Math.floor(Date.now() / 1000) + 300, jti: 'g1', sub: 'user_1', name: 'Pat', ...claims });
+    // The host under test is a PILOT, as Tynn signs into every grant (aud_role, genie#1278); drone hosts are tested below.
+    const body = b64({ aud: WS_ID, exp: Math.floor(Date.now() / 1000) + 300, jti: 'g1', sub: 'user_1', name: 'Pat', aud_role: 'pilot', ...claims });
     return `${head}.${body}.${sign(null, Buffer.from(`${head}.${body}`), key).toString('base64url')}`;
 }
 
@@ -159,6 +160,18 @@ describe('a member over the relay', () => {
     });
 
     // The same write by a CONTROL grant to the same workspace goes through (the test above) — so this refusal is read-only's.
+    it('a DRONE host (Tynn says so in the grant): a share is refused over the relay, the owner from a paired machine is not', async () => {
+        const guest = await member({ src: 'invite', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
+        const gt = (guest as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
+        void wireClient(gt).hello({ kind: 'relay' });
+        await settle();
+        expect(gt.closedBecause()).toMatch(/drone/);
+        const owner = await member({ src: 'owner', src_ws: 'ws_pilot', cap: 'control', scope: ['host:all'], aud_role: 'drone' });
+        expect(owner.ok).toBe(true);
+        const c = wireClient((owner as { transport: ClientTransport }).transport);
+        expect(await c.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', isOwner: true });
+    });
+
     it('a READ-ONLY grant: reads work, a write is refused', async () => {
         const opened = await member({ src: 'invite', cap: 'readonly', scope: ['workspace:tynn'] }, { bind: false });
         const c = wireClient((opened as { transport: ClientTransport }).transport);

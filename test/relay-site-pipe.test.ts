@@ -36,7 +36,8 @@ const thumbprint = (jwk: { crv: string; kty: string; x: string }) =>
 function mintGrant(claims: Record<string, unknown>, key: KeyObject = tynnKey.privateKey): string {
     const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64url');
     const head = b64({ alg: 'EdDSA', typ: 'wsgrant+jwt', kid: 'tynn-1' });
-    const body = b64({ aud: WS_ID, exp: Math.floor(Date.now() / 1000) + 300, jti: 'g1', sub: 'user_1', name: 'Pat', ...claims });
+    // The host under test is a PILOT, as Tynn signs into every grant (aud_role, genie#1278).
+    const body = b64({ aud: WS_ID, exp: Math.floor(Date.now() / 1000) + 300, jti: 'g1', sub: 'user_1', name: 'Pat', aud_role: 'pilot', ...claims });
     return `${head}.${body}.${sign(null, Buffer.from(`${head}.${body}`), key).toString('base64url')}`;
 }
 

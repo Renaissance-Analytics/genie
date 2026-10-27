@@ -30,6 +30,10 @@ export interface HostGrant {
     scopes: WorkspaceScope[];
     expiresAt: number;
     confirmationKeyThumbprint?: string;
+    /** What Tynn says THIS workstation is (`aud_role`, genie#1278); anything but exactly "pilot" reads as drone. */
+    audRole: 'pilot' | 'drone';
+    /** The caller's own registered machine (`src_ws`), resolved by Tynn from its device binding; null when none. */
+    sourceWorkstationId: string | null;
 }
 
 export type GrantCheck = { ok: true; grant: HostGrant } | { ok: false; reason: string };
@@ -84,7 +88,12 @@ export function verifyMemberGrant(token: string, opts: { keys: readonly TynnJwk[
     const cnf = claims.cnf !== null && typeof claims.cnf === 'object' ? text((claims.cnf as Record<string, unknown>).jkt) : null;
     return {
         ok: true,
-        grant: { jti, sub, name: text(claims.name), source: text(claims.src), capability, scopes, expiresAt: claims.exp * 1000, ...(cnf ? { confirmationKeyThumbprint: cnf } : {}) },
+        grant: {
+            jti, sub, name: text(claims.name), source: text(claims.src), capability, scopes, expiresAt: claims.exp * 1000,
+            audRole: claims.aud_role === 'pilot' ? 'pilot' : 'drone',
+            sourceWorkstationId: text(claims.src_ws),
+            ...(cnf ? { confirmationKeyThumbprint: cnf } : {}),
+        },
     };
 }
 
@@ -96,6 +105,12 @@ export function verifyMemberGrant(token: string, opts: { keys: readonly TynnJwk[
 export function principalOf(grant: HostGrant): { ok: true; principal: PreAuth } | { ok: false; reason: string } {
     const label = grant.name ?? grant.sub;
     const readonly = grant.capability === 'readonly';
+    // A DRONE (genie#1278 W5; the owner: drones "auto-accept connections from known and paired devices") admits only
+    // its owner, connecting from one of the owner's own registered machines — both facts signed by Tynn in the grant.
+    // Never a guest, never an owner from an unbound device; nothing local is consulted.
+    if (grant.audRole !== 'pilot' && !(grant.source === 'owner' && grant.sourceWorkstationId !== null)) {
+        return { ok: false, reason: 'this workstation is a drone: it accepts only its owner, from the owner’s own paired machines' };
+    }
     if (grant.source === 'owner') return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };
     if (grant.scopes.includes('host:all')) return { ok: true, principal: { label, isOwner: false, workspaceId: null, readonly } };
     const workspaces = grant.scopes.map((s) => s.slice('workspace:'.length));

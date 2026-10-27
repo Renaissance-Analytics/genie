@@ -22,10 +22,18 @@ function respond(status: number, body: unknown) {
     return { ok: status >= 200 && status < 300, status, json: async () => body };
 }
 
-function fakeTynn(answers: { register?: number; enroll?: number } = {}) {
+function fakeTynn(answers: { register?: number; enroll?: number; me?: { status: number; body: unknown } | 'throw'; reattach?: 'proved' } = {}) {
     const calls: Array<{ path: string; method: string; body?: unknown }> = [];
     const request = async (path: string, init: { method: 'GET' | 'POST'; body?: unknown }) => {
         calls.push({ path, method: init.method, body: init.body });
+        if (path === '/api/v1/workstations/me') {
+            if (answers.me === 'throw') throw new Error('offline');
+            const me = answers.me ?? { status: 200, body: { workstation: null, role: null } };
+            return respond(me.status, me.body);
+        }
+        if (path === '/api/v1/workstations/self-register' && answers.reattach === 'proved') {
+            return respond(200, { workstation: { id: 'ws_9', name: 'desk', status: 'active', role: 'pilot' }, enrollment: null });
+        }
         if (path === '/api/v1/workstations/self-register') {
             const status = answers.register ?? 201;
             return respond(status, status === 201
@@ -85,13 +93,65 @@ describe('ensureWorkstation — this machine registers with Tynn once', () => {
         expect(stored.workstationId).toBe('ws_1');
     });
 
-    it('already registered with THIS Tynn: asks Tynn nothing', async () => {
-        const tynn = fakeTynn();
+    // genie#1278: a sign-in makes a NEW Tynn device, unbound to this machine's record until it registers. So Genie asks
+    // Tynn who this pairing is; when Tynn already says "this workstation", nothing else is asked or written.
+    it('already registered with THIS Tynn, and Tynn says this pairing IS it: asks only who it is, registers nothing', async () => {
+        const tynn = fakeTynn({ me: { status: 200, body: { workstation: { id: 'ws_9', role: 'pilot' }, role: 'pilot' } } });
         const pair = generateHostKeypair();
         const store = memoryStore({ [HOST]: { workstationId: 'ws_9', privateKeyPem: pair.privateKeyPem } });
         expect(await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store })).toEqual({ ok: true, status: 'exists', workstationId: 'ws_9' });
-        expect(tynn.calls).toEqual([]);
+        expect(tynn.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/v1/workstations/me']);
         expect(store.writes).toEqual([]);
+    });
+
+    it.each([[{ status: 404, body: null }], ['throw' as const]])('registered, and Tynn cannot say who this pairing is (%j): keeps its identity, registers nothing', async (me) => {
+        const tynn = fakeTynn({ me });
+        const pair = generateHostKeypair();
+        const store = memoryStore({ [HOST]: { workstationId: 'ws_9', privateKeyPem: pair.privateKeyPem } });
+        expect(await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store })).toEqual({ ok: true, status: 'exists', workstationId: 'ws_9' });
+        expect(tynn.calls.map((c) => c.path)).toEqual(['/api/v1/workstations/me']);
+    });
+
+    it('registered, but this pairing is not bound to it: re-attaches with the machine key AND proof of the enrolled key', async () => {
+        const tynn = fakeTynn({ reattach: 'proved' });
+        const pair = generateHostKeypair();
+        const store = memoryStore({ [HOST]: { workstationId: 'ws_9', privateKeyPem: pair.privateKeyPem } });
+        const result = await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store, machineKey: async () => 'a'.repeat(64), now: () => 1_700_000_000_000 });
+
+        expect(result).toEqual({ ok: true, status: 'exists', workstationId: 'ws_9' });
+        const body = tynn.calls[1]!.body as { name: string; machine_key: string; proof: { workstation_id: string; ts: number; sig: string } };
+        expect(body.name).toBe('desk');
+        expect(body.machine_key).toBe('a'.repeat(64));
+        expect(body.proof.workstation_id).toBe('ws_9');
+        expect(body.proof.ts).toBe(1_700_000_000);
+        // Byte for byte what Tynn verifies: Ed25519 over "workstation-reattach\n{id}\n{ts}" with the ENROLLED key.
+        const pub = createPublicKey(pair.privateKeyPem);
+        expect(verify(null, Buffer.from('workstation-reattach\nws_9\n1700000000'), pub, Buffer.from(body.proof.sig, 'base64'))).toBe(true);
+        // CONTROL: not the host-auth string, so one can never stand in for the other.
+        expect(verify(null, Buffer.from('workstation-auth\nws_9\n1700000000'), pub, Buffer.from(body.proof.sig, 'base64'))).toBe(false);
+        expect(store.writes).toEqual([]);
+    });
+
+    it('registered, unbound, and Tynn re-arms the record instead (proof not accepted): enrolls a new key and stores it', async () => {
+        const tynn = fakeTynn();
+        const pair = generateHostKeypair();
+        const store = memoryStore({ [HOST]: { workstationId: 'ws_1', privateKeyPem: pair.privateKeyPem } });
+        const result = await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store, machineKey: async () => 'b'.repeat(64) });
+        expect(result).toEqual({ ok: true, status: 'enrolled', workstationId: 'ws_1' });
+        expect(tynn.calls.map((c) => `${c.method} ${c.path}`)).toEqual(['GET /api/v1/workstations/me', 'POST /api/v1/workstations/self-register', 'POST /api/v1/workstations/ws_1/enroll']);
+        expect(store.byHost.get(HOST)!.privateKeyPem).not.toBe(pair.privateKeyPem);
+    });
+
+    it('never registered: sends the machine key (never a raw id), and no proof', async () => {
+        const tynn = fakeTynn();
+        await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store: memoryStore(), machineKey: async () => 'c'.repeat(64) });
+        expect(tynn.calls[0]!.body).toEqual({ name: 'desk', machine_key: 'c'.repeat(64) });
+    });
+
+    it('no machine id on this OS: registers by name alone, as before', async () => {
+        const tynn = fakeTynn();
+        await ensureWorkstation({ host: () => HOST, hostname: () => 'desk', request: tynn.request, store: memoryStore(), machineKey: async () => null });
+        expect(tynn.calls[0]!.body).toEqual({ name: 'desk' });
     });
 
     it('registered with ANOTHER Tynn only: registers with this one, and keeps the other', async () => {
