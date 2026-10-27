@@ -37,9 +37,11 @@ describe('genie#1290: the window never scrolls', () => {
     const css = read('src/renderer/styles.css');
 
     it('html is locked like Genie 1: full height, overflow hidden', () => {
+        const full = ruleFor(css, 'html,body,#root');
+        expect(full, 'an `html, body, #root { … }` rule in styles.css').not.toBeNull();
+        expect(full).toMatch(/height:\s*100%/);
         const rule = ruleFor(css, 'html');
         expect(rule, 'an `html { … }` rule in styles.css').not.toBeNull();
-        expect(rule).toMatch(/height:\s*100%/);
         expect(rule).toMatch(/overflow:\s*hidden/);
     });
 
