@@ -741,9 +741,10 @@ if (!approvalEnabled) {
          * 64c. THE PLAN PILL FOCUSES THE COMPOSER WITHOUT SCROLLING ANYTHING (genie#1290 follow-up, react-fancy 5.69.0).
          * A plan step's chat icon puts a pill into this agent's draft with `setDraft(…, { focus: true })` (#1282). Up to
          * 5.68 that was a bare `focus()`, which scrolls every scrollable ancestor to reveal the composer. The root lock
-         * (#1291) keeps the WINDOW still either way, so this measures the composer's own ancestors instead:
-         *  - a spacer at the top of the composer's nearest scrollable ancestor pushes the composer below that ancestor's
-         *    fold, so a scrolling focus WOULD move it;
+         * (#1291) keeps the WINDOW still either way, and (measured on omarchy-test, 2026-10-27) nothing between the composer
+         * and the root is a scroll container today. So the check MAKES one, as any future layout could: the composer
+         * wrapper's parent is held at its current height with `overflow-y: hidden`, and a spacer at its top pushes the
+         * composer below its fold, so a scrolling focus WOULD move it. Then:
          *  - the icon is clicked (the person's gesture), and the pill landing in the composer with focus is awaited;
          *  - every ancestor and the document must still be at 0;
          *  - POSITIVE CONTROL in the same arrangement: a bare `focus()` on the composer DOES scroll that ancestor, so a
@@ -755,13 +756,14 @@ if (!approvalEnabled) {
             const icon = document.querySelector('[data-surface="agent"] [data-plan-discuss="1"]');
             if (!input || !icon) return JSON.stringify({ missing: { input: !input, icon: !icon, steps: document.querySelectorAll('[data-plan-step]').length } });
             // From Genie's own composer wrapper up: react-fancy's internals are not ours to put a spacer in.
-            let box = document.querySelector('[data-chat-composer]')?.parentElement ?? null;
-            while (box && box !== document.body) { const o = getComputedStyle(box).overflowY; if (o === 'auto' || o === 'scroll' || o === 'hidden') break; box = box.parentElement; }
-            if (!box || box === document.body) return JSON.stringify({ missing: { scrollableAncestor: true } });
+            const box = document.querySelector('[data-chat-composer]')?.parentElement ?? null;
+            if (!box) return JSON.stringify({ missing: { composerParent: true } });
+            const was = { overflowY: box.style.overflowY, maxHeight: box.style.maxHeight };
+            box.style.maxHeight = box.clientHeight + 'px'; box.style.overflowY = 'hidden';
             const spacer = document.createElement('div'); spacer.style.height = '4000px'; spacer.style.flexShrink = '0';
             box.insertBefore(spacer, box.firstChild); box.scrollTop = 0;
             document.activeElement?.blur?.();
-            window.__smoke64c = { box, spacer, input };
+            window.__smoke64c = { box, spacer, input, was };
             icon.click();
             return JSON.stringify({ ok: true, box: box.tagName.toLowerCase() + (box.getAttribute('data-chat-draft') !== null ? '[data-chat-draft]' : '') + '.' + String(box.className).split(/\\s+/).slice(0, 3).join('.'), range: box.scrollHeight - box.clientHeight }); })()`);
         const ps = JSON.parse(planSetup || '{}');
@@ -772,7 +774,7 @@ if (!approvalEnabled) {
             const after = { boxTop: s.box.scrollTop, docTop: document.scrollingElement.scrollTop, scrolled, focused: s.input.contains(document.activeElement) };
             s.input.blur(); s.box.scrollTop = 0; s.input.focus();
             const control = s.box.scrollTop;
-            s.input.blur(); s.spacer.remove(); s.box.scrollTop = 0; delete window.__smoke64c;
+            s.input.blur(); s.spacer.remove(); s.box.scrollTop = 0; s.box.style.overflowY = s.was.overflowY; s.box.style.maxHeight = s.was.maxHeight; delete window.__smoke64c;
             return JSON.stringify({ ...after, control }); })()`);
         const pc = JSON.parse(planScroll || '{}');
         check(ps.ok && ps.range > 0 && pillIn && pc.focused && pc.boxTop === 0 && pc.docTop === 0 && (pc.scrolled ?? []).length === 0 && pc.control > 0,
