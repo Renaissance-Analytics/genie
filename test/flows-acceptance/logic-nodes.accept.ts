@@ -142,7 +142,7 @@ describe('waiting, on the runner’s clock (genie#1260)', () => {
         const g = onClock();
         // genie#1260: on omarchy-test a 50 ms Wait was measured on Date.now as 44 ms. A synchronous stall before the timer
         // (the case above) does not make it early; the wall clock being corrected under it does — a VM restored from a
-        // snapshot has its clock set right by time sync while it runs. Here the runner's clock is set back 30 ms, once,
+        // snapshot has its clock set right by time sync while it runs. Here the runner's clock is set back 200 ms, once,
         // while the step waits: the step must still not end before 100 ms have passed ON THAT CLOCK.
         let started = 0;
         let done = 0;
@@ -150,7 +150,7 @@ describe('waiting, on the runner’s clock (genie#1260)', () => {
         vi.spyOn(g.services.flows, 'markInFlight').mockImplementation(async (id, inFlight) => {
             if (inFlight?.nodes.w === 'running' && started === 0) {
                 started = clock.now();
-                setTimeout(() => clock.set(clock.now() - 30), 20);
+                setTimeout(() => clock.set(clock.now() - 200), 20);
             }
             if (inFlight?.nodes.w === 'ran' && done === 0) done = clock.now();
             return real(id, inFlight);

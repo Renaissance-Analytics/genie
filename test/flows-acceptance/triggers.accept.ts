@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { appendFile, mkdir, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { defaultConfigFor, getNodeKind } from '@particle-academy/fancy-flow/engine';
 import { describe, expect, it } from 'vitest';
@@ -210,12 +210,18 @@ describe('A file is added: a file landing in the workspace starts the armed flow
         expect(files(g, id)).toEqual(['grow.bin']);
     });
 
-    it('de-duplication: one file created in several writes is ONE run', async () => {
+    it('de-duplication: one file that lands several times over (an editor’s atomic saves right after creating it) is ONE run', async () => {
         const g = genie();
-        const id = await fileFlow(g, 'once', {});
+        const id = await fileFlow(g, 'once', { extensions: 'md' });
         await armWatched(g, id);
         await write(g, 'notes.md', '# notes\n');
-        for (let i = 0; i < 5; i++) await appendFile(join(g.ws, 'notes.md'), `line ${i}\n`);
+        // Each save writes a temporary file and renames it over the path: another `rename` event for the same path, on
+        // every platform (appending only reports `change`, which is never an addition, so it would prove nothing here).
+        for (let i = 0; i < 4; i++) {
+            await writeFile(join(g.ws, `notes.${i}.tmp`), `# notes\nline ${i}\n`);
+            await rename(join(g.ws, `notes.${i}.tmp`), join(g.ws, 'notes.md'));
+            await new Promise((r) => setTimeout(r, 30));
+        }
         await runsOf(g, id, 1);
         await quiet();
         expect(files(g, id)).toEqual(['notes.md']);
