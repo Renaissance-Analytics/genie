@@ -1,4 +1,5 @@
 import { ContentRenderer } from '@particle-academy/react-fancy';
+import { genieClipboardWriter } from '../clipboard.js';
 import { useState, type FormEvent } from 'react';
 import type { DeckItem } from '../../core/deck.js';
 import { toggleChoice, unansweredCount } from '../../core/deck-resolve.js';
@@ -94,7 +95,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                     ) : null}
                     {/* The question is Markdown (§6.3): agents write bold, lists and links into it. Prose: sans, 13px, 1.6. */}
                     <div data-question-text={i} className="min-w-0 break-words">
-                        <ContentRenderer value={q.question} format="markdown" lineSpacing={1.6} className="font-sans text-[13px] text-[var(--fg-1)]" />
+                        <ContentRenderer clipboardWriter={genieClipboardWriter} value={q.question} format="markdown" lineSpacing={1.6} className="font-sans text-[13px] text-[var(--fg-1)]" />
                     </div>
                     {/* TOGGLE OPTIONS (Genie 1's): a button per option, pressed when picked; a picked option clicked again clears.
                         A radio could not be unpicked. */}

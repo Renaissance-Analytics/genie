@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-    chatLinkTarget, linkChatRefs, parseChatMarkup, prepareChatMarkdown, streamSafe, stripForbiddenTags, stripInternalLinks,
-    type ChatRefs, type ChatSegment,
+    chatLinkTarget, liftChatBlocks, linkChatRefs, prepareChatMarkdown, streamSafe, stripForbiddenTags, stripInternalLinks,
+    type ChatRefs,
 } from '../src/core/chat-markup.js';
 
 /**
@@ -15,68 +15,53 @@ import {
  * sanitisers and the link rules are proved without a DOM.
  */
 
-const kinds = (segs: readonly ChatSegment[]) => segs.map((s) => s.kind);
-
-describe('parseChatMarkup — one segment per block', () => {
-    it('plain Markdown is ONE markdown segment, untouched (the control: nothing invented)', () => {
+describe('liftChatBlocks — Genie’s block rules, written so react-fancy lifts each block itself', () => {
+    /*
+     * react-fancy 5.67 lifts a `markdown: true` tag only when its opening tag STARTS A LINE and has a matching close, and it
+     * nests up to depth 8. Genie's rules (#1277) are wider on one side and narrower on the other: a block may start
+     * mid-line, an unclosed block is a card filling in, and a block inside a block is its words. So Genie rewrites the
+     * text into the shape fancy lifts (each block on lines of its own, closed, one level) and fancy draws it.
+     */
+    it('plain Markdown is returned untouched (the control: nothing invented)', () => {
         const md = '**Done.** I changed two things:\n\n- one\n- two';
-        expect(parseChatMarkup(md)).toEqual([{ kind: 'markdown', text: md }]);
+        expect(liftChatBlocks(md)).toBe(md);
     });
 
-    it('a fenced code block is its own segment, with its language and its exact code', () => {
-        const segs = parseChatMarkup('Run this:\n\n```bash\nnpm ci\nnpm test\n```\n\nThen tell me.');
-        expect(kinds(segs)).toEqual(['markdown', 'code', 'markdown']);
-        expect(segs[1]).toEqual({ kind: 'code', lang: 'bash', code: 'npm ci\nnpm test' });
+    it('code and tables are react-fancy’s now: Genie leaves them exactly as written', () => {
+        const md = 'Run this:\n\n```bash\nnpm ci\nnpm test\n```\n\n| Repo | Open |\n|---|---:|\n| genie | 12 |';
+        expect(liftChatBlocks(md)).toBe(md);
     });
 
-    it('a ~~~ fence and a fence with no language both count', () => {
-        expect(parseChatMarkup('~~~\nplain\n~~~')).toEqual([{ kind: 'code', lang: '', code: 'plain' }]);
+    it('<result> is a block on lines of its own, its body as written (a nested table included)', () => {
+        const md = 'Here it is:\n\n<result>\n## Q3\n\n| Deal | Size |\n|---|---|\n| Acme | **$40k** |\n\n- signed\n</result>\n\nAnything else?';
+        expect(liftChatBlocks(md)).toBe(md);
     });
 
-    it('a Markdown table is its own segment, its rows parsed (header first, the delimiter row dropped)', () => {
-        const segs = parseChatMarkup('Counts:\n\n| Repo | Open |\n|---|---:|\n| genie | 12 |\n| tynn | 3 |\n\nThat is all.');
-        expect(kinds(segs)).toEqual(['markdown', 'table', 'markdown']);
-        const table = segs[1] as Extract<ChatSegment, { kind: 'table' }>;
-        expect(table.rows).toEqual([['Repo', 'Open'], ['genie', '12'], ['tynn', '3']]);
-        expect(table.markdown).toBe('| Repo | Open |\n|---|---:|\n| genie | 12 |\n| tynn | 3 |');
+    it('<highlight> and <followup> written inline on one line are put on lines of their own', () => {
+        const md = '<highlight>The **migration** is irreversible.</highlight>\n\nDone.\n\n<followup>Shall I open the PR?</followup>';
+        expect(liftChatBlocks(md)).toBe('<highlight>\nThe **migration** is irreversible.\n</highlight>\n\nDone.\n\n<followup>\nShall I open the PR?\n</followup>');
     });
 
-    it('a pipe in prose is not a table (no delimiter row under it)', () => {
-        expect(kinds(parseChatMarkup('Use a | b to pipe.\nNext line.'))).toEqual(['markdown']);
-    });
-
-    it('<result> is a card whose body is parsed again: a NESTED Markdown table inside it is a table segment', () => {
-        const segs = parseChatMarkup('Here it is:\n\n<result>\n## Q3\n\n| Deal | Size |\n|---|---|\n| Acme | **$40k** |\n\n- signed\n</result>\n\nAnything else?');
-        expect(kinds(segs)).toEqual(['markdown', 'result', 'markdown']);
-        const result = segs[1] as Extract<ChatSegment, { kind: 'result' }>;
-        expect(kinds(result.children)).toEqual(['markdown', 'table', 'markdown']);
-        expect((result.children[1] as Extract<ChatSegment, { kind: 'table' }>).rows).toEqual([['Deal', 'Size'], ['Acme', '**$40k**']]);
-        expect(result.body).toBe('## Q3\n\n| Deal | Size |\n|---|---|\n| Acme | **$40k** |\n\n- signed');
-    });
-
-    it('<highlight> and <followup> are their own blocks; inline on one line too', () => {
-        const segs = parseChatMarkup('<highlight>The **migration** is irreversible.</highlight>\n\nDone.\n\n<followup>Shall I open the PR?</followup>');
-        expect(kinds(segs)).toEqual(['highlight', 'markdown', 'followup']);
-        expect(segs[0]).toMatchObject({ kind: 'highlight', body: 'The **migration** is irreversible.' });
-        expect(segs[2]).toMatchObject({ kind: 'followup', body: 'Shall I open the PR?' });
+    it('a block that starts MID-LINE is still a block (react-fancy alone would leave it in the paragraph)', () => {
+        expect(liftChatBlocks('Ready. <result>x</result> Next.')).toBe('Ready. \n\n<result>\nx\n</result>\n\n Next.');
     });
 
     it('ONE level: a block tag inside a block is not another card (its words stay, the tag goes)', () => {
-        const segs = parseChatMarkup('<highlight>Outer <highlight>inner</highlight> rest</highlight>');
-        expect(kinds(segs)).toEqual(['highlight']);
-        const inner = (segs[0] as Extract<ChatSegment, { kind: 'highlight' }>).children;
-        expect(kinds(inner)).toEqual(['markdown']);
-        expect(JSON.stringify(inner)).not.toContain('<highlight>');
+        expect(liftChatBlocks('<highlight>Outer <highlight>inner</highlight> rest</highlight>')).toBe('<highlight>\nOuter inner rest\n</highlight>');
+        expect(liftChatBlocks('<result>a <followup>b</followup></result>')).toBe('<result>\na b\n</result>');
     });
 
     it('a tag INSIDE a code fence or a code span is code, not a card', () => {
-        const fenced = parseChatMarkup('```html\n<result>x</result>\n```');
-        expect(fenced).toEqual([{ kind: 'code', lang: 'html', code: '<result>x</result>' }]);
-        expect(kinds(parseChatMarkup('Write `<result>` around it.'))).toEqual(['markdown']);
+        for (const md of ['```html\n<result>x</result>\n```', 'Write `<result>` around it.']) expect(liftChatBlocks(md)).toBe(md);
     });
 
-    it('tag names are case-insensitive, as moic’s regexes are', () => {
-        expect(kinds(parseChatMarkup('<Result>x</RESULT>'))).toEqual(['result']);
+    it('tag names are case-insensitive, as moic’s regexes are; attributes are not carried', () => {
+        expect(liftChatBlocks('<Result>x</RESULT>')).toBe('<result>\nx\n</result>');
+        expect(liftChatBlocks('<result title="t" onclick="x()">ok</result>')).toBe('<result>\nok\n</result>');
+    });
+
+    it('a stray closing tag loses the tag and keeps the words', () => {
+        expect(liftChatBlocks('a </result> b')).toBe('a  b');
     });
 });
 
@@ -93,14 +78,17 @@ describe('streamSafe — a reply still arriving never shows a half-written tag',
         expect(streamSafe('Ask [agent:atlas|At')).toBe('Ask ');
     });
 
-    it('an OPEN block with no close yet renders as its card, filling in (not as raw text)', () => {
-        const segs = parseChatMarkup(streamSafe('Draft:\n\n<result>\nDear Ana,\n\nThanks for'));
-        expect(kinds(segs)).toEqual(['markdown', 'result']);
-        expect((segs[1] as Extract<ChatSegment, { kind: 'result' }>).body).toBe('Dear Ana,\n\nThanks for');
+    it('an OPEN block with no close yet is closed, so it renders as its card, filling in (not as raw text)', () => {
+        expect(liftChatBlocks(streamSafe('Draft:\n\n<result>\nDear Ana,\n\nThanks for'))).toBe('Draft:\n\n<result>\nDear Ana,\n\nThanks for\n</result>');
     });
 
-    it('an open fence renders as code while it arrives', () => {
-        expect(parseChatMarkup(streamSafe('```ts\nconst a = 1;\nconst b'))).toEqual([{ kind: 'code', lang: 'ts', code: 'const a = 1;\nconst b' }]);
+    it('an open block ending inside an open fence closes the fence first (or its close would be code)', () => {
+        expect(liftChatBlocks(streamSafe('<result>\n```ts\nconst a'))).toBe('<result>\n```ts\nconst a\n```\n</result>');
+    });
+
+    it('an open fence is left as it is: it renders as code while it arrives', () => {
+        const md = '```ts\nconst a = 1;\nconst b';
+        expect(liftChatBlocks(streamSafe(md))).toBe(md);
     });
 
     it('CONTROL: complete text is left exactly as it was (a finished reply loses nothing)', () => {

@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { ContentRenderer } from '@particle-academy/react-fancy';
+import { genieClipboardWriter } from '../clipboard.js';
 import { FileViewer } from '@particle-academy/fancy-code';
 import { extractFileRefs, splitByExistence, type AskFileRef } from '../../core/ask-file-refs.js';
 import { questionWindowAction } from '../../core/keys.js';
@@ -78,7 +79,7 @@ function DrawerBody({ path, text, line }: { path: string; text: string; line: nu
                 </div>
             ) : null}
             <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
-                {prose ? <ContentRenderer value={text} format="markdown" lineSpacing={1.6} className="text-[13px]" /> : <FileViewer filename={path} value={text} readOnly {...(line ? { line } : {})} theme="auto" />}
+                {prose ? <ContentRenderer clipboardWriter={genieClipboardWriter} value={text} format="markdown" lineSpacing={1.6} className="text-[13px]" /> : <FileViewer filename={path} value={text} readOnly {...(line ? { line } : {})} theme="auto" />}
             </div>
         </div>
     );

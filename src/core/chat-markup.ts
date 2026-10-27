@@ -7,7 +7,8 @@ import { fileLinkTarget, linkFileRefs } from './chat-file-links.js';
  * The vocabulary is moic's own (MOIC-Partners/suite, `resources/prompts/rules/custom-tags.md` and
  * `app/Services/ChatRenderService.php`), adapted to what Genie actually has:
  *
- * - every fenced code block gets a copy button, and every Markdown table a copy-as-TSV button (moic's `injectCopyButtons`);
+ * - every fenced code block gets a copy button, and every Markdown table a copy-as-TSV button (moic's `injectCopyButtons`)
+ *   — react-fancy's own since 5.67.0 (ContentRenderer `copyButtons`, on by default);
  * - `<result>…</result>` — a card for content the person carries elsewhere, copied RICH (`core/chat-copy.ts`);
  * - `<highlight>…</highlight>` — a one-level callout; `<followup>…</followup>` — one closing question;
  * - `[type:id|label]` pills and `[go:kind:id]` destinations — ONLY `file` (in the chat's workspace), `agent` and
@@ -17,7 +18,8 @@ import { fileLinkTarget, linkFileRefs } from './chat-file-links.js';
  * moic's lessons, kept: the model never authors interactive UI (`stripForbiddenTags`); a model-written URL is never a
  * navigation into Genie (`stripInternalLinks`); a reply still arriving never flashes a half-written tag (`streamSafe`).
  *
- * Every function here is pure and string-to-string, so the whole pipeline is proved without a DOM.
+ * Every function here is pure and string-to-string, so the whole pipeline is proved without a DOM. react-fancy draws the
+ * result (ChatProse): `liftChatBlocks` hands it the blocks in the shape it lifts.
  */
 
 export interface ChatRefs {
@@ -44,14 +46,6 @@ export function chatRefLists(
     return { key: JSON.stringify([a, w]), agents: a, workspaces: w };
 }
 
-export type ChatSegment =
-    | { kind: 'markdown'; text: string }
-    | { kind: 'code'; lang: string; code: string }
-    | { kind: 'table'; markdown: string; rows: string[][] }
-    | { kind: 'result'; body: string; children: ChatSegment[] }
-    | { kind: 'highlight'; body: string; children: ChatSegment[] }
-    | { kind: 'followup'; body: string; children: ChatSegment[] };
-
 export type ChatLinkTarget =
     | { kind: 'file'; path: string; line: number | null }
     | { kind: 'agent'; id: string }
@@ -66,7 +60,7 @@ function fenceSpans(md: string): Span[] {
     return fences(md).spans;
 }
 
-function fences(md: string): { spans: Span[]; open: boolean } {
+function fences(md: string): { spans: Span[]; open: string | null } {
     const spans: Span[] = [];
     let at = 0;
     let open: { from: number; fence: string } | null = null;
@@ -82,7 +76,7 @@ function fences(md: string): { spans: Span[]; open: boolean } {
         at = end + 1;
     }
     if (open) spans.push([open.from, md.length]);
-    return { spans, open: open !== null };
+    return { spans, open: open?.fence ?? null };
 }
 
 /** Fences, then inline code spans outside them: the places where a tag or a pill is CODE, not markup. */
@@ -114,11 +108,15 @@ function outsideCode(md: string, fn: (text: string) => string, links = false): s
  * A REPLY STILL ARRIVING: hold back whatever is half-written at its end — a tag whose `>` has not come yet (`<resul`,
  * `</result`, `<highlight cl`) and a pill whose `]` has not (`[file:src/co`). An open block or fence is fine as it is:
  * the parser draws it as its card or code block, filling in. Complete text is returned exactly as it was.
+ *
+ * Not react-fancy's `streaming` (5.67.0): it holds back an open block or fence ENTIRELY until it closes — #1277's card and
+ * code block fill in as they arrive instead — it knows nothing of pills, and it needs to be told when a reply has
+ * finished, which ChatProse is not (a reply is its text; a finished one that ends oddly would never render whole).
  */
 export function streamSafe(md: string): string {
     if (!md) return md;
     // Ends inside an open fence: what arrives is code, and a `<` in code is not a tag.
-    if (fences(md).open) return md;
+    if (fences(md).open !== null) return md;
     return md
         .replace(/<\/?[A-Za-z][\w-]*(?:\s[^<>]*)?$|<\/?$/, '')
         .replace(/\[[A-Za-z][\w-]*:[^\]\n]*$/, '');
@@ -265,17 +263,31 @@ function tagsOutsideCode(md: string): TagHit[] {
     return hits;
 }
 
+/** Stray block tags (a close with no open, or a tag inside a block) lose the tag and keep the words. */
+function stripBlockTags(md: string): string {
+    if (!md.includes('<')) return md;
+    return outsideCode(md, (t) => t.replace(TAG, ''));
+}
+
 /**
- * THE PARSER: a reply as segments, one per block. Blocks first (`<result>`, `<highlight>`, `<followup>` — case-insensitive,
- * never inside code; an unclosed one runs to the end, so a card fills in while it streams); each block's body is parsed
- * again, ONE level (a block tag inside a block loses its tag and keeps its words). Between blocks, Markdown is split into
- * prose, fenced code and tables.
+ * GENIE'S BLOCK RULES, IN THE SHAPE REACT-FANCY LIFTS. `<result>`, `<highlight>` and `<followup>` are react-fancy
+ * `markdown: true` extensions (ChatProse): fancy lifts such a tag out of the Markdown and renders its body — but only when
+ * the opening tag STARTS A LINE and has a matching close, and it nests them up to depth 8. Genie's rules (#1277) differ,
+ * so the text is rewritten first:
+ *
+ * - a block may start mid-line (`Ready. <result>…`) — it is put on lines of its own;
+ * - a block still arriving has no close yet — it is closed (and an open fence in it first), so its card fills in;
+ * - ONE level: a block tag inside a block loses its tag and keeps its words; a stray close does too;
+ * - case-insensitive, never inside code; attributes are not carried (Genie's blocks take none).
+ *
+ * Text with no block tag is returned exactly as it was. Code blocks and tables are left alone: they are fancy's.
  */
-export function parseChatMarkup(md: string, depth = 0): ChatSegment[] {
+export function liftChatBlocks(md: string): string {
     const text = md ?? '';
-    if (depth > 0) return splitMarkdown(stripBlockTags(text));
     const hits = tagsOutsideCode(text);
-    const out: ChatSegment[] = [];
+    if (hits.length === 0) return text;
+    const parts: string[] = [];
+    const prose = (s: string) => { const t = trimLines(stripBlockTags(s)); if (t.trim() !== '') parts.push(t); };
     let at = 0;
     let i = 0;
     while (i < hits.length) {
@@ -292,67 +304,16 @@ export function parseChatMarkup(md: string, depth = 0): ChatSegment[] {
             else if (nest === 0) { close = h; break; }
             else nest -= 1;
         }
-        out.push(...splitMarkdown(stripBlockTags(text.slice(at, open.index))));
-        const body = trimLines(text.slice(open.end, close ? close.index : text.length));
-        out.push({ kind: open.name, body, children: parseChatMarkup(body, depth + 1) });
+        prose(text.slice(at, open.index));
+        let body = trimLines(stripBlockTags(text.slice(open.end, close ? close.index : text.length)));
+        // Still arriving inside a fence: close the fence, or the block's own close would be code.
+        const fence = close ? null : fences(body).open;
+        if (fence !== null) body += `\n${fence}`;
+        parts.push(`<${open.name}>\n${body}\n</${open.name}>`);
         at = close ? close.end : text.length;
         i = close ? j + 1 : hits.length;
         while (i < hits.length && hits[i]!.index < at) i += 1;
     }
-    out.push(...splitMarkdown(stripBlockTags(text.slice(at))));
-    return out;
-}
-
-/** Stray block tags (a close with no open, or a tag inside a block) lose the tag and keep the words. */
-function stripBlockTags(md: string): string {
-    if (!md.includes('<')) return md;
-    return outsideCode(md, (t) => t.replace(TAG, ''));
-}
-
-const DELIMITER = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
-
-/** A table row's cells, as written: outer pipes off, split on unescaped pipes, trimmed. */
-export function tableCells(line: string): string[] {
-    const inner = line.trim().replace(/^\|/, '').replace(/(?<!\\)\|$/, '');
-    return inner.split(/(?<!\\)\|/).map((c) => c.trim());
-}
-
-function splitMarkdown(md: string): ChatSegment[] {
-    const out: ChatSegment[] = [];
-    const lines = md.split('\n');
-    let prose: string[] = [];
-    const flush = () => {
-        const t = trimLines(prose.join('\n'));
-        if (t.trim() !== '') out.push({ kind: 'markdown', text: t });
-        prose = [];
-    };
-    for (let i = 0; i < lines.length;) {
-        const line = lines[i]!;
-        const fence = FENCE_OPEN.exec(line);
-        if (fence && !(fence[1]![0] === '`' && fence[2]!.includes('`'))) {
-            const mark = fence[1]!;
-            const close = new RegExp(`^ {0,3}${mark[0] === '`' ? '`' : '~'}{${mark.length},}\\s*$`);
-            const code: string[] = [];
-            let j = i + 1;
-            while (j < lines.length && !close.test(lines[j]!)) code.push(lines[j++]!);
-            flush();
-            out.push({ kind: 'code', lang: fence[2]!.trim().split(/\s+/)[0] ?? '', code: code.join('\n') });
-            i = j + 1;
-            continue;
-        }
-        const next = lines[i + 1];
-        if (line.includes('|') && next !== undefined && next.includes('|') && next.includes('-') && DELIMITER.test(next)) {
-            const rows: string[] = [line, next];
-            let j = i + 2;
-            while (j < lines.length && lines[j]!.trim() !== '' && lines[j]!.includes('|')) rows.push(lines[j++]!);
-            flush();
-            out.push({ kind: 'table', markdown: rows.join('\n'), rows: [rows[0]!, ...rows.slice(2)].map(tableCells) });
-            i = j;
-            continue;
-        }
-        prose.push(line);
-        i += 1;
-    }
-    flush();
-    return out;
+    prose(text.slice(at));
+    return parts.join('\n\n');
 }

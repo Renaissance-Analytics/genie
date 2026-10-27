@@ -99,6 +99,7 @@ export const ICON_NAMES: readonly string[] = [
     // ^ the rail's tools and its collapsed state (Tynn #799/#282)
     'info', 'circle-help', 'file-text', 'globe', 'check',
     // The chat's markup (genie#1263): a copy button, the <result> card, the <highlight> callout, the <followup> question.
+    // react-fancy's ContentRenderer copy buttons (5.67.0) ask for 'copy', then 'check' or 'x' — all three registered here.
     'copy', 'clipboard-list', 'lightbulb', 'message-circle-question',
     // The Genie Browser's address bar on a .gen site (its own https origin, Genie's certificate); the file panel's lock badge.
     'lock',

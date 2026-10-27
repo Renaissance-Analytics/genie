@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { clipboardBridge } from './clipboard-ipc.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW'S PRELOAD. It exposes `genieQuestion` — the question to show (on load, and pushed when it
@@ -25,3 +26,6 @@ contextBridge.exposeInMainWorld('genieQuestion', {
         return () => { ipcRenderer.removeListener('question:show', handler); };
     },
 });
+
+// The question and its files are rendered Markdown with copy buttons: they write through main (main/clipboard-ipc.ts).
+contextBridge.exposeInMainWorld('genieClipboard', clipboardBridge(ipcRenderer));

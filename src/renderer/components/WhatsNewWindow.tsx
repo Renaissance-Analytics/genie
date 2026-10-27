@@ -1,4 +1,5 @@
 import { ContentRenderer, Modal } from '@particle-academy/react-fancy';
+import { genieClipboardWriter } from '../clipboard.js';
 
 /**
  * WHAT'S NEW (Tynn #762; Genie 1's What's New modal): once per version, after an upgrade, the release's own "What's new"
@@ -25,7 +26,7 @@ export function WhatsNewWindow({ whatsNew, onClose }: WhatsNewProps) {
 export function WhatsNewBody({ whatsNew, onClose }: { whatsNew: { version: string; notes: string }; onClose: () => void }) {
     return (
         <div data-whats-new={whatsNew.version} className="flex flex-col gap-4">
-            <ContentRenderer value={whatsNew.notes} format="markdown" lineSpacing={1.5} className="max-h-[60vh] overflow-auto text-sm text-[var(--fg-2)]" />
+            <ContentRenderer clipboardWriter={genieClipboardWriter} value={whatsNew.notes} format="markdown" lineSpacing={1.5} className="max-h-[60vh] overflow-auto text-sm text-[var(--fg-2)]" />
             <div className="flex justify-end">
                 <button type="button" data-action="whats-new-close" onClick={onClose} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white">Close</button>
             </div>

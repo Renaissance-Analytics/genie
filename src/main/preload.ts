@@ -5,6 +5,7 @@ import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import { clipboardBridge } from './clipboard-ipc.js';
 
 type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
 
@@ -361,3 +362,6 @@ const bridge: PreloadBridge = {
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+
+// Every copy button in this window writes through main (main/clipboard-ipc.ts): the page's clipboard can fail silently here.
+contextBridge.exposeInMainWorld('genieClipboard', clipboardBridge(ipcRenderer));

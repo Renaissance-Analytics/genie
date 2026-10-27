@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ClipboardItem, clipboard, ipcMain } from 'electron';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,7 @@ import { genieMcpServer } from './mcp-server.js';
 import { genieHome, installDir } from './paths.js';
 import { genieWindowIcon } from './app-identity.js';
 import { SessionHost } from './session-host.js';
+import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 
 /**
  * DOCTOR MODE (`genie --doctor`, the owner 2026-10-12): Genie with ONLY the Genie OSA, to diagnose the system and repair
@@ -103,6 +104,8 @@ export async function runDoctor(): Promise<void> {
 
     // THE WINDOW: its own page and preload (`genieDoctor`), never Genie's renderer bridge.
     const here = dirname(fileURLToPath(import.meta.url));
+    // The doctor's chat draws copy buttons: they write through main, as in Genie's own windows (main/clipboard-ipc.ts).
+    registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     ipcMain.handle('doctor:facts', () => facts);
     ipcMain.handle('doctor:connect', () => connect);
     ipcMain.handle('doctor:detail', () => ({

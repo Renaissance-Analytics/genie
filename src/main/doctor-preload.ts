@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { clipboardBridge } from './clipboard-ipc.js';
 
 /**
  * THE DOCTOR WINDOW'S PRELOAD (`genie --doctor`). It exposes `genieDoctor` — the OSA's detail, a prompt, start, an
@@ -17,3 +18,6 @@ contextBridge.exposeInMainWorld('genieDoctor', {
         return () => { ipcRenderer.removeListener('doctor:changed', handler); };
     },
 });
+
+// The doctor's chat draws copy buttons: they write through main (main/clipboard-ipc.ts).
+contextBridge.exposeInMainWorld('genieClipboard', clipboardBridge(ipcRenderer));

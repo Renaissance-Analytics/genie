@@ -671,6 +671,30 @@ if (!approvalEnabled) {
             'the approval clearing once answered',
         );
         check(cleared, '33. answering it CLEARS it — the round trip completed');
+
+        /*
+         * 33a–c. THE CHAT'S COPY BUTTONS, IN A REAL WINDOW (genie#1263, react-fancy 5.67.0). The stub answers the approval
+         * with a reply holding one code block, one table and one <result>. react-fancy adds its copy buttons AFTER mount,
+         * so no static render can count them — and fancy tested them in jsdom only. Here: exactly one per block (fancy's
+         * on the code and the table, Genie's on the result, none of Genie's beside fancy's), and a click COPIES — the
+         * button turns "copied" only when main wrote the clipboard through Electron and read the same text back.
+         */
+        const PROSE = `[...document.querySelectorAll('[data-chat] [data-chat-prose]')].find((p) => p.querySelector('[data-chat-result]'))`;
+        const replied = await waitFor(cdp, `Boolean(${PROSE}?.querySelector('[data-react-fancy-content-copy="table"]'))`, 'the reply with its copy buttons in the chat');
+        const blocks = await cdp.evaluate(`(() => { const p = ${PROSE}; if (!p) return '{}'; const n = (s) => p.querySelectorAll(s).length; return JSON.stringify({
+            pre: n('pre'), tables: n('table'), code: n('[data-react-fancy-content-copy="code"]'), table: n('[data-react-fancy-content-copy="table"]'),
+            result: n('[data-copy="result"]'), genieCodeOrTable: n('[data-copy="code"], [data-copy="table"]'), live: n('[data-react-fancy-content-renderer-live]') }); })()`);
+        const b = JSON.parse(blocks || '{}');
+        check(replied && b.pre === 1 && b.tables === 1 && b.code === 1 && b.table === 1 && b.result === 1 && b.genieCodeOrTable === 0 && b.live === 1,
+            '33a. ONE copy button per block in the chat: react-fancy’s on the code and the table, Genie’s on the result', blocks);
+
+        await cdp.evaluate(`${PROSE}?.querySelector('[data-react-fancy-content-copy="code"]')?.click(); true`);
+        const codeCopied = await waitFor(cdp, `${PROSE}?.querySelector('[data-react-fancy-content-copy="code"]')?.getAttribute('data-copy-state') === 'copied' && ${PROSE}?.querySelector('[data-react-fancy-content-renderer-live]')?.textContent === 'Copied'`, 'the code copy to be confirmed');
+        check(codeCopied, '33b. "Copy code" writes through main’s clipboard and says Copied', await cdp.evaluate(`${PROSE}?.querySelector('[data-react-fancy-content-copy="code"]')?.getAttribute('data-copy-state') ?? null`));
+
+        await cdp.evaluate(`${PROSE}?.querySelector('[data-copy="result"]')?.click(); true`);
+        const resultCopied = await waitFor(cdp, `${PROSE}?.querySelector('[data-copy="result"]')?.getAttribute('data-copy-state') === 'copied'`, 'the result copy to be confirmed');
+        check(resultCopied, '33c. "Copy result" writes through main’s clipboard (rich) and says Copied', await cdp.evaluate(`${PROSE}?.querySelector('[data-copy="result"]')?.getAttribute('data-copy-state') ?? null`));
     }
 }
 

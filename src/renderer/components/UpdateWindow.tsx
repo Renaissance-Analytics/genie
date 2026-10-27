@@ -1,4 +1,5 @@
 import { ContentRenderer, Modal } from '@particle-academy/react-fancy';
+import { genieClipboardWriter } from '../clipboard.js';
 import type { SignalAction } from '../../core/deck.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 
@@ -27,7 +28,7 @@ export function UpdateWindow({ update, onAction, onClose }: UpdateWindowProps) {
                     {groups.map((g) => (
                         <section key={g.version} data-update-notes-version={g.version} className="flex flex-col gap-2">
                             <h3 className="text-sm font-semibold text-[var(--fg-1)]">Genie {g.version}</h3>
-                            <ContentRenderer value={g.notes} format="markdown" lineSpacing={1.4} className="text-[13px] text-[var(--fg-2)]" />
+                            <ContentRenderer clipboardWriter={genieClipboardWriter} value={g.notes} format="markdown" lineSpacing={1.4} className="text-[13px] text-[var(--fg-2)]" />
                         </section>
                     ))}
                     {state === 'complete' ? null : (
