@@ -278,42 +278,61 @@ await new Promise((r) => setTimeout(r, 600));
 const AGENT_HEADER_PROBE = `
     (() => {
         const header = document.querySelector('[data-surface="agent"] [data-view-header]');
-        // How many lines of text an element's words take: the distinct tops of its text's line boxes.
+        // How many lines an element's WORDS take: the distinct tops of its text nodes' line boxes. Text only — the chip's
+        // logo and the pill's dot are boxes of their own, at their own tops, and are not lines of text.
         const lines = (el) => {
             if (!el) return 0;
-            const range = document.createRange();
-            range.selectNodeContents(el);
-            return new Set([...range.getClientRects()].filter((r) => r.width > 0 && r.height > 0).map((r) => Math.round(r.top))).size;
+            const tops = [];
+            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+            for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+                if (!(n.textContent ?? '').trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(n);
+                for (const r of range.getClientRects()) if (r.width > 0 && r.height > 0) tops.push(r.top);
+            }
+            return tops.sort((a, b) => a - b).filter((t, i, all) => i === 0 || t - all[i - 1] > 4).length;
         };
         const crumb = header?.querySelector('[data-crumb]') ?? null;
         const chip = header?.querySelector('[data-provider-chip]') ?? null;
         const pill = header?.querySelector('[data-pill]') ?? null;
+        // The agent's name, found by its words (the seed names it 'atlas'), so the probe needs no hook in the markup.
+        const name = header ? [...header.querySelectorAll('span')].find((s) => s.children.length === 0 && s.textContent === 'atlas') ?? null : null;
+        const buttons = header ? [...header.querySelectorAll('button[data-action]')] : [];
         const box = header ? header.getBoundingClientRect() : null;
         const pinned = document.querySelector('[data-chat="pinned"]');
         return JSON.stringify({
             // THE POSITIVE CONTROLS: an agent page, the chat in the dock beside it, and the pieces that wrapped.
             pinned: Boolean(pinned),
             chatWidth: pinned ? Math.round(pinned.getBoundingClientRect().width) : 0,
-            pieces: [crumb, chip, pill].filter(Boolean).length,
+            pieces: [crumb, name, chip, pill].filter(Boolean).length,
             logo: Boolean(chip?.querySelector('[data-provider-logo]')),
             headerWidth: box ? Math.round(box.width) : null,
-            crumb: lines(crumb), chip: lines(chip), pill: lines(pill),
+            crumb: lines(crumb), name: lines(name), chip: lines(chip), pill: lines(pill),
+            // An action button shows one line of words, or none when only its icon shows — never two.
+            buttons: buttons.map((b) => b.getAttribute('data-action') + ':' + lines(b)),
             crumbWidth: crumb ? Math.round(crumb.getBoundingClientRect().width) : null,
+            nameWidth: name ? Math.round(name.getBoundingClientRect().width) : null,
             // Taller than its row = something wrapped; wider than its box = something spilled instead of truncating.
             tall: header ? header.scrollHeight - header.clientHeight : null,
             wide: header ? header.scrollWidth - header.clientWidth : null,
         });
     })()
 `;
-// 1024 first: the width the defect was seen at.
-const pinnedWidths = [...new Set([1024, ...WIDTHS])];
+/*
+ * 1024 first: the width the defect was seen at. Not 800: there the pinned chat (520px) and the rail (208px) leave the page
+ * 72px, and what a page can do in 72px is the dock's question, not the header's.
+ */
+const pinnedWidths = [...new Set([1024, ...WIDTHS.filter((w) => w >= 1024)])];
 for (const width of pinnedWidths) {
     await send('Emulation.setDeviceMetricsOverride', { width, height: HEIGHT, deviceScaleFactor: 1, mobile: false });
     await new Promise((r) => setTimeout(r, 250));
     const r = JSON.parse(await evaluate(AGENT_HEADER_PROBE));
     const at = `${width}px, chat pinned`;
-    check(r.pinned && r.pieces === 3 && r.logo, `${at} — an agent page with the chat in the dock, its crumb, logo chip and pill`, `pinned ${r.pinned} (${r.chatWidth}px), ${r.pieces} of 3 pieces, logo ${r.logo}, header ${r.headerWidth}px`);
-    check(r.crumb === 1 && r.chip === 1 && r.pill === 1, `${at} — the crumb, the provider chip and the pill are each ONE line`, `crumb ${r.crumb} line(s) at ${r.crumbWidth}px, chip ${r.chip}, pill ${r.pill}`);
+    check(r.pinned && r.pieces === 4 && r.logo, `${at} — an agent page with the chat in the dock, its crumb, name, logo chip and pill`, `pinned ${r.pinned} (${r.chatWidth}px), ${r.pieces} of 4 pieces, logo ${r.logo}, header ${r.headerWidth}px`);
+    check(r.crumb === 1 && r.name === 1 && r.chip === 1 && r.pill === 1 && r.buttons.every((b) => /:[01]$/.test(b)),
+        `${at} — the crumb, the name, the provider chip, the pill and each action are ONE line`, `crumb ${r.crumb}, name ${r.name}, chip ${r.chip}, pill ${r.pill}, actions ${r.buttons.join(' ')}`);
+    // Truncated, not vanished: a crumb or a name squeezed to nothing is not a truncation.
+    check(r.crumbWidth >= 24 && r.nameWidth >= 24, `${at} — the crumb and the name keep some of their words`, `crumb ${r.crumbWidth}px, name ${r.nameWidth}px`);
     check(r.tall !== null && r.tall <= 1 && r.wide !== null && r.wide <= 1, `${at} — the agent header neither wraps nor spills: it truncates`, `${r.tall}px taller, ${r.wide}px wider than its box`);
 }
 
