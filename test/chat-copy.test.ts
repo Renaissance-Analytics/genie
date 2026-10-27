@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COPIED_MS, htmlToPlain, resultCopyPayload, tableTsv, writeCopy } from '../src/core/chat-copy.js';
+import { COPIED_MS, contentCopyPayload, htmlToPlain, resultCopyPayload, writeCopy, writeThroughHost } from '../src/core/chat-copy.js';
 
 /**
  * WHAT A COPY BUTTON PUTS ON THE CLIPBOARD (genie#1263). moic's lesson, the one its copy buttons exist to answer: copy
@@ -8,21 +8,55 @@ import { COPIED_MS, htmlToPlain, resultCopyPayload, tableTsv, writeCopy } from '
  * resultsCopyButtonHtml). Every payload is built by a pure function, tested here directly.
  */
 
-describe('tableTsv — "Copy table" is tab-separated, the way a spreadsheet pastes it', () => {
-    it('one line per row, header first, cells joined by tabs', () => {
-        expect(tableTsv([['Repo', 'Open'], ['genie', '12'], ['tynn', '3']])).toBe('Repo\tOpen\ngenie\t12\ntynn\t3');
+/*
+ * "Copy code" and "Copy table" are react-fancy's since 5.67.0: the code as written between the fences, a table as TSV of
+ * each cell's rendered text (fancy's ContentRenderer docs, "Copy buttons"). What Genie decides is what reaches the
+ * clipboard from them — through its own writer.
+ */
+describe('contentCopyPayload — what Genie puts on the clipboard from react-fancy’s copy buttons', () => {
+    it('code copies its code as plain text, nothing else (moic: "a code block copies its code, as written")', () => {
+        expect(contentCopyPayload({ kind: 'code', text: 'npm ci\nnpm test', html: '<pre><code>npm ci\nnpm test</code></pre>' })).toEqual({ plain: 'npm ci\nnpm test' });
     });
 
-    it('a cell is its RENDERED text: no asterisks, backticks or link syntax', () => {
-        expect(tableTsv([['Deal', 'Doc'], ['**Acme**', '[brief](https://e.com/b) `v2`']])).toBe('Deal\tDoc\nAcme\tbrief v2');
+    it('a table copies as TSV, with its HTML beside it for a rich paste — a Genie link in it is its words', () => {
+        const html = '<table><tr><td><a href="#agent:ag_1">atlas</a></td><td><a href="https://e.com">docs</a></td></tr></table>';
+        const out = contentCopyPayload({ kind: 'table', text: 'atlas\tdocs', html });
+        expect(out.plain).toBe('atlas\tdocs');
+        expect(out.html).not.toContain('#agent:');
+        expect(out.html).toContain('<td>atlas</td>');
+        // CONTROL: a web link is still a link.
+        expect(out.html).toContain('href="https://e.com"');
+    });
+});
+
+describe('writeThroughHost — the copy goes through Electron’s clipboard in MAIN when Genie has one', () => {
+    const payload = { html: '<p><strong>x</strong></p>', plain: 'x' };
+    const silent = { write: async () => {}, writeText: async () => {} };
+
+    it('the text and the HTML go to the host, and the page’s clipboard is not touched', async () => {
+        const sent: unknown[][] = [];
+        const touched: string[] = [];
+        const ok = await writeThroughHost(payload, { write: async (...a) => { sent.push(a); return true; } }, { writeText: async () => { touched.push('writeText'); } }, undefined);
+        expect(ok).toBe(true);
+        expect(sent).toEqual([['x', '<p><strong>x</strong></p>']]);
+        expect(touched).toEqual([]);
     });
 
-    it('a tab or a newline inside a cell cannot break the grid', () => {
-        expect(tableTsv([['a\tb', 'c<br>d']])).toBe('a b\tc d');
+    it('a plain payload sends no HTML', async () => {
+        const sent: unknown[][] = [];
+        await writeThroughHost({ plain: 'ls' }, { write: async (...a) => { sent.push(a); return true; } }, undefined, undefined);
+        expect(sent).toEqual([['ls']]);
     });
 
-    it('an escaped pipe is a pipe', () => {
-        expect(tableTsv([['a \\| b']])).toBe('a | b');
+    it('a host that says no, or throws, is a FAILED copy — never retried on a page clipboard that can fail silently', async () => {
+        expect(await writeThroughHost(payload, { write: async () => false }, silent, undefined)).toBe(false);
+        expect(await writeThroughHost(payload, { write: async () => { throw new Error('ipc'); } }, silent, undefined)).toBe(false);
+    });
+
+    it('with no host (a browser on another machine), the page’s clipboard is used as before', async () => {
+        const texts: string[] = [];
+        expect(await writeThroughHost({ plain: 'ls' }, undefined, { writeText: async (t) => { texts.push(t); } }, undefined)).toBe(true);
+        expect(texts).toEqual(['ls']);
     });
 });
 

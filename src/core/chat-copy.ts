@@ -7,10 +7,12 @@ import { renderMarkdown } from '@particle-academy/react-fancy';
  * copy what the person SEES, never the Markdown source — "writing only the plain text is how a drafted email arrives as a
  * wall of unformatted prose, and writing the markdown SOURCE is how it arrives full of asterisks". So:
  *
- * - a code block copies its code, as written;
- * - a table copies as TSV, each cell its rendered text — a spreadsheet pastes it as a grid;
- * - a `<result>` copies RICH: one clipboard item holding `text/html` (the rendered semantic HTML, so headings, bold and
- *   lists survive a paste into Outlook, Word or Gmail) and `text/plain` beside it, falling back to `writeText`.
+ * - a code block copies its code, as written, and a table as TSV of each cell's rendered text — both react-fancy's own
+ *   copy buttons since 5.67.0; Genie decides only what of them reaches the clipboard (`contentCopyPayload`);
+ * - a `<result>` copies RICH: `text/html` (the rendered semantic HTML, so headings, bold and lists survive a paste into
+ *   Outlook, Word or Gmail) and `text/plain` beside it.
+ *
+ * Every copy goes through the host — Electron's clipboard, in main — when there is one (`writeThroughHost`).
  *
  * Every payload is a pure function of the reply's text. The HTML is react-fancy's own `renderMarkdown` — the same parser
  * the chat draws with, sanitised by its default blocklist in the app (a no-op in Node, where these are tested).
@@ -98,14 +100,14 @@ function unwrapGenieLinks(html: string): string {
     return html.replace(/<a\b[^>]*\bhref="#(?:file|agent|workspace):[^"]*"[^>]*>([\s\S]*?)<\/a>/gi, '$1');
 }
 
-/** One rendered table cell's text, from its Markdown. */
-function renderedCell(md: string): string {
-    return cellText(htmlToPlain(unwrapGenieLinks(renderMarkdown(md.replace(/\\\|/g, '|')))));
-}
-
-/** "Copy table": tab-separated, header first, each cell the text it renders as. */
-export function tableTsv(rows: readonly (readonly string[])[]): string {
-    return rows.map((r) => r.map(renderedCell).join('\t')).join('\n');
+/**
+ * What reaches the clipboard from react-fancy's own copy buttons (ContentRenderer 5.67.0: code and tables). Code is its
+ * code and nothing else, as #1277 copied it — a code block pasted into an email is still code, not a styled `<pre>`. A
+ * table is fancy's TSV with its HTML beside it, so a rich editor pastes a table and a spreadsheet a grid; a Genie link in
+ * it is its words, as in a `<result>`.
+ */
+export function contentCopyPayload(p: { kind: 'code' | 'table'; text: string; html: string }): CopyPayload {
+    return p.kind === 'code' ? { plain: p.text } : { plain: p.text, html: unwrapGenieLinks(p.html) };
 }
 
 /** "Copy result": the rendered HTML and its plain text — never the Markdown source. */
@@ -142,6 +144,25 @@ export async function writeCopy(payload: CopyPayload, clipboard: ClipboardLike |
     try {
         await clipboard.writeText(payload.plain);
         return true;
+    } catch {
+        return false;
+    }
+}
+
+/** The app's clipboard: MAIN writes it, through Electron, and says whether it landed (main/clipboard-ipc.ts). */
+export interface HostClipboard {
+    write(text: string, html?: string): Promise<boolean>;
+}
+
+/**
+ * Put a payload on the clipboard through the HOST when there is one, else the page's clipboard (`writeCopy`). A host that
+ * says no, or fails, is a failed copy: it is never retried on `navigator.clipboard`, which in a sandboxed Electron window
+ * can resolve without writing anything (Genie 1, v0.7.0-beta.342) — and would turn a failure into a false "Copied".
+ */
+export async function writeThroughHost(payload: CopyPayload, host: HostClipboard | undefined, clipboard: ClipboardLike | undefined, Item: ClipboardItemCtor | undefined): Promise<boolean> {
+    if (!host) return writeCopy(payload, clipboard, Item);
+    try {
+        return (await (payload.html === undefined ? host.write(payload.plain) : host.write(payload.plain, payload.html))) === true;
     } catch {
         return false;
     }

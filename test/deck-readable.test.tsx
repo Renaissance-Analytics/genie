@@ -98,7 +98,8 @@ describe('the body reads like prose', () => {
         const form = html.match(/<form[^>]*data-deck-form="q_1"[\s\S]*?<\/form>/)?.[0] ?? '';
         expect(form).not.toBe('');
         expect(form).toMatch(/^<form[^>]*class="[^"]*max-w-\[72ch\][^"]*font-sans/);
-        const text = form.match(/data-question-text="0"[\s\S]*?<\/div><\/div><\/div>/)?.[0] ?? '';
+        // Up to the renderer's own root (react-fancy 5.67 ends that root with its copy live region, so it is found by name).
+        const text = form.match(/data-question-text="0"[\s\S]*?data-react-fancy-content-renderer=""[^>]*>/)?.[0] ?? '';
         expect(text).toMatch(/class="[^"]*font-sans[^"]*text-\[13px\]/);
         expect(form).not.toContain('font-mono');
         // Not cut off: the whole question is there.

@@ -1,5 +1,6 @@
 import { createContext, useContext } from 'react';
 import { Callout, ContentRenderer, JsonEditor } from '@particle-academy/react-fancy';
+import { genieClipboardWriter } from '../clipboard.js';
 // From the renderer-safe module: `core/plugins.ts` pulls in node:crypto and must never reach this bundle.
 import { VETTED_FANCY_EXPORTS, type VettedFancyExport } from '../../core/plugin-panels.js';
 import type { GenieBridge } from '../bridge.js';
@@ -60,7 +61,7 @@ export function PluginPane({ panel, workspace }: { panel: PluginPanelView; works
                 ) : exported === 'ArtBoardPanel' ? (
                     <ArtBoardPanel workspaceId={workspace!.id} artboard={host.artboard} files={host.files} />
                 ) : exported === 'ContentRenderer' ? (
-                    <ContentRenderer value={typeof props.value === 'string' ? props.value : ''} format={props.format === 'html' || props.format === 'auto' ? props.format : 'markdown'} />
+                    <ContentRenderer clipboardWriter={genieClipboardWriter} value={typeof props.value === 'string' ? props.value : ''} format={props.format === 'html' || props.format === 'auto' ? props.format : 'markdown'} />
                 ) : exported === 'JsonEditor' ? (
                     <JsonEditor value={(props.value ?? {}) as never} />
                 ) : (

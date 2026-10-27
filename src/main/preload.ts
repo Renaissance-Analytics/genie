@@ -361,3 +361,10 @@ const bridge: PreloadBridge = {
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+
+// Every copy button in this window writes through main (main/clipboard-ipc.ts): the page's clipboard can fail silently here.
+// The channel is core/clipboard-wire.ts CLIPBOARD_WRITE_CHANNEL, written out: a module two preloads import becomes a shared
+// chunk, and a sandboxed preload cannot require it (test/clipboard-main.test.ts holds this copy equal to the constant).
+contextBridge.exposeInMainWorld('genieClipboard', {
+    write: (text: string, html?: string) => ipcRenderer.invoke('genie:clipboard-write', html === undefined ? { text } : { text, html }) as Promise<boolean>,
+});

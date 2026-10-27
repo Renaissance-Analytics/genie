@@ -112,6 +112,12 @@ the corrupt file.
   root typechecks clean and throws `resolveIcon is not a function` at runtime. The `./icon`
   subpath works. A types/runtime mismatch, which is the one class of bug a green `tsc` is
   guaranteed not to catch.
+- **`react-fancy@5.67.0`: `Editor` in view mode turns `ContentRenderer`'s copy buttons on but
+  forwards neither `copyButtons` nor `clipboardWriter` (nor `onCopy`).** A host cannot route
+  those copies through its own writer or switch them off. Genie is not affected today
+  (`DocumentEditor`'s `readOnly` is never set, so its `Editor` is always in edit mode); a
+  read-only document would get copy buttons on the page's clipboard, which can fail silently
+  in a sandboxed Electron window.
 
 ## D7 — Packaging, and what the audit noise means
 

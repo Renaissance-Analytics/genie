@@ -20,7 +20,8 @@ import type { Caller } from './mcp-tools.js';
 import { sessionCostOf } from '../core/stream-view.js';
 import { lastNumberedTurn } from '../core/turn-numbers.js';
 import { commsOf } from '../core/comms.js';
-import { BrowserWindow, Menu, Notification, Tray, app, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
+import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
+import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -1236,6 +1237,8 @@ async function boot(): Promise<void> {
             if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
         }
     });
+    // Every copy button writes through main (main/clipboard-ipc.ts): in a sandboxed window the page's clipboard can fail silently.
+    registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     // The native window buttons follow the theme (the owner: "not following color theme"): the renderer sends the
     // theme's own bar colours whenever the theme changes; they are applied to the window that sent them.
     const overlayApplied = new Map<number, { color: string; symbolColor: string }>();

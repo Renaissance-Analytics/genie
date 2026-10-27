@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, ContentRenderer, Drawer, Icon, Input, Modal, Select, Textarea } from '@particle-academy/react-fancy';
+import { genieClipboardWriter } from '../clipboard.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
 import type { InboxSection, InboxThreadView } from '../features.js';
 import { formatSize, type InboxCompose } from './FeatureSurfaces.js';
@@ -176,7 +177,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                             {m.to !== HUMAN && m.readAt === null ? <span data-message-waiting="" className="text-[var(--warning)]">not collected yet</span> : null}
                                             {m.to !== HUMAN && m.readAt !== null ? <span className="text-[var(--fg-4)]">{`read ${ago(Date.parse(m.readAt), p.now)} ago`}</span> : null}
                                         </div>
-                                        <ContentRenderer value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+                                        <ContentRenderer clipboardWriter={genieClipboardWriter} value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
                                         {m.attachments.length > 0 ? (
                                             <div className="flex flex-wrap gap-1">
                                                 {m.attachments.map((att) => (

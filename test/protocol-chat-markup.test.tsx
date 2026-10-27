@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { sharedProtocol } from '../src/core/genie-protocol.js';
-import { parseChatMarkup } from '../src/core/chat-markup.js';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { ChatProse } from '../src/renderer/components/ChatProse.js';
 
 /**
  * AGENTS ARE TOLD THE MARKUP (genie#1263: "Teach agents the markup through Genie's skills / AGENTS shared instructions").
@@ -36,6 +37,8 @@ describe('shared.md teaches the chat markup', () => {
     it('its <result> example parses as a result card (what agents are taught is what Genie draws)', () => {
         const example = /(<result>[\s\S]*?<\/result>)/.exec(md)?.[1];
         expect(example).toBeDefined();
-        expect(parseChatMarkup(example!.replace(/\\`/g, '`')).map((s) => s.kind)).toEqual(['result']);
+        const html = renderToStaticMarkup(<ChatProse text={example!.replace(/\\`/g, '`')} />);
+        expect((html.match(/data-chat-result=""/g) ?? []).length).toBe(1);
+        expect(html).not.toContain('&lt;result');
     });
 });

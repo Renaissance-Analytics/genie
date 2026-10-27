@@ -60,6 +60,23 @@ function note(text) {
     process.stderr.write(`[stub-codex] ${text}\n`);
 }
 
+/** The reply after the approval: a code block, a table and a result card (smoke checks 33a–c). */
+const STUB_REPLY = [
+    'Migrated. Run this to check:',
+    '',
+    '```bash',
+    'php artisan migrate:status',
+    '```',
+    '',
+    '| Table | Rows |',
+    '|---|---|',
+    '| users | 3 |',
+    '',
+    '<result>',
+    '**Migrated:** users',
+    '</result>',
+].join('\n');
+
 /** The approval we park, once, on the first turn. */
 let askedOnce = false;
 
@@ -131,6 +148,13 @@ function handle(frame) {
     // when the smoke reports.
     if (method === undefined && id !== undefined) {
         note(`approval answered: ${JSON.stringify(result ?? error)}`);
+        // Then a REPLY in Genie's chat markup (genie#1263), so the smoke can see react-fancy's copy buttons in a real
+        // window: one code block, one table, one <result>. An agentMessage item, as Codex's App Server sends one.
+        send({
+            jsonrpc: '2.0',
+            method: 'item/completed',
+            params: { threadId: THREAD_ID, turnId: TURN_ID, item: { type: 'agentMessage', id: 'stub_msg_0001', text: STUB_REPLY } },
+        });
         return;
     }
 
