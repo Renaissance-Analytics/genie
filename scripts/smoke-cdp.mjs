@@ -715,6 +715,27 @@ if (!approvalEnabled) {
         await cdp.evaluate(`${PROSE}?.querySelector('[data-copy="result"]')?.click(); true`);
         const resultCopied = await waitFor(cdp, `${PROSE}?.querySelector('[data-copy="result"]')?.getAttribute('data-copy-state') === 'copied'`, 'the result copy to be confirmed');
         check(resultCopied, '33c. "Copy result" writes through main’s clipboard (rich) and says Copied', await cdp.evaluate(`${PROSE}?.querySelector('[data-copy="result"]')?.getAttribute('data-copy-state') ?? null`));
+
+        /*
+         * 64a. A LONG CONVERSATION SCROLLED BACK DOES NOT STRETCH THE WINDOW (genie#1290). The reply above carries
+         * absolutely positioned "Copied" live regions. A conversation longer than the chat, read from its start, puts
+         * them far below the chat's fold; on beta.48 they escaped the chat scroller and the DOCUMENT grew, so the whole
+         * shell could scroll up. A spacer before the conversation makes it that long, the chat goes to its start, and
+         * the document is measured AND pushed (a programmatic scroll, as a focus() or scrollIntoView would do). Then
+         * everything is put back, in the same evaluate.
+         */
+        const scrolledBack = await cdp.evaluate(`(() => {
+            const log = document.querySelector('[data-chat] [data-chat-log]'); const sc = document.querySelector('[data-chat] [data-chat-scroll]');
+            if (!log || !sc) return JSON.stringify({ missing: true });
+            const spacer = document.createElement('div'); spacer.style.height = '4000px'; spacer.style.flexShrink = '0';
+            log.insertBefore(spacer, log.firstChild); sc.scrollTop = 0;
+            const d = document.scrollingElement; d.scrollTop = 100000;
+            const r = { chatTop: sc.scrollTop, chatScroll: sc.scrollHeight, top: d.scrollTop, scrollHeight: d.scrollHeight, clientHeight: d.clientHeight };
+            d.scrollTop = 0; spacer.remove(); sc.scrollTop = sc.scrollHeight;
+            return JSON.stringify(r); })()`);
+        const sb = JSON.parse(scrolledBack || '{}');
+        check(sb.chatScroll > 4000 && sb.chatTop === 0 && sb.top === 0 && sb.scrollHeight === sb.clientHeight,
+            '64a. a long conversation read from its start leaves the window unscrolled: the document cannot scroll (genie#1290)', scrolledBack);
     }
 }
 
@@ -1092,6 +1113,19 @@ if (ch.overlay) {
             '58. a bundled sound loads in the window — no media blocked by the security policy',
             `${s.result} · ${(s.violations ?? []).join(' | ') || 'no violations'} · ${s.url}`);
     }
+}
+
+/*
+ * 64b. AFTER EVERYTHING ABOVE — chat sent and streamed, copy buttons clicked, chats switched, surfaces walked — THE WINDOW
+ * HAS NOT SCROLLED, and cannot (genie#1290): the document is exactly the window, at 0, and a programmatic push stays at 0.
+ */
+{
+    const end = await cdp.evaluate(`(() => { const d = document.scrollingElement; const before = d.scrollTop; d.scrollTop = 100000;
+        const r = { before, pushed: d.scrollTop, scrollHeight: d.scrollHeight, clientHeight: d.clientHeight, body: document.body.scrollTop, root: document.getElementById('root')?.scrollTop ?? null };
+        d.scrollTop = 0; return JSON.stringify(r); })()`);
+    const e = JSON.parse(end || '{}');
+    check(e.before === 0 && e.pushed === 0 && e.body === 0 && e.root === 0 && e.scrollHeight === e.clientHeight,
+        '64b. after the whole run the window is unscrolled and unscrollable: scrollTop 0, scrollHeight === clientHeight (genie#1290)', end);
 }
 
 // 11. Nothing threw on the way up.
