@@ -268,7 +268,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             const target = address ?? (fresh ? initialGenUrl(hostsOf(key)) : null);
             if (target === null) return { ok: true };
             // A site opened from Genie shows its tab when one is open (genie#1196): never a second tab on the same site.
-            return entry!.browser.showSite(target);
+            // Who asked decides the tab too (genie#1265): an agent's site waits in a tab behind the person's.
+            return entry!.browser.showSite(target, activation);
         },
     };
 }

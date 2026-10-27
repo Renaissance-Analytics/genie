@@ -19,7 +19,9 @@ describe('main wires the site row', () => {
     });
 
     it('the same opener reaches the agents’ tools (background) and the Hosting row (the person’s click) — once each (genie#1235)', () => {
-        expect(main.match(/openInBrowser: openInBrowserFor\('background'\),/g) ?? []).toHaveLength(1);
+        // The agents' opener is the background one, and pulses the site's workspace (genie#1265, agent-actions-pulse-wiring).
+        expect(main.match(/openInBrowser: agentOpensSite,/g) ?? []).toHaveLength(1);
+        expect(main.match(/openInBrowserFor\('background'\)\(url\)/g) ?? []).toHaveLength(1);
         expect(main.match(/openInBrowser: openInBrowserFor\('user-gesture'\),/g) ?? []).toHaveLength(1);
         const ports = main.slice(main.indexOf('const featurePorts: FeaturePorts = {'), main.indexOf('const featurePorts: FeaturePorts = {') + 200);
         expect(ports).toMatch(/openInBrowser: openInBrowserFor\('user-gesture'\),/);

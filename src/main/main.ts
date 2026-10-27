@@ -50,6 +50,7 @@ import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
+import { viewDelivery, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
@@ -152,7 +153,7 @@ import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-b
 import { TerminalSnapshots } from './terminal-snapshots.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
-import { fileEventsOf, openFileRoute } from '../core/files-panel.js';
+import { fileEventsOf } from '../core/files-panel.js';
 import { remoteListener } from './remote-listen.js';
 import { remoteAccess } from './remote-access.js';
 import { ensureFirewallRule } from './remote-firewall.js';
@@ -555,6 +556,15 @@ function closeWindowAt(route: string): void {
     for (const w of BrowserWindow.getAllWindows()) {
         if (!w.isDestroyed() && w.webContents.getURL().endsWith(`#${route}`)) w.close();
     }
+}
+
+/**
+ * WHAT THE WINDOW SHOWS, asked for (genie#1265, core/view-requests.ts): the person's gesture navigates; an agent's action
+ * pulses the workspace it acted in and moves nothing. Main changes the window's view through here and nothing else.
+ */
+function showToPerson(request: ViewRequest): void {
+    const delivery = viewDelivery(request);
+    broadcast(delivery.channel, delivery.payload);
 }
 
 /** Pushed to EVERY window — a popped-out panel is a window too. */
@@ -2299,6 +2309,14 @@ async function boot(): Promise<void> {
         const opened = genieBrowserWindow.open(url, activation);
         return opened.ok ? { ok: true } : { ok: false, reason: opened.error };
     };
+    // AN AGENT'S `sites open` (genie#1265): in the background, and the workspace the site belongs to pulses for the person.
+    const agentOpensSite: OpenInBrowser = async (url) => {
+        const r = await openInBrowserFor('background')(url);
+        const host = ((): string | null => { try { return new URL(url).host.toLowerCase(); } catch { return null; } })();
+        const site = r.ok && host ? composed.sites.list().find((s) => s.host.toLowerCase() === host) : undefined;
+        if (site) showToPerson({ activation: 'background', workspaceId: site.workspaceId, reason: 'sites open' });
+        return r;
+    };
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
     // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
     processBook = await ProcessBook.open(genieHome(), {
@@ -2361,7 +2379,7 @@ async function boot(): Promise<void> {
             },
             // workspaceTabs (beta.35 item 36): the workspace's tabs setting (every window reloads it), and its sites' hosts.
             workspaceTabs: {
-                write: (workspaceId, raw) => { void composed.settings.setFor(workspaceId, 'workspace_tabs', raw); },
+                write: (workspaceId, raw) => { void composed.settings.setFor(workspaceId, 'workspace_tabs', raw); showToPerson({ activation: 'background', workspaceId, reason: 'workspaceTabs' }); },
                 sites: (workspaceId) => composed.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
             },
             // pages (browser rebuild step 7): the Genie browser's tabs and the live site panels, each drivable.
@@ -2372,7 +2390,7 @@ async function boot(): Promise<void> {
             thumbsUp: (caller, reason) => { broadcast('genie:action', { agentId: caller.agentId, kind: 'thumbsup', reason }); },
             issueWatch: { forWorkspace: (workspaceId) => issueWatchSummaryFor(workspaceId), refresh: (workspaceId) => issueWatchRefreshFor(workspaceId), recheckSignIn: () => { void tynnAccount?.recheck(); } },
             // In GENIE (genie#922): that workspace's file panel on the file, and Genie brought forward — never the OS's default app.
-            openFile: async ({ workspaceId, path, line }) => { attractMainWindow('openFileForUser'); broadcast('genie:navigate', openFileRoute(workspaceId, path, line)); return { ok: true }; },
+            openFile: async ({ workspaceId, path, line }) => { attractMainWindow('openFileForUser'); showToPerson({ activation: 'background', workspaceId, file: path, line, reason: 'openFileForUser' }); return { ok: true }; },
             // The `plan` tool: into the caller's own session, so its Active Plan column shows it.
             reportPlan: (agentId, steps) => host?.reportPlan(agentId as AgentId, steps) ?? false,
             // ...and read back from the agent's record, where every plan is kept across restarts (identity.ts `plan`).
@@ -2390,8 +2408,9 @@ async function boot(): Promise<void> {
             terminalEnv: (workspaceId) => terminalEnvFor(composed, workspaceId, mcpEnv()),
             // The agents' `services` / `sites` tools act on the same composition the Services and Hosting tabs do.
             hosting: composed,
-            // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235).
-            openInBrowser: openInBrowserFor('background'),
+            // `sites open` shows the site in the same browser the Hosting row's Open does — without taking focus (genie#1235)
+            // or the tab on screen, and the site's workspace pulses (genie#1265).
+            openInBrowser: agentOpensSite,
             // The agents' `processes` tool acts on the Processes tab's own book, and reads the supervisor's kept logs.
             ...(processBook ? { processes: { book: processBook, logs: (id: string, lines?: number) => composed.supervisor.readLog(id, lines), ...(processScheduler ? { runNow: (id: string) => processScheduler!.runNow(id) } : {}) } } : {}),
             // The agents' `flows` tool: the Flows tab's own store, and the scheduler's Run now (the tool runs only armed flows).
@@ -2926,7 +2945,7 @@ async function boot(): Promise<void> {
     });
     trayHandlers = {
         onUpdate: () => { revealMainWindow('tray: update'); },
-        onTaskManager: () => { revealMainWindow('tray: Task Manager'); broadcast('genie:navigate', 'genie://hosting?tab=processes'); },
+        onTaskManager: () => { revealMainWindow('tray: Task Manager'); showToPerson({ activation: 'user-gesture', route: 'genie://hosting?tab=processes', reason: 'tray: Task Manager' }); },
         // New scratch terminal (Tynn #761; the owner, 2026-10-19: in Genie's own workspace): home folder, its own window.
         // A signed-out login named in the tray (#967): its own login, in a window of its own.
         onProviderLogin: (provider) => {
@@ -2944,10 +2963,7 @@ async function boot(): Promise<void> {
             if (!r.ok) console.error('[genie] scratch terminal:', r.reason);
         },
         onOpen: () => { revealMainWindow('tray: Open'); },
-        onSettings: () => {
-            revealMainWindow('Settings');
-            broadcast('genie:navigate', 'genie://settings');
-        },
+        onSettings: () => { revealMainWindow('Settings'); showToPerson({ activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' }); },
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: requestQuit,
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
@@ -2959,17 +2975,14 @@ async function boot(): Promise<void> {
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {
-        onSettings: () => {
-            revealMainWindow('Settings');
-            broadcast('genie:navigate', 'genie://settings');
-        },
+        onSettings: () => { revealMainWindow('Settings'); showToPerson({ activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' }); },
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: requestQuit,
         onCloseWindow: () => { (BrowserWindow.getFocusedWindow() ?? window)?.close(); },
         onOpenRepo: () => { void shell.openExternal('https://github.com/Renaissance-Analytics/genie'); },
         // HELP (Tynn #762): Genie's documentation is the Tynn docs site; What's new opens over the page, again.
         onDocs: () => { void shell.openExternal(genieDocsUrl(tynnHost())); },
-        onWhatsNew: () => { revealMainWindow('menu: What is new'); broadcast('genie:navigate', WHATS_NEW_ROUTE); },
+        onWhatsNew: () => { revealMainWindow('menu: What is new'); showToPerson({ activation: 'user-gesture', route: WHATS_NEW_ROUTE, reason: 'menu: What is new' }); },
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
     // S7: each .gen site at its own https origin — the pane's session routes *.gen to the in-app front door and trusts

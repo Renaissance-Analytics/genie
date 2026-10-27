@@ -33,9 +33,10 @@ describe('no raw activation anywhere in src/main', () => {
 });
 
 describe('the paths an agent or a job can reach are BACKGROUND', () => {
-    it('openFileForUser navigates and never reveals the main window (the owner’s report: an agent took the keyboard)', () => {
+    it('openFileForUser never reveals the main window (the owner’s report: an agent took the keyboard) — nor moves its view (genie#1265)', () => {
         const openFile = /openFile: async \(\{ workspaceId, path, line \}\) => \{([^\n]*)\}/.exec(main)?.[1] ?? '';
-        expect(openFile).toMatch(/broadcast\('genie:navigate', openFileRoute\(workspaceId, path, line\)\)/);
+        expect(openFile).toMatch(/showToPerson\(\{ activation: 'background', workspaceId, file: path, line, reason: 'openFileForUser' \}\)/);
+        expect(openFile).not.toMatch(/genie:navigate/);
         expect(openFile).not.toMatch(/revealMainWindow/);
         expect(openFile).toMatch(/attractMainWindow\('openFileForUser'\)/);
     });
@@ -44,7 +45,9 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
         expect(main).toMatch(/openInBrowserFor\('background'\)/);
         expect(main).toMatch(/openInBrowserFor\('user-gesture'\)/);
         // The agents' tools get the background one; the feature ports (the Hosting tab's buttons) the person's.
-        expect(main).toMatch(/hosting: composed,\s*openInBrowser: openInBrowserFor\('background'\),/);
+        // ...through agentOpensSite, which also pulses the site's workspace (genie#1265).
+        expect(main).toMatch(/hosting: composed,\s*openInBrowser: agentOpensSite,/);
+        expect(main).toMatch(/const agentOpensSite: OpenInBrowser = async \(url\) => \{\s*const r = await openInBrowserFor\('background'\)\(url\);/);
         expect(main).toMatch(/\.\.\.processPorts\(\),\s*openInBrowser: openInBrowserFor\('user-gesture'\),/);
     });
 

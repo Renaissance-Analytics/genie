@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 import { FEATURE_CHANNELS, type AgentDetail, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { Headroom } from '../core/headroom.js';
+import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
 
@@ -51,6 +52,12 @@ const bridge: PreloadBridge = {
         const listener = (_event: unknown, route: string): void => onRoute(route);
         ipcRenderer.on('genie:navigate', listener);
         return () => ipcRenderer.removeListener('genie:navigate', listener);
+    },
+    // An agent acted in a workspace (genie#1265): the window marks it and never moves (core/view-requests.ts).
+    onWorkspacePulse: (onPulse) => {
+        const listener = (_event: unknown, pulse: WorkspacePulse): void => onPulse(pulse);
+        ipcRenderer.on('genie:workspace-pulse', listener);
+        return () => ipcRenderer.removeListener('genie:workspace-pulse', listener);
     },
     onHeadroom: (onHeadroom) => {
         const listener = (_event: unknown, limits: Readonly<Record<string, Headroom>>): void => onHeadroom(limits);

@@ -91,6 +91,8 @@ export interface ShellProps {
     snapshot: GenieSnapshot;
     /** What each agent just did with Genie, for its Dashboard row (genie#1209). */
     rowEmoji?: Readonly<Record<string, string>> | undefined;
+    /** The workspaces an agent acted in that the person has not visited since (genie#1265): their rows pulse. */
+    pulsingWorkspaces?: ReadonlySet<string> | undefined;
     /** Each provider's rate limit for the Dashboard header. */
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
     /** Mail between agents for the Dashboard (genie#1209). */
@@ -276,6 +278,7 @@ export function Shell({
     address,
     snapshot,
     rowEmoji,
+    pulsingWorkspaces,
     rateLimits,
     mailSignals,
     workspaceFaults,
@@ -494,6 +497,8 @@ export function Shell({
                     onOpenSites={(workspaceId) => setRuntimeModal({ kind: 'sites', workspaceId })}
                     // On an agent's page its workspace stays the highlighted row (Tynn #805).
                     currentWorkspaceId={routeWorkspace(route, snapshot.agents)}
+                    // Where an agent acted and the person has not been since (genie#1265).
+                    pulsing={pulsingWorkspaces}
                     available={railSurfacesFor(servable)}
                     onNavigate={onNavigate}
                     // Add a workspace from the rail, any time (Tynn #283): the same flow as the Dashboard's.
@@ -537,6 +542,7 @@ export function Shell({
                      */}
                     {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
                         <Dashboard
+                            pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
                             rateLimits={rateLimits}
                             mailSignals={mailSignals}

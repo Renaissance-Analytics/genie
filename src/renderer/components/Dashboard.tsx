@@ -6,6 +6,7 @@ import { headroomTitle, type Headroom } from '../../core/headroom.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo } from './ProviderLogo.js';
+import { WORKSPACE_PULSE } from './Sidebar.js';
 import { dashboardAction, isTypingTarget, stepFocus } from '../../core/keys.js';
 import type { DashboardGroup } from '../../core/route.js';
 import {
@@ -355,7 +356,10 @@ function GroupHeader({
     onOpenWorkspace,
     onLocateRepo,
     lanes,
+    pulsed = false,
 }: {
+    /** An agent acted in this workspace and the person has not been there since (genie#1265): the header pulses. */
+    pulsed?: boolean;
     group: WorkspaceGroup;
     /** The envelope's name, else the folder — the rail's rule; the id only when nothing else is known. */
     name: string;
@@ -367,7 +371,7 @@ function GroupHeader({
 }) {
     return (
         <>
-            <div className="relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs">
+            <div className={`relative flex h-7 items-center whitespace-nowrap border-b border-[var(--border-1)] bg-[var(--bg-1)] pl-7 pr-5 text-xs${pulsed ? ` ${WORKSPACE_PULSE}` : ''}`} data-workspace-head={group.workspaceId} {...(pulsed ? { 'data-workspace-pulse': 'true', title: 'An agent did something here — open it to see' } : {})}>
                 <Lanes segments={lanes} />
                 <span className="font-semibold">{name}</span>
                 <span className="ml-2.5 min-w-0 truncate font-mono text-[11px] text-[var(--fg-4)]">{path}</span>
@@ -461,9 +465,11 @@ export interface DashboardProps {
     rateLimits?: Readonly<Record<string, Headroom>> | undefined;
     /** Mail between agents, drawn from the sender's row to the recipient's (genie#1209). */
     mailSignals?: readonly MailSignal[] | undefined;
+    /** Workspaces an agent acted in that the person has not visited since (genie#1265): their group headers pulse. */
+    pulsing?: ReadonlySet<string> | undefined;
 }
 
-export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals }: DashboardProps) {
+export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownWorkspaces, onOpenAgent, onAddAgent, onAddWorkspace, onAddWorkspaceFromGit, onAddWorkspaceFromTynn, group = 'workspace', onGroup, onOpenWorkspace, faults, onLocateRepo, onFix, onChat, focusedId, revealId, trayId, onNavigate, rowEmoji, rateLimits, mailSignals, pulsing }: DashboardProps) {
     // Hide known hibernated workspaces consistently; unregistered agents keep their status visibility.
     const workspaces = knownWorkspaces?.filter((workspace) => workspace.asleep !== true) ?? null;
     const hibernatedIds = new Set((knownWorkspaces ?? []).filter((workspace) => workspace.asleep === true).map((workspace) => workspace.id));
@@ -686,7 +692,7 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
             ) : null}
             {groups.map((group) => (
                 <div key={group.workspaceId} data-workspace={group.workspaceId}>
-                    <GroupHeader group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
+                    <GroupHeader pulsed={pulsing?.has(group.workspaceId) === true} group={group} name={nameOf(group.workspaceId)} path={pathOf(group.workspaceId)} onAddAgent={onAddAgent} onOpenWorkspace={onOpenWorkspace} onLocateRepo={onLocateRepo} lanes={lanes?.[`head:${group.workspaceId}`]} />
                     {group.rows.map((row) => (
                         <Fragment key={row.id}>
                             <AgentRowView row={row} emoji={rowEmoji?.[row.id]} onOpen={onOpenAgent} onFix={onFix} focused={row.id === focused} reveal={reveal} lanes={lanes?.[row.id]} onReveal={setOwnReveal} />

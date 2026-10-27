@@ -590,7 +590,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     if (typeof site === 'string') return err(site);
                     if (!deps.openInBrowser) return err('this Genie has no browser to open it in (doctor mode); nothing was opened', { url: `https://${site.host}/` });
                     const r = await openSite(s, site.id, deps.openInBrowser);
-                    return ok({ ok: true, url: r.url, opened: 'in Genie’s browser, in front of the person' });
+                    return ok({ ok: true, url: r.url, opened: 'in Genie’s browser, behind what the person is doing; this workspace’s row pulses until they look' });
                 }
                 case 'update': {
                     const site = own(str(args.site));
