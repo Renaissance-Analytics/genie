@@ -100,13 +100,13 @@ export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
         },
     },
     {
-        description: 'A review surface for what agents MAKE: an agent posts a rendered mockup or an image; you approve or reject it with a comment, and the verdict goes back to that agent.',
+        description: 'A board for what agents MAKE: an agent posts a rendered mockup or an image to show you; when it asks for a verdict, you approve or reject it with a comment and the verdict goes back to that agent.',
         manifest: {
             id: 'ai.genie.artboard',
             name: 'ArtBoard',
             version: '2.0.0',
             publisher,
-            mcpTools: [tool('post', 'Put something you MADE on the ArtBoard for a person to review — a rendered HTML mockup, or an image you generated. Not for plans or written proposals (those are text: send a message). Provide a title and either html (the markup) or kind "image" with imagePath (workspace-relative; it is COPIED onto the board). Pass a stable id and post again with the same id to REPLACE that card when you revise. Returns at once; the approve / reject verdict, with any comment, arrives in your AgentInbox — carry on with work that does not depend on it.', {
+            mcpTools: [tool('post', 'Put something you MADE on the ArtBoard for a person to see — a rendered HTML mockup, or an image you generated. Not for plans or written proposals (those are text: send a message). Provide a title and either html (the markup) or kind "image" with imagePath (workspace-relative; it is COPIED onto the board). Pass a stable id and post again with the same id to REPLACE that card when you revise. By default the card just shows the artifact. Set askVerdict: true only when you need the person to approve or reject it before you go on (a design choice, a direction to sign off); then the verdict, with any comment, arrives in your AgentInbox — the call returns at once, so carry on with work that does not depend on it. Leave it off to show progress, a result, or something to look at.', {
                 type: 'object',
                 properties: {
                     title: { type: 'string', description: 'What the reviewer sees on the card.' },
@@ -115,6 +115,7 @@ export const OFFICIAL_PLUGINS: readonly OfficialPlugin[] = [
                     imagePath: { type: 'string', description: 'For kind image: the workspace-relative path of the image you made.' },
                     id: { type: 'string', description: 'Stable id; posting again with it REPLACES that card.' },
                     note: { type: 'string', description: 'One line on what you want looked at.' },
+                    askVerdict: { type: 'boolean', description: 'true: the card offers Approve / Reject with a comment, and the verdict comes to your AgentInbox. Default false: the card just shows it.' },
                 },
                 required: ['title'],
             })],

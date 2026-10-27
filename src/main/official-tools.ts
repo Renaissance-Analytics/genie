@@ -152,7 +152,10 @@ async function postToBoard(input: OfficialToolInput): Promise<RunResult> {
         await copyFile(source.full, target.full);
     }
     const root = input.caller.workspacePath;
-    const entry: BoardPost = { id, title, kind, file, createdAt: new Date().toISOString(), agentId: input.caller.agentId, ...(str(args.note) ? { note: str(args.note) } : {}) };
+    // OPT-IN (genie#1275): only `askVerdict: true` asks. Written explicitly either way — on disk an absent field means a
+    // post from before #1275, which asked.
+    const askVerdict = args.askVerdict === true;
+    const entry: BoardPost = { id, title, kind, file, createdAt: new Date().toISOString(), agentId: input.caller.agentId, askVerdict, ...(str(args.note) ? { note: str(args.note) } : {}) };
     const board = addPost(await readBoardFile(root), entry);
     const w = await write(input, `${BOARD_DIR}/${BOARD_INDEX}`, JSON.stringify({ posts: board }, null, 2));
     if (!w.ok) return refuse(w.reason);
@@ -160,7 +163,9 @@ async function postToBoard(input: OfficialToolInput): Promise<RunResult> {
         ok: true,
         result: {
             id,
-            text: `Posted "${title}" to the ArtBoard as ${id}. The person sees it in the workspace's ArtBoard panel and can approve or reject it with a comment; that verdict arrives in your AgentInbox, so this call does not wait — carry on with work that does not depend on the answer.${NL}Revising? Post again with id "${id}" and the board REPLACES that card.`,
+            text: askVerdict
+                ? `Posted "${title}" to the ArtBoard as ${id}. The person sees it in the workspace's ArtBoard panel and can approve or reject it with a comment; that verdict arrives in your AgentInbox, so this call does not wait — carry on with work that does not depend on the answer.${NL}Revising? Post again with id "${id}" and the board REPLACES that card.`
+                : `Posted "${title}" to the ArtBoard as ${id}. The person sees it in the workspace's ArtBoard panel. No verdict was asked for, so none will come; post with askVerdict: true when you need one.${NL}Revising? Post again with id "${id}" and the board REPLACES that card.`,
         },
     };
 }
