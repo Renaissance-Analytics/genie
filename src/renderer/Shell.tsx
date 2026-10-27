@@ -812,7 +812,8 @@ export function Shell({
                         approvalRefusal={chatThread ? refusalFor(approvalRefusal, chatThread.agentId, chatApproval) : null}
                         onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
                         scope={scope}
-                        onSend={(text, attachments) => { if (scope.kind !== 'blocked') onSend(chatThread?.agentId ?? '', text, attachments); }}
+                        // The chat the message was TYPED in (genie#1261): each chat keeps its own composer.
+                        onSend={(text, attachments, agentId) => { if (scope.kind !== 'blocked') onSend(agentId || chatThread?.agentId || '', text, attachments); }}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
                         // A piece of mail the chat shows opens the AgentInbox, this chat kept beside it (beta.33 item 18).
