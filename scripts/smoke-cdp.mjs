@@ -1042,18 +1042,31 @@ if (!approvalEnabled) {
         }
         return null;
     };
-    /** What the window renders: the editor, or the main shell. */
+    /**
+     * Every step against the flow window is BOUNDED: a window that stops answering (a render loop, a socket that never
+     * opens) is a failed check with the step named, never a smoke that hangs until CI's `timeout` kills it unexplained.
+     */
+    const within = (ms, promise, step) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`no answer in ${ms} ms: ${step}`)), ms))]);
+    /** What the window renders: the editor, or the main shell. The window is closed after, through the debugger. */
     const rendered = async (t) => {
-        const w = await Cdp.connect(t.webSocketDebuggerUrl);
+        let w = null;
         try {
-            await waitFor(w, `Boolean(document.querySelector('[data-flow-editor]') || document.querySelector('[data-title-bar]'))`, 'the flow window to render');
+            w = await within(10_000, Cdp.connect(t.webSocketDebuggerUrl), 'connect to the flow window');
+            const probe = `JSON.stringify({ editor: document.querySelector('[data-flow-editor]')?.getAttribute('data-flow-editor') ?? null, titleBar: Boolean(document.querySelector('[data-title-bar]')), dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), hash: window.location.hash })`;
+            let what = null;
+            for (let i = 0; i < 60; i += 1) {
+                what = JSON.parse(await within(10_000, w.evaluate(probe), 'read what the flow window renders'));
+                if (what.editor !== null || what.titleBar) break;
+                await new Promise((r) => setTimeout(r, 250));
+            }
             // A beat for a late fallback: the snapshot arriving is what re-read the hash and dropped to the Dashboard.
             await new Promise((r) => setTimeout(r, 1500));
-            const what = JSON.parse(await w.evaluate(`JSON.stringify({ editor: document.querySelector('[data-flow-editor]')?.getAttribute('data-flow-editor') ?? null, titleBar: Boolean(document.querySelector('[data-title-bar]')), dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), hash: window.location.hash })`));
-            await w.evaluate('window.close(); true').catch(() => {});
-            return what;
+            return JSON.parse(await within(10_000, w.evaluate(probe), 'read the flow window again after the snapshot'));
+        } catch (error) {
+            return { error: String(error?.message ?? error) };
         } finally {
-            w.close();
+            try { w?.close(); } catch { /* the socket may already be gone */ }
+            await fetch(`http://127.0.0.1:${PORT}/json/close/${t.id}`).catch(() => {});
         }
     };
     const words = (r) => JSON.stringify(r);
