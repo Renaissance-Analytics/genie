@@ -15,6 +15,7 @@ import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
 import { agentShells } from '../../core/agent-shells.js';
 import { ShellsPanel } from './ShellsPanel.js';
+import { PlanColumn } from './PlanColumn.js';
 import type { GenieBridge } from '../bridge.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
 import { agentOpsMenu } from '../../core/agent-ops-menu.js';
@@ -154,6 +155,12 @@ const REPAIR_LABEL = (r: Repair): string =>
 export interface AgentViewProps {
     /** The Active Plan column shown (beta.33 item 11: hidden from the workspace tab row's toggle); absent = shown. */
     planOpen?: boolean | undefined;
+    /** Where the plan column's width is remembered (genie#1280); `undefined` = the browser's localStorage, `null` = nowhere. */
+    planStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
+    /** The plan column was dragged shut (genie#1280): the same as its toggle. Absent = a drag stops at the floor. */
+    onPlanCollapse?: (() => void) | undefined;
+    /** Talk about a plan step in this agent's chat (genie#1280). Absent = no chat icon on the steps. */
+    onDiscussStep?: ((step: string) => void) | undefined;
     /** Where the index column's collapsed state is remembered; `undefined` = the browser's localStorage, `null` = nowhere (tests). */
     indexStorage?: Pick<Storage, 'getItem' | 'setItem'> | null | undefined;
     agent: { id: string; name: string; workspaceId?: string | undefined; provider: string; fidelity: Fidelity; cwd: string; instructions?: string | null | undefined; raisesApprovals?: boolean | null | undefined };
@@ -278,7 +285,7 @@ function ObservedTerminal({ terminalId, terminals }: { terminalId: string; termi
 export function AgentView({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
-    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, settingsSection: settingsSectionProp,
+    files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
     const tabs = tabsFor(agent.fidelity);
     // A message's pills in the Stream (genie#1263): a file opens in this agent's workspace, an agent or a workspace opens
@@ -1513,33 +1520,10 @@ export function AgentView({
                  * THE ACTIVE PLAN COLUMN (the owner, 2026-10-19: "Genie needs to include an Active Plan column in the agent
                  * view to the left of the chat"): its own column, the view's LAST — directly left of the docked chat — and
                  * always there for an agent that reports plans. Before any plan it says so; an agent seen only through its
-                 * terminal reports none, so it has no column.
+                 * terminal reports none, so it has no column. Resizable, and each step can be put into the chat (genie#1280).
                  */}
                 {agent.fidelity !== 'observed' && planOpen ? (
-                    <aside data-plan-column="" className="flex min-h-0 w-[260px] shrink-0 flex-col gap-1.5 overflow-y-auto border-l border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-xs">
-                        <h2 className="text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">Active plan</h2>
-                        {plan ? (
-                            <>
-                                <p className="font-mono text-[11px] text-[var(--fg-3)]">
-                                    {plan.step}/{plan.of}
-                                </p>
-                                {steps ? (
-                                <ol className="mt-1.5 flex flex-col gap-1">
-                                    {steps.map((step, i) => (
-                                        <li key={i} data-plan-step={step.status} {...(step.current ? { 'data-current': 'true' } : {})} className={`flex items-start gap-1.5 text-[12px] ${step.current ? 'font-semibold text-[var(--fg-1)]' : step.status === 'completed' ? 'text-[var(--fg-3)]' : 'text-[var(--fg-2)]'}`}>
-                                            <span className={`w-3 shrink-0 ${step.status === 'completed' ? 'text-[var(--success)]' : step.current ? 'text-[var(--sky-400)]' : 'text-[var(--fg-4)]'}`}>{step.status === 'completed' ? '✓' : step.current ? '◐' : '○'}</span>
-                                            <span className="min-w-0">{step.content}</span>
-                                        </li>
-                                    ))}
-                                </ol>
-                            ) : (
-                                <p className="mt-1 text-[var(--fg-2)]">{plan.doing}</p>
-                            )}
-                            </>
-                        ) : (
-                            <p className="text-[12px] leading-normal text-[var(--fg-3)]">{agent.name} has not reported a plan yet.</p>
-                        )}
-                    </aside>
+                    <PlanColumn name={agent.name} plan={plan} steps={steps} storage={planStorage} onCollapse={onPlanCollapse} onDiscuss={onDiscussStep} />
                 ) : null}
             </div>
         </div>
