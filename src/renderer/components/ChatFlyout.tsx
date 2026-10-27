@@ -799,9 +799,23 @@ export function ChatComposers({ chats, active, children }: { chats: readonly str
         <>
             {chats.map((chat) => (
                 <div key={chat} data-chat-draft={chat} hidden={chat !== active} {...(chat === active ? { 'data-chat-composer': '' } : {})}>
-                    {children(chat)}
+                    <KeptDraft chat={chat} shown={chat === active} draw={children} />
                 </div>
             ))}
         </>
     );
 }
+
+/**
+ * A KEPT DRAFT IS NOT DRAWN AGAIN WHILE IT IS HIDDEN (genie#1273). The flyout re-renders on every event of the agent on
+ * screen and hands down a new `draw` each time — the composer props of the chat on screen. Drawn straight into the list,
+ * every kept PromptInput re-rendered on every event, so the renderer's per-event cost grew with the number of chats
+ * opened. A hidden draft needs nothing from those props (it is not on screen; its own text lives in its own state), so it
+ * is skipped until it is shown again — and then drawn with the props of that moment.
+ */
+const KeptDraft = memo(
+    function KeptDraft({ chat, draw }: { chat: string; shown: boolean; draw: (chat: string) => ReactNode }) {
+        return <>{draw(chat)}</>;
+    },
+    (prev, next) => prev.chat === next.chat && !next.shown,
+);

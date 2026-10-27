@@ -30,10 +30,23 @@ vi.mock('electron', () => ({
 }));
 
 const words = 'alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau'.split(' ');
-const text = (n: number, seed: number): string => {
+/** The reference: words chained from `seed`, cut at `n` characters. */
+const textByWords = (n: number, seed: number): string => {
     let out = '';
     for (let i = seed; out.length < n; i = (i * 7 + 3) % 1013) out += `${words[i % words.length]} `;
     return out.slice(0, n);
+};
+/*
+ * The SAME text, read from precomputed chains (genie#1273). After its first word the chain depends only on
+ * (seed * 7 + 3) % 1013, so each of the 1,013 tails is built once. Building 100,000 rows word by word was 1.2 s of this
+ * file on omarchy-test — most of what timed it out — and none of it was the cost under test. Checked against the
+ * reference below.
+ */
+const LONGEST = 1_100;
+const tails = Array.from({ length: 1013 }, (_, j) => textByWords(LONGEST, j));
+const text = (n: number, seed: number): string => {
+    if (n > LONGEST) return textByWords(n, seed);
+    return `${words[seed % words.length]} ${tails[(seed * 7 + 3) % 1013]}`.slice(0, n);
 };
 
 /**
@@ -90,6 +103,14 @@ async function crossingPerEvent(agentId: string, n: number): Promise<{ first: nu
     for (const off of offs) off();
     return { first, perEvent, views: 2 };
 }
+
+describe('the synthetic ledger', () => {
+    it('its text is the word-by-word reference, character for character, for every length the ledger uses', () => {
+        for (const n of [40, 60, 80, 300, 600, 1_100]) {
+            for (let seed = 0; seed < 40_000; seed += 7) expect(text(n, seed) === textByWords(n, seed), `n ${n}, seed ${seed}`).toBe(true);
+        }
+    });
+});
 
 describe('what crosses into the page per event of a watched agent', () => {
     it('is the rows that changed — the same at 100,000 rows as at 1,000, not a copy of the ledger', async () => {
