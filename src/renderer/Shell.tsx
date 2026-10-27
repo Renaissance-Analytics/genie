@@ -43,7 +43,8 @@ import { answeringFor, refusalFor, type ApprovalAnswering, type ApprovalRefusal 
 import type { Approval } from '../core/approval.js';
 import type { RepoCommit } from '../core/commits.js';
 import { NO_FILES, NO_TERMINALS, NO_UPDATES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import type { Attachment } from '../core/prompt-content.js';
@@ -439,6 +440,10 @@ export function Shell({
         const ws = snapshot.agents.find((a) => a.id === chatThread?.agentId)?.workspaceId ?? null;
         return ws && ws !== '__genie__' ? ws : null;
     })();
+    // What a pill in the chat or the Stream may name (genie#1263): one object until an id or a name changes, so a
+    // memoised reply is not re-rendered by every push.
+    const refLists = chatRefLists(snapshot.agents, snapshot.workspaces ?? []);
+    const chatRefs = useMemo(() => ({ agents: refLists.agents, workspaces: refLists.workspaces }), [refLists.key]);
 
     return (
         <div className="flex h-full flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
@@ -640,6 +645,7 @@ export function Shell({
                             ) : null}
                             <div className="min-h-0 flex-1">
                             <AgentView
+                                chatRefs={chatRefs}
                                 planOpen={planOpen}
                                 agent={agentDetail.agent}
                                 session={agentDetail.session}
@@ -827,6 +833,10 @@ export function Shell({
                         onSend={(text, attachments, agentId) => { if (scope.kind !== 'blocked') onSend(agentId || chatThread?.agentId || '', text, attachments); }}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
+                        // An agent or workspace pill opens it — on the person's click only (genie#1263, genie#1265).
+                        refs={chatRefs}
+                        onOpenAgent={(agentId: string) => onNavigate(`genie://agent/${encodeURIComponent(agentId)}`)}
+                        onOpenWorkspace={(workspaceId: string) => onNavigate(`genie://workspace/${encodeURIComponent(workspaceId)}`)}
                         // A piece of mail the chat shows opens the AgentInbox, this chat kept beside it (beta.33 item 18).
                         {...(featureAsk ? { onOpenMail: (messageId: string) => openInbox(messageId) } : {})}
                         onRestartAndSend={onRestartAndSend}

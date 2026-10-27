@@ -98,6 +98,8 @@ export const ICON_NAMES: readonly string[] = [
     'monitor-cog',
     // ^ the rail's tools and its collapsed state (Tynn #799/#282)
     'info', 'circle-help', 'file-text', 'globe', 'check',
+    // The chat's markup (genie#1263): a copy button, the <result> card, the <highlight> callout, the <followup> question.
+    'copy', 'clipboard-list', 'lightbulb', 'message-circle-question',
     // The Genie Browser's address bar on a .gen site (its own https origin, Genie's certificate); the file panel's lock badge.
     'lock',
     // The Genie browser window: a tab whose page is loading.

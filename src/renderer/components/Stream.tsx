@@ -8,7 +8,7 @@ import {
     type StreamFilter,
     type TimedEvent,
 } from '../../core/stream-view.js';
-import { StreamRow } from './StreamRow.js';
+import { StreamRow, type StreamMarkup } from './StreamRow.js';
 
 /**
  * THE STREAM — a windowed ledger.
@@ -61,6 +61,8 @@ export interface StreamProps {
     parked?: string | null | undefined;
     /** The stream cursor (`j`/`k`): the row it is on, or null. A focus, not the selection. */
     cursorId?: string | null | undefined;
+    /** What an agent message's pills may open, and the opener for a person's click (genie#1263). Absent = words only. */
+    markup?: StreamMarkup | undefined;
 }
 
 /**
@@ -74,7 +76,7 @@ export function initialFollowTail(at: string | null): boolean {
     return at === null;
 }
 
-export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null }: StreamProps) {
+export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup }: StreamProps) {
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
     // Thoughts opened to their whole reasoning, by row id.
@@ -207,7 +209,7 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 onUnseenChange={setUnseen}
                 scrollToId={at}
                 renderRow={(row) => (
-                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} />
+                    <StreamRow row={row} selected={row.id === selectedId} live={row.id === liveId} cursor={row.id === cursorId} expanded={expanded.has(row.id)} onToggle={toggle} onSelect={onSelect} markup={markup} />
                 )}
             />
 

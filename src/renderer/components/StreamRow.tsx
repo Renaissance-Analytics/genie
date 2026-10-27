@@ -1,5 +1,7 @@
 import { Icon } from '@particle-academy/react-fancy';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
+import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
+import { ChatProse } from './ChatProse.js';
 
 /**
  * ONE LEDGER ROW — time, icon, main, meta.
@@ -38,9 +40,19 @@ export interface StreamRowProps {
     expanded?: boolean | undefined;
     onToggle?: ((id: string) => void) | undefined;
     onSelect: (id: string) => void;
+    /**
+     * A prose row's markup (genie#1263): what its pills may open, and the opener for a person's click on one. Absent =
+     * every pill is its words.
+     */
+    markup?: StreamMarkup | undefined;
 }
 
-export function StreamRow({ row, selected, live = false, cursor = false, expanded = false, onToggle, onSelect }: StreamRowProps) {
+export interface StreamMarkup {
+    refs: ChatRefs;
+    onOpen: (target: ChatLinkTarget) => void;
+}
+
+export function StreamRow({ row, selected, live = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
     const time = timeOf(row.at);
 
     return (
@@ -80,6 +92,25 @@ export function StreamRow({ row, selected, live = false, cursor = false, expande
             {/* The board's kind column, 40px mono — the tool's name, or the row's own kind. Empty for a message. */}
             <span {...(row.kind ? { 'data-kind': row.kind } : {})} className="w-10 shrink-0 truncate pt-0.5 font-mono text-[11px] text-[var(--fg-4)]">{row.kind ?? ''}</span>
 
+            {row.prose ? (
+                // An agent's words, drawn as the chat draws them (genie#1263): Markdown, copy buttons, cards, pills. A
+                // pill opens only on the person's click (genie#1265).
+                <div
+                    data-stream-prose=""
+                    className="flex min-w-0 flex-1 flex-col gap-1"
+                    onClick={markup ? (e) => {
+                        const a = (e.target as HTMLElement).closest?.('a');
+                        const target = a ? chatLinkTarget(a.getAttribute('href') ?? '') : null;
+                        if (!target) return;
+                        e.preventDefault();
+                        e.stopPropagation();
+                        markup.onOpen(target);
+                    } : undefined}
+                >
+                    {row.who ? <span data-who={row.who.tone} className={`font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
+                    <ChatProse text={row.main} refs={markup?.refs} className="text-[13px] text-[var(--fg-1)]" />
+                </div>
+            ) : (
             <span
                 className={[
                     'min-w-0 flex-1',
@@ -97,6 +128,7 @@ export function StreamRow({ row, selected, live = false, cursor = false, expande
                 {row.who ? <span data-who={row.who.tone} className={`mr-2 font-mono text-[11px] ${WHO_TONE[row.who.tone]}`}>{row.who.label}</span> : null}
                 {expanded && row.full !== undefined ? <span data-thought-full="" className="block whitespace-pre-wrap">{row.full}</span> : row.main}
             </span>
+            )}
 
             {/*
              * THE LIVE THOUGHT: a pulsing bar and the word, while the thought is still arriving. No running token

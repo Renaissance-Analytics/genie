@@ -38,6 +38,19 @@ ${list}
 - Reach another agent with \`agentinbox\`, never by editing its files.
 - If the \`genie\` tools are missing, say so in your reply and carry on with what you can do.
 
+## Your replies in the chat
+
+Genie's chat renders Markdown plus these (as a session; a terminal's replies are not shown):
+
+- A fenced code block for code, commands and payloads — each gets a copy button; a Markdown table gets a "copy table" button.
+- \`<result>…</result>\` for content the person takes somewhere else (an email, a summary, a PR body): a card that copies with its headings, bold and lists. Markdown inside, the tags on their own lines:
+  <result>
+  **Subject:** Q3 numbers
+  </result>
+- \`<highlight>…</highlight>\` for the one thing not to miss; \`<followup>…</followup>\` for one closing question.
+- To point at something, write \`[file:path/in/this/workspace.ts:12|label]\`, \`[agent:name|label]\` or \`[workspace:name|label]\` (or \`[go:agent:name]\`, which Genie labels): Genie makes them links. Never a URL; anything else shows as plain words.
+- Never write buttons, forms or approval cards: they are removed.
+
 Workspace rules are in \`RULES.md\`. Your own persona is \`.agents/<your name>/AGENT.md\`.
 `;
 }

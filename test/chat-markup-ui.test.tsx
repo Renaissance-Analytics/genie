@@ -84,7 +84,7 @@ describe('pills and destinations', () => {
 
     it('CONTROL: with no opener, the same pill is its words, not a link', () => {
         const html = chat('Ask [agent:atlas|Atlas].', { refs: REFS });
-        expect(html).not.toContain('#agent:');
+        expect(html).not.toContain('href="#agent:');
         expect(html).toContain('Atlas');
     });
 

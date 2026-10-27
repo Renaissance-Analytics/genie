@@ -1,8 +1,9 @@
-import { memo, useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
-import { ContentRenderer, Icon, PromptInput } from '@particle-academy/react-fancy';
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
-import { fileLinkTarget, linkFileRefs } from '../../core/chat-file-links.js';
+import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
+import { ChatProse } from './ChatProse.js';
 import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth } from '../../core/chat-width.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
@@ -72,8 +73,9 @@ export function GenieMark() {
  * MEMOISED on its text: the chat re-rendered EVERY reply's Markdown on every push of a busy agent, which is many a second
  * (the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all"). Only the reply that grew renders again.
  */
-const ChatReply = memo(function ChatReply({ text, linkFiles }: { text: string; linkFiles: boolean }) {
-    return <ContentRenderer value={linkFiles ? linkFileRefs(text) : text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />;
+const ChatReply = memo(function ChatReply({ text, refs }: { text: string; refs: ChatRefs }) {
+    // With moic's markup (genie#1263, components/ChatProse.tsx): copy buttons on code and tables, <result> cards, pills.
+    return <ChatProse text={text} refs={refs} className="text-[13px] text-[var(--fg-2)]" />;
 });
 
 function clock(at: number): string {
@@ -187,6 +189,14 @@ export interface ChatFlyoutProps {
      * own chat), and file references stay plain text.
      */
     onOpenFile?: ((path: string, line: number | null) => void) | undefined;
+    /**
+     * Open an agent or a workspace a pill in the chat names (genie#1263: `[agent:…|…]`, `[workspace:…|…]`, `[go:…]`) — only
+     * ever on the person's click (genie#1265). Absent = such pills are their words, not links.
+     */
+    onOpenAgent?: ((agentId: string) => void) | undefined;
+    onOpenWorkspace?: ((workspaceId: string) => void) | undefined;
+    /** The agents and workspaces a pill may name, by id or name. Keep it referentially stable: every reply re-renders on a new one. */
+    refs?: { agents: ChatRefs['agents']; workspaces: ChatRefs['workspaces'] } | undefined;
     /** Open a piece of AgentInbox mail the chat shows, by its inbox id. Absent = nowhere to open it; the rows stay text. */
     onOpenMail?: ((messageId: string) => void) | undefined;
     /** The agent's own commands and skills (core/provider-commands.ts), offered in the composer's `/` menu. */
@@ -271,12 +281,21 @@ const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatM
 
 export function ChatFlyout({
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
-    onSend, onClose, onOpenFile, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts,
+    onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts,
 }: ChatFlyoutProps) {
     const keeper = drafts === 'loading' ? undefined : drafts;
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));
     const width = dockWidth ?? ownDockWidth;
+    // What a pill may open (core/chat-markup.ts): only the destinations this chat has an opener for.
+    const canFile = Boolean(onOpenFile);
+    const canAgent = Boolean(onOpenAgent);
+    const canWorkspace = Boolean(onOpenWorkspace);
+    const replyRefs = useMemo<ChatRefs>(() => ({
+        files: canFile,
+        agents: canAgent ? refsIn?.agents ?? [] : [],
+        workspaces: canWorkspace ? refsIn?.workspaces ?? [] : [],
+    }), [canFile, canAgent, canWorkspace, refsIn]);
     const setWidth = (w: number) => { setOwnDockWidth(w); onDockWidth?.(w); };
 
     /**
@@ -515,12 +534,15 @@ export function ChatFlyout({
                 data-chat-log=""
                 className="flex min-h-full flex-col justify-end gap-3 px-3 py-3"
                 // A file link (`#file:…`) opens the file in the agent's workspace, its tree revealed — never navigates the window.
-                onClick={onOpenFile ? (e) => {
+                // An agent or workspace pill (genie#1263) opens it. Only on this click: the person's own (genie#1265).
+                onClick={canFile || canAgent || canWorkspace ? (e) => {
                     const a = (e.target as HTMLElement).closest?.('a');
-                    const target = a ? fileLinkTarget(a.getAttribute('href') ?? '') : null;
+                    const target = a ? chatLinkTarget(a.getAttribute('href') ?? '') : null;
                     if (!target) return;
                     e.preventDefault();
-                    onOpenFile(target.path, target.line);
+                    if (target.kind === 'file') onOpenFile?.(target.path, target.line);
+                    else if (target.kind === 'agent') onOpenAgent?.(target.id);
+                    else onOpenWorkspace?.(target.id);
                 } : undefined}
             >
                 {/*
@@ -577,7 +599,7 @@ export function ChatFlyout({
                                     {stamp ? <span className="text-[var(--fg-4)]">· {stamp}</span> : null}
                                 </summary>
                                 <div className="mt-1 border-l-2 border-[var(--border-1)] pl-2.5">
-                                    <ChatReply text={m.text} linkFiles={Boolean(onOpenFile)} />
+                                    <ChatReply text={m.text} refs={replyRefs} />
                                 </div>
                             </details>
                         );
@@ -636,7 +658,7 @@ export function ChatFlyout({
                         <div key={m.id} data-chat-message={m.id} data-who={who} className="flex max-w-[94%] flex-col gap-1">
                             <div className="font-mono text-[11px] text-[var(--fg-3)]"><span className="text-[var(--violet-400)]">{m.from}</span>{stamp ? <> · {stamp}</> : null}</div>
                             {/* An agent's or a peer's reply, RENDERED (the owner): Markdown through Fancy's ContentRenderer, sanitised by default. */}
-                            <ChatReply text={m.text} linkFiles={Boolean(onOpenFile)} />
+                            <ChatReply text={m.text} refs={replyRefs} />
                         </div>
                     );
                 })}
