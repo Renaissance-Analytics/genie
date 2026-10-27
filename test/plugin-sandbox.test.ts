@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { createHash } from 'node:crypto';
@@ -22,9 +22,17 @@ import { ensureNetGuard, subprocessCommand } from '../src/main/plugin-runner.js'
  */
 
 const ELECTRON = resolve(process.platform === 'win32' ? 'node_modules/electron/dist/electron.exe' : 'node_modules/electron/dist/electron');
+/**
+ * ELECTRON'S BINARY IS INSTALLED BEFORE THE SUITE, NOT DURING IT (genie#1260). Electron 45 has no postinstall: `npm ci`
+ * leaves `node_modules/electron/dist` empty, and the binary is downloaded and unzipped by the first `require('electron')`
+ * (its index.js). In the suite that was a test file importing src/main/tray.ts — in another worker, while this file ran.
+ * This file either found no binary and quietly dropped its Electron cases, or found it half-written and spawned it: the
+ * kernel refuses to execute a file open for writing, `spawn ETXTBSY` (omarchy-test, PR #1258). vitest's globalSetup
+ * (test/global-setup.ts) now installs it, completely, before any worker starts — so its absence here is a failure.
+ */
 const RUNTIMES: { name: string; execPath: string; electron: boolean }[] = [
     { name: 'node', execPath: process.execPath, electron: false },
-    ...(existsSync(ELECTRON) ? [{ name: 'electron-as-node', execPath: ELECTRON, electron: true }] : []),
+    { name: 'electron-as-node', execPath: ELECTRON, electron: true },
     // The INSTALLED app's own binary (genie#871's acceptance: "in the Windows VM on the installed app"), when a run names
     // it — the packaged Genie.exe, with whatever fuses its build set, not the node_modules copy.
     ...(process.env.GENIE_INSTALLED_EXE && existsSync(process.env.GENIE_INSTALLED_EXE) ? [{ name: 'installed-genie', execPath: process.env.GENIE_INSTALLED_EXE, electron: true }] : []),
@@ -106,11 +114,22 @@ function probe(runtime: (typeof RUNTIMES)[number], sandbox: { workspace: string 
         let err = '';
         p.stdout.on('data', (d) => { out += d; });
         p.stderr.on('data', (d) => { err += d; });
+        // A spawn that fails (ENOENT, ETXTBSY) emits no 'exit': without this the case waited out its whole timeout.
+        p.on('error', fail);
         p.on('exit', () => {
             try { done(JSON.parse(out.trim().split('\n').pop()!)); } catch { fail(new Error(`no report from the probe: ${err.slice(0, 500)}`)); }
         });
     });
 }
+
+describe('Electron’s binary, which the electron-as-node cases run (genie#1260)', () => {
+    it('is installed, complete, before this file runs — electron’s own path.txt is written only after the unzip ends', () => {
+        const pkg = resolve('node_modules/electron');
+        expect(existsSync(join(pkg, 'path.txt'))).toBe(true);
+        expect(existsSync(join(pkg, 'dist', readFileSync(join(pkg, 'path.txt'), 'utf8')))).toBe(true);
+        expect(existsSync(ELECTRON)).toBe(true);
+    });
+});
 
 describe.each(RUNTIMES)('a plugin tool, sandboxed — $name', (runtime) => {
     it('with nothing declared: its own folder only — no workspace, nothing outside, no child process, no binding, no network', async () => {
