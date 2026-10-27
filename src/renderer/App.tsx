@@ -14,6 +14,7 @@ const ALERT_TOAST_MS = 8_000;
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
 import type { Headroom } from '../core/headroom.js';
 import { mailSignals, type MailSignal } from '../core/mail-signals.js';
+import { arrive, NO_PULSES, pulse, pulsingIds, type Pulses } from '../core/view-requests.js';
 import { CHAT_LIVE_LINES } from '../core/chat-window.js';
 import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute, routeWorkspace } from '../core/route.js';
 import { chatSubjectFor } from '../core/chat-scope.js';
@@ -541,7 +542,27 @@ function DesktopApp({ bridge }: AppProps) {
     const route = addressContext
         ? routeOfAddress(address, addressContext) ?? DEFAULT_ROUTE
         : isInternalRoute(address) ? address : DEFAULT_ROUTE;
-    const navigate = (next: string): void => { writeAddress(addressContext ? addressOf(next, addressContext) : next); };
+    /*
+     * WHERE AN AGENT ACTED (genie#1265; the owner, 2026-10-27): an agent's file, tab or site never moves this window — its
+     * workspace is marked, and the rail row (and the Dashboard's header) pulses until the person ARRIVES there; the arrival
+     * clears it and opens what the agent opened in the workspace's file panel (core/view-requests.ts). The arrival is read
+     * from the route, so every way the person moves counts — a click, a key, the palette, a notification, Back.
+     */
+    const [pulses, setPulses] = useState<Pulses>(NO_PULSES);
+    const pulsesRef = useRef(pulses);
+    pulsesRef.current = pulses;
+    useEffect(() => resolvedBridge?.onWorkspacePulse?.((p) => setPulses((s) => pulse(s, p))), [resolvedBridge]);
+    const arriveAt = (at: string): void => {
+        const arrived = arrive(pulsesRef.current, at);
+        if (arrived.pulses === pulsesRef.current) return;
+        pulsesRef.current = arrived.pulses;
+        setPulses(arrived.pulses);
+        // Replaced, not pushed: the person's own navigation is the history entry; this only fills in what waited there.
+        if (arrived.show !== null) window.location.replace(`#${addressContext ? addressOf(arrived.show, addressContext) : arrived.show}`);
+    };
+    useEffect(() => { arriveAt(route); }, [route]);
+    // Clicking the row of the workspace already on screen moves no hash, and is an arrival all the same.
+    const navigate = (next: string): void => { if (next === route) { arriveAt(next); return; } writeAddress(addressContext ? addressOf(next, addressContext) : next); };
     // An OLD address (genie://workspace/<id>?chat=…, a link, a host navigation) is rewritten in place to the new form.
     const shownAddress = addressContext ? addressOf(route, addressContext) : address;
     useEffect(() => {
@@ -1330,6 +1351,7 @@ function DesktopApp({ bridge }: AppProps) {
         <PluginEditorsContext.Provider value={pluginEditors}>
         <PanelHostContext.Provider value={panelHost}>
         <Shell
+            pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}
             rateLimits={rateLimits}
             mailSignals={mailSignalList}

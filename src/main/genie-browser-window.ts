@@ -1,3 +1,4 @@
+import type { Activation } from '../core/window-activation.js';
 import { browserReduce, devicePreset, DEVICE_PRESETS, EMPTY_BROWSER, initialGenUrl, normalizeNavUrl, type BrowserAction, type BrowserState, type BrowserTab } from '../core/genie-browser.js';
 
 /**
@@ -101,8 +102,11 @@ export class GenieBrowser {
      * own view, with its own page and history, so it is exactly where the person left it) — or a new tab on it. The
      * active tab first when it is on that host. Never re-navigates the tab on screen: that is what lost the page of the
      * site the person came back to.
+     *
+     * WHO ASKED (genie#1265): an agent's `sites open` is `background` — the site's tab is kept or made, and the tab the
+     * person has in front stays in front. The person's chip or the Hosting row's Open is `user-gesture` and shows it.
      */
-    showSite(input: string): BrowserAnswer {
+    showSite(input: string, activation: Activation = 'user-gesture'): BrowserAnswer {
         const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
         if ('error' in nav) return { ok: false, error: nav.error };
         const host = hostOf(nav.url);
@@ -110,10 +114,10 @@ export class GenieBrowser {
         const active = this.#state.tabs.find((t) => t.id === this.#state.active);
         const tab = active && onHost(active) ? active : this.#state.tabs.find(onHost);
         if (tab) {
-            if (tab.id !== this.#state.active) this.activate(tab.id);
+            if (tab.id !== this.#state.active && activation === 'user-gesture') this.activate(tab.id);
             return { ok: true };
         }
-        this.#openTab(nav.url);
+        this.#openTab(nav.url, activation === 'background');
         return { ok: true };
     }
 
@@ -172,11 +176,13 @@ export class GenieBrowser {
         return { ...this.#state, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
     }
 
-    #openTab(url: string): void {
+    #openTab(url: string, background = false): void {
         const id = this.#ports.newTabId();
         const view = this.#ports.createView(id, this.#events(id));
         this.#views.set(id, view);
-        this.#apply({ kind: 'open', id, url });
+        this.#apply({ kind: 'open', id, url, background });
+        // A tab made behind the active one is hidden now: the active tab did not change, so #apply laid nothing out.
+        if (this.#state.active !== id) this.#layout();
         view.load(url);
     }
 

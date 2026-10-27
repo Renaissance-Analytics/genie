@@ -91,7 +91,8 @@ export const EMPTY_BROWSER: BrowserState = { tabs: [], active: null };
 
 export type BrowserAction =
     /** A new tab, active, beside the active one (an address typed into +, or a page's `_blank` — Genie 1: a tab). */
-    | { readonly kind: 'open'; readonly id: string; readonly url: string }
+    /** `background`: an agent's open (genie#1265) — the tab is made beside the active one, which stays in front. */
+    | { readonly kind: 'open'; readonly id: string; readonly url: string; readonly background?: boolean }
     | { readonly kind: 'activate'; readonly id: string }
     | { readonly kind: 'close'; readonly id: string }
     | { readonly kind: 'loading'; readonly id: string }
@@ -105,7 +106,8 @@ export function browserReduce(state: BrowserState, action: BrowserAction): Brows
         const tab: BrowserTab = { id: action.id, url: action.url, title: null, loading: true, canGoBack: false, canGoForward: false, error: null };
         const at = state.tabs.findIndex((t) => t.id === state.active);
         const tabs = at < 0 ? [...state.tabs, tab] : [...state.tabs.slice(0, at + 1), tab, ...state.tabs.slice(at + 1)];
-        return { tabs, active: tab.id };
+        // A background open leaves the person's tab in front; with no tab at all, the new one is the only thing to show.
+        return { tabs, active: action.background === true && state.active !== null ? state.active : tab.id };
     }
     const at = state.tabs.findIndex((t) => t.id === action.id);
     if (at < 0) return state;

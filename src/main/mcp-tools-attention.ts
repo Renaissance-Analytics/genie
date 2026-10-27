@@ -51,7 +51,7 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
     const openFileForUser: Registration = {
         definition: new ToolDefinition(
             'openFileForUser',
-            'Put a file from your workspace in front of the person, optionally at a line. The path must be inside your workspace; anything outside is refused.',
+            'Open a file from your workspace for the person in your workspace’s file panel, optionally at a line. It never moves their view or keyboard: your workspace’s row pulses, and the file is open when they go there. The path must be inside your workspace; anything outside is refused.',
             { type: 'object', properties: { terminalId: MIRRORED_TERMINAL_ID, path: { type: 'string' }, line: { type: 'number' } }, required: ['path'] },
             'Open file for user',
         ),

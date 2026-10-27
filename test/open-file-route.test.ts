@@ -16,12 +16,13 @@ describe('the route', () => {
 });
 
 describe('main', () => {
-    it('opens the file in Genie WITHOUT taking focus (genie#1235) — never the OS default app', () => {
+    it('opens the file in Genie WITHOUT taking focus (genie#1235) or the view (genie#1265) — never the OS default app', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
         const at = main.indexOf('openFile: async');
         const port = main.slice(at, main.indexOf('\n', main.indexOf('},', at)));
-        expect(port).toContain('openFileRoute(');
-        expect(port).toContain("broadcast('genie:navigate'");
+        // The file waits in its workspace (the row pulses); the person's arrival opens this route (core/view-requests.ts).
+        expect(port).toContain("showToPerson({ activation: 'background', workspaceId, file: path, line, reason: 'openFileForUser' })");
+        expect(port).not.toContain("broadcast('genie:navigate'");
         // An agent's call: the main window is flashed at most, never shown or focused — the owner's keyboard stays theirs.
         expect(port).toContain("attractMainWindow('openFileForUser')");
         expect(port).not.toContain('revealMainWindow');

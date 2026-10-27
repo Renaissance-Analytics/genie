@@ -66,7 +66,19 @@ export interface SidebarProps {
     /** A row's process / site indicator opens that workspace's config (Genie 1's Processes and Site Manager modals). */
     onOpenProcesses?: ((workspaceId: string) => void) | undefined;
     onOpenSites?: ((workspaceId: string) => void) | undefined;
+    /**
+     * WHERE AN AGENT ACTED (genie#1265): a workspace an agent opened a file, changed a tab or opened a site in, which the
+     * person has not visited since — its row pulses (Genie 1's attention-row-glow) instead of the view moving there.
+     */
+    pulsing?: ReadonlySet<string> | undefined;
 }
+
+/**
+ * The row's pulse: a ring that breathes where motion is allowed (Tailwind `motion-safe:`), and holds still for a person who
+ * asked for reduced motion — the same signal, without the movement.
+ */
+export const WORKSPACE_PULSE = 'ring-1 ring-inset ring-[var(--accent)] motion-safe:animate-pulse';
+const PULSE_TITLE = 'An agent did something here — open it to see';
 
 /** The indicators' colours (Genie 1's tones): nothing is grey, working is the accent, broken is danger, starting warns. */
 const TONE: Record<string, string> = {
@@ -153,7 +165,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing }: SidebarProps) {
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.
@@ -217,6 +229,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     const active = current === route_ || w.id === currentWorkspaceId;
                     const name = w.name ?? folderName(w.path);
                     const working = (w.working ?? 0) > 0;
+                    const pulsed = pulsing?.has(w.id) === true;
                     return (
                         <button
                             key={w.id}
@@ -228,10 +241,11 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
                             // THE PULSE (Genie 1's glow): its agents are mid-turn — their sessions say so, not a terminal.
                             {...(working ? { 'data-agent-active': 'true' } : {})}
+                            {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
                             onClick={() => onNavigate(route_)}
-                            title={working ? `${name} · ${workingLabel(w.working ?? 0)}` : name}
+                            title={pulsed ? `${name} · ${PULSE_TITLE}` : working ? `${name} · ${workingLabel(w.working ?? 0)}` : name}
                             aria-label={name}
-                            className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : ''}`}
+                            className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : pulsed ? WORKSPACE_PULSE : ''}`}
                         >
                             {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
                             {w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
@@ -332,6 +346,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
             {(has('workspace') ? shown : []).map((w) => {
                 const route_ = `genie://workspace/${w.id}`;
                 const active = route.split('?')[0] === route_ || w.id === currentWorkspaceId;
+                const pulsed = pulsing?.has(w.id) === true;
 
                 return (
                     <button
@@ -349,9 +364,10 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         // not looked at.
                         {...(w.alert === null ? {} : { 'data-alert': String(w.alert) })}
                         {...((w.working ?? 0) > 0 ? { 'data-agent-active': 'true' } : {})}
+                        {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
                         onClick={() => onNavigate(route_)}
-                        title={(w.working ?? 0) > 0 ? `${w.path} · ${workingLabel(w.working ?? 0)}` : w.path}
-                        className={`${ROW} relative ${active ? ROW_ACTIVE : ''}`}
+                        title={pulsed ? `${w.path} · ${PULSE_TITLE}` : (w.working ?? 0) > 0 ? `${w.path} · ${workingLabel(w.working ?? 0)}` : w.path}
+                        className={`${ROW} relative ${active ? ROW_ACTIVE : ''}${pulsed ? ` ${WORKSPACE_PULSE}` : ''}`}
                     >
                         {/* THE PULSE (Genie 1's): lit while this workspace's agents are mid-turn — by their sessions, never terminal output. */}
                         {(w.working ?? 0) > 0 ? <span data-pulse="" aria-label={workingLabel(w.working ?? 0)} className="absolute inset-y-1 left-0 w-0.5 animate-pulse rounded-full bg-[var(--accent)]" /> : null}

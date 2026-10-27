@@ -181,3 +181,42 @@ describe('CONTROLS', () => {
         expect(snapshots).toHaveLength(count);
     });
 });
+
+describe('an agent’s `sites open` never changes the tab on screen (genie#1265)', () => {
+    it('the person’s chip shows the site’s tab — the positive control', () => {
+        const { browser, views, last } = harness();
+        browser.open('tynn');
+        browser.open('moic');
+        expect(browser.showSite('tynn', 'user-gesture')).toEqual({ ok: true });
+        expect(last().active).toBe('t1');
+        expect(views[0]!.visible).toBe(true);
+    });
+
+    it('an agent’s open of a site already in a tab leaves the person’s tab in front', () => {
+        const { browser, views, last } = harness();
+        browser.open('tynn');
+        browser.open('moic');
+        expect(browser.showSite('tynn', 'background')).toEqual({ ok: true });
+        expect(last().active).toBe('t2');
+        expect(views[1]!.visible).toBe(true);
+        expect(views[0]!.visible).toBe(false);
+    });
+
+    it('an agent’s open of a new site makes its tab behind the one on screen — loaded, hidden, there when the person looks', () => {
+        const { browser, views, last } = harness();
+        browser.open('tynn');
+        expect(browser.showSite('moic', 'background')).toEqual({ ok: true });
+        expect(last().tabs.map((t) => t.url)).toEqual(['https://tynn.gen/', 'https://moic.gen/']);
+        expect(last().active).toBe('t1');
+        expect(views[1]!.loads).toEqual(['https://moic.gen/']);
+        expect(views[1]!.visible).toBe(false);
+        expect(views[0]!.visible).toBe(true);
+    });
+
+    it('with no tab at all (a window just made, shown inactive) the agent’s site is the one tab, and shown', () => {
+        const { browser, views, last } = harness();
+        expect(browser.showSite('tynn', 'background')).toEqual({ ok: true });
+        expect(last().active).toBe('t1');
+        expect(views[0]!.visible).toBe(true);
+    });
+});
