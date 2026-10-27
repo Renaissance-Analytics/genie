@@ -39,9 +39,20 @@ function decode(s: string): string {
 const BLOCK = '\u0000';
 const HOLD = '\u0001';
 
+/**
+ * Every tag removed, repeated until none is left: one pass over `<<b>script>` would leave `<script>` behind (CodeQL
+ * js/incomplete-multi-character-sanitization). The result is plain text for the clipboard's `text/plain` and is never
+ * used as HTML; a `<` the reader SEES (written `&lt;` in the HTML) is decoded afterwards, as `innerText` would give it.
+ */
+function stripTags(html: string): string {
+    let out = html;
+    for (let prev = ''; prev !== out;) { prev = out; out = out.replace(/<[^<>]*>/g, ''); }
+    return out;
+}
+
 /** Inline HTML to text: `<br>` is a line break, every other tag goes, entities are decoded. */
 function inline(html: string): string {
-    return decode(html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>\s*<p[^>]*>/gi, '\n').replace(/<[^>]+>/g, ''));
+    return decode(stripTags(html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/p>\s*<p[^>]*>/gi, '\n')));
 }
 
 /**
@@ -53,7 +64,7 @@ export function htmlToPlain(html: string): string {
     const hold = (s: string) => `${BLOCK}${HOLD}${held.push(s) - 1}${HOLD}${BLOCK}`;
     const expand = (s: string) => s.replace(new RegExp(`${HOLD}(\\d+)${HOLD}`, 'g'), (_, i: string) => held[Number(i)]!);
     let s = html;
-    s = s.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_, inner: string) => hold(decode(inner.replace(/<[^>]+>/g, '')).replace(/\n$/, '')));
+    s = s.replace(/<pre[^>]*>([\s\S]*?)<\/pre>/gi, (_, inner: string) => hold(decode(stripTags(inner)).replace(/\n$/, '')));
     s = s.replace(/<table[^>]*>([\s\S]*?)<\/table>/gi, (_, inner: string) => {
         const rows = [...inner.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((r) => [...r[1]!.matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((c) => cellText(c[1]!)));
         return hold(rows.map((r) => r.join('\t')).join('\n'));

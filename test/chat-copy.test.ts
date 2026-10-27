@@ -67,6 +67,15 @@ describe('htmlToPlain', () => {
     it('ordered lists are numbered, entities decoded, line breaks kept', () => {
         expect(htmlToPlain('<ol><li>a &amp; b</li><li>c</li></ol><p>x<br>y</p>')).toBe('1. a & b\n2. c\n\nx\ny');
     });
+
+    it('no tag survives: a tag split around another is removed too (one pass would leave `b>` behind)', () => {
+        expect(htmlToPlain('<p>a<<b></b>b>c</p>')).toBe('ac');
+        expect(htmlToPlain('<pre><code><<i></i>script>x</code></pre>')).toBe('x');
+    });
+
+    it('CONTROL: a "<" the reader sees (escaped in the HTML) is kept as text', () => {
+        expect(htmlToPlain('<p>3 &lt; 4 &lt;b&gt;</p>')).toBe('3 < 4 <b>');
+    });
 });
 
 describe('writeCopy — rich when the clipboard can, plain when it cannot, and honest when neither works', () => {
