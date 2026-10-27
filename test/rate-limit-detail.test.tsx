@@ -133,7 +133,7 @@ describe('the sidebar alert', () => {
     it('any window counts, not only the headline one; the worst sets the colour; the label names each low window', () => {
         const a = rateLimitAlert({ claude: headroomFromMeta(claude)!, codex: { ...room(25), plan: 'pro' } })!;
         expect(a.level).toBe('danger');
-        expect(a.label).toContain('Claude: 8% left this week');
+        expect(a.label).toContain('Claude Code: 8% left this week');
         expect(a.label).toContain('Codex: 25% left in the 5-hour window');
         expect(a.label).not.toContain('opus');
     });
@@ -154,20 +154,20 @@ describe('the dot on the Dashboard’s sidebar row', () => {
     const dashboardRow = (html: string) => html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '';
 
     it('yellow at the warning, with its words for a screen reader; static', () => {
-        const row = dashboardRow(sidebar({ level: 'warning', label: 'Claude: 30% left in the 5-hour window' }));
-        expect(row).toMatch(/data-rate-limit-dot="warning"[^>]*role="img"[^>]*aria-label="Claude: 30% left in the 5-hour window"/);
+        const row = dashboardRow(sidebar({ level: 'warning', label: 'Claude Code: 30% left in the 5-hour window' }));
+        expect(row).toMatch(/data-rate-limit-dot="warning"[^>]*role="img"[^>]*aria-label="Claude Code: 30% left in the 5-hour window"/);
         expect(row).toContain('bg-[var(--warning)]');
         expect(row).not.toMatch(/animate-/);
     });
 
     it('red at the danger', () => {
-        const row = dashboardRow(sidebar({ level: 'danger', label: 'Claude: 8% left this week' }));
+        const row = dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }));
         expect(row).toMatch(/data-rate-limit-dot="danger"/);
         expect(row).toContain('bg-[var(--danger)]');
     });
 
     it('on the collapsed rail too', () => {
-        expect(dashboardRow(sidebar({ level: 'danger', label: 'Claude: 8% left this week' }, true))).toMatch(/data-rate-limit-dot="danger"/);
+        expect(dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }, true))).toMatch(/data-rate-limit-dot="danger"/);
     });
 
     it('no alert, no dot (positive control above)', () => {
@@ -205,7 +205,7 @@ describe('from any page: the Shell lights the dot from the header’s readings',
 
     it('on Settings, Claude at 8% left this week: the red dot on the Dashboard row, named', () => {
         const html = render('genie://settings', { claude: room(8, '7d') });
-        expect(html).toMatch(/data-rate-limit-dot="danger"[^>]*aria-label="Claude: 8% left this week"/);
+        expect(html).toMatch(/data-rate-limit-dot="danger"[^>]*aria-label="Claude Code: 8% left this week"/);
     });
 
     it('every window above 30%: no dot', () => {

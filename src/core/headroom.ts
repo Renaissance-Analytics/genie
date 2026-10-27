@@ -1,4 +1,5 @@
 import { clockAmPm, fullDateTime } from './clock-words.js';
+import { providerLogin } from './provider-login.js';
 import type { StreamEvent } from './stream-event.js';
 import type { TimedEvent } from './stream-view.js';
 
@@ -121,9 +122,9 @@ export function headroomTitle(h: Headroom): string {
     return `Resets ${fullDateTime(h.resetsAtMs)}`;
 }
 
-/** `claude` → `Claude`. */
+/** The provider's name as ProviderLogo names it (the login table's `Claude Code`, `Codex`), else its id. */
 function providerWord(provider: string): string {
-    return provider.charAt(0).toUpperCase() + provider.slice(1);
+    return providerLogin(provider)?.name ?? provider;
 }
 
 /**
