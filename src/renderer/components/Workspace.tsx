@@ -39,6 +39,8 @@ import { FidelityDot } from './Dashboard.js';
 import { headerRepos, repoChip } from '../../core/repo-status.js';
 import { WorkspaceDashboard } from './WorkspaceDashboard.js';
 import { AgentRosterView, type AgentRosterViewProps } from './ImportedAgents.js';
+import { WorkspaceColorPicker } from './WorkspaceColorPicker.js';
+import { useWorkspaceColor } from '../workspace-colors.js';
 
 /**
  * THE WORKSPACE SURFACE — §4.6. Terminals, for shells, builds, services and hosted sites.
@@ -99,6 +101,14 @@ export interface WorkspaceOpsProps {
         readonly agents: readonly { readonly id: string; readonly name: string }[];
         readonly current: string | null;
         readonly onSet: (agentId: string | null) => void;
+    } | undefined;
+    /**
+     * Its COLOUR (genie#1300): project.json `appearance.color`, picked from the palette or a custom colour. `current: null`
+     * = none known yet. Absent = not offered (a host that cannot write it).
+     */
+    readonly color?: {
+        readonly current: string | null;
+        readonly onSet: (color: string) => void;
     } | undefined;
     /** The workspace-scoped settings (§6.1) with THIS workspace's effective values; `values: null` = not loaded yet. */
     readonly settings?: {
@@ -198,6 +208,8 @@ function formatHeld(bytes: number): string {
 
 export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialState, files, sitePanels, feeds, onStartAgent, panel, onTogglePanel, filesFile, filesLine = null, filesFilter, onFilesRoute, filesPinned, onPinFiles, filesPopped, onPopOutFiles, onBringBackFiles, onPauseAgent, onResumeAgent, pluginPanels = [], issueWatch = null, onRefreshIssueWatch, onSetIssueWatchRepo, view = 'home', rows = [], deckItems = [], onOpenDeckItem, onOpenAgent, onAddAgent, onViewChange, agentTabs = [], onOpenFile }: WorkspaceProps) {
     const [state, setState] = useState<WorkspaceState>(() => initialState ?? emptyWorkspace());
+    // Its colour (genie#1300): the tab strip's edge and the underline of the tab on screen.
+    const wsColor = useWorkspaceColor(workspace.id);
     // THE TABS YOU DESIGNED (Tynn #282), kept in this workspace's `workspace_tabs` setting; read forgivingly.
     const tabsRaw = ops?.settings?.values?.['workspace_tabs'];
     const designed = parseTabs(typeof tabsRaw === 'string' ? tabsRaw : '{"tabs":[]}');
@@ -628,6 +640,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 designed={designed}
                 agents={agentTabs}
                 current={{ kind: 'view', view: onScreen }}
+                color={wsColor}
                 canDesign={canDesign}
                 hasSettings={Boolean(ops?.settings || ops?.governs || ops?.repos)}
                 github={issueWatch?.linked === true}
@@ -668,6 +681,17 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         </div>
                     ) : (
                         <ul className="mt-1 divide-y divide-[var(--border-1)]">
+                            {ops.color ? (
+                                <li data-ws-color="" className="flex items-center gap-3 py-1.5">
+                                    <div className="min-w-0 flex-1">
+                                        <div className="font-medium">Colour</div>
+                                        <div className="text-[var(--fg-3)]">Marks this workspace and its agents everywhere. Saved in project.json.</div>
+                                    </div>
+                                    <div data-setting-control="" className="flex shrink-0 items-center justify-end gap-2">
+                                        <WorkspaceColorPicker current={ops.color.current} onSet={ops.color.onSet} />
+                                    </div>
+                                </li>
+                            ) : null}
                             {ops.defaultAgent ? (
                                 <li data-ws-default-agent="" className="flex items-center gap-3 py-1.5">
                                     <div className="min-w-0 flex-1">

@@ -13,7 +13,7 @@ import { addWorkspace, createWorkspace, hibernateWorkspace, previewAddWorkspace,
  * touches the folder. Every port is injected.
  */
 
-const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/project.schema.json';
+const SCHEMA = 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json';
 const rec = (id: string, workspaceId: string, name: string): AgentRecord => ({ id, workspaceId, provider: 'claude', name, instructions: null, threadId: null, createdAt: 't', lastUsedAt: null, mode: 'manual', accessScope: 'self' }) as unknown as AgentRecord;
 
 function fakes(over: { entries?: Record<string, string[]>; files?: Record<string, unknown>; running?: string[]; handoffAfterMs?: number; commitFails?: string } = {}) {
@@ -98,16 +98,16 @@ describe('adding a workspace', () => {
         expect(empty.calls).toContain('gitInit:/w/new');
 
         const older = fakes({ entries: { '/w/env': ['project.json', 'repos', '.ai'] }, files: { '/w/env/project.json': { $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.1.0/schemas/workspace/project.schema.json', name: 'Env' } } });
-        expect(await addWorkspace(older.ports, '/w/env')).toMatchObject({ ok: true, kind: 'full-envelope', stamped: { from: '0.1.0', backup: 'project.json.pre-schema-0.2.0.bak' } });
+        expect(await addWorkspace(older.ports, '/w/env')).toMatchObject({ ok: true, kind: 'full-envelope', stamped: { from: '0.1.0', backup: 'project.json.pre-schema-0.3.0.bak' } });
         expect(older.files['/w/env/project.json']).toMatchObject({ $schema: SCHEMA, name: 'Env' });
-        expect(older.files['/w/env/project.json.pre-schema-0.2.0.bak']).toMatchObject({ name: 'Env' });
+        expect(older.files['/w/env/project.json.pre-schema-0.3.0.bak']).toMatchObject({ name: 'Env' });
 
         const current = fakes({ entries: { '/w/env': ['project.json', 'repos', '.ai'] }, files: { '/w/env/project.json': { $schema: SCHEMA, name: 'Env' } } });
         expect(await addWorkspace(current.ports, '/w/env')).toMatchObject({ ok: true, stamped: null });
         expect(current.calls.filter((c) => c.startsWith('writeJson'))).toEqual([]);
 
-        const newer = fakes({ entries: { '/w/env': ['project.json', 'repos', '.ai'] }, files: { '/w/env/project.json': { $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json', name: 'Env' } } });
-        expect(await addWorkspace(newer.ports, '/w/env')).toEqual({ ok: false, reason: 'project.json declares schema 0.3.0, newer than the 0.2.0 this Genie writes; not touching it' });
+        const newer = fakes({ entries: { '/w/env': ['project.json', 'repos', '.ai'] }, files: { '/w/env/project.json': { $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.4.0/schemas/workspace/project.schema.json', name: 'Env' } } });
+        expect(await addWorkspace(newer.ports, '/w/env')).toEqual({ ok: false, reason: 'project.json declares schema 0.4.0, newer than the 0.3.0 this Genie writes; not touching it' });
         expect(newer.calls).toEqual([]);
     });
 });

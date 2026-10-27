@@ -323,7 +323,7 @@ describe('an existing envelope', () => {
     it('is only registered: nothing in it is written', async () => {
         const ws = join(parent, 'have.agi');
         await repo(ws, {
-            'project.json': `${JSON.stringify({ $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.2.0/schemas/workspace/project.schema.json', name: 'Have', repos: [] }, null, 2)}\n`,
+            'project.json': `${JSON.stringify({ $schema: 'https://raw.githubusercontent.com/Civicognita/shared-schemas/v0.3.0/schemas/workspace/project.schema.json', name: 'Have', repos: [] }, null, 2)}\n`,
             'repos/.gitkeep': '',
             '.ai/.gitkeep': '',
         });

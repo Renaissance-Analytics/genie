@@ -3,6 +3,7 @@ import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
 import { deckBadge, filterRail, type RailItem, type RailSurface } from '../../core/rail-view.js';
 import { folderName } from '../../core/workspace-name.js';
+import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 
 export type { RailSurface };
 
@@ -271,6 +272,8 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             className={`${ICON_BUTTON} relative font-mono text-[11px] font-semibold uppercase ${active ? ROW_ACTIVE : ''} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : pulsed ? WORKSPACE_PULSE : ''}`}
                         >
                             {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
+                            {/* Its colour (genie#1300): a bar under the letters — the letters stay the cue. */}
+                            {w.color ? <span aria-hidden="true" data-workspace-color={w.color} style={wsStyle(w.color)} className="absolute inset-x-2 bottom-0.5 h-0.5 rounded-full bg-[var(--ws)]" /> : null}
                             {w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
                         </button>
                     );
@@ -397,6 +400,8 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         {/* THE PULSE (Genie 1's): lit while this workspace's agents are mid-turn — by their sessions, never terminal output. */}
                         {(w.working ?? 0) > 0 ? <span data-pulse="" aria-label={workingLabel(w.working ?? 0)} className="absolute inset-y-1 left-0 w-0.5 animate-pulse rounded-full bg-[var(--accent)]" /> : null}
                         <Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />
+                        {/* Its colour (genie#1300), beside its name: the name stays the cue. */}
+                        <WorkspaceSwatch color={w.color} />
                         <span className="truncate">{w.name ?? folderName(w.path)}</span>
 
                         <span className="ml-auto flex shrink-0 items-center gap-1.5">

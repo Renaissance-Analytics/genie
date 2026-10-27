@@ -311,6 +311,8 @@ export interface GenieBridge {
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<{ ok: true; governs: string[] } | { ok: false; reason: string }>;
         /** Genie 1's default agent: one of this workspace's agents, or `null` for none. */
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<{ ok: true } | { ok: false; reason: string }>;
+        /** Its colour (genie#1300), written to its project.json as `appearance.color`. Optional: an older host has none. */
+        setColor?(workspaceId: string, color: string): Promise<{ ok: true } | { ok: false; reason: string }>;
     };
 
     /** AGENT OPERATIONS (§6.2). Each answers with what happened or why not; nothing is silent. */

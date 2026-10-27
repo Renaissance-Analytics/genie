@@ -371,7 +371,7 @@ const EMPTY_REMOTE: RemoteState = { connected: false, host: null, isOwner: false
  * the master switch are on) and raises a toast naming the WORKSPACE and the AGENT. The first
  * snapshot after boot alerts nobody.
  */
-function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string }) => void): void {
+function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, boolean | string>> | null, show: (toast: { title: string; body: string; color?: string }) => void): void {
     const prev = useRef<AlertSnapshot | null>(null);
     useEffect(() => {
         const next: AlertSnapshot = { deckItems: snapshot.deckItems, agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, workspaceId: a.workspaceId, state: a.state, reason: a.reason })) };
@@ -379,7 +379,9 @@ function useAlerts(snapshot: GenieSnapshot, settings: Readonly<Record<string, bo
             for (const alert of alertsBetween(prev.current, next)) {
                 // The chosen sound — a wav or the Default chime — through the one player Preview uses too.
                 playAlertSound(alertSound(alert.kind, settings ?? {}));
-                show(toastFor(alert, slugsFor(snapshot.workspaces ?? [])));
+                // The agent's workspace colour beside its address (genie#1300).
+                const color = snapshot.workspaces?.find((w) => w.id === alert.workspace)?.color;
+                show({ ...toastFor(alert, slugsFor(snapshot.workspaces ?? [])), ...(color ? { color } : {}) });
             }
             prev.current = next;
         }
@@ -616,7 +618,7 @@ function DesktopApp({ bridge }: AppProps) {
     // An alert's toast (genie#1211): Genie in front → its own, bottom-left, clear of the chat; behind → the OS notification.
     const [alertToasts, setAlertToasts] = useState<readonly AlertToast[]>([]);
     const dismissAlert = useCallback((id: string) => setAlertToasts((prev) => prev.filter((t) => t.id !== id)), []);
-    const showAlert = useCallback((toast: { title: string; body: string }) => {
+    const showAlert = useCallback((toast: { title: string; body: string; color?: string }) => {
         if (alertDelivery(typeof document !== 'undefined' && document.hasFocus()) === 'in-app') {
             const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             setAlertToasts((prev) => [...prev.slice(-3), { id, ...toast }]);
@@ -925,6 +927,15 @@ function DesktopApp({ bridge }: AppProps) {
                                     )
                                     .finally(() => { setRoster((s) => (s ? { ...s, busy: null } : s)); readRoster(resolvedBridge, workspaceId); });
                             },
+                        },
+                    }
+                  : {}),
+              // Its colour (genie#1300): written to its project.json by the host; the snapshot brings the new colour back.
+              ...(resolvedBridge.workspaces.setColor
+                  ? {
+                        color: {
+                            current: workspaceRow.color ?? null,
+                            onSet: (color: string) => { void resolvedBridge.workspaces.setColor?.(workspaceId, color).then((r) => { if (!r.ok) setWsView((v) => ({ ...v, lastOutcome: r.reason })); }); },
                         },
                     }
                   : {}),

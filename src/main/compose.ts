@@ -201,6 +201,8 @@ export interface ComposeInput {
      * Deck and the question window say the same name the rail does, never the id. The folder's name by default.
      */
     readonly workspaceName?: (path: string) => string;
+    /** A workspace's COLOUR (genie#1300, main/workspace-color-host.ts), carried on its Deck items beside the name. Absent = none. */
+    readonly workspaceColor?: (path: string) => string | null;
     /**
      * Is an agent still WAITING for what it asked — its session as Genie runs it (or its Take Over terminal), `null` when
      * it has none (main.ts asks the session host and the take-over host), `undefined` while LIVENESS IS NOT KNOWN yet
@@ -1119,11 +1121,16 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         configuredHosts,
         deckItems: () => {
             const workspaceNames: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).map((w) => [w.id, (input.workspaceName ?? folderName)(w.path)]));
+            const workspaceColors: Record<string, string> = Object.fromEntries((input.workspaces?.() ?? []).flatMap((w) => {
+                const color = input.workspaceColor?.(w.path) ?? null;
+                return color ? [[w.id, color]] : [];
+            }));
             return [
-                // An approval is grouped under its workspace on the Deck like a question is, so it carries the same NAME.
+                // An approval is grouped under its workspace on the Deck like a question is, so it carries the same NAME (and colour).
                 ...approvals.deckItems().map((i) => {
                     const name = i.workspaceId === null ? undefined : workspaceNames[i.workspaceId];
-                    return name === undefined ? i : { ...i, workspaceName: name };
+                    const color = i.workspaceId === null ? undefined : workspaceColors[i.workspaceId];
+                    return name === undefined && color === undefined ? i : { ...i, ...(name === undefined ? {} : { workspaceName: name }), ...(color === undefined ? {} : { workspaceColor: color }) };
                 }),
                 ...frontDoorCtl.deckItems(),
                 ...deckItemsFrom({
@@ -1133,6 +1140,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                     finished: attention.finished(),
                     agents: Object.fromEntries(agents()),
                     workspaceNames,
+                    workspaceColors,
                     ...(input.askerLive ? { asker: input.askerLive } : {}),
                 }),
             ];

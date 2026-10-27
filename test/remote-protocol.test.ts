@@ -76,7 +76,8 @@ describe('the capability table', () => {
         // HOST's GitHub sign-in reaches — owner-only, like the import it feeds.
         // 77 since `host.mkdir` (the folder picker's New folder, 2026-10-22): a write on the host's disk — owner-only.
         // 78 since queued input's Send/Discard: a write scoped to that agent, including workspace guests.
-        expect(REMOTE_METHODS.length).toBe(78);
+        // 79 since `workspaces.setColor` (a workspace's colour from its Settings, genie#1300): a write, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(79);
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

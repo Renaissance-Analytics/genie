@@ -203,6 +203,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             resetSetting: (workspaceId, key) => answer('workspaces.resetSetting', workspaceId, key),
             setGoverns: (workspaceId, childIds) => answer('workspaces.setGoverns', workspaceId, [...childIds]),
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
+            setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
         },
         agents: {
             restart: (agentId, kind) => answer('agents.restart', agentId, kind),

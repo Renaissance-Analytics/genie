@@ -107,6 +107,8 @@ export interface HostApiDeps {
         resetSetting(workspaceId: string, key: string): Promise<unknown>;
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
+        /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
+        setColor?(workspaceId: string, color: string): Promise<unknown>;
     };
     agentOps: {
         /** THE ONE RESTART (genie#1238): `restartAgent` — 'graceful' from every state, delivering what is owed. */
@@ -318,6 +320,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.workspaceOps.setGoverns(str(args[0]), Array.isArray(args[1]) ? args[1].map(str) : []);
             case 'workspaces.setDefaultAgent':
                 return deps.workspaceOps.setDefaultAgent(str(args[0]), typeof args[1] === 'string' && args[1] !== '' ? args[1] : null);
+            case 'workspaces.setColor':
+                return deps.workspaceOps.setColor ? deps.workspaceOps.setColor(str(args[0]), str(args[1])) : { ok: false, reason: 'this host cannot set a workspace colour' };
             case 'addWorkspace':
                 throw new Error('addWorkspace opens a folder picker on the host; do it there');
             case 'takeOver':
