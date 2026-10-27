@@ -3,7 +3,8 @@ import { lstat, readdir, readlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
-import { ZipFile } from 'yazl';
+// The DEFAULT import: yazl is CommonJS, and the main bundle loads it under Node's ESM rules (cjs-named-imports.test.ts).
+import yazl from 'yazl';
 import { IGNORED_NAMES } from './files-host.js';
 
 /**
@@ -30,7 +31,7 @@ const S_IFLNK = 0o120000;
 export async function zipFolder(source: string, top: string, out: string, skip: readonly string[] = []): Promise<void> {
     const norm = (p: string) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
     const skipped = new Set(skip.map(norm));
-    const zip = new ZipFile();
+    const zip = new yazl.ZipFile();
     // yazl's typings call it a NodeJS.ReadableStream; it is a stream.PassThrough, which can be destroyed.
     const output = zip.outputStream as Readable;
     // `wx`: the output name is the caller's alone — never over something that happens to be there.
