@@ -6,7 +6,8 @@ import type { ChatDraft } from './chat-drafts.js';
  *
  * The click puts a paste pill into THAT agent's draft — its own composer (genie#1261) — through react-fancy 5.65's
  * `PromptInputHandle`: read the draft, add a text pill and its marker, set it back. Sent, the pill expands in place to
- * the full step, quoted as a plan step.
+ * the full step, quoted as a plan step. It SHOWS the step's first words (react-fancy 5.66's text-pill `label`), not
+ * "Pasted text · N characters". The label is display only, and it is kept with the draft (core/chat-drafts.ts).
  *
  * `setDraft` does not fire `onDraftChange` (react-fancy 5.65), so the new draft is handed to the keeper here, or a
  * restart would lose the pill.
@@ -31,7 +32,7 @@ export interface ChatInsert {
     readonly agentId: string;
     /** One per click, so a second click on the same step is a second insert. */
     readonly seq: number;
-    readonly pill: { readonly id: string; readonly text: string };
+    readonly pill: { readonly id: string; readonly text: string; readonly label: string };
     /** Only the person's own click focuses the composer. */
     readonly focus: boolean;
 }
@@ -41,18 +42,35 @@ export function planStepText(step: string): string {
     return `Plan step: "${step.trim()}"`;
 }
 
+/** How many of the step's words the pill shows. */
+export const PLAN_LABEL_WORDS = 6;
+/** react-fancy's own cap on a pill label (5.66.0). Cut to it here, so the ellipsis is ours. */
+export const PLAN_LABEL_MAX = 80;
+
+/** What the pill shows: the step's first words, with an ellipsis when there is more. */
+export function planStepLabel(step: string): string {
+    const words = step.trim().split(/\s+/).filter((w) => w !== '');
+    let label = words.slice(0, PLAN_LABEL_WORDS).join(' ');
+    let cut = words.length > PLAN_LABEL_WORDS;
+    if (label.length > PLAN_LABEL_MAX - 1) {
+        label = label.slice(0, PLAN_LABEL_MAX - 1).trimEnd();
+        cut = true;
+    }
+    return cut ? `${label}…` : label;
+}
+
 /** The insert for a click on a step's chat icon. */
 export function planStepInsert(agentId: string, step: string, seq: number): ChatInsert {
-    return { agentId, seq, pill: { id: `plan-step-${seq}`, text: planStepText(step) }, focus: true };
+    return { agentId, seq, pill: { id: `plan-step-${seq}`, text: planStepText(step), label: planStepLabel(step) }, focus: true };
 }
 
 /** The draft with the pill added after what is there, and a space after it for the caret. */
-export function withPill(draft: ChatDraft, pill: { id: string; text: string }): ChatDraft {
+export function withPill(draft: ChatDraft, pill: { id: string; text: string; label?: string }): ChatDraft {
     const before = draft.text === '' || /\s$/.test(draft.text) ? draft.text : `${draft.text} `;
     return {
         ...draft,
         text: `${before}${PILL_MARK}${pill.id}${PILL_MARK} `,
-        pills: [...draft.pills.filter((p) => p.id !== pill.id), { kind: 'text', id: pill.id, text: pill.text }],
+        pills: [...draft.pills.filter((p) => p.id !== pill.id), { kind: 'text', id: pill.id, text: pill.text, ...(pill.label !== undefined ? { label: pill.label } : {}) }],
     };
 }
 
