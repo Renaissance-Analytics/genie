@@ -105,11 +105,14 @@ export function verifyMemberGrant(token: string, opts: { keys: readonly TynnJwk[
 export function principalOf(grant: HostGrant): { ok: true; principal: PreAuth } | { ok: false; reason: string } {
     const label = grant.name ?? grant.sub;
     const readonly = grant.capability === 'readonly';
-    // A DRONE (genie#1278 W5; the owner: drones "auto-accept connections from known and paired devices") admits only
-    // its owner, connecting from one of the owner's own registered machines — both facts signed by Tynn in the grant.
-    // Never a guest, never an owner from an unbound device; nothing local is consulted.
-    if (grant.audRole !== 'pilot' && !(grant.source === 'owner' && grant.sourceWorkstationId !== null)) {
-        return { ok: false, reason: 'this workstation is a drone: it accepts only its owner, from the owner’s own paired machines' };
+    // A DRONE (genie#1278 W5; the owner: drones "auto-accept connections from known and paired devices"; 2026-10-28:
+    // "allow share links") admits its owner connecting from one of the owner's own registered machines, and a guest
+    // holding a share link (`src = share`, a WorkstationShare — what a redeemed link becomes), who is scoped by that
+    // grant below exactly as on a pilot and is never the owner. Every other guest (a direct grant, an invite) and an
+    // owner from an unbound device are refused. All of it from the Tynn-signed grant; nothing local is consulted.
+    const ownersOwnMachine = grant.source === 'owner' && grant.sourceWorkstationId !== null;
+    if (grant.audRole !== 'pilot' && !ownersOwnMachine && grant.source !== 'share') {
+        return { ok: false, reason: 'this workstation is a drone: it accepts only its owner, from the owner’s own paired machines, and share links' };
     }
     if (grant.source === 'owner') return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };
     if (grant.scopes.includes('host:all')) return { ok: true, principal: { label, isOwner: false, workspaceId: null, readonly } };

@@ -160,7 +160,7 @@ describe('a member over the relay', () => {
     });
 
     // The same write by a CONTROL grant to the same workspace goes through (the test above) — so this refusal is read-only's.
-    it('a DRONE host (Tynn says so in the grant): a share is refused over the relay, the owner from a paired machine is not', async () => {
+    it('a DRONE host (Tynn says so in the grant): an invite is refused over the relay, the owner from a paired machine is not', async () => {
         const guest = await member({ src: 'invite', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
         const gt = (guest as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
         void wireClient(gt).hello({ kind: 'relay' });
@@ -170,6 +170,22 @@ describe('a member over the relay', () => {
         expect(owner.ok).toBe(true);
         const c = wireClient((owner as { transport: ClientTransport }).transport);
         expect(await c.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', isOwner: true });
+    });
+
+    it('a DRONE host admits a SHARE LINK guest to the one shared workspace, and nothing else (owner 2026-10-28)', async () => {
+        const opened = await member({ src: 'share', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
+        expect(opened.ok).toBe(true);
+        const guest = wireClient((opened as { transport: ClientTransport }).transport);
+        expect(await guest.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
+        // It sees only the shared workspace's agents.
+        expect(((await guest.call('snapshot')) as { value: typeof snapshot }).value.agents.map((a) => a.id)).toEqual(['agent_a']);
+        expect(await guest.call('baton.take')).toMatchObject({ ok: true });
+        // CONTROL: a write inside the shared workspace goes through, so the refusals below are the scope's.
+        expect(await guest.call('openAgent', 'agent_a')).toMatchObject({ ok: true });
+        // The other workspace on the same drone is refused by name, as on a pilot.
+        expect(await guest.call('openAgent', 'agent_b')).toMatchObject({ ok: false, reason: 'agent_b is not in the workspace this link shares' });
+        // And the host itself is not the guest's to change.
+        expect(await guest.call('features.act', { kind: 'remote.lock' })).toMatchObject({ ok: false });
     });
 
     it('a READ-ONLY grant: reads work, a write is refused', async () => {
