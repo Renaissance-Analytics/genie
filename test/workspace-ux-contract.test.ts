@@ -40,14 +40,31 @@ type Board = {
 };
 
 const bytes = readFileSync(new URL('../contracts/workspace-ux.json', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
-const contract = JSON.parse(bytes) as { contract: string; surfaces: Array<{ id: string } & Board> };
+const contract = JSON.parse(bytes) as { $id: string; contract: string; version: string; surfaces: Array<{ id: string } & Board> };
+/** The pin beside the copy: the published tag of Civicognita/shared-schemas this repo declares against, and its bytes' hash. */
+const pin = JSON.parse(readFileSync(new URL('../contracts/workspace-ux.pin.json', import.meta.url), 'utf8')) as {
+    repository: string; contract: string; version: string; tag: string; commit: string; path: string; sha256: string;
+};
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('is the pinned one: it changes in its canonical home first, then here, re-pinned', () => {
-        const pin = readFileSync(new URL('../contracts/workspace-ux.sha256', import.meta.url), 'utf8').trim();
-        expect(createHash('sha256').update(bytes).digest('hex')).toBe(pin);
-        expect(contract.contract).toBe('workspace-ux');
+    it('pins a PUBLISHED contract: a tag of Civicognita/shared-schemas, its commit, its path and the sha256 of its bytes', () => {
+        expect(pin.repository).toBe('Civicognita/shared-schemas');
+        expect(pin.contract).toBe('workspace-ux');
+        expect(pin.version).toMatch(/^\d+\.\d+\.\d+$/);
+        expect(pin.tag).toBe(`workspace-ux/v${pin.version}`);
+        expect(pin.path).toBe(`contracts/workspace-ux/${pin.version}/workspace-ux.json`);
+        expect(pin.commit).toMatch(/^[0-9a-f]{40}$/);
+        expect(pin.sha256).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('is not stale: the copy here is byte for byte the pinned tag\'s contract (it changes in shared-schemas first)', () => {
+        // No network: shared-schemas is private and this repo's CI is public, so the pin RECORDS the published bytes'
+        // hash (LF line ends) and the copy is held to it.
+        expect(createHash('sha256').update(bytes).digest('hex')).toBe(pin.sha256);
+        expect(contract.contract).toBe(pin.contract);
+        expect(contract.version).toBe(pin.version);
+        expect(contract.$id).toBe(`https://raw.githubusercontent.com/${pin.repository}/${pin.tag}/${pin.path}`);
         expect(board).toBeDefined();
     });
 });
