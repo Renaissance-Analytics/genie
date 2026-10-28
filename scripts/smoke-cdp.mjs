@@ -660,6 +660,29 @@ if (!approvalEnabled) {
             writeFileSync(shotPath('smoke-approval.png'), Buffer.from(shot.result.data, 'base64'));
         }
 
+        /*
+         * 32a. A DASHBOARD CLICK ON AN AGENT THAT IS WAITING KEEPS THE DASHBOARD; THE CHAT BECOMES ITS (the owner,
+         * 2026-10-28: "why is clicking an agent in the dashboard taking me to the deck now? Dashboard should stay active
+         * while the chat changes to that agent chat"). The codex agent holds a parked approval right now: a blocking Deck
+         * item, which used to send its row's click to `genie://deck?item=…`. CONTROL: main's snapshot holds that blocking
+         * item while the row is on the Dashboard, so the agent really is waiting when the row is clicked.
+         */
+        await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
+        const onBoard = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"] [data-agent="${codexRow}"]'))`, 'the waiting codex row on the Dashboard');
+        const blocking = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
+        const waitingOnBoard = onBoard && blocking === true;
+        const topBefore = await cdp.evaluate(`document.querySelector('[data-surface="dashboard"]')?.getBoundingClientRect().top ?? null`);
+        await cdp.evaluate(`document.querySelector('[data-surface="dashboard"] [data-agent="${codexRow}"]').click(); true`);
+        const stayed = await waitFor(cdp, `Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]')) && Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the codex chat beside the Dashboard');
+        // A Deck navigation would land asynchronously: give it the time it would take, then read where we are.
+        await new Promise((r) => setTimeout(r, 750));
+        const after = JSON.parse(await cdp.evaluate(`JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, top: document.querySelector('[data-surface="dashboard"]')?.getBoundingClientRect().top ?? null })`) || '{}');
+        check(waitingOnBoard && stayed && after.dashboard && !after.deck && !after.agent && after.subject === codexRow && new RegExp(ADDRESS.dashboard).test(after.address ?? '') && after.top === topBefore,
+            '32a. clicking a WAITING agent on the Dashboard keeps the Dashboard (not the Deck, not its page, no jump) and the chat becomes that agent’s', JSON.stringify({ waitingOnBoard, topBefore, ...after }));
+        // Back to its page, where the approval card is answered below.
+        await cdp.evaluate(`window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
+        await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"] [data-approval]')) || Boolean(document.querySelector('[data-approval]'))`, 'the codex approval card again');
+
         // ANSWER IT. The provider is blocked on one promise, so this is the whole round trip:
         // click → bridge → host → session → driver → the stub, which logs the decision it got.
         const first = parsedOptions[0]?.id;
