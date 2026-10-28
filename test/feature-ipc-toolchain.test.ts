@@ -79,11 +79,12 @@ describe('T3 — the update guard, at the click', () => {
         expect(snap.toolchain!.refusals).toEqual([{ tool: 'claude-code', reason: expect.stringMatching(/atlas is running on Claude Code/) }]);
     });
 
-    it('updating node while a Genie-run dev server is on it is REFUSED naming it; updater never called', async () => {
+    it('updating node while a Genie-run dev server is on it is WARNED naming it (genie#1306: a new Node installs beside the old); updater not called yet', async () => {
         activity = { ...IDLE, processes: [{ label: 'shop.gen dev server', command: 'npm run dev' }] };
         const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, scanned(), ports());
         expect(updates).toEqual([]);
-        expect(snap.toolchain!.refusals).toEqual([{ tool: 'node', reason: expect.stringMatching(/shop\.gen dev server is running on Node/) }]);
+        expect(snap.toolchain!.refusals).toBeUndefined();
+        expect(snap.toolchain!.warning).toMatchObject({ tool: 'node', affected: ['shop.gen dev server'], reason: expect.stringMatching(/shop\.gen dev server is running on Node/) });
     });
 
     it('CONTROL: idle → the same updates run, once each, and the snapshot is the re-probe — with no refusal on any row', async () => {
@@ -173,10 +174,11 @@ describe('a refused or failed toolchain action is SAID on its row (the person sa
     });
 
     it('two tools refused at once: each row keeps its own reason (counted: two, one per tool)', async () => {
-        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }], processes: [{ label: 'shop.gen dev server', command: 'npm run dev' }] };
+        // Two agent CLIs, each with a session on it (node is a warning since genie#1306, not a refusal).
+        activity = { ...IDLE, sessions: [{ label: 'atlas', provider: 'claude' }, { label: 'nova', provider: 'codex' }] };
         const first = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'claude-code' }, scanned(), ports());
-        const second = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'node' }, { ...scanned(), ...toolchainStateFrom(first.toolchain) }, ports());
-        expect(second.toolchain!.refusals!.map((r) => r.tool)).toEqual(['claude-code', 'node']);
+        const second = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'codex' }, { ...scanned(), ...toolchainStateFrom(first.toolchain) }, ports());
+        expect(second.toolchain!.refusals!.map((r) => r.tool)).toEqual(['claude-code', 'codex']);
     });
 
     it('an install that ran and FAILED (not-installed) is said on the row too, verbatim; the result line still says it', async () => {
@@ -194,7 +196,8 @@ describe('a refused or failed toolchain action is SAID on its row (the person sa
         const snap = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'docker' }, scanned(), {
             toolchain: { ...stuck.toolchain!, update: async (tool) => { updates.push(tool); return { kind: 'unchanged', installed: '27.3.1', reason: 'the update command exited 1 but docker still reports 27.3.1; nothing was changed' }; } },
         });
-        expect(snap.toolchain!.refusals).toEqual([{ tool: 'docker', reason: 'the update command exited 1 but docker still reports 27.3.1; nothing was changed' }]);
+        // genie#1306: a failed update carries its Retry ('' = the tool's own update, no version named).
+        expect(snap.toolchain!.refusals).toEqual([{ tool: 'docker', reason: 'the update command exited 1 but docker still reports 27.3.1; nothing was changed', retry: '' }]);
         const ok = await handleFeatureAction(services, { kind: 'toolchain.update', tool: 'docker' }, { ...scanned(), ...toolchainStateFrom(snap.toolchain) }, ports());
         expect(updates).toEqual(['docker', 'docker']);
         expect(ok.toolchain!.refusals).toBeUndefined();

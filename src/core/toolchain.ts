@@ -126,6 +126,11 @@ export interface ToolProbe {
     readonly latest: string | null;
     /** Who said `latest`. `null` when nobody could. */
     readonly source: string | null;
+    /**
+     * A language Genie installs itself (genie#1306): the versions it can update to — the patch in the installed line, and
+     * another line (core/toolchain-update.ts updateChoices). Absent for every other tool.
+     */
+    readonly choices?: { readonly patch: string | null; readonly upgrade: string | null };
 }
 
 export type Tone = 'security-update' | 'update-available' | 'up-to-date' | 'unknown' | 'not-installed';
@@ -138,6 +143,13 @@ export interface ToolStatus {
     readonly source: string | null;
     /** Why the installed version is unsafe (`security-update` only): the CVEs and the version to move to. */
     readonly advisory?: string;
+    /**
+     * genie#1306 — a language Genie installs itself: the PATCH in the installed line (8.4.24 → 8.4.27; a security
+     * notice's fix), the row's primary action. Absent when there is none.
+     */
+    readonly patch?: string;
+    /** …and a NEWER LINE (8.5.12), a separate, secondary choice. Absent when there is none. */
+    readonly upgrade?: string;
 }
 
 /** What is known to be unsafe, per tool. Only PHP has a floor today (core/php-advisories.ts); the shape takes more. */
@@ -151,13 +163,14 @@ function advisoryFor(tool: string, installed: string): string | null {
  * three days of PHP2Shell, which is the wording of a nicety, not of a hole (the owner, 2026-10-22).
  */
 export function toolStatus(p: ToolProbe): ToolStatus {
+    const choices = p.installed === null ? {} : { ...(p.choices?.patch ? { patch: p.choices.patch } : {}), ...(p.choices?.upgrade ? { upgrade: p.choices.upgrade } : {}) };
     const advisory = p.installed === null ? null : advisoryFor(p.tool, p.installed);
-    if (advisory !== null) return { tool: p.tool, installed: p.installed, latest: p.latest, tone: 'security-update', source: p.source, advisory };
+    if (advisory !== null) return { tool: p.tool, installed: p.installed, latest: p.latest, tone: 'security-update', source: p.source, advisory, ...choices };
     let tone: Tone;
     if (p.installed === null) tone = 'not-installed';
     else if (p.latest === null) tone = 'unknown';
     else tone = compareVersions(p.latest, p.installed) > 0 ? 'update-available' : 'up-to-date';
-    return { tool: p.tool, installed: p.installed, latest: p.latest, tone, source: p.source };
+    return { tool: p.tool, installed: p.installed, latest: p.latest, tone, source: p.source, ...choices };
 }
 
 export type UpdatePlan =
@@ -231,6 +244,26 @@ export function planInstall(input: { tool: string; platform: Platform; packageMa
     }
 }
 
+/**
+ * Known winget results, by HRESULT (genie#1306). winget exits with its HRESULT, which Node reads as an unsigned
+ * (2316632084) or signed (-1978335212) number — the owner read "exited 2316632084" and learned nothing. Only codes named
+ * by winget's own return-code list are worded; any other winget code is still said to be winget's, in hex.
+ */
+const WINGET_RESULTS: Readonly<Record<number, string>> = {
+    0x8a150014: 'no installed package matched — winget did not install this copy',
+    0x8a15002b: 'no applicable update was found',
+};
+
+/** An exit code in words: an HRESULT in hex (a winget one by name); an ordinary code as the number it is. */
+export function exitWords(exitCode: number): string {
+    if (exitCode >= 0 && exitCode <= 0x7fffffff) return `exited ${exitCode}`;
+    const unsigned = exitCode >>> 0;
+    const hex = `0x${unsigned.toString(16).toUpperCase().padStart(8, '0')}`;
+    const known = WINGET_RESULTS[unsigned];
+    if (known) return `failed: winget says ${known} (${hex})`;
+    return (unsigned & 0xffff0000) >>> 0 === 0x8a150000 ? `failed: winget error ${hex}` : `failed (${hex})`;
+}
+
 export type RepairOutcome =
     | { readonly kind: 'repaired'; readonly from: string | null; readonly to: string; readonly note?: string }
     | { readonly kind: 'unchanged'; readonly installed: string | null; readonly reason: string }
@@ -244,10 +277,10 @@ export function repairOutcome(input: { tool: string; wanted: string | null; befo
     const { tool, wanted, before, after, exitCode } = input;
     if (after === null) return { kind: 'unverified', reason: `${tool} could not be probed after the update; the result is unknown` };
     if (before !== null && compareVersions(after, before) === 0) {
-        return { kind: 'unchanged', installed: after, reason: `the update command exited ${exitCode} but ${tool} still reports ${after}; nothing was changed` };
+        return { kind: 'unchanged', installed: after, reason: `the update command ${exitWords(exitCode)} but ${tool} still reports ${after}; nothing was changed` };
     }
     const notes: string[] = [];
-    if (exitCode !== 0) notes.push(`the command exited ${exitCode} but ${tool} now reports ${after}`);
+    if (exitCode !== 0) notes.push(`the command ${exitWords(exitCode)} but ${tool} now reports ${after}`);
     if (wanted !== null && compareVersions(after, wanted) !== 0) notes.push(`wanted ${wanted}; the manager installed ${after}`);
     return { kind: 'repaired', from: before, to: after, ...(notes.length > 0 ? { note: notes.join('; ') } : {}) };
 }

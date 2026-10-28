@@ -6,7 +6,7 @@ import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type Bi
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
 import { mobilePageUrl } from '../../core/mobile.js';
-import { groupTools, toneLabel } from '../../core/toolchain.js';
+import { groupTools, toneLabel, type ToolStatus } from '../../core/toolchain.js';
 import { NAV_GROUPS, NEW_PROJECT_DEFAULTS, sectionOf, type SectionId } from '../../core/settings-nav.js';
 import { SETTINGS, searchSettings, type SettingDef } from '../../core/settings.js';
 import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKind } from '../../core/alerts.js';
@@ -857,9 +857,95 @@ export function EngineChoices({ instances, workspaces, onAction }: { instances: 
     );
 }
 
-export function ToolchainSurface({ data, onAction }: SurfaceProps) {
+type ToolchainData = NonNullable<FeatureData['toolchain']>;
+
+/**
+ * ONE TOOL ROW'S UPDATE ACTIONS (genie#1306; the owner: "make what I can click on obvious, and make it obvious that
+ * something is happening"). Real buttons, each sending the update for the version it names: a language's PATCH first and
+ * primary — a security notice's fix (8.4.24 → 8.4.27) — and another line as a separate, secondary button (8.5.12); any
+ * other tool's "Update to <latest>". While its update runs the row shows the step with a spinner and every button is
+ * off; it ends updated (the new version), or failed — the reason, and Retry. Hook-free: what it renders is what is tested.
+ */
+export function ToolUpdateActions({ t, busy, updating, updated, refusal, onAction }: { t: ToolStatus; busy: boolean; updating?: ToolchainData['updating'] | null; updated?: ToolchainData['updated'] | null; refusal?: ToolchainRefusal | null; onAction: SurfaceProps['onAction'] }) {
+    const update = (version?: string) => onAction({ kind: 'toolchain.update', tool: t.tool, ...(version ? { version } : {}) });
+    if (updating && updating.tool === t.tool) {
+        return (
+            <span data-tool-updating={t.tool} className="ml-auto flex items-center gap-2">
+                <Button type="button" size="sm" color="blue" loading disabled data-action="toolchain-update" {...(updating.version ? { 'data-version': updating.version } : {})}>{updating.step}</Button>
+            </span>
+        );
+    }
+    const off = busy || (updating ?? null) !== null;
+    // A language Genie installs itself: its patch, then another line. Anything else: what its own updater knows of.
+    const language = t.patch !== undefined || t.upgrade !== undefined;
+    const primary = language ? (t.patch ?? t.upgrade) : (t.tone === 'update-available' || t.tone === 'security-update') && t.latest ? t.latest : undefined;
+    const secondary = language && t.patch !== undefined ? t.upgrade : undefined;
+    const bare = !language && primary === undefined && t.tone === 'unknown' && t.installed !== null;
+    return (
+        <>
+            {updated && updated.tool === t.tool ? (
+                <span data-tool-updated={t.tool} className="rounded-md bg-[var(--success,#16a34a)] px-1.5 py-0.5 text-xs font-medium text-white">✓ {updated.version}</span>
+            ) : null}
+            {primary !== undefined ? (
+                <Button type="button" size="sm" color={t.tone === 'security-update' ? 'red' : 'blue'} className="ml-auto" disabled={off} data-action="toolchain-update" data-version={primary} onClick={() => update(primary)}>
+                    Update to {primary}
+                </Button>
+            ) : bare ? (
+                <Button type="button" size="sm" color="blue" className="ml-auto" disabled={off} data-action="toolchain-update" onClick={() => update()}>Update</Button>
+            ) : null}
+            {secondary !== undefined ? (
+                <Button type="button" size="sm" variant="ghost" disabled={off} data-action="toolchain-upgrade" data-version={secondary} onClick={() => update(secondary)}>
+                    {secondary}
+                </Button>
+            ) : null}
+            {refusal ? (
+                <span data-tool-refusal={t.tool} className="flex basis-full items-center gap-2 text-xs text-[var(--danger)]">
+                    <span>{refusal.reason}</span>
+                    {refusal.retry !== undefined ? (
+                        <Button type="button" size="xs" disabled={off} data-action="toolchain-retry" data-version={refusal.retry} onClick={() => update(refusal.retry)}>Retry</Button>
+                    ) : null}
+                </span>
+            ) : null}
+        </>
+    );
+}
+
+/**
+ * WHAT RUNS ON THE OLD VERSION (genie#1306): the count, the names behind a toggle — not a wall of text — and one choice:
+ * update and restart them (first, the default), or update only. Hook-free, like the row's actions.
+ */
+export function ToolchainUpdateWarning({ warning, busy, onAction }: { warning: NonNullable<ToolchainData['warning']>; busy: boolean; onAction: SurfaceProps['onAction'] }) {
+    const label = ({ php: 'PHP', node: 'Node', python: 'Python', go: 'Go', docker: 'Docker' } as Record<string, string>)[warning.tool] ?? warning.tool;
+    const go = (restart: boolean) => onAction({ kind: 'toolchain.update', tool: warning.tool, ...(warning.version ? { version: warning.version } : {}), confirmed: true, restart });
+    const n = warning.affected.length;
+    return (
+        <div data-toolchain-warning={warning.tool} className="flex flex-wrap items-center gap-3 border-b border-[var(--border-1)] px-5 py-2 text-sm">
+            <details className="min-w-0">
+                <summary className="cursor-pointer text-[var(--warning)]">{warning.tool === 'docker' ? `Stops ${n} running` : `${n} running on ${label}`}</summary>
+                <ul className="mt-1 list-disc pl-5 text-xs text-[var(--fg-2)]">
+                    {warning.affected.map((a) => <li key={a}>{a}</li>)}
+                </ul>
+            </details>
+            <span className="ml-auto flex shrink-0 gap-2">
+                <Button type="button" size="sm" color="blue" disabled={busy} data-action="toolchain-update-restart" onClick={() => go(true)}>{warning.tool === 'docker' ? 'Update anyway' : 'Update and restart'}</Button>
+                {warning.tool === 'docker' ? null : <Button type="button" size="sm" variant="ghost" disabled={busy} data-action="toolchain-update-only" onClick={() => go(false)}>Update only</Button>}
+            </span>
+        </div>
+    );
+}
+
+export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
     const tc = data.toolchain;
     const busy = tc?.busy ?? null;
+    // The click shows at once (genie#1306): the row is "Starting" until main's own step arrives, and is cleared by the
+    // next snapshot either way — an update never looks like nothing happened.
+    const [pending, setPending] = useState<{ tool: string; version?: string } | null>(null);
+    useEffect(() => { setPending(null); }, [tc]);
+    const onAction: SurfaceProps['onAction'] = (action) => {
+        if (action.kind === 'toolchain.update') setPending({ tool: action.tool, ...(action.version ? { version: action.version } : {}) });
+        return act(action);
+    };
+    const updating = tc?.updating ?? (pending ? { ...pending, step: 'Starting' } : null);
     // First run: the surface has never been scanned — scan once on open instead of drawing skeletons until a click.
     const asked = useRef(false);
     useEffect(() => {
@@ -886,12 +972,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
             </Header>
             {busy !== null ? <p data-toolchain-busy="" className="px-5 py-2 text-sm text-[var(--fg-2)]">{busy}</p> : null}
             {tc?.result ? <p data-toolchain-result="" className="px-5 py-2 text-sm">{tc.result}</p> : null}
-            {tc?.warning ? (
-                <div data-toolchain-warning={tc.warning.tool} className="flex items-center gap-3 px-5 py-2 text-sm text-[var(--warning)]">
-                    <span>{tc.warning.reason}</span>
-                    <button type="button" disabled={busy !== null} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: tc.warning!.tool, confirmed: true })}>Update anyway</button>
-                </div>
-            ) : null}
+            {tc?.warning ? <ToolchainUpdateWarning warning={tc.warning} busy={busy !== null || updating !== null} onAction={onAction} /> : null}
             {tc?.findings && tc.findings.length > 0 ? (
                 <ul data-toolchain-findings={tc.findings.length} className="divide-y divide-[var(--border-1)] border-b border-[var(--border-1)]">
                     {tc.findings.map((f, i) => (
@@ -946,12 +1027,8 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                                         <span data-tool-security={t.tool} className="rounded-md bg-[var(--danger)] px-1.5 py-0.5 text-xs font-medium text-white">{word}</span>
                                     ) : word ? <Badge variant="soft" size="sm" {...(t.tone === 'update-available' ? { color: 'amber' as const } : t.tone === 'up-to-date' ? { color: 'emerald' as const } : {})}>{word}</Badge> : null}
                                     {t.advisory ? <span data-tool-advisory={t.tool} className="basis-full text-xs text-[var(--danger)]">{t.advisory}</span> : null}
-                                    {/* Update from here: to the version Genie knows of, or — with none known — whatever the tool's own update path finds newest. */}
-                                    {(t.tone === 'update-available' || t.tone === 'security-update') && t.latest ? (
-                                        <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update to {t.latest}</button>
-                                    ) : t.tone === 'unknown' && t.installed !== null ? (
-                                        <button type="button" data-action="toolchain-update" disabled={busy !== null} className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'toolchain.update', tool: t.tool })}>Update</button>
-                                    ) : null}
+                                    {/* Update from here (genie#1306): real buttons — a language's patch first, another line second; the step while it runs; the end, either way. */}
+                                    {t.installed !== null ? <ToolUpdateActions t={t} busy={busy !== null} updating={updating} updated={tc.updated ?? null} refusal={refusal} onAction={onAction} /> : null}
                                     {plan && 'label' in plan ? (
                                         <>
                                             <span data-install-command={t.tool} className="ml-auto truncate font-mono text-xs text-[var(--fg-3)]">{plan.label}{plan.elevated ? ' — asks for permission' : ''}</span>
@@ -960,7 +1037,7 @@ export function ToolchainSurface({ data, onAction }: SurfaceProps) {
                                     ) : plan ? (
                                         <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
                                     ) : null}
-                                    {refusal ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
+                                    {refusal && t.installed === null ? <span data-tool-refusal={t.tool} className="basis-full text-xs text-[var(--danger)]">{refusal.reason}</span> : null}
                                 </li>
                             );
                         })}

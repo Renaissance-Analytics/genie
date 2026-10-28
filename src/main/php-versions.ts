@@ -12,17 +12,17 @@ import {
     PHP_BUILD_LIBRARIES,
     missingLibrariesAdvice,
     parsePhpBanner,
-    parseSha256Sums,
     phpConfigureArgs,
     phpReleaseJsonUrl,
     phpSourceName,
     phpSourceShaFromJson,
     phpSourceUrl,
     phpCgiName,
-    phpDownloadSources,
+    PHP_WINDOWS_RELEASES_JSON,
+    phpBuildUrls,
+    phpWindowsBuild,
     phpCacheDir,
     phpIniContents,
-    phpZipName,
     pickPinned,
     commandWord,
     toolchainOpcacheFlags,
@@ -237,12 +237,10 @@ export async function installPhpVersion(version: string, consent: boolean, ports
     // would be true and would hide the reason there is none.
     const unsafe = phpAdvisoryText(version);
     if (unsafe !== null) return { kind: 'refused', reason: `${unsafe}; Genie will not install it` };
-    const recipe = PHP_RECIPES.find((r) => r.version === version);
-    if (!recipe) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; this release installs ${PHP_RECIPES.map((r) => r.version).join(', ')}` };
+    if (!PHP_RECIPES.some((r) => r.version === version)) return { kind: 'refused', reason: `Genie has no installer for PHP ${version}; this release installs ${PHP_RECIPES.map((r) => r.version).join(', ')}` };
     const dir = join(ports.root, version);
     if (ports.fs.exists(join(dir, phpCgiName(ports.platform)))) return { kind: 'already-installed', version };
     if (ports.platform === 'linux') return buildPhpOnLinux(version, ports);
-    const file = phpZipName(recipe);
     const say = (step: string) => ports.progress?.(step);
     try {
         if (ports.ensureVcRuntime) {
@@ -251,23 +249,28 @@ export async function installPhpVersion(version: string, consent: boolean, ports
             if (!vc.ok) return { kind: 'not-installed', reason: `PHP ${version} needs the Microsoft Visual C++ runtime, and it could not be installed: ${vc.reason}. Nothing was downloaded` };
         }
 
+        // WHICH BUILD, AND ITS CHECKSUM (genie#1306): windows.php.net's releases.json names the current build of each line
+        // (a re-issue such as php-8.4.27-1-…) with its sha256. Read first: no published checksum, no download.
+        say(`PHP ${version}: finding windows.php.net's build`);
+        const listed = await ports.fetchText(PHP_WINDOWS_RELEASES_JSON);
+        if (!listed.ok) return { kind: 'not-installed', reason: `windows.php.net's releases.json (${PHP_WINDOWS_RELEASES_JSON}) could not be read (${listed.error}), so there is no checksum to trust a download against. Nothing was installed` };
+        const build = phpWindowsBuild(listed.body, version);
+        if ('missing' in build) return { kind: 'not-installed', reason: `${build.missing}, so Genie will not install PHP ${version} unverified. Nothing was downloaded` };
+        const file = build.file;
+
         say(`PHP ${version}: downloading ${file} from windows.php.net`);
         let zip: Uint8Array | null = null;
-        let sumsUrl = '';
         const tried: string[] = [];
-        for (const src of phpDownloadSources(recipe)) {
-            const r = await ports.fetchBytes(src.zipUrl);
-            if (r.ok) { zip = r.body; sumsUrl = src.sumsUrl; break; }
-            tried.push(`${src.zipUrl} (${r.error})`);
+        for (const url of phpBuildUrls(file)) {
+            const r = await ports.fetchBytes(url);
+            if (r.ok) { zip = r.body; break; }
+            tried.push(`${url} (${r.error})`);
         }
         if (zip === null) return { kind: 'not-installed', reason: `${file} could not be downloaded: ${tried.join('; ')}. Nothing was installed` };
 
-        // THE CHECKSUM, before a byte is written: the hash windows.php.net publishes beside the zip, from the same place.
-        say(`PHP ${version}: checking ${file} against the sha256 windows.php.net publishes`);
-        const sums = await ports.fetchText(sumsUrl);
-        if (!sums.ok) return { kind: 'not-installed', reason: `the published checksums (${sumsUrl}) could not be read (${sums.error}), so ${file} was not trusted. Nothing was installed` };
-        const expected = parseSha256Sums(sums.body).get(file);
-        if (!expected) return { kind: 'not-installed', reason: `${sumsUrl} lists no sha256 for ${file}, so it was not trusted. Nothing was installed` };
+        // THE CHECKSUM, before a byte is written: the sha256 releases.json publishes for that build.
+        say(`PHP ${version}: verifying ${file} against the sha256 windows.php.net publishes`);
+        const expected = build.sha256;
         const actual = createHash('sha256').update(zip).digest('hex');
         if (actual !== expected) return { kind: 'not-installed', reason: `${file} does not match the sha256 windows.php.net publishes (expected ${expected}, got ${actual}); it was discarded unopened. Nothing was installed` };
 

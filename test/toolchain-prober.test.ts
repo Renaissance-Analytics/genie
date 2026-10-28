@@ -24,7 +24,8 @@ describe('probing', () => {
         const index = async (tool: string) => (tool === 'node' ? { version: '22.24.0', source: 'nodejs.org index' } : null);
         const statuses = await probeTools(run, index);
         const by = Object.fromEntries(statuses.map((s) => [s.tool, s]));
-        expect(by.node).toEqual({ tool: 'node', installed: '22.23.2', latest: '22.24.0', tone: 'update-available', source: 'nodejs.org index' });
+        // genie#1306: a language Genie installs also names what it can move to — no 22.x build here, so another line.
+        expect(by.node).toEqual({ tool: 'node', installed: '22.23.2', latest: '22.24.0', tone: 'update-available', source: 'nodejs.org index', upgrade: '24.22.1' });
         expect(by.php).toMatchObject({ installed: '8.4.27', latest: null, tone: 'unknown' });
         expect(by.git).toMatchObject({ installed: '2.51.0', tone: 'unknown' });
         expect(by.python).toMatchObject({ installed: null, tone: 'not-installed' });

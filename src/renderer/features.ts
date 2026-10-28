@@ -227,6 +227,8 @@ export interface ToolchainRefusal {
     /** A Genie-managed PHP version's action (install/remove PHP x.y.z); absent for a tool row. */
     readonly version?: string;
     readonly reason: string;
+    /** A failed update (genie#1306): the version its Retry tries again (`''`: the tool's own update, no version). */
+    readonly retry?: string;
 }
 
 export interface ToolchainSection {
@@ -236,7 +238,12 @@ export interface ToolchainSection {
     readonly busy?: string;
     readonly findings?: readonly RepairFinding[];
     readonly repairedAt?: number;
-    readonly warning?: { readonly tool: string; readonly reason: string; readonly affected: readonly string[] };
+    /** An update that needs the go-ahead: what it walks into. `version`: the version it was for (genie#1306). */
+    readonly warning?: { readonly tool: string; readonly version?: string; readonly reason: string; readonly affected: readonly string[] };
+    /** An update running now (genie#1306): its row shows the step, and its buttons are off. */
+    readonly updating?: { readonly tool: string; readonly version?: string; readonly step: string };
+    /** The last update that took: its row says so, with the version now answering. */
+    readonly updated?: { readonly tool: string; readonly version: string };
     readonly result?: string;
     /** Each refused or failed action, one per row, until that row's next action. Absent when there is none. */
     readonly refusals?: readonly ToolchainRefusal[];
@@ -388,8 +395,12 @@ export type FeatureAction =
     | { kind: 'services.logs'; serviceId: string; tail?: number }
     | { kind: 'services.hideLogs' }
     | { kind: 'toolchain.check'; force?: boolean }
-    /** `confirmed`: the person read the warning (Docker's restart) and chose to go ahead. A REFUSAL is never confirmable. */
-    | { kind: 'toolchain.update'; tool: string; confirmed?: boolean }
+    /**
+     * `confirmed`: the person read the warning (Docker's restart, what runs on the old PHP) and chose to go ahead. A
+     * REFUSAL is never confirmable. `version` (genie#1306): the version the button names — a language's patch or another
+     * line; absent = the tool's own update. `restart`: restart what ran on the old version afterwards (the default), or not.
+     */
+    | { kind: 'toolchain.update'; tool: string; version?: string; confirmed?: boolean; restart?: boolean }
     /** Install a missing tool (or the Windows VC++ runtime). `consent` is the person's click on the command shown. */
     | { kind: 'toolchain.install'; tool: string; consent: boolean }
     | { kind: 'toolchain.repair' }

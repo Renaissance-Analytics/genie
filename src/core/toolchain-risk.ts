@@ -6,8 +6,12 @@
  * - **An agent CLI** (claude-code, codex): `npm install -g` overwrites the very executable a running session is
  *   executing — on Windows the write fails outright (the file is locked), elsewhere the session is left half-replaced.
  *   REFUSED, but only for the sessions running THAT CLI: a running Claude session says nothing about replacing Codex.
- * - **node**: every agent CLI and every node dev server Genie runs is executing ON it. REFUSED while any agent session
- *   or any Genie-run node process is up — the one place the blanket rule is the true one.
+ * - **node**: Genie 1 REFUSED it while anything ran on it, because its update replaced the runtime in place. Genie 2
+ *   installs each Node into its own directory and moves `current/node` (genie#1306), so nothing running loses its
+ *   binary: it is WARNED, naming the agents and processes that keep the old Node until they next start. A refusal here
+ *   made Node unupdatable on any machine with an agent running — every machine the owner uses.
+ * - **php, python, go** (genie#1306): the same — a new version beside the old, so WARNED, naming what keeps running the
+ *   old one.
  * - **docker**: updating Docker Desktop restarts its engine, which stops every running service engine. WARNED, naming
  *   them; the person may go ahead.
  *
@@ -20,7 +24,7 @@ export interface ToolchainActivity {
     /** Agent sessions whose process is running, with the provider each runs (`claude`, `codex`). */
     readonly sessions: readonly { readonly label: string; readonly provider: string }[];
     /** Processes Genie runs (sites' dev servers and workers, kept background processes) that are up, with their command. */
-    readonly processes: readonly { readonly label: string; readonly command: string }[];
+    readonly processes: readonly { readonly id?: string; readonly label: string; readonly command: string }[];
     /** Service engines whose container is running, by name. */
     readonly engines: readonly string[];
 }
@@ -56,6 +60,16 @@ export function runsOnPhp(command: string): boolean {
     return word === 'php' || word === 'php-cgi';
 }
 
+/** Executes Python: the interpreter, pip, or a server it runs (uvicorn, gunicorn), by whatever path. */
+export function runsOnPython(command: string): boolean {
+    return ['python', 'python3', 'py', 'pip', 'pip3', 'uvicorn', 'gunicorn'].includes(firstWord(command));
+}
+
+/** Executes Go: `go run …`, or `air` (Go's live-reload runner). */
+export function runsOnGo(command: string): boolean {
+    return ['go', 'air'].includes(firstWord(command));
+}
+
 const list = (names: readonly string[]): string => (names.length === 1 ? names[0]! : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 const are = (n: number) => (n === 1 ? 'is' : 'are');
 
@@ -79,10 +93,20 @@ export function updateRisk(tool: string, activity: ToolchainActivity, target: { 
         const busy = [...activity.sessions.map((s) => s.label), ...activity.processes.filter((p) => runsOnNode(p.command)).map((p) => p.label)];
         if (busy.length > 0) {
             return {
-                risk: 'blocked',
+                risk: 'warn',
                 affected: busy,
-                reason: `${list(busy)} ${are(busy.length)} running on Node right now. Updating Node pulls the runtime out from under ${busy.length === 1 ? 'it' : 'them'}. Stop ${busy.length === 1 ? 'it' : 'them'} first, then update.`,
+                reason: `${list(busy)} ${are(busy.length)} running on Node right now, and ${busy.length === 1 ? 'keeps' : 'keep'} the old Node until ${busy.length === 1 ? 'it is' : 'they are'} restarted.`,
             };
+        }
+        return { risk: 'safe' };
+    }
+
+    if (tool === 'python' || tool === 'go') {
+        const runsOn = tool === 'python' ? runsOnPython : runsOnGo;
+        const label = tool === 'python' ? 'Python' : 'Go';
+        const busy = activity.processes.filter((p) => runsOn(p.command)).map((p) => p.label);
+        if (busy.length > 0) {
+            return { risk: 'warn', affected: busy, reason: `${list(busy)} ${are(busy.length)} running on ${label} right now, and ${busy.length === 1 ? 'keeps' : 'keep'} the old ${label} until ${busy.length === 1 ? 'it is' : 'they are'} restarted.` };
         }
         return { risk: 'safe' };
     }
