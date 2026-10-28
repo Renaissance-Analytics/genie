@@ -11,6 +11,7 @@ import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
 import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
+import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
 import { namePastedImages, PASTE_PILL_CHARS, type ComposerMeter } from '../../core/composer.js';
 import { keepChat, type ChatDraft, type ChatDraftFile } from '../../core/chat-drafts.js';
 import type { ChatDraftKeeper } from '../../core/chat-draft-keeper.js';
@@ -216,7 +217,7 @@ export interface ChatFlyoutProps {
      * `agentId`: the chat the message was typed in (genie#1261) — each chat has its own composer, and reading the
      * attachments is async, so the chat on screen by the time it is sent may be another.
      */
-    onSend: (text: string, attachments?: readonly Attachment[], agentId?: string) => void;
+    onSend: (text: string, attachments?: readonly Attachment[], agentId?: string) => void | Promise<ChatSendOutcome>;
     /** Absent = no close button (the doctor window: the chat is the page, not a panel). */
     onClose?: (() => void) | undefined;
     /**
@@ -286,6 +287,32 @@ async function readAttachments(picked: readonly { name: string; file?: File; typ
         const bytes = a.file ? new Uint8Array(await a.file.arrayBuffer()) : ((await readRef?.(a.ref)) ?? new Uint8Array(0));
         return { name: a.name, type: a.file?.type ?? a.type ?? '', bytes };
     }));
+}
+
+/** A chat's send error set (`error`) or cleared (`null`); the same object when nothing changes. */
+function withSendError(errors: Readonly<Record<string, string>>, chat: string, error: string | null): Readonly<Record<string, string>> {
+    if (error === null) {
+        if (!(chat in errors)) return errors;
+        const next = { ...errors };
+        delete next[chat];
+        return next;
+    }
+    return errors[chat] === error ? errors : { ...errors, [chat]: error };
+}
+
+/**
+ * WHY A SEND WAS NOT SENT, SEEN (react-fancy 5.70.0): the composer kept the draft, and this line under it says why —
+ * never a send that silently did nothing. react-fancy's own `role="alert"` is visually hidden and is the one announced,
+ * so this line is not a second alert. Gone with the chat's next send.
+ */
+export function ComposerSendError({ chat, error }: { chat: string; error: string | null }) {
+    if (!error) return null;
+    return (
+        <div data-chat-send-error={chat} className="flex items-center gap-1.5 px-1 pt-1.5 text-[12px] text-[var(--danger)]">
+            <Icon name="circle-alert" size="xs" />
+            <span>Not sent: {error}</span>
+        </div>
+    );
 }
 
 /** The stored files a sent message carried (genie#1261): released once the message holds their bytes. */
@@ -416,6 +443,8 @@ export function ChatFlyout({
      * through the keeper because `setDraft` does not fire `onDraftChange`.
      */
     const composerRefs = useRef(new Map<string, DraftHandle>());
+    // Why each chat's last send was not sent (react-fancy's `onSubmitError`), until its next send.
+    const [sendErrors, setSendErrors] = useState<Readonly<Record<string, string>>>({});
     const applied = useRef<number | null>(null);
     useEffect(() => {
         if (!insert || drafts === 'loading' || applied.current === insert.seq) return;
@@ -781,17 +810,26 @@ export function ChatFlyout({
                             persistAttachment: (file: File) => keeper.persistFile(file),
                             restoreAttachment: (entry: ChatDraftFile) => keeper.restoreFile(entry),
                         } : {})}
-                        // Sent with its bytes (a restored attachment's read from the store), then the stored files it carried go.
+                        /*
+                         * THE SEND IS ACKNOWLEDGED (react-fancy 5.70.0, core/chat-send.ts): the send is returned, so the draft
+                         * stays until the host has answered — a second send is refused meanwhile, and text typed meanwhile is
+                         * kept. A failure resolves `{ ok: false }`: the draft stays, its stored files are not released, and the
+                         * reason is shown under the composer. Sent with its bytes (a restored attachment's read from the store).
+                         */
                         onSubmit={(text, picked) => {
-                            void readAttachments(namePastedImages(text, picked), keeper ? (ref) => keeper.readRef(ref) : undefined).then((files) => {
-                                keeper?.sent(chat, sentRefs(picked));
-                                onSend(text, files, chat);
+                            setSendErrors((e) => withSendError(e, chat, null));
+                            return submitFromComposer({
+                                read: () => readAttachments(namePastedImages(text, picked), keeper ? (ref) => keeper.readRef(ref) : undefined),
+                                send: (files) => onSend(text, files, chat),
+                                release: () => keeper?.sent(chat, sentRefs(picked)),
                             });
                         }}
+                        onSubmitError={(error: unknown) => setSendErrors((e) => withSendError(e, chat, typeof error === 'string' && error !== '' ? error : errorWords(error)))}
                     />
                     )}
                 </ChatComposers>
                 ) : null}
+                <ComposerSendError chat={activeChat ?? ''} error={activeChat !== null ? sendErrors[activeChat] ?? null : null} />
             </div>
         </aside>
     );

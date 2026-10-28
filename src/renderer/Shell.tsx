@@ -52,6 +52,7 @@ import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
 import type { Attachment } from '../core/prompt-content.js';
+import type { ChatSendOutcome } from '../core/chat-send.js';
 
 /**
  * The updater's state, pushed by the main process. Starts as `null` — "no updater has said
@@ -139,7 +140,8 @@ export interface ShellProps {
     /** NOT DRAWN since 2026-10-19 (the chat holds the side for good); the pin model is removed in its own cleanup row. */
     pinned: PinnedPanel | null;
     onNavigate: (route: string) => void;
-    onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void;
+    /** What became of the message (core/chat-send.ts): the chat's composer keeps a failed one (react-fancy 5.70). */
+    onSend: (agentId: string, text: string, attachments?: readonly Attachment[]) => void | Promise<ChatSendOutcome>;
     /**
      * The answer in flight — which agent's, for which approval (core/approval-answering.ts). Each card derives its OWN
      * `answering` from this, so only the approval being answered refuses a second press; a window-wide string disabled
@@ -862,7 +864,7 @@ export function Shell({
                         onAnswerApproval={(optionId, note) => { if (chatThread) onAnswerApproval(chatThread.agentId, optionId, note, chatApproval); }}
                         scope={scope}
                         // The chat the message was TYPED in (genie#1261): each chat keeps its own composer.
-                        onSend={(text, attachments, agentId) => { if (scope.kind !== 'blocked') onSend(agentId || chatThread?.agentId || '', text, attachments); }}
+                        onSend={(text, attachments, agentId) => (scope.kind !== 'blocked' ? onSend(agentId || chatThread?.agentId || '', text, attachments) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: scope.reason }))}
                         // A file the chat names opens in ITS agent's workspace, the tree revealed (core/chat-file-links.ts).
                         {...(chatWorkspaceId ? { onOpenFile: (path: string, line: number | null) => onNavigate(openFileRoute(chatWorkspaceId, path, line)) } : {})}
                         // An agent or workspace pill opens it — on the person's click only (genie#1263, genie#1265).

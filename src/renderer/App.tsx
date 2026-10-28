@@ -30,6 +30,7 @@ import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popo
 import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
 import { chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
+import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
@@ -1200,21 +1201,20 @@ function DesktopApp({ bridge }: AppProps) {
             (error: unknown) => problem(error instanceof Error ? error.message : String(error)));
     };
     const [paletteOpen, setPaletteOpen] = useState(false);
-    const send = (agentId: string, text: string, attachments: readonly Attachment[] = []): void => {
-        // A Take Over window has no session to prompt: its mail goes to its inbox, which its TUI reads over MCP.
+    const keepDraft = (agentId: string, text: string, attachments: readonly Attachment[], reason?: string): void => setDrafts((d) => [...d, { id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, agentId, text, at: Date.now(), ...(attachments.length > 0 ? { attachments } : {}), ...(reason ? { reason } : {}) }]);
+    /**
+     * One message to an agent, and what became of it (core/chat-send.ts). The composer hands the outcome to react-fancy
+     * (5.70's acknowledged send): a failure stays in the composer, with its reason; an agent not running keeps it here as
+     * not delivered, with the chat's Restart (genie#1238). A Take Over window has no session to prompt: its mail goes to
+     * its inbox, which its TUI reads over MCP.
+     */
+    const send = (agentId: string, text: string, attachments: readonly Attachment[] = []): Promise<ChatSendOutcome> => {
         const row = snapshot.agents.find((r) => r.id === agentId);
-        const route = row ? chatSendFor(row) : { kind: 'prompt' as const };
-        const keep = (reason?: string): void => setDrafts((d) => [...d, { id: `draft_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, agentId, text, at: Date.now(), ...(attachments.length > 0 ? { attachments } : {}), ...(reason ? { reason } : {}) }]);
-        if (route.kind === 'inbox') {
-            if (attachments.length > 0) { keep('Files cannot be sent to a Take Over window from here yet'); return; }
-            void (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to: route.to, text }).then(setFeatures).catch((error: unknown) => {
-                console.error('[genie] mail not sent:', (error as Error).message);
-            });
-            return;
-        }
-        void resolvedBridge?.prompt(agentId, text, attachments).then((r) => {
-            if (!r.ok) keep(r.reason);
-        }).catch((error: unknown) => keep(error instanceof Error ? error.message : String(error)));
+        return deliverChat(row ? chatSendFor(row) : { kind: 'prompt' }, text, attachments, {
+            prompt: resolvedBridge ? (t, files) => resolvedBridge.prompt(agentId, t, files) : null,
+            mail: (to, t) => (resolvedBridge?.features ?? NO_FEATURES).act({ kind: 'inbox.send', to, text: t }).then(setFeatures),
+            keepUndelivered: () => keepDraft(agentId, text, attachments),
+        });
     };
     /**
      * An undelivered draft's button: `Send now` while its agent runs, else THE CHAT'S ONE RESTART (genie#1238). A Restart
@@ -1274,7 +1274,8 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => { setPromptPlatform(detectPlatform(browserPlatformHints()) === 'apple' ? 'darwin' : 'generic'); }, []);
     const sendToAgentInFront = (text: string): void => {
         const to = promptTarget({ chat: chatDetail?.agent.id ?? chatSubject, agentOnScreen: parsed.surface === 'agent' ? parsed.agentId : null });
-        send(to, text);
+        // No composer holds a saved prompt: one that fails is kept in the chat as not delivered, with its reason.
+        void send(to, text).then((out) => { if (out.kind === 'failed') keepDraft(to, text, [], out.reason); });
         if (parsed.chat !== to) navigate(formatRoute({ ...parsed, chat: to }));
     };
     const sendSavedPrompt = (prompt: SavedPrompt): void => sendToAgentInFront(prompt.text);
@@ -1444,7 +1445,7 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             // The AgentInbox flyout reads its actions' answers (a thread, an attachment) and a send's refusal.
             featureAsk={(action) => (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => { setFeatures(data); return data; })}
-            onSend={(id, text, attachments) => { if (id) send(id, text, attachments ?? []); }}
+            onSend={(id, text, attachments) => (id ? send(id, text, attachments ?? []) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: 'No agent to send to.' }))}
             onRestartAndSend={restartAndSend}
             onDiscardDraft={discardDraft}
             answeringApproval={answering}
