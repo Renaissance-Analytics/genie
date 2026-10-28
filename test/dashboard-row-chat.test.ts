@@ -9,7 +9,7 @@ import { parseRoute } from '../src/core/route.js';
  * always docked beside the page; on the Dashboard its subject was always genie, and a row click LEFT for the agent's
  * page. Now the agent picked on the Dashboard is the chat's subject while the Dashboard is on screen — kept by the
  * window, not the address (a `chat=` in a route is still not read, Tynn #831). The row tray's "Open agent" still opens
- * its page.
+ * its page. Since 2026-10-28 a WAITING row does the same (it used to go to its Deck item).
  */
 
 const agents = [
@@ -38,12 +38,13 @@ describe('the chat’s subject on the Dashboard', () => {
 describe('the wiring (comment LINES dropped — a // inside a string such as genie://deck stays)', () => {
     const source = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8').split(/\r?\n/).filter((l) => !l.trim().startsWith('//')).join('\n');
 
-    it('the Dashboard’s row click picks the chat — it no longer navigates to the agent; a waiting row still opens its Deck item', () => {
+    // The behaviour itself (a waiting row included; the owner, 2026-10-28) is driven through the real Shell in
+    // test/dashboard-agent-click-stays.test.tsx. This pins the wiring's shape: the row click IS the chat pick.
+    it('the Dashboard’s row click picks the chat — it navigates nowhere, not to the agent and not to the Deck', () => {
         const shell = source('../src/renderer/Shell.tsx');
         const block = shell.slice(shell.indexOf('<Dashboard'), shell.indexOf('/>', shell.indexOf('onChat={', shell.indexOf('<Dashboard'))));
-        const handler = block.slice(block.indexOf('onOpenAgent={(id) => {'), block.indexOf('onOpenAgent={(id) => {') + 400);
-        expect(handler).toMatch(/deckItemFor\(id,[\s\S]*genie:\/\/deck\?item=[\s\S]*else onChatAgent\(id\);/);
-        expect(handler).not.toMatch(/else onOpenAgent\(id\);/);
+        expect(block).toMatch(/onOpenAgent=\{onChatAgent\}/);
+        expect(block).not.toMatch(/deckItemFor|genie:\/\/deck/);
     });
 
     it('App passes the picked agent to the chat’s subject, and forgets it once the Dashboard is left', () => {

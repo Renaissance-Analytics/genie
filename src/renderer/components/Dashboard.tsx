@@ -33,8 +33,9 @@ import {
  *
  * *"What is being produced, and by whom?"* A board you READ. It carries **no resolving
  * control anywhere**: no approve, no deny, no answer, no composer, not even in a row tray. A
- * waiting row links to its Deck item and is answered there — the Deck resolves, the Dashboard
- * shows. `A`/`D` are deliberately unbound on this surface.
+ * row click (a waiting one too) opens that agent's chat beside the board, which stays (the
+ * owner, 2026-10-28); a question is answered on the Deck, its toast or that chat. `A`/`D` are
+ * deliberately unbound on this surface.
  *
  * ## This file only renders
  *

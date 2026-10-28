@@ -271,19 +271,6 @@ export function deckSections(items: readonly DeckItem[]): readonly DeckSection[]
     }));
 }
 
-/**
- * THE DECK ITEM A WAITING ROW IS A DOOR TO (§4.1: "a waiting row links to its Deck item and is answered there").
- * The blocking question this agent is waiting on — the oldest when there are two, because it has waited longest —
- * and `null` when there is none: a finished handoff is not a question, and another agent's question is not this
- * row's. The Dashboard never resolves; it only knows where the decision is.
- */
-export function deckItemFor(agentId: string, items: readonly DeckItem[]): string | null {
-    const waiting = items
-        .filter((i) => i.agentId === agentId && i.source === 'agent-question' && i.blocking)
-        .sort((a, b) => a.at - b.at);
-    return waiting[0]?.id ?? null;
-}
-
 export type SignalKind = 'flows' | 'mail' | 'github' | 'os-agent' | 'update';
 
 /** The one kind of door that is an action rather than a place: the update's next step. */
