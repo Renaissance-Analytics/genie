@@ -1020,6 +1020,109 @@ if (!approvalEnabled) {
     }
 }
 
+/*
+ * 40a–40d. A FLOW OPENS ON THE CANVAS, IN ITS OWN WINDOW (genie#1302).
+ *
+ * Main opens the flow editor window on `index.html#genie://flow/<id>`. On beta.49 that window rendered the MAIN shell — a
+ * second copy of the app — because the renderer did not read `genie://flow/…` as a route and fell back to the Dashboard.
+ * So the check is not "a window opened" (it always did) but WHAT IT RENDERS: the editor's own handle (`data-flow-editor`)
+ * and none of the main shell (its title bar, its rail, the Dashboard). Both doors: Add a flow (a new canvas) and a flow
+ * row's Open. Each window is closed again after, so nothing below sees an extra window.
+ */
+{
+    const flowTargets = async () => {
+        const list = await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+        return list.filter((t) => t.type === 'page' && t.webSocketDebuggerUrl && /#genie:\/\/(?:[^/?#]+\/)?flow\//.test(String(t.url)));
+    };
+    const waitForTarget = async (match) => {
+        for (let i = 0; i < 60; i += 1) {
+            const found = (await flowTargets()).find(match);
+            if (found) return found;
+            await new Promise((r) => setTimeout(r, 250));
+        }
+        return null;
+    };
+    /**
+     * Every step against the flow window is BOUNDED: a window that stops answering (a render loop, a socket that never
+     * opens) is a failed check with the step named, never a smoke that hangs until CI's `timeout` kills it unexplained.
+     */
+    const within = (ms, promise, step) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(`no answer in ${ms} ms: ${step}`)), ms))]);
+    /** What the window renders: the editor, or the main shell. The window is closed after, through the debugger. */
+    const rendered = async (t) => {
+        let w = null;
+        try {
+            w = await within(10_000, Cdp.connect(t.webSocketDebuggerUrl), 'connect to the flow window');
+            const probe = `JSON.stringify({ editor: document.querySelector('[data-flow-editor]')?.getAttribute('data-flow-editor') ?? null, titleBar: Boolean(document.querySelector('[data-title-bar]')), dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), hash: window.location.hash })`;
+            let what = null;
+            for (let i = 0; i < 60; i += 1) {
+                what = JSON.parse(await within(10_000, w.evaluate(probe), 'read what the flow window renders'));
+                if (what.editor !== null || what.titleBar) break;
+                await new Promise((r) => setTimeout(r, 250));
+            }
+            // A beat for a late fallback: the snapshot arriving is what re-read the hash and dropped to the Dashboard.
+            await new Promise((r) => setTimeout(r, 1500));
+            return JSON.parse(await within(10_000, w.evaluate(probe), 'read the flow window again after the snapshot'));
+        } catch (error) {
+            return { error: String(error?.message ?? error) };
+        } finally {
+            try { w?.close(); } catch { /* the socket may already be gone */ }
+            await fetch(`http://127.0.0.1:${PORT}/json/close/${t.id}`).catch(() => {});
+        }
+    };
+    const words = (r) => JSON.stringify(r);
+
+    const before = (await flowTargets()).length;
+    check(before === 0, '40a. CONTROL: no flow editor window exists before the click', `${before} target(s)`);
+
+    // ADD A FLOW, from the Flows page: a new canvas in the seeded workspace.
+    await cdp.evaluate(`window.location.hash = '#genie://flows'; true`);
+    const onFlows = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="flows"] [data-flow-new-empty], [data-surface="flows"] form button[type="submit"]:not([disabled])'))`, 'the Flows page with Add a flow');
+    if (onFlows) {
+        await cdp.evaluate(`(document.querySelector('[data-surface="flows"] [data-flow-new-empty]') ?? document.querySelector('[data-surface="flows"] form button[type="submit"]')).click(); true`);
+        const t = await waitForTarget((x) => /#genie:\/\/(?:[^/?#]+\/)?flow\/new/.test(String(x.url)));
+        const r = t ? await rendered(t) : null;
+        check(r !== null && r.editor === 'new' && !r.titleBar && !r.dashboard, '40b. "Add a flow" opens the CANVAS EDITOR in its own window, not a second main window', r ? words(r) : 'no flow window opened');
+    } else {
+        check(false, '40b. "Add a flow" opens the CANVAS EDITOR in its own window, not a second main window', 'the Flows page never offered Add a flow');
+    }
+
+    // OPEN, from a flow's row: a flow saved through the canvas's own door (flows.saveGraph), then its row's Open.
+    const saved = JSON.parse(await cdp.evaluate(`(async () => {
+        const ws = (await window.genie.snapshot?.())?.workspaces?.[0]?.id ?? 'tynn';
+        const document_ = { $schema: 'https://particle.academy/schemas/workflow/v1.json', version: 1, graph: {
+            nodes: [
+                { id: 'trigger', kind: '@particle-academy/manual_trigger', position: { x: 0, y: 0 }, config: {} },
+                { id: 'say', kind: '@particle-academy/log', position: { x: 240, y: 0 }, config: { level: 'info', message: 'smoke' } },
+            ],
+            edges: [{ id: 'trigger-say', source: 'trigger', target: 'say' }],
+        } };
+        try {
+            const data = await window.genie.features.act({ kind: 'flows.saveGraph', workspaceId: ws, name: 'smoke flow', document: document_ });
+            return JSON.stringify(data?.flows?.saved ?? { ok: false, problems: [{ message: 'no answer' }] });
+        } catch (e) { return JSON.stringify({ ok: false, problems: [{ message: String(e) }] }); }
+    })()`));
+    if (saved.ok) {
+        const row = await waitFor(cdp, `Boolean(document.querySelector('[data-flow="${saved.flowId}"]'))`, 'the saved flow’s row');
+        if (row) {
+            // The row's Open button (its name is the other door; both call the same `open`).
+            await cdp.evaluate(`[...document.querySelectorAll('[data-flow="${saved.flowId}"] button')].find((b) => b.textContent.trim() === 'Open').click(); true`);
+            const t = await waitForTarget((x) => String(x.url).includes(`flow/${saved.flowId}`));
+            const r = t ? await rendered(t) : null;
+            check(r !== null && r.editor === saved.flowId && !r.titleBar && !r.dashboard, '40c. a flow row\'s "Open" opens THAT flow on the canvas editor, not a second main window', r ? words(r) : 'no flow window opened');
+        } else {
+            check(false, '40c. a flow row\'s "Open" opens THAT flow on the canvas editor, not a second main window', 'the saved flow never showed a row');
+        }
+    } else {
+        check(false, '40c. a flow row\'s "Open" opens THAT flow on the canvas editor, not a second main window', `could not save a flow to open: ${JSON.stringify(saved.problems ?? saved)}`);
+    }
+
+    let left = 0;
+    for (let i = 0; i < 20; i += 1) { left = (await flowTargets()).length; if (left === 0) break; await new Promise((r) => setTimeout(r, 250)); }
+    check(left === 0, '40d. the flow windows close again (nothing below sees an extra window)', `${left} left`);
+    await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
+    await waitFor(cdp, `Boolean(document.querySelector('[data-surface="dashboard"]'))`, 'the Dashboard again');
+}
+
 // 10b. THE WINDOW A PERSON GETS. The owner's first real run: no window buttons, no drag region, a
 // `genie` row that landed on "No agent is registered". A script never drags, so what CAN be asked
 // of the real window is asked: the overlay is visible (so the native buttons are drawn), the bar

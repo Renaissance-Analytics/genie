@@ -114,6 +114,7 @@ export function windowLabelOf(url: string): string {
     if (page.endsWith('/doctor.html')) return 'doctor';
     if (hash.startsWith('genie://takeover/')) return hash.includes('?login=') ? 'login' : 'takeover';
     if (hash.startsWith('genie://files/')) return 'files';
+    if (hash.startsWith('genie://flow/')) return 'flow';
     if (/(^|&)remote=/.test(query)) return 'remote';
     if (page.endsWith('/index.html')) return 'main';
     return 'unknown';
