@@ -119,7 +119,7 @@ describe('the code prompt: the code, Confirm, its step, then success or the reas
     });
 
     it('Confirm is enabled only with six digits', () => {
-        expect(form({ kind: 'idle' })).toMatch(/<button[^>]*data-action="confirm-role"(?![^>]*disabled)[^>]*>/);
+        expect(form({ kind: 'idle' })).toMatch(/<button[^>]*data-action="confirm-role"(?![^>]*disabled="")[^>]*>/);
         expect(form({ kind: 'idle' }, '123')).toMatch(/<button[^>]*data-action="confirm-role"[^>]*disabled=""/);
     });
 
