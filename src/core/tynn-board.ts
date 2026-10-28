@@ -15,7 +15,8 @@
 
 export type BoardLevel = 'versions' | 'stories' | 'tasks';
 export type BoardKind = 'version' | 'story' | 'task';
-export interface BoardScope { readonly version?: string; readonly story?: string }
+/** Where the tab is: a version's stories, a story's tasks, and (as tynn.ai's `?focus=`) the card whose detail is open. */
+export interface BoardScope { readonly version?: string; readonly story?: string; readonly focus?: string }
 export interface BoardIds { readonly versionId?: string; readonly storyId?: string; readonly taskId?: string }
 
 // ── Declared against the contract ───────────────────────────────────────────────────────────────────────────────────
@@ -83,7 +84,8 @@ export const BOARD_QUICK_ACTIONS: Readonly<Record<BoardKind, Readonly<Record<str
 };
 
 /** The actions the Tynn tab offers, and the call behind each — under `/api/v1/projects/{projectId}`. */
-export const BOARD_API: Readonly<Record<string, { readonly method: 'POST' | 'DELETE'; readonly path: string }>> = {
+export type BoardMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+export const BOARD_API: Readonly<Record<string, { readonly method: BoardMethod; readonly path: string }>> = {
     'version.accept': { method: 'POST', path: '/versions/{versionId}/accept' },
     'version.start': { method: 'POST', path: '/versions/{versionId}/start' },
     'version.review': { method: 'POST', path: '/versions/{versionId}/review' },
@@ -97,6 +99,9 @@ export const BOARD_API: Readonly<Record<string, { readonly method: 'POST' | 'DEL
     'story.block': { method: 'POST', path: '/stories/{storyId}/block' },
     'story.move': { method: 'POST', path: '/stories/{storyId}/move' },
     'story.delete': { method: 'DELETE', path: '/stories/{storyId}' },
+    'story.create': { method: 'POST', path: '/stories' },
+    'story.edit': { method: 'PATCH', path: '/stories/{storyId}' },
+    'story.detail': { method: 'GET', path: '/stories/{storyId}' },
     'task.start': { method: 'POST', path: '/tasks/{taskId}/start' },
     'task.ready': { method: 'POST', path: '/tasks/{taskId}/ready' },
     'task.done': { method: 'POST', path: '/tasks/{taskId}/done' },
@@ -104,28 +109,28 @@ export const BOARD_API: Readonly<Record<string, { readonly method: 'POST' | 'DEL
     'task.block': { method: 'POST', path: '/tasks/{taskId}/block' },
     'task.move': { method: 'POST', path: '/tasks/{taskId}/move' },
     'task.delete': { method: 'DELETE', path: '/tasks/{taskId}' },
+    'task.create': { method: 'POST', path: '/tasks' },
+    'task.edit': { method: 'PATCH', path: '/tasks/{taskId}' },
+    'task.detail': { method: 'GET', path: '/tasks/{taskId}' },
 };
 
 /** What tynn.ai's board offers that this tab does not yet — each needs Tynn's JSON door first (.ai/plans/genie-2-tynn-tab-parity.md). */
-const NEEDS_TYNN_API = 'Tynn has no pairing-token API for it yet (genie-2-tynn-tab-parity.md, row B2)';
+const NEEDS_VERSION_API = 'Tynn has no pairing-token API for creating or editing versions yet (genie-2-tynn-tab-parity.md, row B2: versions)';
+const NEEDS_CLAIM_API = 'Tynn has no pairing-token API for claiming yet (genie-2-tynn-tab-parity.md, row B3)';
 export const BOARD_GAPS: Readonly<Record<string, string>> = {
-    'version.create': NEEDS_TYNN_API,
-    'version.edit': NEEDS_TYNN_API,
-    'story.create': NEEDS_TYNN_API,
-    'story.edit': NEEDS_TYNN_API,
-    'story.claim': NEEDS_TYNN_API,
-    'story.unclaim': NEEDS_TYNN_API,
-    'story.assign': NEEDS_TYNN_API,
-    'task.create': NEEDS_TYNN_API,
-    'task.edit': NEEDS_TYNN_API,
-    'task.claim': NEEDS_TYNN_API,
-    'task.unclaim': NEEDS_TYNN_API,
-    'task.assign': NEEDS_TYNN_API,
-    'board.claimants': NEEDS_TYNN_API,
+    'version.create': NEEDS_VERSION_API,
+    'version.edit': NEEDS_VERSION_API,
+    'story.claim': NEEDS_CLAIM_API,
+    'story.unclaim': NEEDS_CLAIM_API,
+    'story.assign': NEEDS_CLAIM_API,
+    'task.claim': NEEDS_CLAIM_API,
+    'task.unclaim': NEEDS_CLAIM_API,
+    'task.assign': NEEDS_CLAIM_API,
+    'board.claimants': NEEDS_CLAIM_API,
 };
 
 /** Every state the tab draws (TynnBoardPanel), as the contract names them. */
-export const BOARD_STATES = ['loading', 'empty-column', 'drill-down', 'illegal-drop', 'override-armed', 'transition-refused', 'not-linked', 'signed-out'] as const;
+export const BOARD_STATES = ['loading', 'empty-column', 'drill-down', 'illegal-drop', 'override-armed', 'transition-refused', 'detail', 'create-in-backlog', 'not-linked', 'signed-out'] as const;
 
 // ── The view ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -182,14 +187,27 @@ export type TynnBoardState =
     | { readonly state: 'not-linked' }
     | { readonly state: 'signed-out'; readonly reason: string }
     | { readonly state: 'error'; readonly reason: string }
-    | { readonly state: 'ready'; readonly view: BoardView; readonly refused?: string | null };
+    | {
+        readonly state: 'ready';
+        readonly view: BoardView;
+        readonly refused?: string | null;
+        /** The open card's detail (the scope's focus), or null with why when Tynn would not show it. */
+        readonly detail?: BoardDetail | null;
+        readonly detailRefused?: string | null;
+        /** The create or edit in flight, or how the last one ended. */
+        readonly op?: BoardOp | null;
+    };
 
 /** One action on the board: the contract's id, the item's ids, and — for a drag — the column, the place and Shift. */
-export interface BoardActionInput { readonly action: string; readonly ids: BoardIds; readonly body?: { status: string; order: number; override?: boolean } }
+/**
+ * One action on the board: the contract's id, the item's ids, and its body: for a drag the column, the place and Shift;
+ * for a create the title and description (the parent is in `ids`); for an edit the fields that change.
+ */
+export interface BoardActionInput { readonly action: string; readonly ids: BoardIds; readonly body?: Readonly<Record<string, unknown>> }
 export type BoardRefusal = { ok: false; state: 'not-linked' | 'signed-out' | 'transition-refused' | 'error'; reason: string };
 /** What the tab needs from the host: the board at a scope, and one action — both for the WORKSPACE's own project. */
 export interface TynnBoardHost {
-    read(workspaceId: string, scope: BoardScope): Promise<{ ok: true; view: BoardView } | BoardRefusal>;
+    read(workspaceId: string, scope: BoardScope): Promise<{ ok: true; view: BoardView; detail?: BoardDetail | null; detailRefused?: string | null } | BoardRefusal>;
     act(workspaceId: string, input: BoardActionInput): Promise<{ ok: true } | BoardRefusal>;
 }
 
@@ -279,7 +297,7 @@ export function boardQueryPath(projectId: string, scope: BoardScope): string {
 }
 
 /** The call behind an offered action, its ids encoded; null for an action not offered or an id it needs and lacks. */
-export function boardActionRequest(projectId: string, action: string, ids: BoardIds): { method: 'POST' | 'DELETE'; path: string } | null {
+export function boardActionRequest(projectId: string, action: string, ids: BoardIds): { method: BoardMethod; path: string } | null {
     const api = BOARD_API[action];
     if (!api) return null;
     let missing = false;
@@ -294,4 +312,139 @@ export function boardActionRequest(projectId: string, action: string, ids: Board
 /** The ids an action on a card needs, from the card itself. */
 export function idsOf(c: Pick<BoardCard, 'id' | 'kind'>): BoardIds {
     return c.kind === 'version' ? { versionId: c.id } : c.kind === 'story' ? { storyId: c.id } : { taskId: c.id };
+}
+
+// ── Row B2: create, edit and the detail flyout (workspace-ux 0.2.0) ──────────────────────────────────────────────────
+
+/** The kind a "New …" in the start column makes at a level; null where Tynn has no API for it yet (versions). */
+export function newItemKind(level: BoardLevel): 'story' | 'task' | null {
+    return level === 'stories' ? 'story' : level === 'tasks' ? 'task' : null;
+}
+
+/** A card's detail as the flyout draws it: Tynn's FocusPayloadService answer, trimmed to what is shown and edited. */
+export interface BoardDetail {
+    readonly kind: 'story' | 'task';
+    readonly id: string;
+    readonly number: string | null;
+    readonly title: string;
+    readonly description: string;
+    readonly status: string;
+    /** A story's acceptance criteria. */
+    readonly acceptanceCriteria: readonly string[];
+    /** A story's tasks. */
+    readonly tasks: ReadonlyArray<{ readonly id: string; readonly number: string | null; readonly title: string; readonly status: string }>;
+    readonly features: readonly string[];
+    /** A task's verification steps and code area. */
+    readonly verificationSteps: readonly string[];
+    readonly codeArea: string | null;
+    /** A story's version, a task's story. */
+    readonly parent: { readonly id: string; readonly label: string } | null;
+}
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+const hash = (n: string | null) => (n === null ? null : `#${n}`);
+
+/** Tynn's detail answer (GET /stories/{id}, /tasks/{id}) as the flyout draws it; null when it is not a story or task. */
+export function parseDetail(json: unknown): BoardDetail | null {
+    if (!isRow(json)) return null;
+    const kind = json.kind;
+    if (kind !== 'story' && kind !== 'task') return null;
+    const id = str(json.id);
+    const status = str(json.status);
+    if (id === null || status === null) return null;
+    const parentRow = kind === 'story' ? json.version : json.story;
+    let parent: BoardDetail['parent'] = null;
+    if (isRow(parentRow) && str(parentRow.id) !== null) {
+        const n = str(parentRow.number);
+        const label = kind === 'story' ? (n ?? str(parentRow.title) ?? '') : [hash(n), str(parentRow.title)].filter(Boolean).join(' ');
+        parent = { id: str(parentRow.id)!, label };
+    }
+    return {
+        kind,
+        id,
+        number: hash(str(json.number)),
+        title: str(json.title) ?? '',
+        description: typeof json.description === 'string' ? json.description : '',
+        status,
+        acceptanceCriteria: strings(json.acceptance_criteria),
+        tasks: Array.isArray(json.tasks)
+            ? json.tasks.filter(isRow).flatMap((t) => {
+                const tid = str(t.id);
+                return tid === null ? [] : [{ id: tid, number: hash(str(t.number)), title: str(t.title) ?? '', status: str(t.status) ?? '' }];
+            })
+            : [],
+        features: Array.isArray(json.features) ? json.features.flatMap((f) => (isRow(f) ? [str(f.title)] : [str(f)])).filter((f): f is string => f !== null) : [],
+        verificationSteps: strings(json.verification_steps),
+        codeArea: str(json.code_area),
+        parent,
+    };
+}
+
+/** The detail call for a focus (`story:<id>` or `task:<id>`, as tynn.ai's `?focus=`); null for anything else. */
+export function boardDetailRequest(projectId: string, focus: string | undefined): { method: BoardMethod; path: string } | null {
+    const m = typeof focus === 'string' ? /^(story|task):(.+)$/.exec(focus) : null;
+    const id = m?.[2];
+    if (!m || id === undefined) return null;
+    return m[1] === 'story' ? boardActionRequest(projectId, 'story.detail', { storyId: id }) : boardActionRequest(projectId, 'task.detail', { taskId: id });
+}
+
+const lines = (v: unknown): string[] | null => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string').map((x) => x.trim()).filter((x) => x !== '') : null);
+
+/**
+ * What a create sends: the parent (from the card's scope), a title and a description, both required by Tynn. Never a
+ * status: a new item starts in backlog (tynn.ai#365). Null when something required is missing.
+ */
+export function createBody(kind: 'story' | 'task', ids: BoardIds, raw: unknown): Record<string, string> | null {
+    const b = isRow(raw) ? raw : {};
+    const parent = kind === 'story' ? ids.versionId : ids.storyId;
+    const title = typeof b.title === 'string' ? b.title.trim() : '';
+    const description = typeof b.description === 'string' ? b.description.trim() : '';
+    if (typeof parent !== 'string' || parent === '' || title === '' || description === '') return null;
+    return { [kind === 'story' ? 'version_id' : 'story_id']: parent, title, description };
+}
+
+/**
+ * What an edit sends: only the fields the flyout edits (a story's title, description and acceptance criteria; a task's
+ * title, description, verification steps and code area). Never a status: that moves through the workflow. Null when
+ * there is nothing to change or the title would be empty.
+ */
+export function editBody(kind: 'story' | 'task', raw: unknown): Record<string, unknown> | null {
+    const b = isRow(raw) ? raw : {};
+    const out: Record<string, unknown> = {};
+    if (b.title !== undefined) {
+        if (typeof b.title !== 'string' || b.title.trim() === '') return null;
+        out.title = b.title.trim();
+    }
+    if (typeof b.description === 'string') out.description = b.description;
+    if (kind === 'story') {
+        const ac = lines(b.acceptance_criteria);
+        if (ac !== null) out.acceptance_criteria = ac;
+    } else {
+        const steps = lines(b.verification_steps);
+        if (steps !== null) out.verification_steps = steps;
+        if (typeof b.code_area === 'string') out.code_area = b.code_area.trim();
+        else if (b.code_area === null) out.code_area = null;
+    }
+    return Object.keys(out).length > 0 ? out : null;
+}
+
+/** A create or an edit, in flight or ended: what the tab says while it runs, and after. */
+export interface BoardOp { readonly action: string; readonly phase: 'running' | 'done' | 'failed'; readonly reason?: string }
+
+/** Run one action and say so: `running` first, then `done` or `failed` with the reason (never silent, never a hang). */
+export async function performBoardAction(
+    host: Pick<TynnBoardHost, 'act'>,
+    workspaceId: string,
+    input: BoardActionInput,
+    report: (op: BoardOp) => void,
+): Promise<{ ok: true } | BoardRefusal> {
+    report({ action: input.action, phase: 'running' });
+    let r: { ok: true } | BoardRefusal;
+    try {
+        r = await host.act(workspaceId, input);
+    } catch (error) {
+        r = { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) };
+    }
+    report(r.ok ? { action: input.action, phase: 'done' } : { action: input.action, phase: 'failed', reason: r.reason });
+    return r;
 }

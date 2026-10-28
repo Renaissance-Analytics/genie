@@ -1,4 +1,17 @@
-import { boardActionRequest, boardQueryPath, parseBoard, type BoardIds, type BoardScope, type BoardView } from '../core/tynn-board.js';
+import {
+    boardActionRequest,
+    boardDetailRequest,
+    boardQueryPath,
+    createBody,
+    editBody,
+    parseBoard,
+    parseDetail,
+    type BoardDetail,
+    type BoardIds,
+    type BoardMethod,
+    type BoardScope,
+    type BoardView,
+} from '../core/tynn-board.js';
 
 /**
  * THE TYNN TAB TALKS TO TYNN AS AN APP (genie#1295; the owner, 2026-10-27: "the mcp is for agents, the api is for apps").
@@ -13,7 +26,7 @@ import { boardActionRequest, boardQueryPath, parseBoard, type BoardIds, type Boa
 export interface TynnBoardPorts {
     signedIn(): boolean;
     projectFor(workspaceId: string): string | null;
-    request(path: string, init: { method: 'GET' | 'POST' | 'DELETE'; body?: unknown }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+    request(path: string, init: { method: BoardMethod; body?: unknown }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 }
 
 export type TynnBoardRefusal = { ok: false; state: 'not-linked' | 'signed-out' | 'transition-refused' | 'error'; reason: string };
@@ -40,21 +53,41 @@ async function refusal(res: { status: number; json(): Promise<unknown> }): Promi
 }
 
 function scopeOf(raw: unknown): BoardScope {
-    const s = (raw ?? {}) as { version?: unknown; story?: unknown };
-    return typeof s.story === 'string' && s.story !== '' ? { story: s.story } : typeof s.version === 'string' && s.version !== '' ? { version: s.version } : {};
+    const s = (raw ?? {}) as { version?: unknown; story?: unknown; focus?: unknown };
+    const at: BoardScope = typeof s.story === 'string' && s.story !== '' ? { story: s.story } : typeof s.version === 'string' && s.version !== '' ? { version: s.version } : {};
+    return typeof s.focus === 'string' && /^(story|task):./.test(s.focus) ? { ...at, focus: s.focus } : at;
 }
 
-/** The workspace's board at a scope (`{}` versions, `{version}` its stories, `{story}` its tasks). */
-export async function readTynnBoard(ports: TynnBoardPorts, workspaceId: string, scope: BoardScope): Promise<{ ok: true; view: BoardView } | TynnBoardRefusal> {
+type BoardRead = { ok: true; view: BoardView; detail?: BoardDetail | null; detailRefused?: string | null };
+
+/**
+ * The workspace's board at a scope (`{}` versions, `{version}` its stories, `{story}` its tasks) and, when the scope
+ * names a focus (`story:<id>` / `task:<id>`, tynn.ai's `?focus=`), that card's detail. A detail Tynn will not show is said
+ * beside the board; it never takes the board away.
+ */
+export async function readTynnBoard(ports: TynnBoardPorts, workspaceId: string, scope: BoardScope): Promise<BoardRead | TynnBoardRefusal> {
     const projectId = ports.projectFor(workspaceId);
     if (projectId === null) return NOT_LINKED;
     if (!ports.signedIn()) return SIGNED_OUT;
+    const at = scopeOf(scope);
     let res;
-    try { res = await ports.request(boardQueryPath(projectId, scopeOf(scope)), { method: 'GET' }); }
+    try { res = await ports.request(boardQueryPath(projectId, at), { method: 'GET' }); }
     catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }
     if (!res.ok) return refusal(res);
     const view = parseBoard(await bodyOf(res));
-    return view ? { ok: true, view } : { ok: false, state: 'error', reason: 'Tynn answered with something that is not a board.' };
+    if (!view) return { ok: false, state: 'error', reason: 'Tynn answered with something that is not a board.' };
+
+    const detailCall = boardDetailRequest(projectId, at.focus);
+    if (detailCall === null) return { ok: true, view };
+    let dres;
+    try { dres = await ports.request(detailCall.path, { method: 'GET' }); }
+    catch (error) { return { ok: true, view, detail: null, detailRefused: error instanceof Error ? error.message : String(error) }; }
+    if (!dres.ok) {
+        const why = dres.status === 404 ? 'Tynn did not show this card. It may have been deleted, or it is not in this project.' : (await refusal(dres)).reason;
+        return { ok: true, view, detail: null, detailRefused: why };
+    }
+    const detail = parseDetail(await bodyOf(dres));
+    return detail ? { ok: true, view, detail } : { ok: true, view, detail: null, detailRefused: 'Tynn answered with something that is not a card.' };
 }
 
 /** A drag: the column, the place in it, and the person's Shift override. Anything else is not sent. */
@@ -71,9 +104,19 @@ export async function runTynnBoardAction(ports: TynnBoardPorts, workspaceId: str
     if (projectId === null) return NOT_LINKED;
     const request = boardActionRequest(projectId, input.action, input.ids ?? {});
     if (request === null) return { ok: false, state: 'error', reason: `The Tynn tab does not offer ${input.action}.` };
-    const isMove = input.action.endsWith('.move');
-    const body = isMove ? dragBody(input.body) : null;
-    if (isMove && body === null) return { ok: false, state: 'error', reason: 'A move names a column and a place in it.' };
+    if (request.method === 'GET') return { ok: false, state: 'error', reason: `${input.action} is read with the board (its focus), not run.` };
+    const [kind, verb] = input.action.split('.') as [string, string];
+    let body: unknown = null;
+    if (verb === 'move') {
+        body = dragBody(input.body);
+        if (body === null) return { ok: false, state: 'error', reason: 'A move names a column and a place in it.' };
+    } else if (verb === 'create' && (kind === 'story' || kind === 'task')) {
+        body = createBody(kind, input.ids ?? {}, input.body);
+        if (body === null) return { ok: false, state: 'error', reason: `A new ${kind} needs a title and a description.` };
+    } else if (verb === 'edit' && (kind === 'story' || kind === 'task')) {
+        body = editBody(kind, input.body);
+        if (body === null) return { ok: false, state: 'error', reason: 'Nothing to save, or the title is empty.' };
+    }
     if (!ports.signedIn()) return SIGNED_OUT;
     let res;
     try { res = await ports.request(request.path, { method: request.method, ...(body ? { body } : {}) }); }
