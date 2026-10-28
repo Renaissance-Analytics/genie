@@ -109,14 +109,28 @@ describe('the title bar carries "Connect to another machine" (Genie 1’s Hosts 
 describe('wired: the shell hands the title bar its connect, and the palette offers it', () => {
     const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
     const shell = strip(readFileSync(new URL('../src/renderer/Shell.tsx', import.meta.url), 'utf8'));
+    const main = strip(readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8'));
+    const preload = strip(readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8'));
 
-    it('the Command Window’s actions include it', () => {
-        const actions = /const paletteActions[^=]*= \[([^]*?)\n {4}\];/.exec(app)?.[1] ?? '';
-        expect(actions).toContain('CONNECT_PALETTE_ACTION');
+    it('the Command Window’s actions are the two ways in, for the role Tynn gave this machine', () => {
+        const actions = /const paletteActions[^\n]*\[\n([^]*?)\n {4}\];/.exec(app)?.[1] ?? '';
+        expect(actions).toMatch(/\.\.\.connectPaletteActions\(features\.remote\?\.tynnWorkstation\?\.role \?\? null\)/);
     });
 
-    it('the shell passes connect to the TitleBar — but not while this window shows another machine (Genie 1 hid the Hosts button in a host window)', () => {
+    it('the shell passes connect to the TitleBar only on this machine’s own window and never on a drone (Genie 1 hid the Hosts button in a host window)', () => {
         const bar = /<TitleBar([^]*?)\/>/.exec(shell)?.[1] ?? '';
-        expect(bar).toMatch(/\bconnect=\{remote \|\| !remoteConnect \? undefined : /);
+        expect(bar).toMatch(/\bconnect=\{remote \|\| !remoteConnect \|\| !mayBrowse\(features\.remote\?\.tynnWorkstation\?\.role \?\? null\) \? undefined : /);
+    });
+
+    it('main opens a pasted link through dispatchConnectLink, with the role Tynn gave it, never one the window sends', () => {
+        const handler = /ipcMain\.handle\('genie:connect-link'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
+        expect(handler).toContain('dispatchConnectLink(');
+        expect(handler).toContain('workstationRoleNow');
+        expect(handler).toContain('shell.openExternal');
+        expect(handler).toContain('openRemoteWindow(`relay:${');
+    });
+
+    it('preload exposes it to the window', () => {
+        expect(preload).toMatch(/openLink: \(text\) => ipcRenderer\.invoke\('genie:connect-link', text\)/);
     });
 });
