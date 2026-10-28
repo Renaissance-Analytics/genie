@@ -1,7 +1,8 @@
 {
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.1.0/contracts/workspace-ux/0.1.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.1.0-draft",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Proposed home: Civicognita/shared-schemas (genie#1295). Until that lands, this file is mirrored byte-for-byte into each repo and pinned by sha256.",
+  "version": "0.1.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.1.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
