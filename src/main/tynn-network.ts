@@ -29,7 +29,8 @@ export interface TynnWorkstation {
     readonly role: 'pilot' | 'drone' | null;
 }
 
-export type TynnWorkstations = { readonly ok: true; readonly workstations: readonly TynnWorkstation[] } | { readonly ok: false; readonly reason: string };
+/** `refusedByTynn`: Tynn refused THIS caller (401/404/419 — it never says why), as against Tynn unreachable or broken. */
+export type TynnWorkstations = { readonly ok: true; readonly workstations: readonly TynnWorkstation[] } | { readonly ok: false; readonly reason: string; readonly refusedByTynn?: true };
 
 const signedOut = (status: number) => status === 401 || status === 404 || status === 419;
 
@@ -46,7 +47,7 @@ export async function connectableWorkstations(request: SessionRequest, ownWorkst
     } catch (error) {
         return { ok: false, reason: `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})` };
     }
-    if (signedOut(res.status)) return { ok: false, reason: 'sign in to Tynn to see your workstations' };
+    if (signedOut(res.status)) return { ok: false, reason: 'sign in to Tynn to see your workstations', refusedByTynn: true };
     if (!res.ok) return { ok: false, reason: await tynnSays(res, 'Tynn did not list your workstations') };
     const rows = ((await res.json().catch(() => null)) as { workstations?: unknown } | null)?.workstations;
     const byId = new Map<string, TynnWorkstation>();
@@ -105,7 +106,7 @@ export async function setWorkstationRole(
     return { ok: true, role: now };
 }
 
-export async function mintConnectGrant(request: SessionRequest, workstationId: string, popJwk: PopJwk): Promise<{ ok: true; token: string; relayEndpoint: string } | { ok: false; reason: string }> {
+export async function mintConnectGrant(request: SessionRequest, workstationId: string, popJwk: PopJwk): Promise<{ ok: true; token: string; relayEndpoint: string } | { ok: false; reason: string; refusedByTynn?: true }> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
         res = await request(`/api/v1/workstations/${encodeURIComponent(workstationId)}/connect-grant`, { method: 'POST', body: { pop_jwk: popJwk } });
@@ -113,7 +114,7 @@ export async function mintConnectGrant(request: SessionRequest, workstationId: s
         return { ok: false, reason: `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})` };
     }
     // Since tynn.ai#303 an unauthenticated OR unentitled request is one 404: Tynn no longer says which.
-    if (signedOut(res.status)) return { ok: false, reason: 'Tynn did not give this machine a way in: sign in to Tynn, and check the workstation is shared with you' };
+    if (signedOut(res.status)) return { ok: false, reason: 'Tynn did not give this machine a way in: sign in to Tynn, and check the workstation is shared with you', refusedByTynn: true };
     if (!res.ok) return { ok: false, reason: await tynnSays(res, 'Tynn refused a connection') };
     const body = (await res.json().catch(() => null)) as { token?: unknown; relay_endpoint?: unknown } | null;
     if (typeof body?.token !== 'string' || typeof body.relay_endpoint !== 'string' || body.relay_endpoint === '') return { ok: false, reason: 'Tynn answered without a grant and a relay' };

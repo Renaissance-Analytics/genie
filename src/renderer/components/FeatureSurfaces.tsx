@@ -19,6 +19,7 @@ import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
 import type { HostUpgradeStep } from '../../core/host-upgrade.js';
 import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
+import type { ConnectProgress } from '../../core/connect-machine.js';
 import { TynnWorkstationRows, useOpenProgress } from './ConnectMenu.js';
 import type { Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
@@ -1947,6 +1948,9 @@ export interface RemoteConnectProps {
     readonly onOpenLink?: (() => void) | undefined;
     /** A pilot only (genie#1278 W6): change a workstation's role with an authenticator code. */
     readonly onSetRole?: ((workstation: TynnWorkstationRow, role: 'pilot' | 'drone', code: string) => Promise<RoleChange>) | undefined;
+    /** Read Tynn's list again, and where that read stands (M0 finding 1; the title bar's menu and ⌘K use them). */
+    readonly onRefresh?: (() => void) | undefined;
+    readonly refresh?: ConnectProgress | undefined;
 }
 
 /** An upgrade's step, in words, for the host it is upgrading. */

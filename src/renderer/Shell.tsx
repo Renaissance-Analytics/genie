@@ -491,7 +491,7 @@ export function Shell({
                 workspace={onScreen ? { name: onScreen.name ?? folderName(onScreen.path), color: onScreen.color ?? null } : null}
                 // CONNECT TO ANOTHER MACHINE among the same icons (genie#1278 C1; Genie 1's Hosts button): not in a window that
                 // already shows another machine (Genie 1 hid it in a host window), and never on a drone (Tynn's role, W5).
-                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onSetRole: remoteConnect.onSetRole }}
+                connect={remote || !remoteConnect || !mayBrowse(features.remote?.tynnWorkstation?.role ?? null) ? undefined : { workstations: remoteConnect.tynnWorkstations ?? null, onOpenWorkstation: remoteConnect.onOpenWorkstation, onOpenLink: remoteConnect.onOpenLink, onSetRole: remoteConnect.onSetRole, onRefresh: remoteConnect.onRefresh, refresh: remoteConnect.refresh }}
             />
             {/* WHAT IS IN THIS UPDATE (Genie 1's upgrade window; the owner, 2026-10-19), opened from the header's update button. */}
             {updateOpen && updateChip(updateState) ? (

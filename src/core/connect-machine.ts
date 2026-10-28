@@ -40,6 +40,18 @@ export type ConnectProgress =
     | { readonly kind: 'failed'; readonly reason: string };
 
 /**
+ * A FRESH READ OF TYNN'S LIST (genie#1278, M0 finding 1: a share accepted after sign-in did not appear until a reload,
+ * because the list was read at sign-in only). The menu and the Command Window read again each time they open; a fresh
+ * answer replaces the list; a FAILED refresh keeps the last list on screen and gives its reason as the problem (with
+ * Retry). With no list yet, a failure IS the list (its reason, then the steps).
+ */
+export type WorkstationRead<T> = { readonly ok: true; readonly workstations: readonly T[] } | { readonly ok: false; readonly reason: string };
+export function mergeWorkstationRead<T>(prev: WorkstationRead<T> | null, next: WorkstationRead<T>): { list: WorkstationRead<T>; problem: string | null } {
+    if (next.ok || prev === null || !prev.ok) return { list: next, problem: null };
+    return { list: prev, problem: next.reason };
+}
+
+/**
  * What to do ON THE OTHER MACHINE when Tynn lists none. An empty list used to draw nothing, so "that machine is not
  * set up yet" read as "there is no such feature".
  */

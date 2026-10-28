@@ -100,7 +100,7 @@ describe('2. Open never brings forward another account’s window, or a dropped 
     });
 
     it('the account is the Tynn host and the user, never only one of them', () => {
-        expect(accountKeyOf({ signedIn: true, host: 'https://tynn.ai', user: { id: 62 } })).toBe('https://tynn.ai#62');
+        expect(accountKeyOf({ signedIn: true, host: 'https://tynn.ai', user: { name: 'M0 Owner', email: 'm0-owner@example.com' } })).toBe('https://tynn.ai#m0-owner@example.com');
         expect(accountKeyOf({ signedIn: false })).toBeNull();
     });
 
@@ -108,7 +108,10 @@ describe('2. Open never brings forward another account’s window, or a dropped 
         const open = /function openRemoteWindow\([^]*?\n\}/.exec(main)?.[0] ?? '';
         expect(open).toContain('remoteWindowAction(');
         expect(open).toContain("'genie:remote-reconnect'");
-        expect(main).toMatch(/tynnAccount\.onChange\(\(\) => \{[^]*?windowsLeftByAccountChange\(/);
+        expect(main).toContain('tynnAccount.onChange(() => { closeRelayWindowsOfOtherAccounts(); });');
+        const close = /function closeRelayWindowsOfOtherAccounts\(\)[^]*?\n\}/.exec(main)?.[0] ?? '';
+        expect(close).toContain('windowsLeftByAccountChange(');
+        expect(close).toContain('.destroy()');
         expect(preload).toMatch(/onReconnectAsked: \(listener\) =>/);
         expect(app).toMatch(/onReconnectAsked\?\.\(/);
     });

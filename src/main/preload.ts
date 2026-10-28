@@ -228,7 +228,15 @@ const bridge: PreloadBridge = {
     },
 
     // A known remote host in its own window (Tynn #819).
-    remoteWindows: { open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void> },
+    remoteWindows: {
+        open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void>,
+        // Main asks THIS remote window to reconnect (its connection dropped and the person pressed Open; M0 finding 2).
+        onReconnectAsked: (listener) => {
+            const handler = () => listener();
+            ipcRenderer.on('genie:remote-reconnect', handler);
+            return () => { ipcRenderer.removeListener('genie:remote-reconnect', handler); };
+        },
+    },
     // Every chat's unsent draft, kept by main across a restart and a reload (genie#1261, main/chat-draft-store.ts).
     chatDrafts: {
         load: () => ipcRenderer.invoke('genie:chat-drafts-load') as Promise<unknown>,

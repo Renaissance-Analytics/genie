@@ -1,5 +1,5 @@
 import { Icon, Modal } from '@particle-academy/react-fancy';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CONNECT_EMPTY_GUIDANCE, type ConnectProgress } from '../../core/connect-machine.js';
 import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 
@@ -220,14 +220,28 @@ export interface ConnectMenuProps {
     readonly onOpenLink?: (() => void) | undefined;
     /** A pilot only (genie#1278 W6). */
     readonly onSetRole?: SetRole | undefined;
+    /** Where the re-read of Tynn's list stands (M0 finding 1): its step, or why it failed (with Retry). */
+    readonly refresh?: ConnectProgress | undefined;
+    /** Read Tynn's list again (Retry). */
+    readonly onRefresh?: (() => void) | undefined;
 }
 
 /** The title bar's menu and the Command Window's "Connect to my workstations": your machines first, then the other ways. */
-export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, onOpenLink, onSetRole }: ConnectMenuProps) {
+export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, onOpenLink, onSetRole, refresh = { kind: 'idle' }, onRefresh }: ConnectMenuProps) {
     const [opening, open] = useOpenProgress(onOpenWorkstation);
     const quiet = 'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]';
     return (
         <div data-connect-menu="" className="flex w-80 flex-col gap-2 p-2 text-sm">
+            {/* Re-reading on open: the last list stays below while Tynn is asked; a failure keeps it, with Retry. */}
+            {workstations !== null && refresh.kind === 'working' ? (
+                <span data-tynn-refresh="working" className="flex items-center gap-1.5 text-xs text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />{refresh.step}</span>
+            ) : null}
+            {workstations !== null && refresh.kind === 'failed' ? (
+                <span data-tynn-refresh="failed" className="flex flex-wrap items-center gap-2 text-xs text-[var(--danger)]">
+                    <span>{refresh.reason}</span>
+                    {onRefresh ? <button type="button" data-action="retry-workstations" onClick={onRefresh} className={BUTTON}><Icon name="refresh-cw" size="xs" />Retry</button> : null}
+                </span>
+            ) : null}
             {workstations === null ? (
                 <p data-tynn-workstations="loading" className="flex items-center gap-1.5 text-xs text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />Asking Tynn for your machines…</p>
             ) : (
@@ -247,8 +261,10 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
  * THE COMMAND WINDOW'S TWO WAYS IN (genie#1278 C1), in a window of their own: "Open a share link…" (paste, Open, its
  * progress) and "Connect to my workstations" (the same menu as the title bar's button).
  */
-export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, onSetRole }: {
+export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, onSetRole, refresh, onRefresh }: {
     onSetRole?: SetRole | undefined;
+    refresh?: ConnectProgress | undefined;
+    onRefresh?: (() => void) | undefined;
     mode: 'link' | 'workstations';
     onClose: () => void;
     workstations: TynnWorkstationList | null;
@@ -260,6 +276,8 @@ export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, 
 }) {
     const [value, setValue] = useState('');
     const [state, setState] = useState<ConnectProgress>({ kind: 'idle' });
+    // "Connect to my workstations" reads Tynn's list again each time it opens (M0 finding 1).
+    useEffect(() => { if (mode === 'workstations') onRefresh?.(); }, [mode]); // eslint-disable-line react-hooks/exhaustive-deps
     const open = () => {
         if (!openLink) { setState({ kind: 'failed', reason: 'Share links open from Genie on a desktop' }); return; }
         setState({ kind: 'working', step: 'Checking the link…' });
@@ -277,7 +295,7 @@ export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, 
                 {mode === 'link' ? (
                     <ShareLinkForm value={value} state={state} onChange={(v) => { setValue(v); if (state.kind !== 'working') setState({ kind: 'idle' }); }} onOpen={open} />
                 ) : (
-                    <ConnectMenu workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} onSetRole={onSetRole} />
+                    <ConnectMenu workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} onSetRole={onSetRole} refresh={refresh} onRefresh={onRefresh} />
                 )}
             </Modal.Body>
         </Modal>
