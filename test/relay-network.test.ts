@@ -173,7 +173,7 @@ describe('a member over the relay', () => {
     });
 
     it('a DRONE host admits a SHARE LINK guest to the one shared workspace, and nothing else (owner 2026-10-28)', async () => {
-        const opened = await member({ src: 'share', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
+        const opened = await member({ src: 'share', share_origin: 'link', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
         expect(opened.ok).toBe(true);
         const guest = wireClient((opened as { transport: ClientTransport }).transport);
         expect(await guest.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
@@ -186,6 +186,14 @@ describe('a member over the relay', () => {
         expect(await guest.call('openAgent', 'agent_b')).toMatchObject({ ok: false, reason: 'agent_b is not in the workspace this link shares' });
         // And the host itself is not the guest's to change.
         expect(await guest.call('features.act', { kind: 'remote.lock' })).toMatchObject({ ok: false });
+    });
+
+    it('a DRONE host refuses a MEMBER share over the relay: links only (owner 2026-10-28)', async () => {
+        const opened = await member({ src: 'share', share_origin: 'member', cap: 'control', scope: ['workspace:tynn'], aud_role: 'drone' });
+        const t = (opened as { transport: ClientTransport & { closedBecause(): string | null } }).transport;
+        void wireClient(t).hello({ kind: 'relay' });
+        await settle();
+        expect(t.closedBecause()).toMatch(/share link/);
     });
 
     it('a READ-ONLY grant: reads work, a write is refused', async () => {

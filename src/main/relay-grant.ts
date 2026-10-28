@@ -34,6 +34,9 @@ export interface HostGrant {
     audRole: 'pilot' | 'drone';
     /** The caller's own registered machine (`src_ws`), resolved by Tynn from its device binding; null when none. */
     sourceWorkstationId: string | null;
+    /** Where a `src: share` grant's share came from (`share_origin`): a redeemed share LINK, an email invite, or an
+     *  owner-made member share. Null when the grant does not say (an older Tynn, or a share of unknown origin). */
+    shareOrigin: 'link' | 'invite' | 'member' | null;
 }
 
 export type GrantCheck = { ok: true; grant: HostGrant } | { ok: false; reason: string };
@@ -92,6 +95,7 @@ export function verifyMemberGrant(token: string, opts: { keys: readonly TynnJwk[
             jti, sub, name: text(claims.name), source: text(claims.src), capability, scopes, expiresAt: claims.exp * 1000,
             audRole: claims.aud_role === 'pilot' ? 'pilot' : 'drone',
             sourceWorkstationId: text(claims.src_ws),
+            shareOrigin: claims.share_origin === 'link' || claims.share_origin === 'invite' || claims.share_origin === 'member' ? claims.share_origin : null,
             ...(cnf ? { confirmationKeyThumbprint: cnf } : {}),
         },
     };
@@ -106,12 +110,17 @@ export function principalOf(grant: HostGrant): { ok: true; principal: PreAuth } 
     const label = grant.name ?? grant.sub;
     const readonly = grant.capability === 'readonly';
     // A DRONE (genie#1278 W5; the owner: drones "auto-accept connections from known and paired devices"; 2026-10-28:
-    // "allow share links") admits its owner connecting from one of the owner's own registered machines, and a guest
-    // holding a share link (`src = share`, a WorkstationShare — what a redeemed link becomes), who is scoped by that
-    // grant below exactly as on a pilot and is never the owner. Every other guest (a direct grant, an invite) and an
-    // owner from an unbound device are refused. All of it from the Tynn-signed grant; nothing local is consulted.
+    // "allow share links", then "links only") admits its owner connecting from one of the owner's own registered
+    // machines, and a guest whose access came from a redeemed share LINK (`src = share` with `share_origin = link`),
+    // scoped by that grant below exactly as on a pilot and never the owner. A member share, an email-invite share, a
+    // share grant that does not say its origin (an older Tynn, or a share written before origins were kept), every
+    // other guest, and an owner from an unbound device are refused. All of it from the Tynn-signed grant.
     const ownersOwnMachine = grant.source === 'owner' && grant.sourceWorkstationId !== null;
-    if (grant.audRole !== 'pilot' && !ownersOwnMachine && grant.source !== 'share') {
+    const shareLink = grant.source === 'share' && grant.shareOrigin === 'link';
+    if (grant.audRole !== 'pilot' && !ownersOwnMachine && !shareLink) {
+        if (grant.source === 'share') {
+            return { ok: false, reason: `this workstation is a drone: it admits a guest only through a share link, and this access came from ${grant.shareOrigin === 'member' ? 'a member share' : grant.shareOrigin === 'invite' ? 'an email invite' : 'a share Tynn did not identify as a link'}` };
+        }
         return { ok: false, reason: 'this workstation is a drone: it accepts only its owner, from the owner’s own paired machines, and share links' };
     }
     if (grant.source === 'owner') return { ok: true, principal: { label, isOwner: true, workspaceId: null, readonly } };

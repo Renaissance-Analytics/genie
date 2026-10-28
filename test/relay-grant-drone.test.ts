@@ -32,6 +32,13 @@ describe('the grant says what this host is and who is calling', () => {
         expect(g.sourceWorkstationId).toBe('ws_pilot');
     });
 
+    it('reads share_origin from the signed claims; anything but a known origin is none', () => {
+        expect(grant({ src: 'share', share_origin: 'link' }).shareOrigin).toBe('link');
+        expect(grant({ src: 'share', share_origin: 'member' }).shareOrigin).toBe('member');
+        expect(grant({ src: 'share', share_origin: 'invite' }).shareOrigin).toBe('invite');
+        for (const v of [undefined, 'LINK', 'link ', true, 'owner']) expect(grant({ src: 'share', share_origin: v }).shareOrigin).toBeNull();
+    });
+
     it('anything but exactly "pilot" reads as drone', () => {
         for (const audRole of [undefined, 'PILOT', 'pilot ', true, 'admin']) {
             expect(grant({ aud_role: audRole }).audRole).toBe('drone');
@@ -51,15 +58,36 @@ describe('a drone host admits only the owner, from one of the owner\'s own paire
         expect((r as { reason: string }).reason).toMatch(/drone/);
     });
 
-    it('admits a SHARE LINK guest, as a guest, inside the link\'s scope only (owner 2026-10-28: "allow share links")', () => {
+    it('admits a SHARE LINK guest, as a guest, inside the link\'s scope only (owner 2026-10-28: "links only")', () => {
+        const link = { src: 'share', share_origin: 'link', aud_role: 'drone' };
         // One workspace: a guest of that workspace, never the owner, never the host.
-        expect(principalOf(grant({ src: 'share', scope: ['workspace:design'], cap: 'readonly', aud_role: 'drone' })))
+        expect(principalOf(grant({ ...link, scope: ['workspace:design'], cap: 'readonly' })))
             .toEqual({ ok: true, principal: { label: 'u1', isOwner: false, workspaceId: 'design', readonly: true } });
         // A whole-workstation link: a guest of the whole host, still not the owner.
-        expect(principalOf(grant({ src: 'share', scope: ['host:all'], aud_role: 'drone' })))
+        expect(principalOf(grant({ ...link, scope: ['host:all'] })))
             .toEqual({ ok: true, principal: { label: 'u1', isOwner: false, workspaceId: null, readonly: false } });
         // A link naming several workspaces is refused in words, as on a pilot (never widened).
-        expect(principalOf(grant({ src: 'share', scope: ['workspace:a', 'workspace:b'], aud_role: 'drone' })).ok).toBe(false);
+        expect(principalOf(grant({ ...link, scope: ['workspace:a', 'workspace:b'] })).ok).toBe(false);
+    });
+
+    it('refuses a MEMBER share and an email-INVITE share on a drone: links only (owner 2026-10-28)', () => {
+        for (const origin of ['member', 'invite']) {
+            const r = principalOf(grant({ src: 'share', share_origin: origin, scope: ['workspace:design'], aud_role: 'drone' }));
+            expect(r.ok).toBe(false);
+            expect((r as { reason: string }).reason).toMatch(/share link/);
+        }
+    });
+
+    it('refuses a share grant that does not say where it came from (an older Tynn, or a share of unknown origin)', () => {
+        const r = principalOf(grant({ src: 'share', scope: ['workspace:design'], aud_role: 'drone' }));
+        expect(r.ok).toBe(false);
+        expect((r as { reason: string }).reason).toMatch(/share link/);
+    });
+
+    it('a share_origin "link" on anything but a share grants nothing extra', () => {
+        for (const src of ['grant', 'invite', 'owner']) {
+            expect(principalOf(grant({ src, share_origin: 'link', scope: ['workspace:design'], aud_role: 'drone' })).ok).toBe(false);
+        }
     });
 
     it('still refuses every OTHER guest — a direct grant, an invite — whatever its scope', () => {
@@ -73,13 +101,14 @@ describe('a drone host admits only the owner, from one of the owner\'s own paire
     });
 
     it('a share-link guest can never be taken for the owner, even carrying owner-looking claims', () => {
-        const r = principalOf(grant({ src: 'share', src_ws: 'ws_pilot', scope: ['host:all'], name: 'owner', aud_role: 'drone' }));
+        const r = principalOf(grant({ src: 'share', share_origin: 'link', src_ws: 'ws_pilot', scope: ['host:all'], name: 'owner', aud_role: 'drone' }));
         expect(r).toMatchObject({ ok: true, principal: { isOwner: false } });
     });
 
     it('a grant that does not say the host is a pilot is judged as a drone\'s', () => {
         expect(principalOf(grant({ src: 'invite', scope: ['workspace:design'] })).ok).toBe(false);
-        expect(principalOf(grant({ src: 'share', scope: ['workspace:design'] }))).toMatchObject({ ok: true, principal: { isOwner: false, workspaceId: 'design' } });
+        expect(principalOf(grant({ src: 'share', share_origin: 'link', scope: ['workspace:design'] }))).toMatchObject({ ok: true, principal: { isOwner: false, workspaceId: 'design' } });
+        expect(principalOf(grant({ src: 'share', share_origin: 'member', scope: ['workspace:design'] })).ok).toBe(false);
         expect(principalOf(grant({ src: 'owner' })).ok).toBe(false);
         expect(principalOf(grant({ src: 'owner', src_ws: 'ws_pilot' })).ok).toBe(true);
     });
@@ -87,5 +116,9 @@ describe('a drone host admits only the owner, from one of the owner\'s own paire
     it('a PILOT host keeps today\'s rules: the owner from anywhere, a guest scoped by its grant (CONTROL)', () => {
         expect(principalOf(grant({ src: 'owner', aud_role: 'pilot' }))).toMatchObject({ ok: true, principal: { isOwner: true } });
         expect(principalOf(grant({ src: 'invite', scope: ['workspace:design'], aud_role: 'pilot' }))).toMatchObject({ ok: true, principal: { isOwner: false, workspaceId: 'design' } });
+        // A pilot admits every share, whatever its origin — and an old-format share with none (unchanged behaviour).
+        for (const origin of ['link', 'member', 'invite', undefined]) {
+            expect(principalOf(grant({ src: 'share', share_origin: origin, scope: ['workspace:design'], aud_role: 'pilot' }))).toMatchObject({ ok: true, principal: { isOwner: false, workspaceId: 'design' } });
+        }
     });
 });
