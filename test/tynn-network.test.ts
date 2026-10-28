@@ -46,7 +46,7 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
 
     it('signed out (404 since tynn.ai#303, or 401): says so', async () => {
         for (const status of [401, 404]) {
-            expect(await connectableWorkstations(async () => json(status, {}), null)).toEqual({ ok: false, reason: 'sign in to Tynn to see your workstations' });
+            expect(await connectableWorkstations(async () => json(status, {}), null)).toEqual({ ok: false, reason: 'sign in to Tynn to see your workstations', refusedByTynn: true });
         }
     });
 });
@@ -67,7 +67,7 @@ describe('mintConnectGrant — a grant for one workstation, bound to this connec
     it('refused: Tynn’s own words; a 404 (signed out, or not shared with you — Tynn no longer says which)', async () => {
         const pop = PopKeypair.generate();
         expect(await mintConnectGrant(async () => json(409, { message: 'This workstation is not active.' }), 'ws_x', pop.publicJwk)).toEqual({ ok: false, reason: 'This workstation is not active.' });
-        expect(await mintConnectGrant(async () => json(404, {}), 'ws_x', pop.publicJwk)).toEqual({ ok: false, reason: 'Tynn did not give this machine a way in: sign in to Tynn, and check the workstation is shared with you' });
+        expect(await mintConnectGrant(async () => json(404, {}), 'ws_x', pop.publicJwk)).toEqual({ ok: false, reason: 'Tynn did not give this machine a way in: sign in to Tynn, and check the workstation is shared with you', refusedByTynn: true });
     });
 });
 
