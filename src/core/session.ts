@@ -347,6 +347,8 @@ export class AgentSession {
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
     #unpersisted = 0;
+    /** Whether this run has said in its ledger that its history is not being saved (`#sayNotSaved`). */
+    #notSavedSaid = false;
     /** Completed turns, failed ones included — a failed turn still happened and still cost. */
     #turns = 0;
     /**
@@ -1458,16 +1460,56 @@ export class AgentSession {
     #enqueue(open: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean } | null): void {
         if (!open || open.persisted || open.event.text.length === 0) return;
         open.persisted = true;
+        void this.#record(open.event);
+    }
 
+    /**
+     * Write ONE row to the thread, on the chain, so rows land in the order they were emitted.
+     *
+     * A row the thread cannot take AT ONCE is not lost (genie#1315). The thread's lock waits 5 s for a holder and then
+     * throws `session_locked`; this used to count that and move on, and the row was gone from the agent's history for good
+     * — measured on genie-test-windows with the real store: a lock held past one write's wait cost the first turn's
+     * marker. A held lock clears (its holder finishes, or its TTL runs out and the next waiter reclaims it), and so does
+     * Windows' EPERM/EBUSY/EACCES on a file another process has open (prism-harness reads the same three as "held"). So
+     * such a write is tried again after `WRITE_RETRY_MS`, bounded, still in order. Any other fault is final at once.
+     *
+     * A rejected write never breaks the chain: the next write runs whether this one failed or not. A row that still
+     * cannot be saved is counted (`unpersistedEvents`) AND said in the ledger, once per run (`#sayNotSaved`).
+     */
+    #record(event: StreamEvent): Promise<void> {
         const write = async (): Promise<void> => {
-            try {
-                const thread = openAgentThread(this.#options.store, this.agentId);
-                await thread.record([persistable(open.event, this.#options.runId)]);
-            } catch {
-                this.#unpersisted += 1;
+            for (let attempt = 0; ; attempt += 1) {
+                try {
+                    const thread = openAgentThread(this.#options.store, this.agentId);
+                    await thread.record([persistable(event, this.#options.runId)]);
+                    return;
+                } catch (error) {
+                    const wait = WRITE_RETRY_MS[attempt];
+                    if (wait !== undefined && clearsOnItsOwn(error)) {
+                        await new Promise((r) => setTimeout(r, wait));
+                        continue;
+                    }
+                    this.#unpersisted += 1;
+                    this.#sayNotSaved(error);
+                    return;
+                }
             }
         };
         this.#writes = this.#writes.then(write, write);
+        return this.#writes;
+    }
+
+    /**
+     * A ROW THAT COULD NOT BE SAVED IS SAID, not only counted: nothing read `unpersistedEvents`, so a conversation whose
+     * history had stopped being written looked exactly like one being kept. One notice per run, in the ledger only — it
+     * is about the thread, so it cannot be written to it.
+     */
+    #sayNotSaved(error: unknown): void {
+        if (this.#notSavedSaid) return;
+        this.#notSavedSaid = true;
+        const reason = error instanceof Error ? error.message : String(error);
+        this.#options.onEvent?.({ kind: 'notice', level: 'error', message: `This conversation is not being saved: a row could not be written to its history (${reason}). What is shown now may be missing after a restart.` }, { replacesLast: false });
+        this.#changed();
     }
 
     #changed(): void {
@@ -1661,20 +1703,9 @@ export class AgentSession {
         this.#enqueue(closing);
 
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
-        // emitted together (a turn marker and your message) reach the thread in either order.
-        const write = async (): Promise<void> => {
-            try {
-                const thread = openAgentThread(this.#options.store, this.agentId);
-                await thread.record([persistable(event, this.#options.runId)]);
-            } catch {
-                // A storage fault must not take the turn down with it — but it must also not
-                // vanish. Counted, so a surface can say "this conversation is not being saved"
-                // instead of quietly holding a partial history.
-                this.#unpersisted += 1;
-            }
-        };
-        this.#writes = this.#writes.then(write, write);
-        await this.#writes;
+        // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
+        // take the turn down with it — and must not vanish either (`#record`).
+        await this.#record(event);
     }
 }
 
@@ -1709,6 +1740,23 @@ function promptRow(text: string, by: string | null, sent: { attachments: readonl
     return by === null || by === 'you'
         ? { kind: 'message', speaker: 'you', peerName: null, text, ...attachments }
         : { kind: 'message', speaker: 'peer', peerName: by, text, ...attachments, ...mail };
+}
+
+/**
+ * The waits before a thread write is tried again (`AgentSession.#record`): three retries, four attempts in all. Each
+ * attempt on a held lock already waits 5 s inside the store; the lock's own TTL is 10 s, so a lock left by a write cut
+ * off mid-way is reclaimed by the second attempt. Bounded, so a store that never frees costs a row ~20 s, not forever.
+ */
+const WRITE_RETRY_MS: readonly number[] = [250, 1000, 2000];
+
+/**
+ * A thread write fault that CLEARS ON ITS OWN: the lock was held (`session_locked`, prism-harness), or Windows refused a
+ * file another process has open (EPERM/EBUSY/EACCES — the three prism-harness's own lock reads as "held"). Anything else
+ * (a folder gone, a disk full, a payload it cannot write) is not waited out.
+ */
+function clearsOnItsOwn(error: unknown): boolean {
+    const code = typeof error === 'object' && error !== null ? (error as { code?: unknown }).code : undefined;
+    return code === 'session_locked' || code === 'EPERM' || code === 'EBUSY' || code === 'EACCES';
 }
 
 /**
