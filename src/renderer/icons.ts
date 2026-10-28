@@ -36,6 +36,8 @@ export const ICON_NAMES: readonly string[] = [
     'search', 'inbox', 'layout-list', 'sparkles',
     // The Tynn tab's board (genie#1295): each card's next step, delete, its claimant.
     'rocket', 'shield-check', 'circle-check', 'ban', 'trash-2', 'user',
+    // Its detail flyout: list marks (tasks, features, produces) and a story's facts (outcome, risk).
+    'square-check', 'tag', 'package', 'target', 'triangle-alert',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // The rail's Hosting / AgentInbox rows (Toolchain uses 'wrench'), and a hibernated workspace's row.
     'server', 'mail', 'moon',
