@@ -2,6 +2,8 @@ import { AgentDetailCache, chatSubscriptionId } from './agent-detail.js';
 import { CommandWindow } from './components/CommandWindow.js';
 import { FlowEditorWindow } from './components/FlowEditorWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
+import { ConnectDialog } from './components/ConnectMenu.js';
+import { CONNECT_ROUTE, OPEN_SHARE_LINK_ACTION, connectPaletteActions } from '../core/connect-machine.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
@@ -711,6 +713,8 @@ function DesktopApp({ bridge }: AppProps) {
      * wake / remove carry their own confirm and outcome, reset when the route changes workspace.
      */
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
+    // The Command Window's two ways to another machine (genie#1278 C1), each in its own window.
+    const [connectDialog, setConnectDialog] = useState<'link' | 'workstations' | null>(null);
     // The confirmed add is running (parity row 25), and the ONE controller every non-New confirm goes through: one add at
     // a time, busy for the whole run, and the workspace it added opened, as New opens its own (row 38; add-confirm.ts).
     const [addBusy, setAddBusy] = useState(false);
@@ -1363,6 +1367,8 @@ function DesktopApp({ bridge }: AppProps) {
         { id: 'go-hosting', label: 'Open Hosting', run: () => navigate('genie://hosting') },
         { id: 'go-settings', label: 'Open Settings', run: () => navigate('genie://settings') },
         { id: 'add-workspace', label: 'Add a workspace…', run: () => previewAdd() },
+        // genie#1278 C1: paste a share link, or find my workstations — for the role Tynn gave this machine (none on a drone).
+        ...connectPaletteActions(features.remote?.tynnWorkstation?.role ?? null).map((a) => ({ id: a.id, label: a.label, run: () => setConnectDialog(a.id === OPEN_SHARE_LINK_ACTION.id ? 'link' : 'workstations') })),
     ];
     const paletteItems: CommandItem[] = [
         ...promptPaletteItems(savedPrompts, promptPlatform),
@@ -1410,6 +1416,7 @@ function DesktopApp({ bridge }: AppProps) {
                 // A Tynn workstation (Tynn #837): its own window, bound to relay:<id>.
                 tynnWorkstations: remote.tynnWorkstations,
                 onOpenWorkstation: (w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
+                onOpenLink: () => setConnectDialog('link'),
             }}
             agentOps={agentOps}
             workspaceOps={workspaceOps}
@@ -1689,6 +1696,18 @@ function DesktopApp({ bridge }: AppProps) {
                         readShares(forWorkspace);
                     });
                 }}
+            />
+        ) : null}
+        {connectDialog ? (
+            <ConnectDialog
+                key={connectDialog}
+                mode={connectDialog}
+                onClose={() => setConnectDialog(null)}
+                onSwitch={setConnectDialog}
+                workstations={remote.tynnWorkstations}
+                onOpenWorkstation={(w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); })}
+                onOpenSurface={() => { setConnectDialog(null); navigate(CONNECT_ROUTE); }}
+                openLink={typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork?.openLink}
             />
         ) : null}
         <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />
