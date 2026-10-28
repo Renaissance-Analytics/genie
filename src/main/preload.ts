@@ -229,7 +229,7 @@ const bridge: PreloadBridge = {
 
     // A known remote host in its own window (Tynn #819).
     remoteWindows: {
-        open: (url) => ipcRenderer.invoke('genie:remote-open-window', url) as Promise<void>,
+        open: (url, name) => ipcRenderer.invoke('genie:remote-open-window', url, name) as Promise<void>,
         // Main asks THIS remote window to reconnect (its connection dropped and the person pressed Open; M0 finding 2).
         onReconnectAsked: (listener) => {
             const handler = () => listener();
@@ -270,6 +270,12 @@ const bridge: PreloadBridge = {
     tynnNetwork: {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
         open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,
+        // Where an open stands: main says when Tynn gave the way in and it is reaching the machine.
+        onOpenStep: (listener) => {
+            const handler = (_e: unknown, workstationId: string, step: 'relay') => listener(workstationId, step);
+            ipcRenderer.on('genie:relay-open-step', handler);
+            return () => { ipcRenderer.removeListener('genie:relay-open-step', handler); };
+        },
         openLink: (text) => ipcRenderer.invoke('genie:connect-link', text) as Promise<never>,
         setRole: (workstationId, role, code) => ipcRenderer.invoke('genie:tynn-workstation-role', workstationId, role, code) as Promise<never>,
         send: (channel, text) => ipcRenderer.send('genie:relay-send', channel, text),

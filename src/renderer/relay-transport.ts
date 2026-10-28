@@ -26,8 +26,13 @@ export type TynnWorkstationList = { readonly ok: true; readonly workstations: re
 export interface TynnNetworkBridge {
     /** The workstations Tynn says this person can see, never this machine. */
     workstations(): Promise<TynnWorkstationList>;
-    /** Main mints a grant and dials the relay; the channel is this connection's. */
-    open(workstationId: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string }>;
+    /**
+     * Main mints a grant and dials the relay; the channel is this connection's. A failure says at which step (`tynn`: the
+     * way in; `relay`: reaching the machine) and whether the relay said the machine is not connected (`offline`).
+     */
+    open(workstationId: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string; stage?: 'tynn' | 'relay'; offline?: boolean }>;
+    /** Main says when Tynn gave the way in and it is reaching the machine. */
+    onOpenStep?(listener: (workstationId: string, step: 'relay') => void): () => void;
     /** Change a workstation's role with an authenticator code (genie#1278 W6); Tynn enforces it. */
     setRole?(workstationId: string, role: 'pilot' | 'drone', code: string): Promise<RoleChange>;
     /** A pasted share link (genie#1278 C1): main classifies it and acts (core/connect-link.ts). */

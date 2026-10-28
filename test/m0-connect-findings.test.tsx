@@ -121,7 +121,7 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
     it('Tynn’s 404 on a grant or the list is marked as Tynn’s refusal', async () => {
         const grant = await mintConnectGrant(async () => json(404, {}), 'ws_a', { kty: 'OKP', crv: 'Ed25519', x: 'x' } as never);
         expect(grant).toMatchObject({ ok: false, refusedByTynn: true });
-        const list = await connectableWorkstations(async () => json(404, {}), null);
+        const list = await connectableWorkstations(async () => json(404, {}), new Set());
         expect(list).toMatchObject({ ok: false, refusedByTynn: true });
     });
 

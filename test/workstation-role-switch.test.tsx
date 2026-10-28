@@ -74,7 +74,7 @@ describe('the list carries each workstation’s role from Tynn', () => {
             { id: 'b', name: 'b', status: 'active', is_local: false, connectable: true, source: 'owner', role: 'drone' },
             { id: 'c', name: 'c', status: 'active', is_local: true, connectable: true, source: 'owner', role: 'admin' },
         ];
-        const out = await connectableWorkstations(async () => json(200, { workstations: rows }), null);
+        const out = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set());
         expect(out.ok && out.workstations.map((w) => w.role)).toEqual(['pilot', 'drone', null]);
     });
 });

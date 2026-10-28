@@ -57,7 +57,7 @@ export interface ConnectLinkDeps {
     /** Open an https URL in the person's browser; false when it could not. */
     openExternal(url: string): Promise<boolean>;
     /** Open a Tynn workstation in its own window, over the relay. */
-    openWorkstation(workstationId: string): void;
+    openWorkstation(workstationId: string, name?: string | null): void;
 }
 
 /**
@@ -76,7 +76,7 @@ export async function dispatchConnectLink(pasted: string, tynnHost: string | nul
                 ? { ok: true, note: 'Opened the invite in your browser: accept it there and Genie opens the machine.' }
                 : { ok: false, note: 'Could not open that link in your browser.' };
         }
-        deps.openWorkstation(link.workstationId);
+        deps.openWorkstation(link.workstationId, link.name ?? null);
         return { ok: true, note: `Opening ${link.name ?? 'the workstation'} in its own window` };
     } catch (error) {
         return { ok: false, note: error instanceof Error ? error.message : String(error) };

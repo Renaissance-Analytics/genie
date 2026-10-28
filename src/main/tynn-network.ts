@@ -39,8 +39,11 @@ async function tynnSays(res: { status: number; json(): Promise<unknown> }, fallb
     return typeof body?.message === 'string' && body.message !== '' ? body.message : `${fallback} (${res.status})`;
 }
 
-/** `GET /api/v1/workstations/connectable`, never this machine itself, each once. */
-export async function connectableWorkstations(request: SessionRequest, ownWorkstationId: string | null | ReadonlySet<string>): Promise<TynnWorkstations> {
+/**
+ * `GET /api/v1/workstations/connectable`, never this machine itself, each once. `thisMachine` is EVERY Tynn identity this
+ * machine holds (this-machine.ts): Tynn does not leave the caller out, and one machine can be two records.
+ */
+export async function connectableWorkstations(request: SessionRequest, thisMachine: ReadonlySet<string>): Promise<TynnWorkstations> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
         res = await request('/api/v1/workstations/connectable', { method: 'GET' });
@@ -53,7 +56,7 @@ export async function connectableWorkstations(request: SessionRequest, ownWorkst
     const byId = new Map<string, TynnWorkstation>();
     for (const row of Array.isArray(rows) ? rows : []) {
         const r = row as Record<string, unknown>;
-        if (typeof r.id !== 'string' || r.id === ownWorkstationId || byId.has(r.id)) continue;
+        if (typeof r.id !== 'string' || thisMachine.has(r.id) || byId.has(r.id)) continue;
         byId.set(r.id, {
             id: r.id,
             name: typeof r.name === 'string' && r.name !== '' ? r.name : r.id,

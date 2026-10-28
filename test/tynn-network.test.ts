@@ -33,7 +33,7 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
             { id: 'ws_cloud', name: 'cloud box', status: 'active', is_local: false, connectable: true, source: 'owner' },
             { id: 'ws_pat', name: 'Pat’s laptop', status: 'active', is_local: true, connectable: false, source: null },
         ];
-        const result = await connectableWorkstations(async (path, init) => { asked.push(`${init.method} ${path}`); return json(200, { workstations: rows }); }, 'ws_me');
+        const result = await connectableWorkstations(async (path, init) => { asked.push(`${init.method} ${path}`); return json(200, { workstations: rows }); }, new Set(['ws_me']));
         expect(asked).toEqual(['GET /api/v1/workstations/connectable']);
         expect(result).toEqual({
             ok: true,
@@ -46,7 +46,7 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
 
     it('signed out (404 since tynn.ai#303, or 401): says so', async () => {
         for (const status of [401, 404]) {
-            expect(await connectableWorkstations(async () => json(status, {}), null)).toEqual({ ok: false, reason: 'sign in to Tynn to see your workstations', refusedByTynn: true });
+            expect(await connectableWorkstations(async () => json(status, {}), new Set())).toEqual({ ok: false, reason: 'sign in to Tynn to see your workstations', refusedByTynn: true });
         }
     });
 });

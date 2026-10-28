@@ -49,7 +49,7 @@ export function rememberedTokens(storage: TokenStorage) {
     };
 }
 
-export { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
+export { relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 
 const HOSTS_KEY = 'genie.remote.hosts';
 
@@ -107,12 +107,14 @@ export function knownHosts(storage: TokenStorage) {
  */
 export function openRemoteHost(
     url: string,
-    injected: { remoteWindows?: { open(url: string): Promise<void> } | undefined } | undefined,
-    own: { remoteWindows?: { open(url: string): Promise<void> } | undefined } | undefined,
+    injected: { remoteWindows?: { open(url: string, name?: string | null): Promise<void> } | undefined } | undefined,
+    own: { remoteWindows?: { open(url: string, name?: string | null): Promise<void> } | undefined } | undefined,
     connectHere: (url: string) => void,
+    /** The machine's name, for its window to say (never the raw `relay:<id>`). */
+    name?: string | null,
 ): Promise<void> {
     const windows = injected?.remoteWindows ?? own?.remoteWindows;
-    if (windows) return windows.open(url);
+    if (windows) return windows.open(url, name ?? null);
     connectHere(url);
     return Promise.resolve();
 }
