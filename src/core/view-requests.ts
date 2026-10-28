@@ -45,6 +45,16 @@ export function viewDelivery(request: ViewRequest): ViewDelivery {
     return { channel: 'genie:workspace-pulse', payload: { workspaceId: request.workspaceId, reason: request.reason, file: request.file ?? null, line: request.line ?? null } };
 }
 
+/**
+ * WHICH WINDOWS A VIEW REQUEST REACHES (genie#1302). A navigation is the person's gesture to the MAIN window — the tray and
+ * the menu reveal it and move it — so it reaches that window only. Every window's renderer obeys `genie:navigate` by
+ * writing its hash, so a broadcast turned an open flow editor, take-over or file window into a second copy of the main
+ * app. A pulse moves nothing; it reaches every window, as before.
+ */
+export function viewReaches(delivery: ViewDelivery, target: { readonly main: boolean }): boolean {
+    return delivery.channel === 'genie:navigate' ? target.main : true;
+}
+
 /** The workspaces marked and not yet visited, each with what waits there. */
 export type Pulses = Readonly<Record<string, WorkspacePulse>>;
 
