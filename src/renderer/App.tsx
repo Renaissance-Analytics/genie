@@ -46,7 +46,7 @@ import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
-import { ipcRelayTransport, watchTynnSignIn, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
+import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
 import { AddWorkspaceModal } from './components/AddWorkspaceModal.js';
@@ -252,7 +252,7 @@ function useAgentDetail(
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     const tokens = typeof window === 'undefined' ? null : rememberedTokens(window.localStorage);
@@ -265,6 +265,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
     const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
+    // Read Tynn's list again (genie#1278 W6: after a role change, so each row shows Tynn's answer).
+    const reloadTynnWorkstations = () => { if (net) void net.workstations().then(setTynnWorkstations, () => {}); };
     // Read again whenever this Genie's Tynn sign-in changes (Tynn #850): read once at open, signing in afterwards left it
     // saying "sign in to Tynn".
     useEffect(() => {
@@ -360,6 +362,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         upgradeHost: startUpgrade,
         forget: (url: string) => { hosts?.forget(url); setKnown(hosts?.list() ?? []); setRemembered(tokens?.hosts() ?? []); },
         tynnWorkstations,
+        reloadTynnWorkstations,
     };
 }
 
@@ -715,6 +718,14 @@ function DesktopApp({ bridge }: AppProps) {
     const [addPreview, setAddPreview] = useState<AddPreviewView | null>(null);
     // The Command Window's two ways to another machine (genie#1278 C1), each in its own window.
     const [connectDialog, setConnectDialog] = useState<'link' | 'workstations' | null>(null);
+    // A role change (genie#1278 W6) through main, which asks Tynn; then the list is read again, so it shows Tynn's answer.
+    const setWorkstationRole = async (w: TynnWorkstationRow, role: 'pilot' | 'drone', code: string): Promise<RoleChange> => {
+        const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
+        if (!net?.setRole) return { ok: false, reason: 'Roles change from Genie on a desktop' };
+        const result = await net.setRole(w.id, role, code);
+        if (result.ok) remote.reloadTynnWorkstations();
+        return result;
+    };
     // The confirmed add is running (parity row 25), and the ONE controller every non-New confirm goes through: one add at
     // a time, busy for the whole run, and the workspace it added opened, as New opens its own (row 38; add-confirm.ts).
     const [addBusy, setAddBusy] = useState(false);
@@ -1417,6 +1428,8 @@ function DesktopApp({ bridge }: AppProps) {
                 tynnWorkstations: remote.tynnWorkstations,
                 onOpenWorkstation: (w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
                 onOpenLink: () => setConnectDialog('link'),
+                // genie#1278 W6: only when Tynn says this machine is a pilot; Tynn enforces it again, with the code.
+                onSetRole: features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined,
             }}
             agentOps={agentOps}
             workspaceOps={workspaceOps}
@@ -1708,6 +1721,7 @@ function DesktopApp({ bridge }: AppProps) {
                 onOpenWorkstation={(w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); })}
                 onOpenSurface={() => { setConnectDialog(null); navigate(CONNECT_ROUTE); }}
                 openLink={typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork?.openLink}
+                onSetRole={features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined}
             />
         ) : null}
         <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />

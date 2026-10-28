@@ -6,6 +6,9 @@ import type { ShareLink } from '../main/tynn-share-links.js';
  * proof key — neither ever reaches the renderer — and gives the window a CHANNEL; Genie's protocol crosses IPC on it.
  */
 
+/** What Tynn answered a role change (main/tynn-network.ts setWorkstationRole). */
+export type RoleChange = { readonly ok: true; readonly role: 'pilot' | 'drone' } | { readonly ok: false; readonly reason: string; readonly needsTwoFactor?: true };
+
 export interface TynnWorkstationRow {
     readonly id: string;
     readonly name: string;
@@ -13,6 +16,8 @@ export interface TynnWorkstationRow {
     readonly connectable: boolean;
     readonly local: boolean;
     readonly source: string | null;
+    /** Its Pilot/Drone role as Tynn holds it (genie#1278); `null`/absent = Tynn did not say. */
+    readonly role?: 'pilot' | 'drone' | null | undefined;
 }
 
 export type TynnWorkstationList = { readonly ok: true; readonly workstations: readonly TynnWorkstationRow[] } | { readonly ok: false; readonly reason: string };
@@ -23,6 +28,8 @@ export interface TynnNetworkBridge {
     workstations(): Promise<TynnWorkstationList>;
     /** Main mints a grant and dials the relay; the channel is this connection's. */
     open(workstationId: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string }>;
+    /** Change a workstation's role with an authenticator code (genie#1278 W6); Tynn enforces it. */
+    setRole?(workstationId: string, role: 'pilot' | 'drone', code: string): Promise<RoleChange>;
     /** A pasted share link (genie#1278 C1): main classifies it and acts (core/connect-link.ts). */
     openLink?(text: string): Promise<{ ok: boolean; note: string }>;
     send(channel: string, text: string): void;

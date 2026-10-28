@@ -1,7 +1,7 @@
 import { Icon, Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { CONNECT_EMPTY_GUIDANCE, type ConnectProgress } from '../../core/connect-machine.js';
-import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
+import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 
 type OpenWorkstation = (workstation: TynnWorkstationRow) => void | Promise<unknown>;
 
@@ -56,11 +56,67 @@ function Progress({ state, onRetry, retryAction }: { state: ConnectProgress; onR
  * EMPTY IS NEVER BLANK: no machines, or Tynn could not be asked, shows the steps to take on the other machine, after
  * Tynn's own reason when it gave one.
  */
-export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {} }: {
+type SetRole = (workstation: TynnWorkstationRow, role: 'pilot' | 'drone', code: string) => Promise<RoleChange>;
+
+const ROLE_ICON = { pilot: 'navigation', drone: 'bot' } as const;
+const ROLE_NAME = { pilot: 'Pilot', drone: 'Drone' } as const;
+
+/**
+ * THE CODE PROMPT FOR A ROLE CHANGE (genie#1278 W6): what will change, the authenticator code, Confirm; then its step,
+ * and success, or Tynn's reason with Retry. Tynn checks the code; this only collects it.
+ */
+export function RoleChangeForm({ to, name, code, state, onCode, onConfirm, onCancel }: {
+    to: 'pilot' | 'drone';
+    name: string;
+    code: string;
+    state: ConnectProgress;
+    onCode: (code: string) => void;
+    onConfirm: () => void;
+    onCancel: () => void;
+}) {
+    const ready = /^[0-9]{6}$/.test(code.replace(/[ -]/g, ''));
+    return (
+        <form
+            data-form="change-role"
+            className="flex flex-col gap-1.5 rounded-md bg-[var(--bg-2)] p-2 text-xs"
+            onSubmit={(e) => { e.preventDefault(); if (ready && state.kind !== 'working') onConfirm(); }}
+        >
+            <span className="flex items-center gap-1.5 text-[var(--fg-2)]">
+                <Icon name={ROLE_ICON[to]} size="xs" />
+                Make {name} a {to}. {to === 'drone' ? 'It can no longer open other workstations.' : 'It can open your other workstations.'}
+            </span>
+            <div className="flex items-center gap-2">
+                <span className="flex shrink-0 text-[var(--fg-3)]" title="Authenticator code" aria-label="Authenticator code"><Icon name="shield-check" size="xs" /></span>
+                <input
+                    data-role-code=""
+                    aria-label="Authenticator code"
+                    placeholder="123456"
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    maxLength={9}
+                    value={code}
+                    onChange={(e) => onCode(e.target.value)}
+                    className="w-24 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 font-mono tracking-widest"
+                />
+                <button type="submit" data-action="confirm-role" disabled={!ready || state.kind === 'working'} className={BUTTON}>Confirm</button>
+                <button type="button" data-action="cancel-role" onClick={onCancel} aria-label="Cancel" title="Cancel" className="rounded-md p-1 text-[var(--fg-3)] hover:bg-[var(--bg-1)]"><Icon name="x" size="xs" /></button>
+            </div>
+            <Progress state={state} onRetry={onConfirm} retryAction="retry-role" />
+        </form>
+    );
+}
+
+export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onSetRole }: {
     list: TynnWorkstationList;
     onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void) | undefined;
     opening?: Readonly<Record<string, ConnectProgress>> | undefined;
+    /** A pilot only (genie#1278 W6): change a workstation's role with an authenticator code. */
+    onSetRole?: SetRole | undefined;
 }) {
+    // The one row whose role is being changed, its code and where the change stands.
+    const [changing, setChanging] = useState<{ id: string; to: 'pilot' | 'drone'; code: string; state: ConnectProgress } | null>(null);
+    // What Tynn answered, until the list is read again.
+    const [changed, setChanged] = useState<Readonly<Record<string, 'pilot' | 'drone'>>>({});
     if (!list.ok || list.workstations.length === 0) {
         return (
             <div data-tynn-workstations={list.ok ? 'empty' : 'unavailable'} className="flex flex-col gap-1 text-xs text-[var(--fg-3)]">
@@ -73,6 +129,20 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {} }: {
         <ul data-tynn-workstations="" className="flex flex-col gap-1">
             {list.workstations.map((w) => {
                 const state = opening[w.id] ?? { kind: 'idle' as const };
+                const role = changed[w.id] ?? w.role ?? null;
+                // Only your own desktops: a cloud machine is always a drone, and one shared with you is not yours to change.
+                const switchable = onSetRole !== undefined && w.local && w.source === 'owner' && role !== null;
+                const confirm = (to: 'pilot' | 'drone', code: string) => {
+                    if (!onSetRole) return;
+                    setChanging({ id: w.id, to, code, state: { kind: 'working', step: 'Asking Tynn…' } });
+                    onSetRole(w, to, code).then(
+                        (r) => {
+                            if (r.ok) setChanged((now) => ({ ...now, [w.id]: r.role }));
+                            setChanging((now) => (now?.id === w.id ? { ...now, code: r.ok ? '' : now.code, state: r.ok ? { kind: 'done', note: `${w.name} is now a ${r.role}` } : { kind: 'failed', reason: r.reason } } : now));
+                        },
+                        (error: unknown) => setChanging((now) => (now?.id === w.id ? { ...now, state: { kind: 'failed', reason: error instanceof Error ? error.message : String(error) } } : now)),
+                    );
+                };
                 return (
                     <li key={w.id} data-tynn-workstation-row={w.id} className="flex flex-col gap-1 rounded-lg border border-[var(--border-1)] px-3 py-2 text-[13px]">
                         <div className="flex items-center gap-2">
@@ -81,6 +151,14 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {} }: {
                                 <Icon name={w.local ? 'monitor' : 'cloud'} size="xs" />
                             </span>
                             <span className="truncate font-medium">{w.name}</span>
+                            {role ? (
+                                <span data-workstation-role={role} title={ROLE_NAME[role]} aria-label={ROLE_NAME[role]} className="flex shrink-0 text-[var(--fg-3)]"><Icon name={ROLE_ICON[role]} size="xs" /></span>
+                            ) : null}
+                            {switchable && role ? (
+                                <button type="button" data-action="change-role" onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={BUTTON}>
+                                    <Icon name={ROLE_ICON[role === 'pilot' ? 'drone' : 'pilot']} size="xs" />Make {role === 'pilot' ? 'drone' : 'pilot'}
+                                </button>
+                            ) : null}
                             {w.source && w.source !== 'owner' ? <span title="Shared with you" aria-label="Shared with you" className="flex shrink-0 text-[var(--fg-4)]"><Icon name="link" size="xs" /></span> : null}
                             {w.connectable && onOpenWorkstation ? (
                                 <button type="button" data-action="open-workstation" disabled={state.kind === 'working'} onClick={() => onOpenWorkstation(w)} className={`ml-auto shrink-0 ${BUTTON}`}>Open</button>
@@ -89,6 +167,17 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {} }: {
                             )}
                         </div>
                         {onOpenWorkstation ? <Progress state={state} onRetry={() => onOpenWorkstation(w)} retryAction="retry-workstation" /> : null}
+                        {changing?.id === w.id ? (
+                            <RoleChangeForm
+                                to={changing.to}
+                                name={w.name}
+                                code={changing.code}
+                                state={changing.state}
+                                onCode={(code) => setChanging((now) => (now ? { ...now, code, state: now.state.kind === 'working' ? now.state : { kind: 'idle' } } : now))}
+                                onConfirm={() => confirm(changing.to, changing.code)}
+                                onCancel={() => setChanging(null)}
+                            />
+                        ) : null}
                     </li>
                 );
             })}
@@ -129,10 +218,12 @@ export interface ConnectMenuProps {
     readonly onOpenSurface: () => void;
     /** Paste a share link instead. */
     readonly onOpenLink?: (() => void) | undefined;
+    /** A pilot only (genie#1278 W6). */
+    readonly onSetRole?: SetRole | undefined;
 }
 
 /** The title bar's menu and the Command Window's "Connect to my workstations": your machines first, then the other ways. */
-export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, onOpenLink }: ConnectMenuProps) {
+export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, onOpenLink, onSetRole }: ConnectMenuProps) {
     const [opening, open] = useOpenProgress(onOpenWorkstation);
     const quiet = 'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]';
     return (
@@ -140,7 +231,7 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
             {workstations === null ? (
                 <p data-tynn-workstations="loading" className="flex items-center gap-1.5 text-xs text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />Asking Tynn for your machines…</p>
             ) : (
-                <TynnWorkstationRows list={workstations} onOpenWorkstation={open} opening={opening} />
+                <TynnWorkstationRows list={workstations} onOpenWorkstation={open} opening={opening} onSetRole={onSetRole} />
             )}
             <div className="flex items-center gap-1">
                 {onOpenLink ? (
@@ -156,7 +247,8 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
  * THE COMMAND WINDOW'S TWO WAYS IN (genie#1278 C1), in a window of their own: "Open a share link…" (paste, Open, its
  * progress) and "Connect to my workstations" (the same menu as the title bar's button).
  */
-export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch }: {
+export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, onSetRole }: {
+    onSetRole?: SetRole | undefined;
     mode: 'link' | 'workstations';
     onClose: () => void;
     workstations: TynnWorkstationList | null;
@@ -185,7 +277,7 @@ export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, 
                 {mode === 'link' ? (
                     <ShareLinkForm value={value} state={state} onChange={(v) => { setValue(v); if (state.kind !== 'working') setState({ kind: 'idle' }); }} onOpen={open} />
                 ) : (
-                    <ConnectMenu workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} />
+                    <ConnectMenu workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} onSetRole={onSetRole} />
                 )}
             </Modal.Body>
         </Modal>

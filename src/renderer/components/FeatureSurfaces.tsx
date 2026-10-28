@@ -18,7 +18,7 @@ import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
 import type { HostUpgradeStep } from '../../core/host-upgrade.js';
-import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
+import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 import { TynnWorkstationRows, useOpenProgress } from './ConnectMenu.js';
 import type { Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
@@ -1945,6 +1945,8 @@ export interface RemoteConnectProps {
     readonly onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
     /** Paste a share link instead (genie#1278 C1): opens the Command Window's share-link box. */
     readonly onOpenLink?: (() => void) | undefined;
+    /** A pilot only (genie#1278 W6): change a workstation's role with an authenticator code. */
+    readonly onSetRole?: ((workstation: TynnWorkstationRow, role: 'pilot' | 'drone', code: string) => Promise<RoleChange>) | undefined;
 }
 
 /** An upgrade's step, in words, for the host it is upgrading. */
@@ -1965,7 +1967,7 @@ function upgradeWords(step: HostUpgradeStep, host: string): string {
  * "DRIVE ANOTHER MACHINE" — a host, a PIN (or a remembered token), a label for this screen. While
  * connected: who you are driving and Disconnect. A refusal from the host is shown where it was caused.
  */
-export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now(), onUpgradeHost, upgrade = null, tynnWorkstations = null, onOpenWorkstation }: RemoteConnectProps) {
+export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now(), onUpgradeHost, upgrade = null, tynnWorkstations = null, onOpenWorkstation, onSetRole }: RemoteConnectProps) {
     const [opening, openWorkstation] = useOpenProgress(onOpenWorkstation);
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // An upgrade in flight is said in place of its button — connected or not: the link DROPS while the host restarts.
@@ -2006,7 +2008,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
     const tynnList = tynnWorkstations === null ? null : (
         <div className="flex flex-col gap-1">
             <span className="text-xs font-medium text-[var(--fg-3)]">Your Tynn workstations</span>
-            <TynnWorkstationRows list={tynnWorkstations} onOpenWorkstation={openWorkstation} opening={opening} />
+            <TynnWorkstationRows list={tynnWorkstations} onOpenWorkstation={openWorkstation} opening={opening} onSetRole={onSetRole} />
         </div>
     );
     // Host and PIN over the tailnet is the OTHER way: folded under the Tynn list. Open when it is the only way (Tynn was
