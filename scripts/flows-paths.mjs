@@ -129,7 +129,8 @@ export function touchedFlows(changed, root = REPO) {
         .filter((p) => p && (set.has(p) || FLOW_NAME.test(p) || ALSO.some((a) => (a.endsWith('/') ? p.startsWith(a) : p === a))));
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Run as a script (not imported by the test): by name, since comparing full paths trips over a drive letter's case.
+if (/(^|[\\/])flows-paths\.mjs$/.test(process.argv[1] ?? '')) {
     const [flag, list] = process.argv.slice(2);
     if (flag === '--touched') {
         if (!list) { console.error('usage: flows-paths.mjs --touched <file of changed paths>'); process.exit(2); }

@@ -1,6 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { WINDOW_PATH, flowsDependencySet, importGraph, runtimeImports, srcFiles } from '../scripts/flows-paths.mjs';
+import { WINDOW_PATH, flowsDependencySet, importGraph, runtimeImports, srcFiles, touchedFlows } from '../scripts/flows-paths.mjs';
 
 /**
  * THE FLOWS ACCEPTANCE SUITE IS WIRED (the owner, 2026-10-27: test every trigger and node "only when we make changes to
@@ -13,6 +17,7 @@ import { WINDOW_PATH, flowsDependencySet, importGraph, runtimeImports, srcFiles 
 const code = (yaml: string) => yaml.split(/\r?\n/).filter((l) => !/^\s*#/.test(l)).join('\n');
 const ci = code(readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8'));
 const job = ci.slice(ci.indexOf('\n  flows:'), ci.indexOf('\n  test-windows:'));
+const repo = fileURLToPath(new URL('..', import.meta.url));
 
 describe('the Flows acceptance suite', () => {
     it('`npm run verify:flows` runs its own config, which includes only the acceptance files — `npm test` does not pick them up', () => {
@@ -31,23 +36,49 @@ describe('the Flows acceptance suite', () => {
         expect(job).toMatch(/- run: npm run verify:flows\n\s+if: steps\.changed\.outputs\.flows == 'true'/);
     });
 
-    it('its path rule: flow sources, the editor, the schedule and file-trigger cores, the suite — nothing else; and the fancy-flow dependency', () => {
-        const rule = /grep -qE '([^']+)'/.exec(job)![1]!;
-        // The rule is a POSIX ERE written so it reads the same as a JavaScript RegExp (nothing whose meaning differs).
-        const matches = (path: string) => new RegExp(rule).test(path);
-        for (const path of ['src/main/flow-runner.ts', 'src/main/flow-tools.ts', 'src/core/flow-canvas.ts', 'src/renderer/components/FlowEditorWindow.tsx', 'src/main/v1-flows.ts', 'src/core/cron.ts', 'src/core/file-trigger.ts', 'test/flows-acceptance/harness.ts', 'vitest.flows.config.mts']) {
-            expect(matches(path), path).toBe(true);
-        }
-        for (const path of ['src/main/compose.ts', 'src/main/process-supervisor.ts', 'test/flows.test.ts', 'README.md', 'package.json']) {
-            expect(matches(path), path).toBe(false);
-        }
-        expect(job).toContain(`-- package.json | grep -qE '^[+-].*"@particle-academy/fancy-flow"'`);
-        expect(job).toContain(`-- package-lock.json | grep -qE '^[+-].*fancy-flow-[0-9]'`);
+    it('it asks scripts/flows-paths.mjs which changed files touch Flows (not a rule on names), and checks the fancy-flow dependency', () => {
+        expect(job).toContain('git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"');
+        expect(job).toContain('node scripts/flows-paths.mjs --touched "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/touched.txt"');
+        expect(job).toMatch(/if \[ -s "\$RUNNER_TEMP\/touched\.txt" \]; then [^\n]*flows=true; fi/);
+        expect(job).toContain(`git diff "$BASE" HEAD -- package.json > "$RUNNER_TEMP/package.diff"`);
+        expect(job).toContain(`if grep -qE '^[+-].*"@particle-academy/fancy-flow"' "$RUNNER_TEMP/package.diff"; then flows=true; fi`);
+        expect(job).toContain(`git diff "$BASE" HEAD -- package-lock.json > "$RUNNER_TEMP/package-lock.diff"`);
+        expect(job).toContain(`if grep -qE '^[+-].*fancy-flow-[0-9]' "$RUNNER_TEMP/package-lock.diff"; then flows=true; fi`);
+        // Nothing piped into grep: `grep -q` exits at its first match, the writer dies of SIGPIPE, and pipefail reads a
+        // match as none — the suite would be skipped exactly when the dependency changed.
+        expect(job).not.toMatch(/\|\s*grep/);
+        // node makes the decision, so node is set up before it — for every change, not only the ones that touch Flows.
+        const setup = job.indexOf('uses: actions/setup-node@v4');
+        expect(setup).toBeGreaterThan(-1);
+        expect(setup).toBeLessThan(job.indexOf('node scripts/flows-paths.mjs'));
+        expect(job.slice(setup, job.indexOf('- name: did this change touch Flows?'))).not.toContain('if:');
     });
 
-    it('its rule covers every file Flows are made of — not only the files named flow (genie#1302 broke the editor through core/address.ts, and the job never ran)', () => {
-        const rule = new RegExp(/grep -qE '([^']+)'/.exec(job)![1]!);
-        expect(flowsDependencySet().filter((path) => !rule.test(path))).toEqual([]);
+    it('its decision covers every file Flows are made of — not only the files named flow (genie#1302 broke the editor through core/address.ts, and the job never ran)', () => {
+        const set = flowsDependencySet();
+        expect(touchedFlows(set)).toEqual(set);
+        expect(touchedFlows(['README.md', 'src/core/address.ts'])).toEqual(['src/core/address.ts']);
+        // The suite, its config and the script that decides; and a flow file that was DELETED (it is in no graph).
+        for (const path of ['test/flows-acceptance/harness.ts', 'vitest.flows.config.mts', 'scripts/flows-paths.mjs', 'src/main/flow-gone.ts']) {
+            expect(touchedFlows([path]), path).toEqual([path]);
+        }
+        // Not the rest of Genie, not the unit tests (the default suite runs them), not package.json by itself.
+        expect(touchedFlows(['src/main/terminal-host.ts', 'src/renderer/Shell.tsx', 'test/flows.test.ts', 'README.md', 'package.json', ''])).toEqual([]);
+    });
+
+    it('`--touched <file>` prints the paths that touch Flows, one per line, and nothing when none do', () => {
+        const dir = mkdtempSync(join(tmpdir(), 'flows-paths-'));
+        try {
+            const list = join(dir, 'changed.txt');
+            const touched = (paths: string[]) => {
+                writeFileSync(list, `${paths.join('\n')}\n`);
+                return execFileSync(process.execPath, ['scripts/flows-paths.mjs', '--touched', list], { cwd: repo, encoding: 'utf8' });
+            };
+            expect(touched(['README.md', 'src/core/address.ts', 'src/core/route.ts'])).toBe('src/core/address.ts\nsrc/core/route.ts\n');
+            expect(touched(['README.md', 'src/main/terminal-host.ts'])).toBe('');
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 
