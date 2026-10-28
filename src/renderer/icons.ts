@@ -38,6 +38,8 @@ export const ICON_NAMES: readonly string[] = [
     'rocket', 'shield-check', 'circle-check', 'ban', 'trash-2', 'user',
     // Its detail flyout: list marks (tasks, features, produces) and a story's facts (outcome, risk).
     'square-check', 'tag', 'package', 'target', 'triangle-alert',
+    // Its claims (row B3): Claim + Start and Assign to.
+    'hand', 'user-plus',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
     // The rail's Hosting / AgentInbox rows (Toolchain uses 'wrench'), and a hibernated workspace's row.
     'server', 'mail', 'moon',

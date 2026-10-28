@@ -4,9 +4,12 @@ import {
     canDrop,
     changedEdit,
     idsOf,
-    RISK_LEVELS,
+    initialsOf,
     newItemKind,
     performBoardAction,
+    performClaimThenStart,
+    RISK_LEVELS,
+    startPlan,
     type BoardActionInput,
     type BoardCard,
     type BoardColumnView,
@@ -15,6 +18,7 @@ import {
     type BoardOp,
     type BoardScope,
     type BoardView,
+    type Claimant,
     type TynnBoardHost,
     type TynnBoardState,
 } from '../../core/tynn-board.js';
@@ -34,6 +38,11 @@ export type { BoardActionInput, TynnBoardHost };
  * create or an edit says it is running, then that it worked — or Tynn's reason, with Retry (the owner: visible progress,
  * never silent).
  *
+ * Row B3 (workspace-ux 0.3.0): a claimed card shows its claimant (a person's initials, an agent's mark; the name on hover)
+ * and the claimant can release it; a backlog card's Start follows the project's claim mode, as tynn.ai's does; a person
+ * who may manage the project assigns from the project's eligible claimants. Each says it is running, then that it
+ * worked, or Tynn's reason with Retry.
+ *
  * What a card can do and where it can go are declared in core/tynn-board.ts against the workspace-UX contract.
  */
 
@@ -44,6 +53,9 @@ export interface TynnBoardPanelProps {
     readonly onRefresh?: (() => void) | undefined;
     /** Run the last failed create or edit again. */
     readonly onRetry?: (() => void) | undefined;
+    /** The project's eligible claimants for the Assign picker: null until asked for, 'loading' while read. */
+    readonly claimants?: readonly Claimant[] | 'loading' | null | undefined;
+    readonly onLoadClaimants?: (() => void) | undefined;
 }
 
 const SINGULAR: Record<BoardLevel, string> = { versions: 'versions', stories: 'stories', tasks: 'tasks' };
@@ -66,13 +78,14 @@ function useShift(): boolean {
     return held;
 }
 
-function IconButton({ icon, label, onClick, disabled = false, data }: { icon: string; label: string; onClick: () => void; disabled?: boolean; data: Record<string, string> }) {
+function IconButton({ icon, label, onClick, disabled = false, data, menu = false }: { icon: string; label: string; onClick: () => void; disabled?: boolean; data: Record<string, string>; menu?: boolean }) {
     return (
         <button
             type="button"
             aria-label={label}
             title={label}
             disabled={disabled}
+            {...(menu ? { 'aria-haspopup': 'menu' as const } : {})}
             onClick={(e) => { e.stopPropagation(); onClick(); }}
             className="rounded p-1 text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] disabled:opacity-40"
             {...data}
@@ -102,7 +115,102 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'task.create': { running: 'Creating task…', done: 'Task created' },
     'story.edit': { running: 'Saving…', done: 'Saved' },
     'task.edit': { running: 'Saving…', done: 'Saved' },
+    'story.claim-start': { running: 'Claiming and starting…', done: 'Claimed and started' },
+    'task.claim-start': { running: 'Claiming and starting…', done: 'Claimed and started' },
+    'story.unclaim': { running: 'Releasing claim…', done: 'Claim released' },
+    'task.unclaim': { running: 'Releasing claim…', done: 'Claim released' },
+    'story.assign': { running: 'Assigning…', done: 'Assigned' },
+    'task.assign': { running: 'Assigning…', done: 'Assigned' },
 };
+
+/** The claim actions: their progress is said on the board's own line, not in a form. */
+const CLAIM_OP = /\.(claim-start|unclaim|assign)$/;
+
+/** Who holds a card: a person's initials or an agent's mark, the name on hover and for a screen reader. */
+function Avatar({ who }: { who: { type: 'user' | 'agent'; id: string; name: string; initials?: string } }) {
+    const label = `Claimed by ${who.name}${who.type === 'agent' ? ' (agent)' : ''}`;
+    return (
+        <span
+            data-tynn-claimant={who.id}
+            data-tynn-claimant-kind={who.type}
+            title={label}
+            aria-label={label}
+            role="img"
+            className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--bg-2)] text-[9px] font-semibold text-[var(--fg-2)]"
+        >
+            {who.type === 'agent' ? <Icon name="bot" size="xs" /> : (who.initials ?? who.name.charAt(0).toUpperCase())}
+        </span>
+    );
+}
+
+const menuItemClass = 'flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[12px] text-[var(--fg-1)] hover:bg-[var(--bg-2)]';
+
+/** A small menu under an icon button (the Start choice, the Assign picker). */
+function Menu({ children, label }: { children: ReactNode; label: string }) {
+    return (
+        <span role="menu" aria-label={label} onClick={(e) => e.stopPropagation()} className="absolute right-0 top-full z-20 mt-1 flex max-h-56 min-w-[10rem] flex-col overflow-y-auto rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] shadow-sm">
+            {children}
+        </span>
+    );
+}
+
+/**
+ * A backlog card's Start, by the project's claim mode (tynn.ai's Claim.jsx): off or already mine → Start; required →
+ * one "Claim and start"; optional → a choice of "Claim + Start" or "Start".
+ */
+function StartControl({ card, claims, onAction }: { card: BoardCard; claims: BoardView['claims']; onAction: TynnBoardPanelProps['onAction'] }) {
+    const [open, setOpen] = useState(false);
+    const step = card.quick!;
+    const kind = card.kind as 'story' | 'task';
+    const plan = startPlan(card, claims);
+    const claimStart = () => onAction({ action: `${kind}.claim-start`, ids: idsOf(card) });
+    const start = () => onAction({ action: step.actionId, ids: idsOf(card) });
+    if (plan === 'claim-then-start') {
+        return <IconButton icon="play" label="Claim and start" disabled={step.disabled} onClick={claimStart} data={{ 'data-tynn-step': `${kind}.claim-start` }} />;
+    }
+    if (plan === 'choose') {
+        return (
+            <span className="relative inline-flex">
+                <IconButton icon="play" label={step.label} disabled={step.disabled} menu onClick={() => setOpen((o) => !o)} data={{ 'data-tynn-start-choice': card.id }} />
+                {open && !step.disabled ? (
+                    <Menu label="Start">
+                        <button type="button" role="menuitem" data-tynn-claim-start={card.id} className={menuItemClass} onClick={() => { setOpen(false); claimStart(); }}><Icon name="hand" size="xs" /> Claim + Start</button>
+                        <button type="button" role="menuitem" data-tynn-plain-start={card.id} className={menuItemClass} onClick={() => { setOpen(false); start(); }}><Icon name="play" size="xs" /> Start</button>
+                    </Menu>
+                ) : null}
+            </span>
+        );
+    }
+    return <IconButton icon={step.icon} label={step.label} disabled={step.disabled} onClick={start} data={{ 'data-tynn-step': step.actionId }} />;
+}
+
+/** The Assign picker: the project's eligible claimants (read when first opened), each with their avatar. */
+function AssignControl({ card, claimants, onLoadClaimants, onAction }: { card: BoardCard; claimants: TynnBoardPanelProps['claimants']; onLoadClaimants?: (() => void) | undefined; onAction: TynnBoardPanelProps['onAction'] }) {
+    const [open, setOpen] = useState(false);
+    const toggle = () => {
+        setOpen((o) => !o);
+        if (!open && (claimants === null || claimants === undefined)) onLoadClaimants?.();
+    };
+    return (
+        <span className="relative inline-flex">
+            <IconButton icon="user-plus" label="Assign to…" menu onClick={toggle} data={{ 'data-tynn-assign': card.id }} />
+            {open ? (
+                <Menu label="Assign to">
+                    {claimants === 'loading' || claimants === null || claimants === undefined
+                        ? <span className="flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" /> Loading…</span>
+                        : claimants.length === 0
+                            ? <span className="px-2.5 py-1.5 text-[12px] text-[var(--fg-3)]">No one can be assigned here</span>
+                            : claimants.map((c) => (
+                                <button key={`${c.type}:${c.id}`} type="button" role="menuitem" data-tynn-assign-to={`${c.type}:${c.id}`} className={menuItemClass}
+                                    onClick={() => { setOpen(false); onAction({ action: `${card.kind}.assign`, ids: idsOf(card), body: { type: c.type, id: c.id } }); }}>
+                                    <Avatar who={{ ...c, initials: initialsOf(c.name) }} /> <span className="min-w-0 truncate">{c.name}</span>
+                                </button>
+                            ))}
+                </Menu>
+            ) : null}
+        </span>
+    );
+}
 
 /** What the create or edit in flight is doing, or how it ended: running, done, or Tynn's reason with Retry. */
 function OpLine({ op, onRetry }: { op: BoardOp; onRetry?: (() => void) | undefined }) {
@@ -153,7 +261,9 @@ function NewItemForm({ kind, view, op, onAction, onClose, onRetry }: { kind: 'st
     );
 }
 
-function Card({ card, scope, onScope, onAction }: { card: BoardCard; scope: BoardScope; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction'] }) {
+interface ClaimProps { readonly claims: BoardView['claims']; readonly claimants: TynnBoardPanelProps['claimants']; readonly onLoadClaimants?: (() => void) | undefined }
+
+function Card({ card, scope, onScope, onAction, claim }: { card: BoardCard; scope: BoardScope; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; claim: ClaimProps }) {
     const drill = card.drill;
     const remove = () => {
         if (globalThis.confirm?.(`Delete this ${card.kind}? This cannot be undone.`) !== false) onAction({ action: `${card.kind}.delete`, ids: idsOf(card) });
@@ -172,11 +282,19 @@ function Card({ card, scope, onScope, onAction }: { card: BoardCard; scope: Boar
                 </div>
                 <div className="flex items-center gap-1 text-[11px] text-[var(--fg-3)]">
                     {card.progress !== null ? <span data-tynn-progress="">{card.progress}</span> : null}
-                    {card.claimedBy !== null ? <span className="truncate" title={card.claimedBy}><Icon name="user" size="xs" /> {card.claimedBy}</span> : null}
+                    {card.claim !== null ? (
+                        <span className="inline-flex items-center gap-0.5">
+                            <Avatar who={card.claim} />
+                            {card.claim.mine ? <IconButton icon="x" label="Release claim" onClick={() => onAction({ action: `${card.kind}.unclaim`, ids: idsOf(card) })} data={{ 'data-tynn-release': card.id }} /> : null}
+                        </span>
+                    ) : null}
                     <span className="ml-auto flex items-center">
-                        {card.quick ? (
+                        {card.quick && card.quick.verb === 'start' && hasDetail ? (
+                            <StartControl card={card} claims={claim.claims} onAction={onAction} />
+                        ) : card.quick ? (
                             <IconButton icon={card.quick.icon} label={card.quick.label} disabled={card.quick.disabled} onClick={() => onAction({ action: card.quick!.actionId, ids: idsOf(card) })} data={{ 'data-tynn-step': card.quick.actionId }} />
                         ) : null}
+                        {hasDetail && claim.claims?.canAssign === true ? <AssignControl card={card} claimants={claim.claimants} onLoadClaimants={claim.onLoadClaimants} onAction={onAction} /> : null}
                         {hasDetail ? <IconButton icon="panel-right-open" label="Details" onClick={() => onScope({ ...scope, focus: `${card.kind}:${card.id}` })} data={{ 'data-tynn-details': card.id }} /> : null}
                         <IconButton icon="trash-2" label="Delete" onClick={remove} data={{ 'data-tynn-delete': card.id }} />
                     </span>
@@ -186,7 +304,7 @@ function Card({ card, scope, onScope, onAction }: { card: BoardCard; scope: Boar
     );
 }
 
-function Column({ column, view, scope, override, composer, onScope, onAction }: { column: BoardColumnView; view: BoardView; scope: BoardScope; override: boolean; composer: ReactNode; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction'] }) {
+function Column({ column, view, scope, override, composer, onScope, onAction, claim }: { column: BoardColumnView; view: BoardView; scope: BoardScope; override: boolean; composer: ReactNode; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; claim: ClaimProps }) {
     const { draggedCard, dragSource } = useKanban();
     // While a card is dragged, a column it cannot reach reads as off (tynn.ai dims it too); Shift opens them all.
     const illegal = draggedCard !== null && dragSource !== null && !canDrop(view.level, dragSource, column.status, override);
@@ -195,7 +313,7 @@ function Column({ column, view, scope, override, composer, onScope, onAction }: 
             {composer}
             {column.cards.length === 0 && !composer ? (
                 <p data-tynn-empty={column.status} className="py-2 text-center text-[11px] text-[var(--fg-4)]">No {SINGULAR[view.level]}</p>
-            ) : column.cards.map((c) => <Card key={c.id} card={c} scope={scope} onScope={onScope} onAction={onAction} />)}
+            ) : column.cards.map((c) => <Card key={c.id} card={c} scope={scope} onScope={onScope} onAction={onAction} claim={claim} />)}
         </Kanban.Column>
     );
 }
@@ -356,8 +474,10 @@ function Detail({ detail, op, onClose, onAction, onRetry }: { detail: BoardDetai
     );
 }
 
-function Board({ state, onScope, onAction, onRefresh, onRetry }: { state: Extract<TynnBoardState, { state: 'ready' }>; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; onRefresh?: (() => void) | undefined; onRetry?: (() => void) | undefined }) {
+function Board({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoadClaimants }: { state: Extract<TynnBoardState, { state: 'ready' }>; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; onRefresh?: (() => void) | undefined; onRetry?: (() => void) | undefined; claimants?: TynnBoardPanelProps['claimants']; onLoadClaimants?: (() => void) | undefined }) {
     const { view, refused = null, detail = null, detailRefused = null, op = null } = state;
+    const claim: ClaimProps = { claims: view.claims, claimants, onLoadClaimants };
+    const claimOp = op !== null && CLAIM_OP.test(op.action) ? op : null;
     const shift = useShift();
     const kind = view.level === 'versions' ? 'version' : view.level === 'stories' ? 'story' : 'task';
     const newKind = newItemKind(view.level);
@@ -402,10 +522,11 @@ function Board({ state, onScope, onAction, onRefresh, onRetry }: { state: Extrac
                         {onRefresh ? <IconButton icon="refresh-cw" label="Refresh" onClick={onRefresh} data={{ 'data-tynn-refresh': '' }} /> : null}
                     </span>
                 </div>
+                {claimOp ? <OpLine op={claimOp} onRetry={onRetry} /> : null}
                 {refused ? <p data-tynn-board-refused="" role="alert" className="rounded bg-[var(--warning)]/10 px-2 py-1 text-[12px] text-[var(--warning)]">{refused}</p> : null}
                 {detailRefused ? <p data-tynn-detail-refused="" role="alert" className="rounded bg-[var(--warning)]/10 px-2 py-1 text-[12px] text-[var(--warning)]">{detailRefused}</p> : null}
                 <Kanban onCardMove={move} className="flex min-h-0 flex-1 items-start gap-2 overflow-x-auto">
-                    {view.columns.map((col) => <Column key={col.status} column={col} view={view} scope={scope} override={shift} composer={col.status === start ? composer : null} onScope={onScope} onAction={onAction} />)}
+                    {view.columns.map((col) => <Column key={col.status} column={col} view={view} scope={scope} override={shift} composer={col.status === start ? composer : null} onScope={onScope} onAction={onAction} claim={claim} />)}
                 </Kanban>
             </div>
             {detail ? <Detail key={detail.id} detail={detail} op={op} onClose={() => onScope(scope)} onAction={onAction} onRetry={onRetry} /> : null}
@@ -413,8 +534,8 @@ function Board({ state, onScope, onAction, onRefresh, onRetry }: { state: Extrac
     );
 }
 
-export function TynnBoardPanel({ state, onScope, onAction, onRefresh, onRetry }: TynnBoardPanelProps) {
-    if (state.state === 'ready') return <Board state={state} onScope={onScope} onAction={onAction} onRefresh={onRefresh} onRetry={onRetry} />;
+export function TynnBoardPanel({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoadClaimants }: TynnBoardPanelProps) {
+    if (state.state === 'ready') return <Board state={state} onScope={onScope} onAction={onAction} onRefresh={onRefresh} onRetry={onRetry} claimants={claimants} onLoadClaimants={onLoadClaimants} />;
     const line = state.state === 'loading'
         ? <><Icon name="loader" size="xs" /> Reading Tynn…</>
         : state.state === 'not-linked'
@@ -423,8 +544,9 @@ export function TynnBoardPanel({ state, onScope, onAction, onRefresh, onRetry }:
     return <p data-tynn-board-state={state.state} className="flex items-center gap-1.5 p-4 text-[12px] text-[var(--fg-3)]">{line}</p>;
 }
 
-/** Create and edit report their progress; the workflow steps, drags and deletes keep the board's refused line. */
-const REPORTS_PROGRESS = /\.(create|edit)$/;
+/** Create, edit and the claim actions report their progress; workflow steps, drags and deletes keep the refused line. */
+const REPORTS_PROGRESS = /\.(create|edit|claim-start|unclaim|assign)$/;
+const CLAIM_START = /^(story|task)\.claim-start$/;
 
 /** The tab: keeps the scope, reads the board, acts, and reads it again — a refused step stays on screen in Tynn's words. */
 export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host: TynnBoardHost }) {
@@ -432,6 +554,13 @@ export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host:
     const [state, setState] = useState<TynnBoardState>({ state: 'loading' });
     const [op, setOp] = useState<BoardOp | null>(null);
     const [lastInput, setLastInput] = useState<BoardActionInput | null>(null);
+    const [claimants, setClaimants] = useState<readonly Claimant[] | 'loading' | null>(null);
+    const loadClaimants = useCallback(async () => {
+        setClaimants('loading');
+        const r = await host.act(workspaceId, { action: 'board.claimants', ids: {} });
+        // A list Tynn will not show reads as nobody to assign, never a spinner that does not end.
+        setClaimants(r.ok ? (r.claimants ?? []) : []);
+    }, [host, workspaceId]);
     const read = useCallback(async (at: BoardScope, refused: string | null = null) => {
         const r = await host.read(workspaceId, at);
         if (r.ok) setState({ state: 'ready', view: r.view, refused, detail: r.detail ?? null, detailRefused: r.detailRefused ?? null });
@@ -441,7 +570,10 @@ export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host:
     const act = async (input: BoardActionInput) => {
         const tracked = REPORTS_PROGRESS.test(input.action);
         if (tracked) setLastInput(input);
-        const r = tracked ? await performBoardAction(host, workspaceId, input, setOp) : await host.act(workspaceId, input);
+        const claimStart = CLAIM_START.exec(input.action);
+        const r = claimStart
+            ? await performClaimThenStart(host, workspaceId, claimStart[1] as 'story' | 'task', input.ids, setOp)
+            : tracked ? await performBoardAction(host, workspaceId, input, setOp) : await host.act(workspaceId, input);
         if (!r.ok && (r.state === 'not-linked' || r.state === 'signed-out')) {
             setState(r.state === 'not-linked' ? { state: 'not-linked' } : { state: 'signed-out', reason: r.reason });
             return;
@@ -458,6 +590,8 @@ export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host:
             onAction={(input) => { void act(input); }}
             onRefresh={() => { void read(scope); }}
             onRetry={lastInput ? () => { void act(lastInput); } : undefined}
+            claimants={claimants}
+            onLoadClaimants={() => { void loadClaimants(); }}
         />
     );
 }

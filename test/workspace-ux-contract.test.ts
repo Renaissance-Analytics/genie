@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
     BOARD_API,
+    BOARD_CLAIMS,
     BOARD_DATA_API,
     BOARD_DRAG,
     BOARD_FIELDS,
@@ -31,6 +32,7 @@ type Board = {
         api: { method: string; path: string };
         levels: Record<string, { scope: string; columns: string[] }>;
         fields: Record<string, string[]>;
+        claims: Record<string, unknown>;
         drag: Record<string, unknown>;
         transitions: Record<string, Record<string, string[]>>;
         quickActions: Record<string, Record<string, { verb: string; guard?: string }>>;
@@ -98,6 +100,10 @@ describe('the Tynn tab\'s board, against the contract', () => {
         expect(BOARD_DRAG).toEqual(board.data.drag);
         expect(BOARD_TRANSITIONS).toEqual(board.data.transitions);
         expect(BOARD_QUICK_ACTIONS).toEqual(board.data.quickActions);
+    });
+
+    it('claims by the contract\'s rules: the settings it reads, the claim-aware Start, who releases and who assigns', () => {
+        expect(BOARD_CLAIMS).toEqual(board.data.claims);
     });
 
     it('has a view for every state the contract names', () => {

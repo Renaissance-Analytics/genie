@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.2.0/contracts/workspace-ux/0.2.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.3.0/contracts/workspace-ux/0.3.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.2.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.2.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.3.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.3.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -12,7 +12,7 @@
     "credential": "the Genie pairing token (gpk_), never an agent's MCP key",
     "scope": "genie:board",
     "refusal": "404 for every refusal (no scope, no access, wrong project, role may not write)",
-    "invalid": "422 with errors.status naming why"
+    "invalid": "422 naming why: errors.status for a workflow step, errors.claim for a claim or an assignment the project's claim rules refuse, or the field's own key for a body that does not validate"
   },
   "surfaces": [
     {
@@ -29,8 +29,17 @@
         },
         "fields": {
           "version": ["id", "number", "title", "status", "story_count", "stories_done", "task_count", "tasks_done"],
-          "story": ["id", "story_number", "title", "status", "order", "task_count", "tasks_done", "claimed_by", "can_start", "can_move_to_qa", "version_active"],
-          "task": ["id", "task_number", "title", "status", "order", "story_id", "claimed_by", "can_start", "version_active"]
+          "story": ["id", "story_number", "title", "status", "order", "task_count", "tasks_done", "claimed_by", "claimed_by_me", "can_start", "can_move_to_qa", "version_active"],
+          "task": ["id", "task_number", "title", "status", "order", "story_id", "claimed_by", "claimed_by_me", "can_start", "version_active"]
+        },
+        "claims": {
+          "field": "claims",
+          "keys": ["mode", "policy", "can_assign"],
+          "modes": ["off", "optional", "required"],
+          "policies": ["any", "human", "agent"],
+          "start": { "off": "start", "optional": "choose", "required": "claim-then-start", "mine": "start" },
+          "release": "claimed_by_me",
+          "assign": "can_assign"
         },
         "drag": { "versions": false, "stories": true, "tasks": true, "override": "shift" },
         "transitions": {
@@ -83,6 +92,9 @@
         { "id": "transition-refused", "what": "a refused step shows the reason the state machine gave" },
         { "id": "detail", "what": "a story or task opens its detail (description, acceptance criteria, tasks, features) and the person can edit it there" },
         { "id": "create-in-backlog", "what": "a new story or task is made in its level's backlog column; the workflow moves it on" },
+        { "id": "claim-start", "what": "a backlog card's Start follows the project's claim mode: off (or already the person's) starts; optional offers Claim + Start or Start; required claims, then starts" },
+        { "id": "claimed", "what": "a claimed card shows its claimant (a person's initials, or an agent's mark) and its name on hover; the person who holds the claim can release it" },
+        { "id": "assign", "what": "a person who may manage the project picks a claimant from the project's eligible list (members and agents, by its claimant policy) and the card is assigned to them" },
         { "id": "not-linked", "what": "the workspace has no Tynn project" },
         { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
       ],
@@ -106,9 +118,9 @@
         { "id": "story.create", "web": "POST stories.store", "api": { "method": "POST", "path": "/stories" } },
         { "id": "story.edit", "web": "PATCH stories.update", "api": { "method": "PATCH", "path": "/stories/{storyId}" } },
         { "id": "story.detail", "web": "GET board", "api": { "method": "GET", "path": "/stories/{storyId}" } },
-        { "id": "story.claim", "web": "POST stories.claim", "api": null },
-        { "id": "story.unclaim", "web": "POST stories.release", "api": null },
-        { "id": "story.assign", "web": "POST stories.assign", "api": null },
+        { "id": "story.claim", "web": "POST stories.claim", "api": { "method": "POST", "path": "/stories/{storyId}/claim" } },
+        { "id": "story.unclaim", "web": "POST stories.release", "api": { "method": "POST", "path": "/stories/{storyId}/release" } },
+        { "id": "story.assign", "web": "POST stories.assign", "api": { "method": "POST", "path": "/stories/{storyId}/assign" } },
 
         { "id": "task.start", "web": "POST tasks.start", "api": { "method": "POST", "path": "/tasks/{taskId}/start" }, "to": "doing" },
         { "id": "task.ready", "web": "POST tasks.ready", "api": { "method": "POST", "path": "/tasks/{taskId}/ready" }, "to": "qa" },
@@ -120,11 +132,11 @@
         { "id": "task.create", "web": "POST tasks.store", "api": { "method": "POST", "path": "/tasks" } },
         { "id": "task.edit", "web": "PATCH tasks.update", "api": { "method": "PATCH", "path": "/tasks/{taskId}" } },
         { "id": "task.detail", "web": "GET board", "api": { "method": "GET", "path": "/tasks/{taskId}" } },
-        { "id": "task.claim", "web": "POST tasks.claim", "api": null },
-        { "id": "task.unclaim", "web": "POST tasks.release", "api": null },
-        { "id": "task.assign", "web": "POST tasks.assign", "api": null },
+        { "id": "task.claim", "web": "POST tasks.claim", "api": { "method": "POST", "path": "/tasks/{taskId}/claim" } },
+        { "id": "task.unclaim", "web": "POST tasks.release", "api": { "method": "POST", "path": "/tasks/{taskId}/release" } },
+        { "id": "task.assign", "web": "POST tasks.assign", "api": { "method": "POST", "path": "/tasks/{taskId}/assign" } },
 
-        { "id": "board.claimants", "web": "GET claimants", "api": null }
+        { "id": "board.claimants", "web": "GET claimants", "api": { "method": "GET", "path": "/claimants" } }
       ]
     }
   ]
