@@ -64,7 +64,7 @@ export const SETTINGS: readonly SettingDef[] = [
     { key: 'default_env_file', group: 'general', scope: 'host', label: 'Env file name', description: 'Default environment file name for new workspaces — the file in each site’s folder Genie keeps the service connection in.', type: 'string', default: '.env' },
     // THIS MACHINE AS A HOST (Tynn #820; the owner: remote access "Off by default", as Genie 1 had it). Drawn in Settings →
     // Remote access as its switch, not as a row.
-    { key: 'remote_access', group: 'workstation', scope: 'host', label: 'Remote access', description: 'Let paired devices on your tailnet reach this Genie.', type: 'boolean', default: false, hidden: true },
+    { key: 'remote_access', group: 'workstation', scope: 'host', label: 'Remote access', description: 'Let your other machines reach this Genie through Tynn, and devices on your tailnet.', type: 'boolean', default: false, hidden: true },
     { key: 'mcp_sync_claude', group: 'workstation', scope: 'host', label: 'Sync Genie into Claude Code (.mcp.json)', description: 'Config sync writes Genie’s MCP endpoint into the workspace’s .mcp.json.', type: 'boolean', default: true },
     { key: 'mcp_sync_cursor', group: 'workstation', scope: 'host', label: 'Sync Genie into Cursor (.cursor/mcp.json)', description: 'Config sync writes Genie’s MCP endpoint into the workspace’s .cursor/mcp.json.', type: 'boolean', default: true },
     { key: 'mcp_sync_codex', group: 'workstation', scope: 'host', label: 'Sync Genie into Codex (.codex/config.toml)', description: 'Config sync writes Genie’s MCP server block into the workspace’s Codex config.', type: 'boolean', default: true },

@@ -65,6 +65,7 @@ import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } fr
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
+import { dispatchConnectLink } from '../core/connect-link.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
@@ -1750,6 +1751,16 @@ async function boot(): Promise<void> {
         if (refused) return { ok: false, reason: refused };
         const own = tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null;
         return connectableWorkstations((path, init) => account.request(path, init), own);
+    });
+    // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
+    // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
+    // browser or the workstation in its own window.
+    ipcMain.handle('genie:connect-link', async (_event, text: unknown) => {
+        const status = tynnAccount?.status();
+        return dispatchConnectLink(String(text ?? ''), status?.signedIn ? status.host : null, workstationRoleNow, {
+            openExternal: async (url) => { try { await shell.openExternal(url); return true; } catch { return false; } },
+            openWorkstation: (id) => openRemoteWindow(`relay:${id}`),
+        });
     });
     ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };

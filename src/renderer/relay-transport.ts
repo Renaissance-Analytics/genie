@@ -23,6 +23,8 @@ export interface TynnNetworkBridge {
     workstations(): Promise<TynnWorkstationList>;
     /** Main mints a grant and dials the relay; the channel is this connection's. */
     open(workstationId: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string }>;
+    /** A pasted share link (genie#1278 C1): main classifies it and acts (core/connect-link.ts). */
+    openLink?(text: string): Promise<{ ok: boolean; note: string }>;
     send(channel: string, text: string): void;
     close(channel: string): void;
     onMessage(listener: (channel: string, text: string) => void): () => void;

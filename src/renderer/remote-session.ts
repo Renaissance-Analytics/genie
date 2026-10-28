@@ -110,8 +110,9 @@ export function openRemoteHost(
     injected: { remoteWindows?: { open(url: string): Promise<void> } | undefined } | undefined,
     own: { remoteWindows?: { open(url: string): Promise<void> } | undefined } | undefined,
     connectHere: (url: string) => void,
-): void {
+): Promise<void> {
     const windows = injected?.remoteWindows ?? own?.remoteWindows;
-    if (windows) void windows.open(url);
-    else connectHere(url);
+    if (windows) return windows.open(url);
+    connectHere(url);
+    return Promise.resolve();
 }

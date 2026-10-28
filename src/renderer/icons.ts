@@ -41,6 +41,8 @@ export const ICON_NAMES: readonly string[] = [
     'server', 'mail', 'moon',
     // The workspace row's background-process indicator (Genie 1's runtime pill, 2026-10-19).
     'cpu',
+    // Connect to another machine (the title bar's button, Genie 1's Hosts), and a Tynn workstation's desktop / cloud.
+    'monitor', 'cloud',
     // A workspace's GitHub (IssueWatch) panel heading (Tynn #806), its rows' kinds and its Refresh.
     'git-pull-request', 'circle-dot', 'shield-alert', 'refresh-cw',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.

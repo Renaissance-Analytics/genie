@@ -1,5 +1,6 @@
 import {
     Icon,
+    Popover,
     Tooltip,
     browserPlatformHints,
     detectPlatform,
@@ -10,6 +11,9 @@ import { useEffect, useState } from 'react';
 import { FEATURE_ICONS } from '../../core/rail-view.js';
 import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
+import { ConnectMenu } from './ConnectMenu.js';
+import { CONNECT_LABEL, CONNECT_ROUTE } from '../../core/connect-machine.js';
+import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 
@@ -78,9 +82,20 @@ export interface TitleBarProps {
      * workspace you are in is never in doubt. Absent = not in a workspace; `color: null` = none known yet (named, no swatch).
      */
     workspace?: { name: string; color: string | null } | null | undefined;
+    /**
+     * CONNECT TO ANOTHER MACHINE, among the header's system icons (genie#1278 C1; Genie 1's `HostsButton`,
+     * v0.7.0-beta.342 renderer/pages/master.tsx:4803). It opens a menu of your Tynn workstations, each with Open and its
+     * progress, a share-link button and the way to Settings → Remote access. Absent = this window cannot connect (it
+     * shows another machine, or this machine is a drone).
+     */
+    connect?: {
+        workstations: TynnWorkstationList | null;
+        onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
+        onOpenLink?: (() => void) | undefined;
+    } | undefined;
 }
 
-export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace }: TitleBarProps) {
+export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette, platform, controlsInset = 0, update, onOpenUpdate, paletteKey, version, inbox, workspace, connect }: TitleBarProps) {
     /**
      * The modifier label, from the KIT rather than from our own copy.
      *
@@ -102,6 +117,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
      * First paint says `Ctrl`; an Apple machine swaps on the next tick.
      */
     const [resolved, setResolved] = useState<FancyPlatform>('generic');
+    const [connectOpen, setConnectOpen] = useState(false);
     useEffect(() => {
         if (platform === undefined) setResolved(detectPlatform(browserPlatformHints()));
     }, [platform]);
@@ -178,6 +194,31 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                             ) : null}
                         </button>
                     </Tooltip>
+                ) : null}
+                {connect ? (
+                    <Popover placement="bottom-start" open={connectOpen} onOpenChange={setConnectOpen}>
+                        <Popover.Trigger className="[-webkit-app-region:no-drag]">
+                            <Tooltip content={CONNECT_LABEL} placement="bottom">
+                                <button
+                                    type="button"
+                                    data-system-icon="Connect"
+                                    aria-label={CONNECT_LABEL}
+                                    className={`flex size-6 items-center justify-center rounded-md hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] ${connectOpen ? 'bg-[var(--bg-2)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}
+                                >
+                                    <Icon name="monitor" size="sm" />
+                                </button>
+                            </Tooltip>
+                        </Popover.Trigger>
+                        <Popover.Content className="[-webkit-app-region:no-drag]">
+                            {/* Stays open while a machine opens, so its step and then "opened" or the reason with Retry show. */}
+                            <ConnectMenu
+                                workstations={connect.workstations}
+                                onOpenWorkstation={connect.onOpenWorkstation}
+                                onOpenLink={connect.onOpenLink ? () => { setConnectOpen(false); connect.onOpenLink?.(); } : undefined}
+                                onOpenSurface={() => { setConnectOpen(false); onNavigate(CONNECT_ROUTE); }}
+                            />
+                        </Popover.Content>
+                    </Popover>
                 ) : null}
             </div>
 

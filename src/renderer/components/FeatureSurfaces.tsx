@@ -19,6 +19,7 @@ import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
 import type { HostUpgradeStep } from '../../core/host-upgrade.js';
 import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
+import { TynnWorkstationRows, useOpenProgress } from './ConnectMenu.js';
 import type { Problem, ServiceForm, SiteFormDefaults } from '../../core/forms.js';
 import { chooseEngines, switchActiveWarning, type ServiceInstance } from '../../core/services.js';
 import { mailpitInboxUrl } from '../../core/mailpit-name.js';
@@ -1941,7 +1942,9 @@ export interface RemoteConnectProps {
     /** The workstations Tynn says this person can see (Tynn #837); absent/`null` = not asked. */
     readonly tynnWorkstations?: TynnWorkstationList | null | undefined;
     /** Open a Tynn workstation in its own window, over the Tynn relay. */
-    readonly onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void) | undefined;
+    readonly onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
+    /** Paste a share link instead (genie#1278 C1): opens the Command Window's share-link box. */
+    readonly onOpenLink?: (() => void) | undefined;
 }
 
 /** An upgrade's step, in words, for the host it is upgrading. */
@@ -1963,6 +1966,7 @@ function upgradeWords(step: HostUpgradeStep, host: string): string {
  * connected: who you are driving and Disconnect. A refusal from the host is shown where it was caused.
  */
 export function ConnectRemote({ state, remembered, onConnect, onDisconnect, known = [], onOpenHost, onForgetHost, onReconnect, now = Date.now(), onUpgradeHost, upgrade = null, tynnWorkstations = null, onOpenWorkstation }: RemoteConnectProps) {
+    const [opening, openWorkstation] = useOpenProgress(onOpenWorkstation);
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // An upgrade in flight is said in place of its button — connected or not: the link DROPS while the host restarts.
     const upgrading = upgrade !== null && upgrade.kind !== 'up-to-date' && upgrade.kind !== 'done' && upgrade.kind !== 'failed' && upgrade.kind !== 'lost';
@@ -1996,34 +2000,26 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
             ))}
         </ul>
     ) : null;
-    // YOUR TYNN WORKSTATIONS (Genie 1's Hosts picker, Tynn #837): each one Tynn says you may reach opens in its own
-    // window over the Tynn relay; one you may not is shown, and says why, but not offered.
-    const tynnList = tynnWorkstations === null ? null : !tynnWorkstations.ok ? (
-        <p data-tynn-workstations="unavailable" className="text-xs text-[var(--fg-3)]">Your Tynn workstations: {tynnWorkstations.reason}.</p>
-    ) : tynnWorkstations.workstations.length === 0 ? null : (
-        <div data-tynn-workstations="" className="flex flex-col gap-1">
+    // YOUR TYNN WORKSTATIONS — THE MAIN WAY (Genie 1's Hosts picker, Tynn #837; genie#1278 C1): each one Tynn says you may
+    // reach opens in its own window over the Tynn relay, with its progress; one you may not is shown, and says why. None,
+    // or Tynn could not be asked: the steps to take on the other machine (ConnectMenu.tsx), never an empty space.
+    const tynnList = tynnWorkstations === null ? null : (
+        <div className="flex flex-col gap-1">
             <span className="text-xs font-medium text-[var(--fg-3)]">Your Tynn workstations</span>
-            <ul className="flex flex-col gap-1">
-                {tynnWorkstations.workstations.map((w) => (
-                    <li key={w.id} data-tynn-workstation-row={w.id} className="flex items-center gap-2 rounded-lg border border-[var(--border-1)] px-3 py-2 text-[13px]">
-                        <span className="font-medium">{w.name}</span>
-                        <span className="text-[11px] text-[var(--fg-4)]">{w.local ? 'desktop' : 'cloud'}{w.source === 'owner' ? ' · yours' : w.source ? ' · shared with you' : ''}</span>
-                        {w.connectable && onOpenWorkstation ? (
-                            <button type="button" data-action="open-workstation" onClick={() => onOpenWorkstation(w)} className={`ml-auto ${button}`}>Open</button>
-                        ) : (
-                            <span className="ml-auto text-[11px] text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
-                        )}
-                    </li>
-                ))}
-            </ul>
+            <TynnWorkstationRows list={tynnWorkstations} onOpenWorkstation={openWorkstation} opening={opening} />
         </div>
     );
+    // Host and PIN over the tailnet is the OTHER way: folded under the Tynn list. Open when it is the only way (Tynn was
+    // not asked from this window) or when it has something to say (a refusal is never folded away).
+    const tailnetOpen = tynnWorkstations === null || Boolean(state?.lastRefusal);
     return (
         <div className="flex flex-col gap-3">
         {upgradeLine}
         {upgrading ? null : reconnect}
         {tynnList}
         {list}
+        <details data-connect-tailnet="" open={tailnetOpen} className="flex flex-col gap-2">
+        <summary className="cursor-pointer text-xs font-medium text-[var(--fg-3)]">Over your tailnet, with a host and PIN</summary>
         <form
             data-form="connect-remote"
             className="flex flex-wrap items-end gap-2"
@@ -2053,6 +2049,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
             <button type="submit" className={button}>Connect</button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
         </form>
+        </details>
         </div>
     );
 }
@@ -2383,10 +2380,19 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                 <Skeletons rows={3} />
             ) : (
                 <>
-                    {/* THE SWITCH (Tynn #820; the owner: "Off by default", as Genie 1 had it): off, nothing listens. */}
+                    {/* DRIVE ANOTHER MACHINE FIRST (genie#1278 C1): this page is where the title bar's Connect lands, so the way to
+                        another machine is the first thing on it. Never on a drone (W5): Tynn refuses it every connect-grant. */}
+                    {connect && browse ? (
+                        <div data-drive-another="">
+                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
+                            <ConnectRemote {...connect} />
+                        </div>
+                    ) : null}
+                    {/* THE SWITCH (Tynn #820; the owner: "Off by default", as Genie 1 had it): off, nothing listens. It is ALSO what
+                        makes this machine reachable through the Tynn relay (main.ts relayAfterSwitch), so it says Tynn first. */}
                     <div data-remote-enabled={remote.enabled ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 text-sm">
-                        <Switch checked={remote.enabled} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: 'remote_access', value: checked })} aria-label="Let paired devices reach this Genie" />
-                        <span>{remote.enabled ? `Paired devices on your tailnet can reach ${remote.host}.` : `Remote access is off: nothing listens, and no device can reach ${remote.host}.`}</span>
+                        <Switch checked={remote.enabled} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: 'remote_access', value: checked })} aria-label="Let your other machines reach this Genie" />
+                        <span>{remote.enabled ? `Your other machines can reach ${remote.host} through Tynn, and devices on your tailnet.` : `Remote access is off: your other machines cannot reach ${remote.host} through Tynn or your tailnet.`}</span>
                         {remote.enabled ? <button type="button" data-action="remote-restart" className={button} onClick={() => onAction({ kind: 'remote.restart' })}>Restart</button> : null}
                         {remote.enabled && remote.firewall ? <button type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</button> : null}
                         {remote.firewallOutcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.firewallOutcome}</span> : null}
@@ -2460,12 +2466,6 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                             ) : null}
                         </div>
                     )}
-                    {connect && browse ? (
-                        <div>
-                            <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
-                            <ConnectRemote {...connect} />
-                        </div>
-                    ) : null}
                     <div className="flex items-center gap-3 text-sm">
                         <button type="button" className={button} onClick={() => onAction({ kind: remote.locked ? 'remote.unlock' : 'remote.lock' })}>{remote.locked ? 'Unlock' : 'Lock'}</button>
                         <span className="text-xs text-[var(--fg-3)]">{remote.locked ? 'Locked: every remote change is refused until you unlock; reading still works.' : 'Lock refuses every remote change at once.'}</span>
