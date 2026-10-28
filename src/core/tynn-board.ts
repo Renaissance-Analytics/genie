@@ -339,7 +339,23 @@ export interface BoardDetail {
     readonly codeArea: string | null;
     /** A story's version, a task's story. */
     readonly parent: { readonly id: string; readonly label: string } | null;
+    /** A story's tags, persona, outcome metric, risk, effort points and definition of done (tynn.ai's flyout). */
+    readonly tags: readonly string[];
+    readonly persona: string | null;
+    readonly outcomeMetric: string | null;
+    readonly riskLevel: RiskLevel | null;
+    readonly effortPoints: number | null;
+    readonly dodReference: string | null;
+    /** A task's environment; null when Tynn's detail did not carry it, so it is neither shown as empty nor sent back. */
+    readonly envRequirements: readonly string[] | null;
+    readonly blockingOn: readonly string[];
+    readonly produces: readonly string[];
 }
+
+export const RISK_LEVELS = ['low', 'medium', 'high'] as const;
+export type RiskLevel = (typeof RISK_LEVELS)[number];
+const riskOf = (v: unknown): RiskLevel | null => (typeof v === 'string' && (RISK_LEVELS as readonly string[]).includes(v) ? (v as RiskLevel) : null);
+const effortOf = (v: unknown): number | null => (typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null);
 
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 const hash = (n: string | null) => (n === null ? null : `#${n}`);
@@ -377,6 +393,15 @@ export function parseDetail(json: unknown): BoardDetail | null {
         verificationSteps: strings(json.verification_steps),
         codeArea: str(json.code_area),
         parent,
+        tags: strings(json.tags),
+        persona: str(json.persona),
+        outcomeMetric: str(json.outcome_metric),
+        riskLevel: riskOf(json.risk_level),
+        effortPoints: effortOf(json.effort_points),
+        dodReference: str(json.dod_reference),
+        envRequirements: Array.isArray(json.env_requirements) ? strings(json.env_requirements) : null,
+        blockingOn: strings(json.blocking_on),
+        produces: strings(json.produces),
     };
 }
 
@@ -403,10 +428,14 @@ export function createBody(kind: 'story' | 'task', ids: BoardIds, raw: unknown):
     return { [kind === 'story' ? 'version_id' : 'story_id']: parent, title, description };
 }
 
+/** A free-text field: trimmed; empty clears it (null); anything else is not sent (undefined). */
+const text = (v: unknown): string | null | undefined => (typeof v === 'string' ? (v.trim() === '' ? null : v.trim()) : v === null ? null : undefined);
+
 /**
- * What an edit sends: only the fields the flyout edits (a story's title, description and acceptance criteria; a task's
- * title, description, verification steps and code area). Never a status: that moves through the workflow. Null when
- * there is nothing to change or the title would be empty.
+ * What an edit sends: only the fields tynn.ai's flyout edits. A story: title, description, acceptance criteria, tags,
+ * persona, outcome metric, risk, effort points, definition of done. A task: title, description, verification steps, code
+ * area, environment, blocking-on, produces. Never a status: that moves through the workflow. A risk or an effort Tynn
+ * would refuse is not sent; an empty one clears. Null when there is nothing to change or the title would be empty.
  */
 export function editBody(kind: 'story' | 'task', raw: unknown): Record<string, unknown> | null {
     const b = isRow(raw) ? raw : {};
@@ -416,16 +445,51 @@ export function editBody(kind: 'story' | 'task', raw: unknown): Record<string, u
         out.title = b.title.trim();
     }
     if (typeof b.description === 'string') out.description = b.description;
+    const listFields = kind === 'story' ? ['acceptance_criteria', 'tags'] : ['verification_steps', 'env_requirements', 'blocking_on', 'produces'];
+    for (const key of listFields) {
+        const list = lines(b[key]);
+        if (list !== null) out[key] = list;
+    }
     if (kind === 'story') {
-        const ac = lines(b.acceptance_criteria);
-        if (ac !== null) out.acceptance_criteria = ac;
+        for (const key of ['persona', 'outcome_metric', 'dod_reference']) {
+            const value = text(b[key]);
+            if (value !== undefined) out[key] = value;
+        }
+        if (b.risk_level === '' || b.risk_level === null) out.risk_level = null;
+        else if (riskOf(b.risk_level) !== null) out.risk_level = b.risk_level;
+        if (b.effort_points === '' || b.effort_points === null) out.effort_points = null;
+        else if (effortOf(b.effort_points) !== null) out.effort_points = b.effort_points;
     } else {
-        const steps = lines(b.verification_steps);
-        if (steps !== null) out.verification_steps = steps;
         if (typeof b.code_area === 'string') out.code_area = b.code_area.trim();
         else if (b.code_area === null) out.code_area = null;
     }
     return Object.keys(out).length > 0 ? out : null;
+}
+
+/** What the detail holds for each field an edit can send, as Tynn names it; `undefined` = not known here, never sent. */
+function heldValues(d: BoardDetail): Record<string, unknown> {
+    const common = { title: d.title, description: d.description };
+    return d.kind === 'story'
+        ? { ...common, acceptance_criteria: d.acceptanceCriteria, tags: d.tags, persona: d.persona, outcome_metric: d.outcomeMetric, risk_level: d.riskLevel, effort_points: d.effortPoints, dod_reference: d.dodReference }
+        : { ...common, verification_steps: d.verificationSteps, code_area: d.codeArea ?? '', env_requirements: d.envRequirements ?? undefined, blocking_on: d.blockingOn, produces: d.produces };
+}
+
+const same = (a: unknown, b: unknown): boolean => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+
+/**
+ * The edit the person made: the form's fields (cleaned as editBody cleans them) that differ from what the detail holds.
+ * A field the detail could not show (an environment an older Tynn did not send) is never sent, so a save cannot wipe
+ * what Tynn keeps. `{}` when nothing changed.
+ */
+export function changedEdit(detail: BoardDetail, form: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    const cleaned = editBody(detail.kind, form) ?? {};
+    const held = heldValues(detail);
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(cleaned)) {
+        if (held[key] === undefined) continue;
+        if (!same(held[key], key === 'code_area' && value === null ? '' : value)) out[key] = value;
+    }
+    return out;
 }
 
 /** A create or an edit, in flight or ended: what the tab says while it runs, and after. */
