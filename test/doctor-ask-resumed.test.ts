@@ -20,8 +20,8 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 let dir: string;
 const hosts: SessionHost[] = [];
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-askresumed-')); });
-// Stop every host, then remove with retries: a session's row writes are fire-and-forget by design and `stop` does not
-// await them, so a removal right after can meet a write still landing — CI, 2026-10-14: `ENOTEMPTY ... runtime/sessions`
+// Stop every host, then remove with retries: a session's row writes are queued behind the screen by design and `stop`
+// does not await them, so a removal right after can meet a write still landing — CI, 2026-10-14: `ENOTEMPTY ... runtime/sessions`
 // on this test, never alone, about one full suite in twelve. The same race and the same answer as session-host.test.ts.
 afterEach(async () => {
     for (const h of hosts.splice(0)) h.stopAll();
@@ -52,7 +52,11 @@ describe('askAndWait on a resumed agent', () => {
         const first = host();
         first.host.start(record, dir);
         for (const q of ['one', 'two']) { first.host.prompt(record.id, q, 'you'); first.say(`answer ${q}`); first.end(); }
-        await vi.waitFor(async () => expect((await readHistory(openDurableStore(sessionsDir(dir)), record.id)).rows.filter((r) => r.event.kind === 'turn')).toHaveLength(2), { timeout: 3000 });
+        // Waited for by the host's own `settled()` — every row queued is written or counted — never by a poll with a budget:
+        // a 3 s `vi.waitFor` here read [] on a loaded windows-latest runner (genie#1315). A row that was LOST, not slow,
+        // still fails this, at once and as itself.
+        await first.host.settled();
+        expect((await readHistory(openDurableStore(sessionsDir(dir)), record.id)).rows.filter((r) => r.event.kind === 'turn')).toHaveLength(2);
         first.host.stop(record.id);
 
         // Genie restarts; the agent resumes, its turn count carried on from the record.
