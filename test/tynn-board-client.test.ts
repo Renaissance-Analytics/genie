@@ -70,7 +70,8 @@ describe('acting on the board', () => {
 
     it('an action Genie does not offer, or a body that is not a drag, is refused here and never sent', async () => {
         const { p, calls } = ports({ status: 200, body: {} });
-        expect(await runTynnBoardAction(p, 'w1', { action: 'story.claim', ids: { storyId: 's1' } })).toMatchObject({ ok: false, state: 'error' });
+        // Versions' create has no API on Tynn's door yet (a BOARD_GAPS entry); claiming has one since workspace-ux 0.3.0.
+        expect(await runTynnBoardAction(p, 'w1', { action: 'version.create', ids: {} })).toMatchObject({ ok: false, state: 'error' });
         expect(await runTynnBoardAction(p, 'w1', { action: 'story.move', ids: { storyId: 's1' }, body: { status: 1 } })).toMatchObject({ ok: false, state: 'error' });
         expect(calls).toEqual([]);
     });

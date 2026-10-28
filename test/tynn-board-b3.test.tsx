@@ -148,7 +148,8 @@ describe('the board\'s claims', () => {
     });
 
     it('an older Tynn without claim settings: no claims, and Start is plain', () => {
-        const v = board([story('s1')], undefined);
+        // null, not undefined: undefined would take board()'s default claim settings.
+        const v = board([story('s1')], null);
         expect(v.claims).toBeNull();
         expect(startPlan(v.columns[0]!.cards[0]!, v.claims)).toBe('start');
     });

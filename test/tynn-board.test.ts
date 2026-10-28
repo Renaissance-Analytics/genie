@@ -94,7 +94,8 @@ describe('the requests', () => {
         expect(boardActionRequest('p1', 'task.start', { taskId: 't1' })).toEqual({ method: 'POST', path: '/api/v1/projects/p1/tasks/t1/start' });
         expect(boardActionRequest('p1', 'story.move', { storyId: 'a/b' })).toEqual({ method: 'POST', path: '/api/v1/projects/p1/stories/a%2Fb/move' });
         expect(boardActionRequest('p1', 'version.delete', { versionId: 'v1' })).toEqual({ method: 'DELETE', path: '/api/v1/projects/p1/versions/v1' });
-        expect(boardActionRequest('p1', 'story.claim', { storyId: 's1' })).toBeNull();
+        // A BOARD_GAPS entry (versions' edit has no API yet) is not offered; claiming is, since workspace-ux 0.3.0.
+        expect(boardActionRequest('p1', 'version.edit', { versionId: 'v1' })).toBeNull();
         // An id the path needs and was not given is no request at all, never a path with a hole in it.
         expect(boardActionRequest('p1', 'task.start', {})).toBeNull();
     });
