@@ -5,7 +5,7 @@
  * the same rule before it opens anything: a Genie host is `ws://` / `wss://`, or `relay:<workstation id>` — a Tynn
  * workstation reached over the Tynn relay (Tynn #837), whose connection main holds.
  */
-export function remoteWindowSearch(url: string): string {
+export function remoteWindowSearch(url: string, _name?: string | null): string {
     return `?${new URLSearchParams({ remote: url }).toString()}`;
 }
 

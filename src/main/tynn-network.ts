@@ -40,7 +40,7 @@ async function tynnSays(res: { status: number; json(): Promise<unknown> }, fallb
 }
 
 /** `GET /api/v1/workstations/connectable`, never this machine itself, each once. */
-export async function connectableWorkstations(request: SessionRequest, ownWorkstationId: string | null): Promise<TynnWorkstations> {
+export async function connectableWorkstations(request: SessionRequest, ownWorkstationId: string | null | ReadonlySet<string>): Promise<TynnWorkstations> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {
         res = await request('/api/v1/workstations/connectable', { method: 'GET' });
