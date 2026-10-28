@@ -2,7 +2,9 @@ import { Icon, Kanban, useKanban } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
     canDrop,
+    changedEdit,
     idsOf,
+    RISK_LEVELS,
     newItemKind,
     performBoardAction,
     type BoardActionInput,
@@ -198,30 +200,73 @@ function Column({ column, view, scope, override, composer, onScope, onAction }: 
     );
 }
 
-/** The card's edit: the fields tynn.ai's flyout edits. A list is one entry per line. */
+/** A list field as the form holds it: one entry per line. */
+function LinesField({ label, value, onChange, busy, rows = 3 }: { label: string; value: string; onChange: (v: string) => void; busy: boolean; rows?: number }) {
+    return <textarea aria-label={label} placeholder={label} rows={rows} value={value} disabled={busy} onChange={(e) => onChange(e.target.value)} className={inputClass} />;
+}
+
+/** The card's edit: every field tynn.ai's flyout edits. A list is one entry per line; tags are comma separated. */
 function EditForm({ detail, op, onAction, onClose, onRetry }: { detail: BoardDetail; op: BoardOp | null; onAction: TynnBoardPanelProps['onAction']; onClose: () => void; onRetry?: (() => void) | undefined }) {
     const [title, setTitle] = useState(detail.title);
     const [description, setDescription] = useState(detail.description);
     const [list, setList] = useState((detail.kind === 'story' ? detail.acceptanceCriteria : detail.verificationSteps).join('\n'));
     const [codeArea, setCodeArea] = useState(detail.codeArea ?? '');
+    const [tags, setTags] = useState(detail.tags.join(', '));
+    const [persona, setPersona] = useState(detail.persona ?? '');
+    const [outcome, setOutcome] = useState(detail.outcomeMetric ?? '');
+    const [risk, setRisk] = useState<string>(detail.riskLevel ?? '');
+    const [effort, setEffort] = useState(detail.effortPoints === null ? '' : String(detail.effortPoints));
+    const [dod, setDod] = useState(detail.dodReference ?? '');
+    const [env, setEnv] = useState((detail.envRequirements ?? []).join('\n'));
+    const [blocking, setBlocking] = useState(detail.blockingOn.join('\n'));
+    const [produces, setProduces] = useState(detail.produces.join('\n'));
     const mine = op !== null && op.action === `${detail.kind}.edit` ? op : null;
     const busy = mine?.phase === 'running';
     const listLabel = detail.kind === 'story' ? 'Acceptance criteria, one per line' : 'Verification steps, one per line';
     const submit = (e: { preventDefault(): void }) => {
         e.preventDefault();
         if (busy || title.trim() === '') return;
-        const entries = list.split('\n');
-        const body = detail.kind === 'story'
-            ? { title, description, acceptance_criteria: entries }
-            : { title, description, verification_steps: entries, code_area: codeArea };
+        const form: Record<string, unknown> = detail.kind === 'story'
+            ? {
+                title, description, acceptance_criteria: list.split('\n'), tags: tags.split(','), persona, outcome_metric: outcome,
+                risk_level: risk, effort_points: effort.trim() === '' ? '' : Number(effort), dod_reference: dod,
+            }
+            : {
+                title, description, verification_steps: list.split('\n'), code_area: codeArea,
+                env_requirements: env.split('\n'), blocking_on: blocking.split('\n'), produces: produces.split('\n'),
+            };
+        // Only what the person changed: a field this Genie could not read is never sent back over what Tynn holds.
+        const body = changedEdit(detail, form);
+        if (Object.keys(body).length === 0) { onClose(); return; }
         onAction({ action: `${detail.kind}.edit`, ids: idsOf({ id: detail.id, kind: detail.kind }), body });
     };
     return (
         <form data-tynn-edit-form={detail.id} onSubmit={submit} className="flex flex-col gap-1.5">
             <input aria-label="Title" value={title} disabled={busy} onChange={(e) => setTitle(e.target.value)} className={inputClass} />
             <textarea aria-label="Description" rows={5} value={description} disabled={busy} onChange={(e) => setDescription(e.target.value)} className={inputClass} />
-            <textarea aria-label={listLabel} placeholder={listLabel} rows={4} value={list} disabled={busy} onChange={(e) => setList(e.target.value)} className={inputClass} />
-            {detail.kind === 'task' ? <input aria-label="Code area" placeholder="Code area" value={codeArea} disabled={busy} onChange={(e) => setCodeArea(e.target.value)} className={inputClass} /> : null}
+            <LinesField label={listLabel} value={list} onChange={setList} busy={busy} rows={4} />
+            {detail.kind === 'story' ? (
+                <>
+                    <input aria-label="Tags, comma separated" placeholder="Tags, comma separated" value={tags} disabled={busy} onChange={(e) => setTags(e.target.value)} className={inputClass} />
+                    <input aria-label="Persona" placeholder="Persona" value={persona} disabled={busy} onChange={(e) => setPersona(e.target.value)} className={inputClass} />
+                    <input aria-label="Outcome metric" placeholder="Outcome metric" value={outcome} disabled={busy} onChange={(e) => setOutcome(e.target.value)} className={inputClass} />
+                    <div className="flex gap-1.5">
+                        <select aria-label="Risk" value={risk} disabled={busy} onChange={(e) => setRisk(e.target.value)} className={inputClass}>
+                            <option value="">Risk</option>
+                            {RISK_LEVELS.map((r) => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                        <input aria-label="Effort points" placeholder="Effort" type="number" min={0} step={1} value={effort} disabled={busy} onChange={(e) => setEffort(e.target.value)} className={inputClass} />
+                    </div>
+                    <input aria-label="Definition of done" placeholder="Definition of done" value={dod} disabled={busy} onChange={(e) => setDod(e.target.value)} className={inputClass} />
+                </>
+            ) : (
+                <>
+                    <input aria-label="Code area" placeholder="Code area" value={codeArea} disabled={busy} onChange={(e) => setCodeArea(e.target.value)} className={inputClass} />
+                    {detail.envRequirements !== null ? <LinesField label="Environment, one per line" value={env} onChange={setEnv} busy={busy} /> : null}
+                    <LinesField label="Blocking on, one per line" value={blocking} onChange={setBlocking} busy={busy} />
+                    <LinesField label="Produces, one per line" value={produces} onChange={setProduces} busy={busy} />
+                </>
+            )}
             {mine && mine.phase !== 'done' ? <OpLine op={mine} onRetry={onRetry} /> : null}
             <div className="flex items-center justify-end gap-1">
                 <IconButton icon="x" label="Cancel" onClick={onClose} disabled={busy} data={{ 'data-tynn-cancel': '' }} />
@@ -239,6 +284,31 @@ function List({ title, items, mark }: { title: string; items: readonly string[];
             <ul className="flex flex-col gap-0.5">
                 {items.map((item, i) => <li key={`${i}:${item}`} className="flex gap-1.5 text-[12px] text-[var(--fg-1)]"><Icon name={mark} size="xs" className="mt-0.5 shrink-0 text-[var(--fg-3)]" /> <span>{item}</span></li>)}
             </ul>
+        </section>
+    );
+}
+
+/** A story's tags (chips) and its persona, outcome, risk, effort and definition of done: an icon each, few words. */
+function Facts({ detail }: { detail: BoardDetail }) {
+    const facts: Array<{ icon: string; label: string; value: string; data?: Record<string, string> }> = [];
+    if (detail.persona !== null) facts.push({ icon: 'user', label: 'Persona', value: detail.persona });
+    if (detail.outcomeMetric !== null) facts.push({ icon: 'target', label: 'Outcome metric', value: detail.outcomeMetric });
+    if (detail.riskLevel !== null) facts.push({ icon: 'triangle-alert', label: 'Risk', value: detail.riskLevel });
+    if (detail.effortPoints !== null) facts.push({ icon: 'gauge', label: 'Effort points', value: String(detail.effortPoints), data: { 'data-tynn-detail-effort': String(detail.effortPoints) } });
+    if (detail.dodReference !== null) facts.push({ icon: 'list-checks', label: 'Definition of done', value: detail.dodReference });
+    if (facts.length === 0 && detail.tags.length === 0) return null;
+    return (
+        <section className="flex flex-col gap-1">
+            {detail.tags.length > 0 ? (
+                <div className="flex flex-wrap gap-1">
+                    {detail.tags.map((t) => <span key={t} data-tynn-tag={t} className="rounded-full bg-[var(--bg-2)] px-1.5 py-0.5 text-[11px] text-[var(--fg-2)]">{t}</span>)}
+                </div>
+            ) : null}
+            {facts.map((f) => (
+                <p key={f.label} title={f.label} aria-label={`${f.label}: ${f.value}`} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-1)]" {...(f.data ?? {})}>
+                    <Icon name={f.icon} size="xs" className="shrink-0 text-[var(--fg-3)]" /> <span className="min-w-0 truncate">{f.value}</span>
+                </p>
+            ))}
         </section>
     );
 }
@@ -274,6 +344,10 @@ function Detail({ detail, op, onClose, onAction, onRetry }: { detail: BoardDetai
                     <List title="Acceptance criteria" items={detail.acceptanceCriteria} mark="check" />
                     <List title="Verification" items={detail.verificationSteps} mark="check" />
                     {detail.codeArea !== null ? <p className="font-mono text-[11px] text-[var(--fg-3)]">{detail.codeArea}</p> : null}
+                    <Facts detail={detail} />
+                    <List title="Environment" items={detail.envRequirements ?? []} mark="server" />
+                    <List title="Blocking on" items={detail.blockingOn} mark="ban" />
+                    <List title="Produces" items={detail.produces} mark="package" />
                     <List title="Tasks" items={detail.tasks.map((t) => [t.number, t.title, `(${t.status})`].filter(Boolean).join(' '))} mark="square-check" />
                     <List title="Features" items={detail.features} mark="tag" />
                 </>
