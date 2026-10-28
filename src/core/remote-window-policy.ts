@@ -43,6 +43,6 @@ export function windowsLeftByAccountChange(windows: ReadonlyArray<{ key: string;
 }
 
 /** Which Tynn account this is: its host and its user, never only one of them. Signed out = null. */
-export function accountKeyOf(status: { signedIn: false } | { signedIn: true; host: string; user: { email: string } }): string | null {
+export function accountKeyOf(status: { signedIn: false } | { signedIn: true; host: string; user: { readonly email: string; readonly name?: string } }): string | null {
     return status.signedIn ? `${status.host}#${status.user.email}` : null;
 }
