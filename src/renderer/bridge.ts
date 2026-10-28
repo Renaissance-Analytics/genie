@@ -126,7 +126,7 @@ export interface ActivityBridge {
 
 export interface GenieBridge {
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
-    remoteWindows?: { open(url: string): Promise<void> };
+    remoteWindows?: { open(url: string): Promise<void>; onReconnectAsked?(listener: () => void): () => void };
     /**
      * Every chat's unsent draft, kept by THIS machine's main so it survives a restart and a reload (genie#1261,
      * main/chat-draft-store.ts). Host-only: absent on a remote bridge — a remote host's agents are not this machine's.

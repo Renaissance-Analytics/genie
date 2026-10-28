@@ -66,6 +66,8 @@ import { readRememberedPasswordStore, rememberPasswordStore } from './password-s
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
+import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
+import { wordTynnRefusal } from './drone-refusal.js';
 import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
@@ -733,21 +735,55 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
 
 /**
  * A WINDOW PER REMOTE HOST (Genie 1's remote.open; Tynn #819): the host's own window, so the local Genie stays open. One
- * per host — asking again brings it to the front. Only a ws:// or wss:// URL is a host; anything else opens nothing.
+ * per host. Only a ws:// or wss:// URL, or a Tynn `relay:<id>`, is a host; anything else opens nothing.
+ *
+ * What Open does with one that already exists is core/remote-window-policy.ts (genie#1278, M0 finding 2): a Tynn relay
+ * window belongs to the ACCOUNT whose grant it holds — another account's is replaced by a fresh connection, a dropped
+ * one of this account is asked to reconnect, a live one is brought forward. An account change closes the relay windows
+ * opened under another account (`closeRelayWindowsOfOtherAccounts`).
  */
 const remoteWindows = new Map<string, BrowserWindow>();
+/** The Tynn account each relay window was opened under (accountKeyOf). */
+const remoteWindowAccount = new Map<BrowserWindow, string | null>();
+const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
+const relayLiveFor = (win: BrowserWindow): boolean => [...relayChannels.values()].some((c) => c.sender === win.webContents);
 function openRemoteWindow(url: string): void {
     const search = remoteWindowSearch(url);
     if (remoteFromSearch(search) === null) return;
     const open = remoteWindows.get(url);
-    if (open && !open.isDestroyed()) {
+    const exists = open !== undefined && !open.isDestroyed();
+    const account = tynnAccountKeyNow();
+    const action = remoteWindowAction({
+        exists,
+        relay: relayWorkstationOf(url) !== null,
+        live: exists && relayLiveFor(open),
+        openedBy: exists ? remoteWindowAccount.get(open) ?? null : null,
+        account,
+    });
+    if (exists && action === 'replace') {
+        remoteWindows.delete(url);
+        open.destroy();
+    }
+    if (exists && (action === 'focus' || action === 'reconnect')) {
         // Asked for by the person: the rail's Open, or a Tynn share link they clicked.
         bringUp(open, { activation: 'user-gesture', reason: 'remote window', ledger: activationLedger, label: 'remote' });
+        if (action === 'reconnect') open.webContents.send('genie:remote-reconnect');
         return;
     }
     const win = createWindow(true, search);
     remoteWindows.set(url, win);
-    win.on('closed', () => { if (remoteWindows.get(url) === win) remoteWindows.delete(url); });
+    remoteWindowAccount.set(win, account);
+    win.on('closed', () => { if (remoteWindows.get(url) === win) remoteWindows.delete(url); remoteWindowAccount.delete(win); });
+}
+/** The Tynn account changed: a relay window opened under another account holds that account's grant, and goes. */
+function closeRelayWindowsOfOtherAccounts(): void {
+    const account = tynnAccountKeyNow();
+    const windows = [...remoteWindows].filter(([, w]) => !w.isDestroyed()).map(([key, w]) => ({ key, relay: relayWorkstationOf(key) !== null, openedBy: remoteWindowAccount.get(w) ?? null }));
+    for (const key of windowsLeftByAccountChange(windows, account)) {
+        const win = remoteWindows.get(key);
+        remoteWindows.delete(key);
+        if (win && !win.isDestroyed()) win.destroy();
+    }
 }
 
 /**
@@ -791,6 +827,8 @@ let tynnWorkstationNow: TynnWorkstationState | null = null;
 let workstationRoleNow: WorkstationRole | null = 'drone';
 /** Read this machine's role from Tynn again (set where the reader is built). */
 let readWorkstationRoleNow: (() => Promise<void>) | null = null;
+/** Tynn refused this caller: read the role again FIRST, then word the refusal from it (genie#1278, M0 finding 3). */
+const rereadRole = async (): Promise<WorkstationRole | null> => { await readWorkstationRoleNow?.(); return workstationRoleNow; };
 /** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
 let relayAfterSwitch: (() => void) | null = null;
 /** This Genie on the Tynn relay as a host (Tynn #838): `null` = not started (remote access off, or not registered). */
@@ -1752,7 +1790,7 @@ async function boot(): Promise<void> {
         const refused = droneRefusal(workstationRoleNow);
         if (refused) return { ok: false, reason: refused };
         const own = tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null;
-        return connectableWorkstations((path, init) => account.request(path, init), own);
+        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), own), rereadRole);
     });
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
     // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
@@ -1784,7 +1822,7 @@ async function boot(): Promise<void> {
         if (!account?.status().signedIn) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = PopKeypair.generate();
         const grant = await mintConnectGrant((path, init) => account.request(path, init), workstationId, pop.publicJwk);
-        if (!grant.ok) return grant;
+        if (!grant.ok) return wordTynnRefusal(grant, rereadRole);
         const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop });
         if (!opened.ok) return opened;
         const channel = `relay_${++nextRelayChannel}`;
@@ -2439,6 +2477,8 @@ async function boot(): Promise<void> {
     };
     relayAfterSwitch = () => { void applyRelayHost(); };
     tynnAccount.onChange(() => { void registerWorkstation(); });
+    // Another account (or none): the relay windows opened under the last one hold its grants (M0 finding 2).
+    tynnAccount.onChange(() => { closeRelayWindowsOfOtherAccounts(); });
     void registerWorkstation();
     // A sign-in that came back before the account was open (this launch's own argv, or an early second launch).
     if (pendingGenieUrl !== null) { const url = pendingGenieUrl; pendingGenieUrl = null; openGenieUrl(url); }

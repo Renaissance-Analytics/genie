@@ -3,7 +3,7 @@ import { CommandWindow } from './components/CommandWindow.js';
 import { FlowEditorWindow } from './components/FlowEditorWindow.js';
 import { WhatsNewWindow } from './components/WhatsNewWindow.js';
 import { ConnectDialog } from './components/ConnectMenu.js';
-import { CONNECT_ROUTE, OPEN_SHARE_LINK_ACTION, connectPaletteActions } from '../core/connect-machine.js';
+import { CONNECT_ROUTE, OPEN_SHARE_LINK_ACTION, connectPaletteActions, mergeWorkstationRead, type ConnectProgress } from '../core/connect-machine.js';
 import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
@@ -252,7 +252,7 @@ function useAgentDetail(
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     const tokens = typeof window === 'undefined' ? null : rememberedTokens(window.localStorage);
@@ -265,8 +265,22 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
     const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
-    // Read Tynn's list again (genie#1278 W6: after a role change, so each row shows Tynn's answer).
-    const reloadTynnWorkstations = () => { if (net) void net.workstations().then(setTynnWorkstations, () => {}); };
+    // Read Tynn's list again: after a role change (W6), and each time the Connect menu or ⌘K opens (M0 finding 1). The last
+    // list stays on screen while it is read; a failure keeps it and says why, with Retry (core/connect-machine.ts).
+    const [tynnRefresh, setTynnRefresh] = useState<ConnectProgress>({ kind: 'idle' });
+    const tynnListNow = useRef<TynnWorkstationList | null>(null);
+    useEffect(() => { tynnListNow.current = tynnWorkstations; }, [tynnWorkstations]);
+    const reloadTynnWorkstations = () => {
+        if (!net) return;
+        setTynnRefresh({ kind: 'working', step: 'Asking Tynn…' });
+        const settle = (next: TynnWorkstationList) => {
+            const merged = mergeWorkstationRead(tynnListNow.current, next);
+            tynnListNow.current = merged.list;
+            setTynnWorkstations(merged.list);
+            setTynnRefresh(merged.problem ? { kind: 'failed', reason: merged.problem } : { kind: 'idle' });
+        };
+        net.workstations().then(settle, (error: unknown) => settle({ ok: false, reason: error instanceof Error ? error.message : String(error) }));
+    };
     // Read again whenever this Genie's Tynn sign-in changes (Tynn #850): read once at open, signing in afterwards left it
     // saying "sign in to Tynn".
     useEffect(() => {
@@ -363,6 +377,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         forget: (url: string) => { hosts?.forget(url); setKnown(hosts?.list() ?? []); setRemembered(tokens?.hosts() ?? []); },
         tynnWorkstations,
         reloadTynnWorkstations,
+        tynnRefresh,
     };
 }
 
@@ -554,6 +569,11 @@ function DesktopApp({ bridge }: AppProps) {
     // works in internal routes. Derived on every render, so an address resolves as soon as the snapshot can name it.
     const [address, writeAddress] = useRoute();
     const remote = useRemote();
+    // A REMOTE WINDOW ASKED TO RECONNECT (genie#1278, M0 finding 2): its connection dropped and the person pressed Open, so
+    // main asks it to connect again — with a grant minted now, under the account signed in now — instead of only focusing.
+    const reconnectNow = useRef(remote.reconnect);
+    reconnectNow.current = remote.reconnect;
+    useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
     /**
@@ -1428,6 +1448,8 @@ function DesktopApp({ bridge }: AppProps) {
                 tynnWorkstations: remote.tynnWorkstations,
                 onOpenWorkstation: (w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
                 onOpenLink: () => setConnectDialog('link'),
+                onRefresh: remote.reloadTynnWorkstations,
+                refresh: remote.tynnRefresh,
                 // genie#1278 W6: only when Tynn says this machine is a pilot; Tynn enforces it again, with the code.
                 onSetRole: features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined,
             }}
@@ -1722,6 +1744,8 @@ function DesktopApp({ bridge }: AppProps) {
                 onOpenSurface={() => { setConnectDialog(null); navigate(CONNECT_ROUTE); }}
                 openLink={typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork?.openLink}
                 onSetRole={features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined}
+                refresh={remote.tynnRefresh}
+                onRefresh={remote.reloadTynnWorkstations}
             />
         ) : null}
         <AlertToasts toasts={alertToasts} onDismiss={dismissAlert} />
