@@ -45,6 +45,14 @@ export function viewDelivery(request: ViewRequest): ViewDelivery {
     return { channel: 'genie:workspace-pulse', payload: { workspaceId: request.workspaceId, reason: request.reason, file: request.file ?? null, line: request.line ?? null } };
 }
 
+/**
+ * WHICH WINDOWS A VIEW REQUEST REACHES — today's behaviour, written down so the tests can name it: every request reaches
+ * every window (main's `showToPerson` broadcasts). genie#1302's follow-up changes this.
+ */
+export function viewReaches(_delivery: ViewDelivery, _target: { readonly main: boolean }): boolean {
+    return true;
+}
+
 /** The workspaces marked and not yet visited, each with what waits there. */
 export type Pulses = Readonly<Record<string, WorkspacePulse>>;
 
