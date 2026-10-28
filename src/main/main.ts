@@ -64,6 +64,9 @@ import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
+import { droneRefusal, effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
+import { machineKeyOf, readMachineId } from './machine-key.js';
+import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
@@ -782,6 +785,9 @@ let tynnAccount: TynnAccount | null = null;
 let githubAccount: GithubAccount | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
+/** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
+// A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
+let workstationRoleNow: WorkstationRole | null = 'drone';
 /** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
 let relayAfterSwitch: (() => void) | null = null;
 /** This Genie on the Tynn relay as a host (Tynn #838): `null` = not started (remote access off, or not registered). */
@@ -1740,11 +1746,15 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:tynn-workstations', async () => {
         const account = tynnAccount;
         if (!account) return { ok: false, reason: 'this Genie has no Tynn account' };
+        const refused = droneRefusal(workstationRoleNow);
+        if (refused) return { ok: false, reason: refused };
         const own = tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null;
         return connectableWorkstations((path, init) => account.request(path, init), own);
     });
     ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
+        const refusedByRole = droneRefusal(workstationRoleNow);
+        if (refusedByRole) return { ok: false, reason: refusedByRole };
         const account = tynnAccount;
         if (!account?.status().signedIn) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = PopKeypair.generate();
@@ -2337,6 +2347,24 @@ async function boot(): Promise<void> {
         encrypt: (text) => safeStorage.encryptString(text),
         decrypt: (bytes) => safeStorage.decryptString(bytes),
     });
+    // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
+    const machineKey = (): Promise<string | null> => readMachineId({
+        platform: process.platform,
+        readFile: (path) => readFile(path, 'utf8'),
+        exec: (command, args) => new Promise<string>((resolve, reject) => { execFileCb(command, [...args], { windowsHide: true, timeout: 10_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+    }).then((id) => (id ? machineKeyOf(id) : null));
+    // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
+    const readRole = async (): Promise<void> => {
+        const account = tynnAccount;
+        const signedIn = account?.status().signedIn === true;
+        const role = signedIn && account ? await readWorkstationRole((path, init) => account.request(path, init)) : null;
+        const next = signedIn ? effectiveRoleOf({ signedIn: true, role }) : effectiveRoleOf({ signedIn: false });
+        if (next === workstationRoleNow) return;
+        workstationRoleNow = next;
+        if (tynnWorkstationNow) tynnWorkstationNow = { ...tynnWorkstationNow, role: next };
+        pushFeatures();
+    };
+    setInterval(() => { void readRole(); }, 5 * 60_000).unref();
     let registering: Promise<void> | null = null;
     const registerWorkstation = (): Promise<void> => {
         if (registering) return registering;
@@ -2345,13 +2373,13 @@ async function boot(): Promise<void> {
         registering = (async () => {
             const host = account.host();
             if (!account.status().signedIn) {
-                tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine' };
+                tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine', role: null };
                 return;
             }
-            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities })
+            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities, machineKey })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
-            tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId } : { registered: false, reason: result.reason };
-        })().finally(() => { registering = null; void applyRelayHost(); pushFeatures(); });
+            tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId, role: workstationRoleNow } : { registered: false, reason: result.reason, role: workstationRoleNow };
+        })().finally(() => { registering = null; void applyRelayHost(); void readRole(); pushFeatures(); });
         return registering;
     };
     // THIS GENIE ON THE TYNN RELAY, AS A HOST (Tynn #838; Genie 1's relay-host-controller): while remote access is on and

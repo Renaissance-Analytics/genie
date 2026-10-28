@@ -49,3 +49,37 @@ describe('the Tynn row', () => {
         expect(render(undefined)).not.toContain('data-tynn-workstation');
     });
 });
+
+/**
+ * A DRONE CANNOT BROWSE (genie#1278 W5). What this machine is comes from Tynn (`role`, set by main from
+ * `GET /api/v1/workstations/me`). On a drone, "Drive another machine" and the tailnet's device count are not drawn.
+ * Hiding is not the boundary — Tynn refuses a drone's list and grants, and the relay refuses a member without a grant —
+ * but a drone offers nothing it would only be refused.
+ */
+describe('a drone hides browsing and discovery', () => {
+    const connect = { state: null, remembered: [], onConnect: () => {}, onDisconnect: () => {} };
+    const tailscale = { installed: true, running: true, state: 'running', self: { hostname: 'box', dnsName: 'box.tail.ts.net', ip: null, online: true, os: 'linux' }, peers: [{ hostname: 'other', ip: '100.64.0.2', online: true, os: 'linux', dnsName: 'other.tail.ts.net' }] } as unknown as NonNullable<RemoteSection['tailscale']>;
+    const draw = (role: 'pilot' | 'drone' | null) => renderToStaticMarkup(
+        <RemoteAccess remote={{ ...base, tailscale, tynnWorkstation: { registered: true, host: 'https://tynn.example.com', workstationId: 'ws_1', role } }} workspaces={[]} onAction={() => {}} connect={connect} />,
+    );
+
+    it('a drone: no "Drive another machine", no tailnet device count, and it says what it is', () => {
+        const html = draw('drone');
+        expect(html).not.toContain('Drive another machine');
+        expect(html).not.toContain('data-form="connect-remote"');
+        expect(html).not.toMatch(/devices? on your tailnet/);
+        expect(html).toContain('data-workstation-role="drone"');
+    });
+
+    it('a pilot (CONTROL): both are drawn', () => {
+        const html = draw('pilot');
+        expect(html).toContain('Drive another machine');
+        expect(html).toMatch(/1 device on your tailnet/);
+        expect(html).toContain('data-workstation-role="pilot"');
+    });
+
+    it('not on the Tynn network (signed out): nothing of Tynn to restrict; tailnet pairing stays as it was', () => {
+        const html = renderToStaticMarkup(<RemoteAccess remote={{ ...base, tailscale, tynnWorkstation: { registered: false, reason: 'sign in to Tynn to register this machine', role: null } }} workspaces={[]} onAction={() => {}} connect={connect} />);
+        expect(html).toContain('Drive another machine');
+    });
+});

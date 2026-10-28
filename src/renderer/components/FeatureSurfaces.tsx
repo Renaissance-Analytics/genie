@@ -1,3 +1,4 @@
+import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
@@ -2372,6 +2373,9 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
     const pairUrl = mobilePageUrl(remote?.url ?? null) ?? remote?.url ?? '';
+    // What Tynn says this machine is (main reads it from Tynn; genie#1278 W5). A drone offers no browsing.
+    const role = remote?.tynnWorkstation?.role ?? null;
+    const browse = mayBrowse(role);
     return (
         <section data-remote className="flex flex-col gap-3 border-t border-[var(--border-1)] px-5 py-3">
             <h2 className="text-sm font-semibold">Remote access</h2>
@@ -2395,7 +2399,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                             {remote.tailscale.state === 'running' ? (
                                 <>
                                     <span>Connected as <span className="font-mono">{remote.tailscale.self?.dnsName ?? remote.tailscale.self?.hostname ?? remote.host}</span></span>
-                                    <span className="text-xs text-[var(--fg-3)]">{remote.tailscale.peers.length} {remote.tailscale.peers.length === 1 ? 'device' : 'devices'} on your tailnet</span>
+                                    {browse ? <span className="text-xs text-[var(--fg-3)]">{remote.tailscale.peers.length} {remote.tailscale.peers.length === 1 ? 'device' : 'devices'} on your tailnet</span> : null}
                                 </>
                             ) : (
                                 <>
@@ -2414,6 +2418,8 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                     {remote.tynnWorkstation ? (
                         <div data-tynn-workstation={remote.tynnWorkstation.registered ? 'registered' : 'unregistered'} className="flex flex-wrap items-center gap-3 text-sm">
                             <span className="font-medium">Tynn</span>
+                            {role ? <span data-workstation-role={role} className="rounded-full border border-[var(--border-1)] px-2 py-0.5 text-xs">{role === 'pilot' ? 'Pilot' : 'Drone'}</span> : null}
+                            {role === 'drone' ? <span className="basis-full text-xs text-[var(--fg-3)]">{droneRefusal(role)}</span> : null}
                             {remote.tynnWorkstation.registered ? (
                                 <>
                                     <span>This machine is registered with <span className="font-mono">{remote.tynnWorkstation.host.replace(/^https?:\/\//, '')}</span> as workstation <span className="font-mono text-xs">{remote.tynnWorkstation.workstationId}</span></span>
@@ -2454,7 +2460,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                             ) : null}
                         </div>
                     )}
-                    {connect ? (
+                    {connect && browse ? (
                         <div>
                             <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Drive another machine</h3>
                             <ConnectRemote {...connect} />

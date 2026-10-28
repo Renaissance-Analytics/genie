@@ -19,6 +19,16 @@ import { dirname } from 'node:path';
 /** Domain separator — MUST match Tynn's `EnsureWorkstationHost::PROOF_CONTEXT` and genie-cloud's host-auth. */
 const PROOF_CONTEXT = 'workstation-auth';
 
+/** Domain separator of a re-attach proof — MUST match Tynn's `WorkstationMachineIdentity::PROOF_CONTEXT` (genie#1278). */
+const REATTACH_CONTEXT = 'workstation-reattach';
+
+/** Proof this Genie holds `workstationId`'s enrolled key: Ed25519 over `workstation-reattach\n{id}\n{ts}`. */
+export function buildReattachProof(privateKeyPem: string, workstationId: string, now: number = Date.now()): { workstation_id: string; ts: number; sig: string } {
+    const ts = Math.floor(now / 1000);
+    const sig = sign(null, Buffer.from(`${REATTACH_CONTEXT}\n${workstationId}\n${ts}`, 'utf8'), createPrivateKey(privateKeyPem)).toString('base64');
+    return { workstation_id: workstationId, ts, sig };
+}
+
 export interface HostKeypair {
     /** PKCS8 PEM — signed with, stored encrypted. */
     readonly privateKeyPem: string;
@@ -137,6 +147,9 @@ export interface EnsureWorkstationPorts {
     readonly request: TynnRequest;
     readonly store: IdentityStore;
     readonly generate?: () => HostKeypair;
+    /** This machine's stable key (machine-key.ts), or null when the OS gives no machine id (genie#1278 W2). */
+    readonly machineKey?: () => Promise<string | null>;
+    readonly now?: () => number;
 }
 
 export type EnsureWorkstationResult =
@@ -148,20 +161,44 @@ const refusal = async (what: string, res: { status: number; json(): Promise<unkn
     return `Tynn refused to ${what} (${res.status}${typeof body?.message === 'string' && body.message ? `: ${body.message}` : ''})`;
 };
 
-/** Registered with this Tynn already → nothing asked. Otherwise self-register → key → enroll → store, in that order. */
+/**
+ * Registered with this Tynn already and Tynn says this pairing IS that workstation → nothing else asked. Registered, but
+ * this pairing is not bound to it (a new sign-in is a new Tynn device) → self-register again with the machine key and
+ * proof of the enrolled key, which binds this pairing and keeps the role. Not registered → self-register (with the
+ * machine key, so Tynn finds this machine's record if it has one) → key → enroll → store, in that order.
+ */
 export async function ensureWorkstation(ports: EnsureWorkstationPorts): Promise<EnsureWorkstationResult> {
     const host = ports.host();
     const existing = await ports.store.read(host);
-    if (existing) return { ok: true, status: 'exists', workstationId: existing.workstationId };
+    const machineKey = await (ports.machineKey?.() ?? Promise.resolve(null)).catch(() => null);
+    if (existing) {
+        const me = await ports.request('/api/v1/workstations/me', { method: 'GET' }).catch(() => null);
+        const body = me?.ok ? ((await me.json().catch(() => null)) as { workstation?: { id?: unknown } | null } | null) : null;
+        // Tynn cannot say (signed out, offline): keep the identity; the next sign-in asks again.
+        if (!me?.ok || body === null) return { ok: true, status: 'exists', workstationId: existing.workstationId };
+        if (body.workstation?.id === existing.workstationId) return { ok: true, status: 'exists', workstationId: existing.workstationId };
+        const proved = await ports.request('/api/v1/workstations/self-register', {
+            method: 'POST',
+            body: { name: ports.hostname(), ...(machineKey ? { machine_key: machineKey } : {}), proof: buildReattachProof(existing.privateKeyPem, existing.workstationId, (ports.now ?? Date.now)()) },
+        });
+        if (!proved.ok) return { ok: false, reason: await refusal('re-attach this machine', proved) };
+        const answer = (await proved.json().catch(() => null)) as { workstation?: { id?: unknown }; enrollment?: { workstation_id?: unknown; secret?: unknown } | null } | null;
+        if (!answer?.enrollment && answer?.workstation?.id === existing.workstationId) return { ok: true, status: 'exists', workstationId: existing.workstationId };
+        return enrollAndStore(ports, host, answer);
+    }
 
     // Without OS encryption the key could not be kept: ask Tynn NOTHING, or it holds an enrolled, keyless workstation
     // after every attempt (the two-VM proof, 2026-10-20; Tynn #847).
     if (!ports.store.canWrite()) return { ok: false, reason: 'this machine cannot encrypt a key (no OS keyring answering), so it is not registered with Tynn' };
-    const registered = await ports.request('/api/v1/workstations/self-register', { method: 'POST', body: { name: ports.hostname() } });
+    const registered = await ports.request('/api/v1/workstations/self-register', { method: 'POST', body: { name: ports.hostname(), ...(machineKey ? { machine_key: machineKey } : {}) } });
     // Tynn answers an unauthenticated session route 404 (tynn.ai#303), 401/419 before that.
     if (registered.status === 401 || registered.status === 404 || registered.status === 419) return { ok: false, reason: 'sign in to Tynn to register this machine' };
     if (!registered.ok) return { ok: false, reason: await refusal('register this machine', registered) };
-    const grant = (await registered.json()) as { enrollment?: { workstation_id?: unknown; secret?: unknown } } | null;
+    return enrollAndStore(ports, host, (await registered.json()) as { enrollment?: { workstation_id?: unknown; secret?: unknown } | null } | null);
+}
+
+/** A fresh key, enrolled with the one-time secret Tynn handed back, then stored (encrypted) — in that order. */
+async function enrollAndStore(ports: EnsureWorkstationPorts, host: string, grant: { enrollment?: { workstation_id?: unknown; secret?: unknown } | null } | null): Promise<EnsureWorkstationResult> {
     const workstationId = grant?.enrollment?.workstation_id;
     const secret = grant?.enrollment?.secret;
     if (typeof workstationId !== 'string' || typeof secret !== 'string') return { ok: false, reason: 'Tynn answered the registration without an enrollment' };
