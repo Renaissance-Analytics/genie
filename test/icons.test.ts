@@ -74,6 +74,29 @@ describe('every icon the app asks for', () => {
     });
 });
 
+describe('the icons the Tynn tab passes through props', () => {
+    it('are all registered: a card step, a list mark, a fact or an icon button is a name too', () => {
+        /**
+         * The scan above reads `<Icon name="...">` only. The Tynn board (genie#1295) hands most of its names to Icon
+         * through props: `icon="..."` on its icon buttons, `mark="..."` on its lists, `icon: '...'` in its step and fact
+         * tables. Those were never scanned, and a name missing from ICON_NAMES renders a blank gap: the B2 flyout's
+         * 'tag' and 'square-check' list marks did, on a green suite.
+         */
+        const sources = import.meta.glob(['../src/renderer/components/TynnBoardPanel.tsx', '../src/core/tynn-board.ts'], { query: '?raw', import: 'default', eager: true });
+        const used = new Set<string>();
+        for (const source of Object.values(sources) as string[]) {
+            for (const m of source.matchAll(/\b(?:icon|mark)(?:=\{?|:\s*)["']([a-z0-9-]+)["']/g)) used.add(m[1] as string);
+        }
+
+        // POSITIVE CONTROL: both files were read and the prop names were found (the steps' 'rocket', a list's 'check').
+        expect(Object.keys(sources)).toHaveLength(2);
+        expect(used).toContain('rocket');
+        expect(used).toContain('check');
+
+        expect([...used].filter((name) => !ICON_NAMES.includes(name))).toEqual([]);
+    });
+});
+
 describe('the icons the ledger chooses at RUNTIME', () => {
     it('are all registered — driven by the real function, not by reading the source', () => {
         /**
