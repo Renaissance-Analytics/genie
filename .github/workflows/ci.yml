@@ -96,11 +96,15 @@ jobs:
   #
   # The job ALWAYS runs and decides for itself, rather than an `on.paths` filter: a required check whose workflow is filtered
   # out never reports, and a PR that touches no flow would wait on it for ever. So it is required, it reports on every PR,
-  # and it runs the suite exactly when one of these changed (test/flows-acceptance-ci.test.ts holds the list):
-  #   - any file under src/ whose name says flow (src/**/flow*, FlowEditorWindow.tsx, v1-flows.ts, mcp-tools-flows.ts),
-  #     and what flows are built from: core/cron.ts (the schedule), core/file-trigger.ts (the file trigger);
-  #   - the suite itself and its config;
+  # and it runs the suite exactly when one of these changed (test/flows-acceptance-ci.test.ts holds the rules):
+  #   - a file Flows are made of: scripts/flows-paths.mjs walks src/'s run-time imports, on this commit, from every file
+  #     named flow and from the flow editor window's route (core/address.ts, route.ts…), and adds the files that wire a
+  #     flow file in (compose.ts, feature-ipc.ts, main.ts, App.tsx…). Not by name: genie#1302 broke the editor through
+  #     core/address.ts and a name rule never ran the suite;
+  #   - the suite itself, its config and that script;
   #   - the fancy-flow dependency (its line in package.json or its version in package-lock.json).
+  # Nothing here is piped into `grep -q`: grep exits at its first match, the writer dies of SIGPIPE, and under pipefail
+  # a match reads as none. Each diff goes to a file first.
   flows:
     name: flows acceptance
     runs-on: ubuntu-latest
@@ -109,6 +113,12 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Before the decision: node makes it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
 
       - name: did this change touch Flows?
         id: changed
@@ -122,20 +132,17 @@ jobs:
             echo "flows=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          changed="$(git diff --name-only "$BASE" HEAD)"
-          echo "$changed"
+          git diff --name-only "$BASE" HEAD > "$RUNNER_TEMP/changed.txt"
+          cat "$RUNNER_TEMP/changed.txt"
           flows=false
-          if printf '%s\n' "$changed" | grep -qE '^src/(.*/)?[^/]*[Ff]low[^/]*$|^src/core/(cron|file-trigger)\.ts$|^test/flows-acceptance/|^vitest\.flows\.config\.mts$'; then flows=true; fi
-          if git diff "$BASE" HEAD -- package.json | grep -qE '^[+-].*"@particle-academy/fancy-flow"'; then flows=true; fi
-          if git diff "$BASE" HEAD -- package-lock.json | grep -qE '^[+-].*fancy-flow-[0-9]'; then flows=true; fi
+          node scripts/flows-paths.mjs --touched "$RUNNER_TEMP/changed.txt" > "$RUNNER_TEMP/touched.txt"
+          if [ -s "$RUNNER_TEMP/touched.txt" ]; then echo "Touches Flows:"; cat "$RUNNER_TEMP/touched.txt"; flows=true; fi
+          git diff "$BASE" HEAD -- package.json > "$RUNNER_TEMP/package.diff"
+          if grep -qE '^[+-].*"@particle-academy/fancy-flow"' "$RUNNER_TEMP/package.diff"; then flows=true; fi
+          git diff "$BASE" HEAD -- package-lock.json > "$RUNNER_TEMP/package-lock.diff"
+          if grep -qE '^[+-].*fancy-flow-[0-9]' "$RUNNER_TEMP/package-lock.diff"; then flows=true; fi
           echo "flows=$flows" >> "$GITHUB_OUTPUT"
           echo "Flows changed: $flows"
-
-      - uses: actions/setup-node@v4
-        if: steps.changed.outputs.flows == 'true'
-        with:
-          node-version: '22'
-          cache: npm
 
       - run: npm ci
         if: steps.changed.outputs.flows == 'true'
