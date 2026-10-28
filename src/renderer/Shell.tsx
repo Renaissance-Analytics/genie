@@ -15,7 +15,7 @@ import { updateChip } from '../core/update-chip.js';
 import { useControlsInset, useOverlayColors } from './window-chrome.js';
 import { Deck } from './components/Deck.js';
 import { ApprovalToasts } from './components/ApprovalToasts.js';
-import { deckItemFor, needsYouCount, type DeckItem } from '../core/deck.js';
+import { needsYouCount, type DeckItem } from '../core/deck.js';
 import type { LiveSession } from '../core/roster.js';
 import { turnStopOffered } from '../core/agent-view.js';
 import { railSurfacesFor, railWorkspaces, type Surface } from '../core/rail-view.js';
@@ -592,14 +592,12 @@ export function Shell({
                             // Genie's own row, its group first (the design mockup).
                             genie={snapshot.osAgent ?? null}
                             workspaces={snapshot.workspaces}
-                            // A WAITING row is a door to its Deck item (§4.1): the Deck resolves, the Dashboard shows.
-                            // A row click opens that agent's CHAT beside the Dashboard, which stays (genie#1209); its page is the
-                            // row tray's Open agent. A WAITING row is still a door to its Deck item (§4.1).
-                            onOpenAgent={(id) => {
-                                const item = deckItemFor(id, snapshot.deckItems ?? []);
-                                if (item) onNavigate(`genie://deck?item=${encodeURIComponent(item)}`);
-                                else onChatAgent(id);
-                            }}
+                            // A row click opens that agent's CHAT beside the Dashboard, which stays (genie#1209) — EVERY row,
+                            // a waiting one too (the owner, 2026-10-28: "Dashboard should stay active while the chat changes
+                            // to that agent chat"). A pending question no longer sends the click to the Deck: Genie 1 never let
+                            // one redirect an agent click, and the question is answered on the Deck, its toast or the chat.
+                            // The agent's page is the row tray's Open agent.
+                            onOpenAgent={onChatAgent}
                             onAddAgent={onAddAgent}
                             onAddWorkspace={onAddWorkspace}
                             onAddWorkspaceFromGit={onAddWorkspaceFromGit}
