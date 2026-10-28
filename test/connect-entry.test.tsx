@@ -115,7 +115,7 @@ describe('opening a workstation shows its progress, then success or the reason w
 
     it('CONTROL: idle has an enabled Open and no step, no Retry', () => {
         const html = row({});
-        expect(html).toMatch(/<button[^>]*data-action="open-workstation"(?![^>]*disabled)[^>]*>/);
+        expect(html).toMatch(/<button[^>]*data-action="open-workstation"(?![^>]*disabled="")[^>]*>/);
         expect(html).not.toContain('data-connect-step');
         expect(html).not.toContain('retry-workstation');
     });
@@ -128,7 +128,7 @@ describe('the share-link form: paste, Open, progress, then success or the reason
     it('idle: a field to paste into and an enabled Open button', () => {
         const html = form({ kind: 'idle' });
         expect(html).toMatch(/<input[^>]*data-share-link-input=""/);
-        expect(html).toMatch(/<button[^>]*data-action="open-share-link"(?![^>]*disabled)[^>]*>/);
+        expect(html).toMatch(/<button[^>]*data-action="open-share-link"(?![^>]*disabled="")[^>]*>/);
     });
 
     it('idle with nothing pasted: Open is disabled', () => {
