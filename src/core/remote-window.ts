@@ -5,8 +5,22 @@
  * the same rule before it opens anything: a Genie host is `ws://` / `wss://`, or `relay:<workstation id>` — a Tynn
  * workstation reached over the Tynn relay (Tynn #837), whose connection main holds.
  */
-export function remoteWindowSearch(url: string): string {
-    return `?${new URLSearchParams({ remote: url }).toString()}`;
+export function remoteWindowSearch(url: string, name?: string | null): string {
+    const shown = cleanName(name);
+    return `?${new URLSearchParams(shown ? { remote: url, name: shown } : { remote: url }).toString()}`;
+}
+
+/**
+ * The NAME of the machine a window is bound to, as the window that opened it knew it (Genie 1, main/workstation-open.ts:
+ * "The display name drives the host window title"), or `null`. Shown, never trusted: it decides nothing.
+ */
+export function remoteNameFromSearch(search: string): string | null {
+    return cleanName(new URLSearchParams(search.startsWith('?') ? search.slice(1) : search).get('name'));
+}
+
+function cleanName(name: string | null | undefined): string | null {
+    const trimmed = (name ?? '').replace(/\s+/g, ' ').trim();
+    return trimmed === '' ? null : trimmed.slice(0, 120);
 }
 
 /** A Tynn workstation's address: `relay:` and its id (letters, digits, `_`, `-`). */

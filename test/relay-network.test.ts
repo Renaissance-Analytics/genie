@@ -267,10 +267,10 @@ describe('a member over the relay', () => {
         expect(t.closedBecause()).toBe('grant is no longer active');
     });
 
-    it('no host on the relay: the member is told so', async () => {
+    it('no host on the relay: the member is told so, and that the machine is offline', async () => {
         link.close();
         await settle();
-        expect(await member({ src: 'owner', cap: 'control', scope: ['host:all'] })).toEqual({ ok: false, reason: 'workstation not connected' });
+        expect(await member({ src: 'owner', cap: 'control', scope: ['host:all'] })).toEqual({ ok: false, reason: 'workstation not connected', offline: true });
     });
 });
 

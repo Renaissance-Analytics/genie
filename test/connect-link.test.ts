@@ -52,7 +52,7 @@ describe('acting on it', () => {
     it('a workstation link opens the workstation', async () => {
         const d = deps();
         const out = await dispatchConnectLink('genie://workstation/open?id=ws_1&name=studio', TYNN, null, d);
-        expect(d.openWorkstation).toHaveBeenCalledWith('ws_1');
+        expect(d.openWorkstation).toHaveBeenCalledWith('ws_1', 'studio');
         expect(out).toEqual({ ok: true, note: 'Opening studio in its own window' });
     });
 

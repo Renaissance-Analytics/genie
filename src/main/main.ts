@@ -107,6 +107,7 @@ import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
 import { electronQuestionWindow } from './question-window-electron.js';
 import { readV1Settings } from './v1-settings.js';
+import { thisMachineWorkstationIds } from './this-machine.js';
 import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
@@ -747,8 +748,10 @@ const remoteWindows = new Map<string, BrowserWindow>();
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
 const relayLiveFor = (win: BrowserWindow): boolean => [...relayChannels.values()].some((c) => c.sender === win.webContents);
-function openRemoteWindow(url: string): void {
-    const search = remoteWindowSearch(url);
+function openRemoteWindow(url: string, name?: string | null): void {
+    // The machine's NAME rides with the window (Genie 1's openWorkstationById: "The display name drives the host window
+    // title"): its connecting screen says it, never the raw `relay:<id>`.
+    const search = remoteWindowSearch(url, name);
     if (remoteFromSearch(search) === null) return;
     const open = remoteWindows.get(url);
     const exists = open !== undefined && !open.isDestroyed();
@@ -822,6 +825,8 @@ let tynnAccount: TynnAccount | null = null;
 let githubAccount: GithubAccount | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
+/** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
+let thisMachineIds: () => Promise<ReadonlySet<string>> = () => Promise.resolve(new Set(tynnWorkstationNow?.registered ? [tynnWorkstationNow.workstationId] : []));
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
@@ -857,7 +862,7 @@ function openGenieUrl(url: string): void {
     if (!tynnAccount) { pendingGenieUrl = url; return; }
     // A Tynn share link, opened (Tynn #839): Tynn's page opens genie://workstation/open?id=… — its window, over the relay.
     const workstation = workstationOpenFrom(url);
-    if (workstation) { openRemoteWindow(`relay:${workstation.id}`); return; }
+    if (workstation) { openRemoteWindow(`relay:${workstation.id}`, workstation.name); return; }
     if (signInCodeFrom(url) === null) { console.log('[genie] a genie:// URL Genie does not handle was ignored'); return; }
     revealMainWindow('genie:// sign-in link');
     void tynnAccount.signIn(url).then((r) => {
@@ -1781,7 +1786,7 @@ async function boot(): Promise<void> {
         return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
     });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
-    ipcMain.handle('genie:remote-open-window', (_event, url: unknown) => { if (typeof url === 'string') openRemoteWindow(url); });
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url === 'string') openRemoteWindow(url, typeof name === 'string' ? name : null); });
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
     ipcMain.handle('genie:tynn-workstations', async () => {
@@ -1789,8 +1794,8 @@ async function boot(): Promise<void> {
         if (!account) return { ok: false, reason: 'this Genie has no Tynn account' };
         const refused = droneRefusal(workstationRoleNow);
         if (refused) return { ok: false, reason: refused };
-        const own = tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null;
-        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), own), rereadRole);
+        // Every Tynn identity this machine holds, not only the one this launch registered (this-machine.ts).
+        return wordTynnRefusal(await connectableWorkstations((path, init) => account.request(path, init), await thisMachineIds()), rereadRole);
     });
     // A PASTED SHARE LINK (genie#1278 C1; Genie 1's connect-dispatch): main classifies it against the Tynn this Genie is
     // signed in to, with the role Tynn gave this machine — never one the window sends — then opens the invite in the
@@ -1799,7 +1804,7 @@ async function boot(): Promise<void> {
         const status = tynnAccount?.status();
         return dispatchConnectLink(String(text ?? ''), status?.signedIn ? status.host : null, workstationRoleNow, {
             openExternal: async (url) => { try { await shell.openExternal(url); return true; } catch { return false; } },
-            openWorkstation: (id) => openRemoteWindow(`relay:${id}`),
+            openWorkstation: (id, name) => openRemoteWindow(`relay:${id}`, name ?? null),
         });
     });
     // CHANGE A WORKSTATION'S ROLE (genie#1278 W6): refused here first on a drone (the role main read from Tynn), then Tynn
@@ -1821,10 +1826,13 @@ async function boot(): Promise<void> {
         const account = tynnAccount;
         if (!account?.status().signedIn) return { ok: false, reason: 'sign in to Tynn to connect to a Tynn workstation' };
         const pop = PopKeypair.generate();
+        // Each step is said where it fails (core/relay-connect.ts): Tynn's way in, then the relay to the machine.
         const grant = await mintConnectGrant((path, init) => account.request(path, init), workstationId, pop.publicJwk);
-        if (!grant.ok) return wordTynnRefusal(grant, rereadRole);
+        if (!grant.ok) return { ...(await wordTynnRefusal(grant, rereadRole)), stage: 'tynn' };
+        // Tynn gave the way in: the window moves its step on to reaching the machine.
+        if (!event.sender.isDestroyed()) event.sender.send('genie:relay-open-step', workstationId, 'relay');
         const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop });
-        if (!opened.ok) return opened;
+        if (!opened.ok) return { ...opened, stage: 'relay' };
         const channel = `relay_${++nextRelayChannel}`;
         const sender = event.sender;
         relayChannels.set(channel, { transport: opened.transport, sender, workstationId });
@@ -2410,6 +2418,9 @@ async function boot(): Promise<void> {
         encrypt: (text) => safeStorage.encryptString(text),
         decrypt: (bytes) => safeStorage.decryptString(bytes),
     });
+    // THIS MACHINE, ALL OF IT (this-machine.ts): this launch's registration, the identity Genie 2 stored for this Tynn,
+    // and the one Genie 1 registered from the userData Genie 2 shares — "Your workstations" never lists any of them.
+    thisMachineIds = () => identities.read(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
     // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,

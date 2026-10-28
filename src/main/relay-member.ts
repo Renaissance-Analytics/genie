@@ -58,7 +58,8 @@ interface SiteStream {
 
 const SITE_OPEN_TIMEOUT_MS = 15_000;
 
-export type RelayMemberResult = { ok: true; transport: RelayMemberTransport } | { ok: false; reason: string };
+/** `offline`: the relay said the machine is not connected to it (genie-cloud's `no-host`), as against any other refusal. */
+export type RelayMemberResult = { ok: true; transport: RelayMemberTransport } | { ok: false; reason: string; offline?: true };
 
 export function openRelayMember(input: {
     socket: RelaySocketFactory;
@@ -76,6 +77,7 @@ export function openRelayMember(input: {
         let settled = false;
         let closed = false;
         let because: string | null = null;
+        let offline = false;
         const streams = new Map<string, SiteStream>();
         let nextReq = 0;
 
@@ -96,7 +98,7 @@ export function openRelayMember(input: {
             }
             streams.clear();
             try { ws.close(); } catch { /* already closing */ }
-            finish({ ok: false, reason: reason ?? 'the relay closed the connection' });
+            finish(offline ? { ok: false, reason: reason ?? 'the relay closed the connection', offline: true } : { ok: false, reason: reason ?? 'the relay closed the connection' });
             for (const l of closes) l();
         };
         const timer = setTimeout(() => closeOnce('the relay did not answer'), input.timeoutMs ?? 15_000);
@@ -172,6 +174,8 @@ export function openRelayMember(input: {
                     return;
                 }
                 if (reply.type === 'error') {
+                    // genie-cloud relay-server: `no-host` = "workstation not connected" — the machine is offline.
+                    offline = reply.code === 'no-host';
                     closeOnce(reply.reason || reply.code);
                     return;
                 }

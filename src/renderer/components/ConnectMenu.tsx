@@ -53,13 +53,22 @@ function Progress({ state, onRetry, retryAction }: { state: ConnectProgress; onR
  * machine Tynn says this person can see. One Tynn says you may reach has Open, which opens it in its own window over the
  * Tynn relay; one you may not is shown with the reason, and has no Open. `opening` is where each Open stands.
  *
+ * READ AT A GLANCE (the owner, 2026-10-28, on beta.50: "ugly"). As Genie 1's rows (master.tsx:5056-5079): one line per
+ * machine, no box around it — a glyph, the name in full and bold (beta.50 cut it: "Foundati…"), a small Open. The role
+ * is a badge with its word (beta.50's lone paper-plane glyph read as a stray "send" icon). Whether a machine is online is
+ * NOT shown: Tynn's list does not say (its `status` is the record's, `active` while the machine is off), and the relay
+ * has no presence call — so the window that connects says "offline" when the relay does (core/relay-connect.ts).
+ *
  * EMPTY IS NEVER BLANK: no machines, or Tynn could not be asked, shows the steps to take on the other machine, after
  * Tynn's own reason when it gave one.
  */
 type SetRole = (workstation: TynnWorkstationRow, role: 'pilot' | 'drone', code: string) => Promise<RoleChange>;
 
-const ROLE_ICON = { pilot: 'navigation', drone: 'bot' } as const;
+const ROLE_ICON = { pilot: 'plane', drone: 'bot' } as const;
 const ROLE_NAME = { pilot: 'Pilot', drone: 'Drone' } as const;
+const ROLE_TITLE = { pilot: 'Pilot: it can open your other machines', drone: 'Drone: it can be opened, and opens nothing' } as const;
+/** The one thing to press on a row: filled, so it reads as a button at a glance (the owner, 2026-10-27). */
+const OPEN_BUTTON = 'inline-flex items-center rounded-md bg-[var(--primary)] px-2.5 py-1 text-xs font-medium text-[var(--primary-fg)] hover:bg-[var(--primary-hover)] disabled:cursor-default disabled:opacity-60';
 
 /**
  * THE CODE PROMPT FOR A ROLE CHANGE (genie#1278 W6): what will change, the authenticator code, Confirm; then its step,
@@ -126,7 +135,7 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onS
         );
     }
     return (
-        <ul data-tynn-workstations="" className="flex flex-col gap-1">
+        <ul data-tynn-workstations="" className="flex flex-col gap-0.5">
             {list.workstations.map((w) => {
                 const state = opening[w.id] ?? { kind: 'idle' as const };
                 const role = changed[w.id] ?? w.role ?? null;
@@ -144,26 +153,26 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onS
                     );
                 };
                 return (
-                    <li key={w.id} data-tynn-workstation-row={w.id} className="flex flex-col gap-1 rounded-lg border border-[var(--border-1)] px-3 py-2 text-[13px]">
+                    <li key={w.id} data-tynn-workstation-row={w.id} className="flex flex-col gap-1 rounded-lg px-2 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
                         <div className="flex items-center gap-2">
                             {/* Desktop or cloud is a glyph, named for a screen reader and on hover (the owner's reduce-reading rule). */}
                             <span title={w.local ? 'Desktop' : 'Cloud'} aria-label={w.local ? 'Desktop' : 'Cloud'} className="flex shrink-0 text-[var(--fg-3)]">
-                                <Icon name={w.local ? 'monitor' : 'cloud'} size="xs" />
+                                <Icon name={w.local ? 'monitor' : 'cloud'} size="sm" />
                             </span>
-                            <span className="truncate font-medium">{w.name}</span>
+                            <span className="min-w-0 flex-1 font-semibold break-words">{w.name}</span>
+                            {w.source && w.source !== 'owner' ? <span title="Shared with you" aria-label="Shared with you" className="flex shrink-0 text-[var(--fg-4)]"><Icon name="link" size="xs" /></span> : null}
                             {role ? (
-                                <span data-workstation-role={role} title={ROLE_NAME[role]} aria-label={ROLE_NAME[role]} className="flex shrink-0 text-[var(--fg-3)]"><Icon name={ROLE_ICON[role]} size="xs" /></span>
+                                <span data-workstation-role={role} title={ROLE_TITLE[role]} aria-label={ROLE_NAME[role]} className={`inline-flex shrink-0 items-center gap-1 rounded-full px-1.5 py-px text-[10px] font-medium ${role === 'pilot' ? 'bg-[var(--primary)]/10 text-[var(--primary)]' : 'bg-[var(--bg-3)] text-[var(--fg-3)]'}`}><Icon name={ROLE_ICON[role]} size="xs" />{ROLE_NAME[role]}</span>
                             ) : null}
                             {switchable && role ? (
-                                <button type="button" data-action="change-role" onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={BUTTON}>
+                                <button type="button" data-action="change-role" title={`Make ${w.name} a ${role === 'pilot' ? 'drone' : 'pilot'}`} onClick={() => setChanging({ id: w.id, to: role === 'pilot' ? 'drone' : 'pilot', code: '', state: { kind: 'idle' } })} className={`shrink-0 whitespace-nowrap ${BUTTON}`}>
                                     <Icon name={ROLE_ICON[role === 'pilot' ? 'drone' : 'pilot']} size="xs" />Make {role === 'pilot' ? 'drone' : 'pilot'}
                                 </button>
                             ) : null}
-                            {w.source && w.source !== 'owner' ? <span title="Shared with you" aria-label="Shared with you" className="flex shrink-0 text-[var(--fg-4)]"><Icon name="link" size="xs" /></span> : null}
                             {w.connectable && onOpenWorkstation ? (
-                                <button type="button" data-action="open-workstation" disabled={state.kind === 'working'} onClick={() => onOpenWorkstation(w)} className={`ml-auto shrink-0 ${BUTTON}`}>Open</button>
+                                <button type="button" data-action="open-workstation" title={`Open ${w.name} in its own window`} disabled={state.kind === 'working'} onClick={() => onOpenWorkstation(w)} className={`shrink-0 whitespace-nowrap ${OPEN_BUTTON}`}>Open</button>
                             ) : (
-                                <span className="ml-auto shrink-0 text-[11px] text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
+                                <span className="shrink-0 text-[11px] whitespace-nowrap text-[var(--fg-3)]">{!w.active ? 'not active' : 'not shared with you'}</span>
                             )}
                         </div>
                         {onOpenWorkstation ? <Progress state={state} onRetry={() => onOpenWorkstation(w)} retryAction="retry-workstation" /> : null}
@@ -218,20 +227,24 @@ export interface ConnectMenuProps {
     readonly onOpenSurface: () => void;
     /** Paste a share link instead. */
     readonly onOpenLink?: (() => void) | undefined;
-    /** A pilot only (genie#1278 W6). */
-    readonly onSetRole?: SetRole | undefined;
     /** Where the re-read of Tynn's list stands (M0 finding 1): its step, or why it failed (with Retry). */
     readonly refresh?: ConnectProgress | undefined;
-    /** Read Tynn's list again (Retry). */
+    /** Read Tynn's list again (Retry, and the menu's own refresh button). */
     readonly onRefresh?: (() => void) | undefined;
+    /** Fill the space it is given (the ⌘K dialog); else the title-bar popover's own width. */
+    readonly fill?: boolean | undefined;
 }
 
-/** The title bar's menu and the Command Window's "Connect to my workstations": your machines first, then the other ways. */
-export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, onOpenLink, onSetRole, refresh = { kind: 'idle' }, onRefresh }: ConnectMenuProps) {
+/**
+ * The title bar's menu and the Command Window's "Connect to my workstations": your machines first, then the other ways.
+ * Changing a machine's ROLE is not here (the owner, 2026-10-28: a "Make drone" on every row was the ugliest part of it):
+ * it is Settings → Remote access, where each of your desktops has it (genie#1278 W6). The menu is for connecting.
+ */
+export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, onOpenLink, refresh = { kind: 'idle' }, onRefresh, fill = false }: ConnectMenuProps) {
     const [opening, open] = useOpenProgress(onOpenWorkstation);
     const quiet = 'flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]';
     return (
-        <div data-connect-menu="" className="flex w-80 flex-col gap-2 p-2 text-sm">
+        <div data-connect-menu="" className={`flex ${fill ? 'w-full' : 'w-80'} flex-col gap-2 p-1 text-sm`}>
             {/* Re-reading on open: the last list stays below while Tynn is asked; a failure keeps it, with Retry. */}
             {workstations !== null && refresh.kind === 'working' ? (
                 <span data-tynn-refresh="working" className="flex items-center gap-1.5 text-xs text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />{refresh.step}</span>
@@ -245,13 +258,19 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
             {workstations === null ? (
                 <p data-tynn-workstations="loading" className="flex items-center gap-1.5 text-xs text-[var(--fg-3)]"><Icon name="loader" size="xs" className="animate-spin" />Asking Tynn for your machines…</p>
             ) : (
-                <TynnWorkstationRows list={workstations} onOpenWorkstation={open} opening={opening} onSetRole={onSetRole} />
+                <TynnWorkstationRows list={workstations} onOpenWorkstation={open} opening={opening} />
             )}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-1 border-t border-[var(--border-1)] pt-1.5">
                 {onOpenLink ? (
                     <button type="button" data-action="paste-share-link" onClick={onOpenLink} className={quiet}><Icon name="link" size="xs" />Share link</button>
                 ) : null}
                 <button type="button" data-action="open-connect-surface" onClick={onOpenSurface} className={quiet}><Icon name="settings" size="xs" />Remote access</button>
+                {/* Genie 1's ⟳ "Rescan" (master.tsx:5046): ask Tynn again, here. */}
+                {onRefresh ? (
+                    <button type="button" data-action="refresh-workstations" title="Ask Tynn again" aria-label="Ask Tynn again" disabled={refresh.kind === 'working'} onClick={onRefresh} className={`ml-auto ${quiet}`}>
+                        <Icon name="refresh-cw" size="xs" className={refresh.kind === 'working' ? 'animate-spin' : ''} />
+                    </button>
+                ) : null}
             </div>
         </div>
     );
@@ -261,8 +280,7 @@ export function ConnectMenu({ workstations, onOpenWorkstation, onOpenSurface, on
  * THE COMMAND WINDOW'S TWO WAYS IN (genie#1278 C1), in a window of their own: "Open a share link…" (paste, Open, its
  * progress) and "Connect to my workstations" (the same menu as the title bar's button).
  */
-export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, onSetRole, refresh, onRefresh }: {
-    onSetRole?: SetRole | undefined;
+export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, onOpenSurface, openLink, onSwitch, refresh, onRefresh }: {
     refresh?: ConnectProgress | undefined;
     onRefresh?: (() => void) | undefined;
     mode: 'link' | 'workstations';
@@ -295,7 +313,7 @@ export function ConnectDialog({ mode, onClose, workstations, onOpenWorkstation, 
                 {mode === 'link' ? (
                     <ShareLinkForm value={value} state={state} onChange={(v) => { setValue(v); if (state.kind !== 'working') setState({ kind: 'idle' }); }} onOpen={open} />
                 ) : (
-                    <ConnectMenu workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} onSetRole={onSetRole} refresh={refresh} onRefresh={onRefresh} />
+                    <ConnectMenu fill workstations={workstations} onOpenWorkstation={onOpenWorkstation} onOpenSurface={onOpenSurface} onOpenLink={() => onSwitch('link')} refresh={refresh} onRefresh={onRefresh} />
                 )}
             </Modal.Body>
         </Modal>

@@ -45,7 +45,9 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
-import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
+import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
+import { RelayConnecting } from './components/RelayConnecting.js';
+import type { RelayConnect } from '../core/relay-connect.js';
 import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
 import { ShareWorkspaceModal } from './components/ShareWorkspaceModal.js';
 import { HostPathPicker, HostPathPickerContext, type PickHostPath } from './components/HostPathPicker.js';
@@ -252,7 +254,7 @@ function useAgentDetail(
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
  */
-function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress } {
+function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     const tokens = typeof window === 'undefined' ? null : rememberedTokens(window.localStorage);
@@ -261,6 +263,10 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     // The hosts this device has connected to (Tynn #819), and the host THIS window is bound to (a remote host's window).
     const [known, setKnown] = useState<KnownHost[]>(() => hosts?.list() ?? []);
     const [bound] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteFromSearch(window.location.search)));
+    // A Tynn workstation's window: the machine's NAME (from the window that opened it, else Tynn's list) and where its
+    // connection stands, step by step (core/relay-connect.ts). Never the raw `relay:<id>`.
+    const [boundName, setBoundName] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteNameFromSearch(window.location.search)));
+    const [relayConnect, setRelayConnect] = useState<RelayConnect>({ kind: 'working', step: 'tynn' });
     const last = useRef<{ url: string; label: string } | null>(null);
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
     const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
@@ -310,8 +316,17 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
             if (workstationId !== null) {
                 if (!net) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'Tynn workstations open from Genie on a desktop' })); return Promise.resolve(false); }
                 last.current = { url: url.url, label };
+                setRelayConnect({ kind: 'working', step: 'tynn' });
+                // Main says when Tynn gave the way in and it is reaching the machine.
+                const offStep = net.onOpenStep?.((id, step) => { if (id === workstationId) setRelayConnect({ kind: 'working', step }); });
                 return net.open(workstationId).then((opened) => {
-                    if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
+                    offStep?.();
+                    if (!opened.ok) {
+                        setRelayConnect({ kind: 'failed', step: opened.stage ?? 'tynn', reason: opened.reason, ...(opened.offline ? { offline: true } : {}) });
+                        setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason }));
+                        return false;
+                    }
+                    setRelayConnect({ kind: 'working', step: 'host' });
                     const transport = ipcRelayTransport(net, opened.channel);
                     // This machine's Genie browser, which main points at THIS workstation's sites over this window's channel.
                     const localBrowser = window.genie?.browserWindow;
@@ -321,7 +336,11 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     return next.ready.then((r) => {
                         if (r.ok && hosts) { hosts.noteConnected(url.url, next.state().host, Date.now()); setKnown(hosts.list()); }
                         // The relay's or the host's own words beat the protocol's generic close.
-                        if (!r.ok) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: transport.closedBecause() ?? r.reason }));
+                        if (!r.ok) {
+                            const reason = transport.closedBecause() ?? r.reason;
+                            setRelayConnect({ kind: 'failed', step: 'host', reason });
+                            setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: reason }));
+                        }
                         return r.ok;
                     });
                 });
@@ -362,6 +381,20 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     };
     // A remote host's window connects on open, with the token this device holds (no PIN: it was paired before).
     useEffect(() => { if (bound) void connectTo(bound, ''); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // A Tynn workstation's window opened without its name (an older opener): Tynn's list names it.
+    useEffect(() => {
+        const id = bound ? relayWorkstationOf(bound) : null;
+        if (id === null || boundName !== null || !net) return;
+        void net.workstations().then((list) => { const w = list.ok ? list.workstations.find((x) => x.id === id) : undefined; if (w) setBoundName(w.name); }, () => {});
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // A Tynn workstation's connection that DROPPED after it was up: said at its last step, with Retry.
+    const wasConnected = useRef(false);
+    useEffect(() => {
+        if (state?.connected) { wasConnected.current = true; return; }
+        if (!wasConnected.current || !bound || relayWorkstationOf(bound) === null) return;
+        wasConnected.current = false;
+        setRelayConnect({ kind: 'failed', step: 'host', reason: state?.lastRefusal ?? 'The connection dropped.' });
+    }, [state?.connected]); // eslint-disable-line react-hooks/exhaustive-deps
     return {
         client,
         state,
@@ -378,6 +411,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         tynnWorkstations,
         reloadTynnWorkstations,
         tynnRefresh,
+        boundName,
+        relayConnect,
     };
 }
 
@@ -1414,10 +1449,19 @@ function DesktopApp({ bridge }: AppProps) {
     // A remote host's window (Tynn #819) shows its host's Genie or nothing of this machine's: until connected, only its
     // connecting screen — Reconnect, or the PIN when this device is not paired.
     if (remote.bound && !remote.state?.connected) {
+        // A Tynn workstation (relay:<id>): its name and the steps, offline said as such, Retry — no host/PIN form, no id.
+        // A tailnet host (ws:// / wss://): its host name, with the host/PIN form — that IS its way in.
+        const tailnetHost = remote.bound.replace(/^wss?:\/\//, '').replace(/\/genie$/, '');
         return (
             <div data-remote-window={remote.bound} className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--bg-0)] p-8 text-[var(--fg-1)]">
-                <h1 className="text-sm font-semibold">Connecting to {remote.bound.replace(/^wss?:\/\//, '').replace(/\/genie$/, '')}…</h1>
-                <ConnectRemote state={remote.state} remembered={[remote.bound]} onConnect={(i) => { void remote.connect(i); }} onDisconnect={remote.disconnect} onReconnect={remote.reconnect} upgrade={remote.upgrade} />
+                {relayWorkstationOf(remote.bound) !== null ? (
+                    <RelayConnecting name={remote.boundName} state={remote.relayConnect} onRetry={remote.reconnect} />
+                ) : (
+                    <>
+                        <h1 className="text-sm font-semibold">Connecting to {tailnetHost}…</h1>
+                        <ConnectRemote state={remote.state} remembered={[remote.bound]} onConnect={(i) => { void remote.connect(i); }} onDisconnect={remote.disconnect} onReconnect={remote.reconnect} upgrade={remote.upgrade} />
+                    </>
+                )}
             </div>
         );
     }
@@ -1446,7 +1490,7 @@ function DesktopApp({ bridge }: AppProps) {
                 onOpenHost: (url: string) => openRemoteHost(url, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
                 // A Tynn workstation (Tynn #837): its own window, bound to relay:<id>.
                 tynnWorkstations: remote.tynnWorkstations,
-                onOpenWorkstation: (w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }),
+                onOpenWorkstation: (w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }, w.name),
                 onOpenLink: () => setConnectDialog('link'),
                 onRefresh: remote.reloadTynnWorkstations,
                 refresh: remote.tynnRefresh,
@@ -1740,10 +1784,9 @@ function DesktopApp({ bridge }: AppProps) {
                 onClose={() => setConnectDialog(null)}
                 onSwitch={setConnectDialog}
                 workstations={remote.tynnWorkstations}
-                onOpenWorkstation={(w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); })}
+                onOpenWorkstation={(w: TynnWorkstationRow) => openRemoteHost(`relay:${w.id}`, bridge, typeof window === 'undefined' ? undefined : window.genie, (u) => { void remote.connect({ host: u, pin: '', label: '' }); }, w.name)}
                 onOpenSurface={() => { setConnectDialog(null); navigate(CONNECT_ROUTE); }}
                 openLink={typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork?.openLink}
-                onSetRole={features.remote?.tynnWorkstation?.role === 'pilot' ? setWorkstationRole : undefined}
                 refresh={remote.tynnRefresh}
                 onRefresh={remote.reloadTynnWorkstations}
             />
