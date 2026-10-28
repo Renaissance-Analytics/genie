@@ -155,7 +155,7 @@ describe('the board\'s claims', () => {
 
     it('a backlog card\'s Start follows the claim mode, as tynn.ai\'s: off or mine starts; optional chooses; required claims first', () => {
         const card = (extra: Record<string, unknown> = {}) => board([story('s1', extra)]).columns[0]!.cards[0]!;
-        const at = (mode: string) => ({ mode, policy: 'any', canAssign: false }) as const;
+        const at = (mode: 'off' | 'optional' | 'required') => ({ mode, policy: 'any', canAssign: false });
         expect(startPlan(card(), at('off'))).toBe('start');
         expect(startPlan(card(), at('optional'))).toBe('choose');
         expect(startPlan(card(), at('required'))).toBe('claim-then-start');

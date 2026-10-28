@@ -1,16 +1,19 @@
 import {
+    assignBody,
     boardActionRequest,
     boardDetailRequest,
     boardQueryPath,
     createBody,
     editBody,
     parseBoard,
+    parseClaimants,
     parseDetail,
     type BoardDetail,
     type BoardIds,
     type BoardMethod,
     type BoardScope,
     type BoardView,
+    type Claimant,
 } from '../core/tynn-board.js';
 
 /**
@@ -21,7 +24,8 @@ import {
  * side (`projectFor`): the tab has no project picker, and a window cannot name some other project.
  *
  * Tynn answers every refusal with a 404 (no `genie:board` scope on an older pairing, no access to the project, a role
- * that may not write); an illegal workflow step is a 422 whose `errors.status` says why, in Tynn's words.
+ * that may not write); an illegal step is a 422 that says why in Tynn's words: `errors.status` for a workflow step,
+ * `errors.claim` for a claim the project's rules refuse, `errors.assignee` for a claimant not on the project.
  */
 export interface TynnBoardPorts {
     signedIn(): boolean;
@@ -98,12 +102,22 @@ function dragBody(raw: unknown): { status: string; order: number; override?: boo
     return { status: b.status, order: b.order, ...(b.override === true ? { override: true } : {}) };
 }
 
+/** The project's eligible claimants (GET /claimants), for the Assign picker. */
+async function readClaimants(ports: TynnBoardPorts, path: string): Promise<{ ok: true; claimants: Claimant[] } | TynnBoardRefusal> {
+    if (!ports.signedIn()) return SIGNED_OUT;
+    let res;
+    try { res = await ports.request(path, { method: 'GET' }); }
+    catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }
+    return res.ok ? { ok: true, claimants: parseClaimants(await bodyOf(res)) } : refusal(res);
+}
+
 /** One action on the board, by the contract's id (`task.start`, `story.move`, `version.delete`…). */
-export async function runTynnBoardAction(ports: TynnBoardPorts, workspaceId: string, input: { action: string; ids: BoardIds; body?: unknown }): Promise<{ ok: true } | TynnBoardRefusal> {
+export async function runTynnBoardAction(ports: TynnBoardPorts, workspaceId: string, input: { action: string; ids: BoardIds; body?: unknown }): Promise<{ ok: true; claimants?: Claimant[] } | TynnBoardRefusal> {
     const projectId = ports.projectFor(workspaceId);
     if (projectId === null) return NOT_LINKED;
     const request = boardActionRequest(projectId, input.action, input.ids ?? {});
     if (request === null) return { ok: false, state: 'error', reason: `The Tynn tab does not offer ${input.action}.` };
+    if (input.action === 'board.claimants') return readClaimants(ports, request.path);
     if (request.method === 'GET') return { ok: false, state: 'error', reason: `${input.action} is read with the board (its focus), not run.` };
     const [kind, verb] = input.action.split('.') as [string, string];
     let body: unknown = null;
@@ -116,6 +130,9 @@ export async function runTynnBoardAction(ports: TynnBoardPorts, workspaceId: str
     } else if (verb === 'edit' && (kind === 'story' || kind === 'task')) {
         body = editBody(kind, input.body);
         if (body === null) return { ok: false, state: 'error', reason: 'Nothing to save, or the title is empty.' };
+    } else if (verb === 'assign') {
+        body = assignBody(input.body);
+        if (body === null) return { ok: false, state: 'error', reason: 'Pick a person or an agent to assign.' };
     }
     if (!ports.signedIn()) return SIGNED_OUT;
     let res;

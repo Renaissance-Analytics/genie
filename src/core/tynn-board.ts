@@ -33,9 +33,26 @@ export const BOARD_LEVELS = {
 /** What a card reads from Tynn's row (the rest of the row is ignored). */
 export const BOARD_FIELDS = {
     version: ['id', 'number', 'title', 'status', 'story_count', 'stories_done', 'task_count', 'tasks_done'],
-    story: ['id', 'story_number', 'title', 'status', 'order', 'task_count', 'tasks_done', 'claimed_by', 'can_start', 'can_move_to_qa', 'version_active'],
-    task: ['id', 'task_number', 'title', 'status', 'order', 'story_id', 'claimed_by', 'can_start', 'version_active'],
+    story: ['id', 'story_number', 'title', 'status', 'order', 'task_count', 'tasks_done', 'claimed_by', 'claimed_by_me', 'can_start', 'can_move_to_qa', 'version_active'],
+    task: ['id', 'task_number', 'title', 'status', 'order', 'story_id', 'claimed_by', 'claimed_by_me', 'can_start', 'version_active'],
 } as const satisfies Record<BoardKind, readonly string[]>;
+
+/**
+ * Claims, as tynn.ai's board does them (row B3): the board answer's `claims` {mode, policy, can_assign}; a backlog card's
+ * Start by claim mode (off or already mine: start; optional: choose Claim + Start or Start; required: claim, then start);
+ * only the claimant releases (`claimed_by_me`); only a person who may manage the project assigns (`can_assign`).
+ */
+export const BOARD_CLAIMS = {
+    field: 'claims',
+    keys: ['mode', 'policy', 'can_assign'],
+    modes: ['off', 'optional', 'required'],
+    policies: ['any', 'human', 'agent'],
+    start: { off: 'start', optional: 'choose', required: 'claim-then-start', mine: 'start' },
+    release: 'claimed_by_me',
+    assign: 'can_assign',
+} as const;
+export type ClaimMode = (typeof BOARD_CLAIMS.modes)[number];
+export type StartPlan = (typeof BOARD_CLAIMS.start)[keyof typeof BOARD_CLAIMS.start];
 
 export const BOARD_DRAG = { versions: false, stories: true, tasks: true, override: 'shift' } as const;
 
@@ -102,6 +119,9 @@ export const BOARD_API: Readonly<Record<string, { readonly method: BoardMethod; 
     'story.create': { method: 'POST', path: '/stories' },
     'story.edit': { method: 'PATCH', path: '/stories/{storyId}' },
     'story.detail': { method: 'GET', path: '/stories/{storyId}' },
+    'story.claim': { method: 'POST', path: '/stories/{storyId}/claim' },
+    'story.unclaim': { method: 'POST', path: '/stories/{storyId}/release' },
+    'story.assign': { method: 'POST', path: '/stories/{storyId}/assign' },
     'task.start': { method: 'POST', path: '/tasks/{taskId}/start' },
     'task.ready': { method: 'POST', path: '/tasks/{taskId}/ready' },
     'task.done': { method: 'POST', path: '/tasks/{taskId}/done' },
@@ -112,25 +132,21 @@ export const BOARD_API: Readonly<Record<string, { readonly method: BoardMethod; 
     'task.create': { method: 'POST', path: '/tasks' },
     'task.edit': { method: 'PATCH', path: '/tasks/{taskId}' },
     'task.detail': { method: 'GET', path: '/tasks/{taskId}' },
+    'task.claim': { method: 'POST', path: '/tasks/{taskId}/claim' },
+    'task.unclaim': { method: 'POST', path: '/tasks/{taskId}/release' },
+    'task.assign': { method: 'POST', path: '/tasks/{taskId}/assign' },
+    'board.claimants': { method: 'GET', path: '/claimants' },
 };
 
 /** What tynn.ai's board offers that this tab does not yet — each needs Tynn's JSON door first (.ai/plans/genie-2-tynn-tab-parity.md). */
 const NEEDS_VERSION_API = 'Tynn has no pairing-token API for creating or editing versions yet (genie-2-tynn-tab-parity.md, row B2: versions)';
-const NEEDS_CLAIM_API = 'Tynn has no pairing-token API for claiming yet (genie-2-tynn-tab-parity.md, row B3)';
 export const BOARD_GAPS: Readonly<Record<string, string>> = {
     'version.create': NEEDS_VERSION_API,
     'version.edit': NEEDS_VERSION_API,
-    'story.claim': NEEDS_CLAIM_API,
-    'story.unclaim': NEEDS_CLAIM_API,
-    'story.assign': NEEDS_CLAIM_API,
-    'task.claim': NEEDS_CLAIM_API,
-    'task.unclaim': NEEDS_CLAIM_API,
-    'task.assign': NEEDS_CLAIM_API,
-    'board.claimants': NEEDS_CLAIM_API,
 };
 
 /** Every state the tab draws (TynnBoardPanel), as the contract names them. */
-export const BOARD_STATES = ['loading', 'empty-column', 'drill-down', 'illegal-drop', 'override-armed', 'transition-refused', 'detail', 'create-in-backlog', 'not-linked', 'signed-out'] as const;
+export const BOARD_STATES = ['loading', 'empty-column', 'drill-down', 'illegal-drop', 'override-armed', 'transition-refused', 'detail', 'create-in-backlog', 'claim-start', 'claimed', 'assign', 'not-linked', 'signed-out'] as const;
 
 // ── The view ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -166,10 +182,15 @@ export interface BoardCard {
     /** `3/5` — done of total, under a version's or story's card. */
     readonly progress: string | null;
     readonly claimedBy: string | null;
+    /** Who holds the card, as its badge draws them; `mine` when it is this person (who may release it). */
+    readonly claim: BoardClaim | null;
     readonly quick: BoardStep | null;
     /** Where opening the card goes: a version's stories, a story's tasks; a task opens nothing. */
     readonly drill: BoardScope | null;
 }
+export interface BoardClaim { readonly type: 'user' | 'agent'; readonly id: string; readonly name: string; readonly initials: string; readonly mine: boolean }
+/** The project's claim settings for this person; null from a Tynn that does not send them (Start is then plain). */
+export interface BoardClaims { readonly mode: ClaimMode; readonly policy: string; readonly canAssign: boolean }
 export interface BoardColumnView { readonly status: string; readonly label: string; readonly cards: readonly BoardCard[] }
 export interface BoardView {
     readonly level: BoardLevel;
@@ -180,6 +201,7 @@ export interface BoardView {
     readonly crumbs: ReadonlyArray<{ readonly label: string; readonly scope: BoardScope }>;
     readonly columns: readonly BoardColumnView[];
     readonly draggable: boolean;
+    readonly claims: BoardClaims | null;
 }
 
 export type TynnBoardState =
@@ -208,7 +230,8 @@ export type BoardRefusal = { ok: false; state: 'not-linked' | 'signed-out' | 'tr
 /** What the tab needs from the host: the board at a scope, and one action — both for the WORKSPACE's own project. */
 export interface TynnBoardHost {
     read(workspaceId: string, scope: BoardScope): Promise<{ ok: true; view: BoardView; detail?: BoardDetail | null; detailRefused?: string | null } | BoardRefusal>;
-    act(workspaceId: string, input: BoardActionInput): Promise<{ ok: true } | BoardRefusal>;
+    /** One action; `board.claimants` answers the project's eligible claimants. */
+    act(workspaceId: string, input: BoardActionInput): Promise<{ ok: true; claimants?: readonly Claimant[] } | BoardRefusal>;
 }
 
 type Row = Record<string, unknown>;
@@ -229,7 +252,10 @@ function card(kind: BoardKind, row: Row): BoardCard | null {
     if (id === null || status === null) return null;
     const n = kind === 'version' ? str(row.number) : str(kind === 'story' ? row.story_number : row.task_number);
     const [done, total]: [number | null, number | null] = kind === 'version' ? [num(row.stories_done), num(row.story_count)] : kind === 'story' ? [num(row.tasks_done), num(row.task_count)] : [null, null];
-    const claim = isRow(row.claimed_by) ? str(row.claimed_by.name) : null;
+    const claimRow = isRow(row.claimed_by) ? row.claimed_by : null;
+    const claim = claimRow ? str(claimRow.name) : null;
+    const claimType = claimRow?.type === 'agent' ? 'agent' : claimRow?.type === 'user' ? 'user' : null;
+    const claimId = claimRow ? str(claimRow.id) : null;
     return {
         id,
         kind,
@@ -239,6 +265,9 @@ function card(kind: BoardKind, row: Row): BoardCard | null {
         order: num(row.order) ?? 0,
         progress: total !== null && total > 0 ? `${done ?? 0}/${total}` : null,
         claimedBy: claim,
+        claim: claim !== null && claimType !== null && claimId !== null
+            ? { type: claimType, id: claimId, name: claim, initials: initialsOf(claim), mine: row.claimed_by_me === true }
+            : null,
         quick: quickStep(kind, status, row),
         drill: kind === 'version' ? { version: id } : kind === 'story' ? { story: id } : null,
     };
@@ -277,7 +306,47 @@ export function parseBoard(json: unknown): BoardView | null {
 
     const upVersion = versionId ?? storyVersion;
     const up: BoardScope | null = level === 'versions' ? null : level === 'stories' ? {} : upVersion !== null ? { version: upVersion } : {};
-    return { level, versionId, storyId, up, crumbs, columns, draggable: BOARD_DRAG[level] };
+    return { level, versionId, storyId, up, crumbs, columns, draggable: BOARD_DRAG[level], claims: parseClaims(json[BOARD_CLAIMS.field]) };
+}
+
+function parseClaims(raw: unknown): BoardClaims | null {
+    if (!isRow(raw)) return null;
+    const mode = (BOARD_CLAIMS.modes as readonly unknown[]).includes(raw.mode) ? (raw.mode as ClaimMode) : null;
+    if (mode === null) return null;
+    return { mode, policy: str(raw.policy) ?? 'any', canAssign: raw.can_assign === true };
+}
+
+/** A person's initials for a claim badge: the first and last word's first letters ("Ada Lovelace" → AL). */
+export function initialsOf(name: string): string {
+    const words = name.trim().split(/\s+/).filter((w) => w !== '');
+    if (words.length === 0) return '?';
+    const first = words[0]!.charAt(0);
+    const last = words.length > 1 ? words[words.length - 1]!.charAt(0) : '';
+    return (first + last).toUpperCase();
+}
+
+/** How a backlog card's Start runs under the project's claim mode, as tynn.ai's Claim.jsx decides it. */
+export function startPlan(card: Pick<BoardCard, 'claim'>, claims: BoardClaims | null): StartPlan {
+    if (claims === null || card.claim?.mine === true) return BOARD_CLAIMS.start.mine;
+    return BOARD_CLAIMS.start[claims.mode];
+}
+
+/** One of the project's eligible claimants (GET /claimants): a member or an agent. */
+export interface Claimant { readonly type: 'user' | 'agent'; readonly id: string; readonly name: string }
+export function parseClaimants(json: unknown): Claimant[] {
+    const rows = isRow(json) && Array.isArray(json.claimants) ? json.claimants : [];
+    return rows.filter(isRow).flatMap((r) => {
+        const id = str(r.id);
+        const name = str(r.name);
+        return (r.type === 'user' || r.type === 'agent') && id !== null && name !== null ? [{ type: r.type, id, name }] : [];
+    });
+}
+
+/** What an assign sends: the claimant's type and id, as Tynn names them; null without a person or an agent. */
+export function assignBody(raw: unknown): { assignee_type: 'user' | 'agent'; assignee_id: string } | null {
+    if (!isRow(raw)) return null;
+    const id = str(raw.id);
+    return (raw.type === 'user' || raw.type === 'agent') && id !== null ? { assignee_type: raw.type, assignee_id: id } : null;
 }
 
 /** May a card dragged from `from` land in `to`? Its own column (a reorder) always; Shift anywhere; versions never drag. */
@@ -510,5 +579,32 @@ export async function performBoardAction(
         r = { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) };
     }
     report(r.ok ? { action: input.action, phase: 'done' } : { action: input.action, phase: 'failed', reason: r.reason });
+    return r;
+}
+
+/**
+ * tynn.ai's "Claim + Start": claim, and start only once the claim has landed (a required-mode project will not start an
+ * unclaimed card). One progress line for both (`<kind>.claim-start`): running, then done, or the step's own reason.
+ */
+export async function performClaimThenStart(
+    host: Pick<TynnBoardHost, 'act'>,
+    workspaceId: string,
+    kind: 'story' | 'task',
+    ids: BoardIds,
+    report: (op: BoardOp) => void,
+): Promise<{ ok: true } | BoardRefusal> {
+    const action = `${kind}.claim-start`;
+    report({ action, phase: 'running' });
+    const run = async (step: string): Promise<{ ok: true } | BoardRefusal> => {
+        try {
+            const r = await host.act(workspaceId, { action: `${kind}.${step}`, ids });
+            return r.ok ? { ok: true } : r;
+        } catch (error) {
+            return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) };
+        }
+    };
+    let r = await run('claim');
+    if (r.ok) r = await run('start');
+    report(r.ok ? { action, phase: 'done' } : { action, phase: 'failed', reason: r.reason });
     return r;
 }
