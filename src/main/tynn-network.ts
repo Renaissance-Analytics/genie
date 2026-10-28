@@ -12,7 +12,7 @@ import { buildTicketHostHello, type PopJwk, type RelaySocketFactory } from './re
  * relay ticket and the relay to dial, Tynn's grant keys, and whether a grant is still active.
  */
 
-type SessionRequest = (path: string, init: { method: 'GET' | 'POST'; body?: unknown }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
+type SessionRequest = (path: string, init: { method: 'GET' | 'POST' | 'PUT'; body?: unknown }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
 
 /** A workstation Tynn says this person can see — reachable (`connectable`) or not. */
 export interface TynnWorkstation {
@@ -25,6 +25,8 @@ export interface TynnWorkstation {
     readonly local: boolean;
     /** owner | grant | invite; `null` when not entitled. */
     readonly source: string | null;
+    /** Its Pilot/Drone role as Tynn holds it (genie#1278): exactly one of the two, else `null`. */
+    readonly role: 'pilot' | 'drone' | null;
 }
 
 export type TynnWorkstations = { readonly ok: true; readonly workstations: readonly TynnWorkstation[] } | { readonly ok: false; readonly reason: string };
@@ -58,12 +60,51 @@ export async function connectableWorkstations(request: SessionRequest, ownWorkst
             connectable: r.connectable === true,
             local: r.is_local === true,
             source: typeof r.source === 'string' ? r.source : null,
+            role: r.role === 'pilot' || r.role === 'drone' ? r.role : null,
         });
     }
     return { ok: true, workstations: [...byId.values()] };
 }
 
 /** `POST /api/v1/workstations/{id}/connect-grant {pop_jwk}`: the grant and the relay to dial. */
+/**
+ * CHANGE A WORKSTATION'S ROLE (genie#1278 W6): `PUT /api/v1/workstations/{id}/role {role, code}`. Tynn enforces all of
+ * it — the owner only, never from a drone, a fresh authenticator code every time, 5 a minute — so Genie only collects the
+ * code and says what Tynn answered. Tynn answers every unauthorized request with 404 and never says which reason, so the
+ * 404 is said as what it can mean.
+ */
+export async function setWorkstationRole(
+    request: SessionRequest,
+    workstationId: string,
+    role: 'pilot' | 'drone',
+    rawCode: string,
+): Promise<{ ok: true; role: 'pilot' | 'drone' } | { ok: false; reason: string; needsTwoFactor?: true }> {
+    // Spaces and dashes a person types or pastes go; anything else stays, so it fails the six-digit check.
+    const code = rawCode.replace(/[ -]/g, '').trim();
+    if (!/^[0-9]{6}$/.test(code)) return { ok: false, reason: 'Enter the 6-digit code from your authenticator app.' };
+    let res: Awaited<ReturnType<SessionRequest>>;
+    try {
+        res = await request(`/api/v1/workstations/${encodeURIComponent(workstationId)}/role`, { method: 'PUT', body: { role, code } });
+    } catch (error) {
+        return { ok: false, reason: `Tynn could not be reached (${error instanceof Error ? error.message : String(error)})` };
+    }
+    const body = (await res.json().catch(() => null)) as { error?: unknown; message?: unknown; errors?: Record<string, unknown>; workstation?: { role?: unknown } } | null;
+    if (res.status === 401 || res.status === 404 || res.status === 419) {
+        return { ok: false, reason: 'Tynn refused: only the owner can change a role, from a pilot that is signed in. Check you sign in to Tynn as the owner, then retry.' };
+    }
+    if (res.status === 429) return { ok: false, reason: 'Too many tries: wait a minute, then retry with a new code.' };
+    if (res.status === 422 && body?.error === 'two_factor_required') {
+        return { ok: false, reason: typeof body.message === 'string' && body.message !== '' ? body.message : 'Turn on two-factor authentication in your Tynn account to change workstation roles.', needsTwoFactor: true };
+    }
+    if (!res.ok) {
+        const first = (key: string): string | null => { const v = body?.errors?.[key]; return Array.isArray(v) && typeof v[0] === 'string' ? v[0] : null; };
+        return { ok: false, reason: first('code') ?? first('role') ?? (typeof body?.message === 'string' && body.message !== '' ? body.message : `Tynn refused the change (${res.status})`) };
+    }
+    const now = body?.workstation?.role;
+    if (now !== 'pilot' && now !== 'drone') return { ok: false, reason: 'Tynn answered without the workstation’s role' };
+    return { ok: true, role: now };
+}
+
 export async function mintConnectGrant(request: SessionRequest, workstationId: string, popJwk: PopJwk): Promise<{ ok: true; token: string; relayEndpoint: string } | { ok: false; reason: string }> {
     let res: Awaited<ReturnType<SessionRequest>>;
     try {

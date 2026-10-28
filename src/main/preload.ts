@@ -263,6 +263,7 @@ const bridge: PreloadBridge = {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
         open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,
         openLink: (text) => ipcRenderer.invoke('genie:connect-link', text) as Promise<never>,
+        setRole: (workstationId, role, code) => ipcRenderer.invoke('genie:tynn-workstation-role', workstationId, role, code) as Promise<never>,
         send: (channel, text) => ipcRenderer.send('genie:relay-send', channel, text),
         close: (channel) => ipcRenderer.send('genie:relay-close', channel),
         onMessage: (listener) => {

@@ -15,7 +15,7 @@ import { browserConnectionFor } from '../core/browser-connection.js';
 import { RemoteBrowsers } from './remote-browsers.js';
 import { drivablePages } from './page-navigation-electron.js';
 import { dialFrontDoor, isGenHost, siteDoor } from './relay-site.js';
-import { connectableWorkstations, mintConnectGrant, relayHostPorts, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
+import { connectableWorkstations, mintConnectGrant, relayHostPorts, setWorkstationRole, startRelayHost, type RelayHostHandle, type RelayHostStatus } from './tynn-network.js';
 import { livenessOf } from '../core/liveness.js';
 import { CallerBook, genieMcpServers, sessionCallerOf } from './mcp-callers.js';
 import type { Caller } from './mcp-tools.js';
@@ -789,6 +789,8 @@ let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** What Tynn says this machine is (genie#1278 W5): read from Tynn, kept in memory only, never from a file or setting. */
 // A drone until Tynn's first answer (fail closed); signed out, the first read makes it null (not on the Tynn network).
 let workstationRoleNow: WorkstationRole | null = 'drone';
+/** Read this machine's role from Tynn again (set where the reader is built). */
+let readWorkstationRoleNow: (() => Promise<void>) | null = null;
 /** Re-applies the relay host after the remote-access switch moves (set once the Tynn account is open). */
 let relayAfterSwitch: (() => void) | null = null;
 /** This Genie on the Tynn relay as a host (Tynn #838): `null` = not started (remote access off, or not registered). */
@@ -1762,6 +1764,18 @@ async function boot(): Promise<void> {
             openWorkstation: (id) => openRemoteWindow(`relay:${id}`),
         });
     });
+    // CHANGE A WORKSTATION'S ROLE (genie#1278 W6): refused here first on a drone (the role main read from Tynn), then Tynn
+    // decides — the owner only, with a fresh authenticator code. This machine's own role is read again afterwards.
+    ipcMain.handle('genie:tynn-workstation-role', async (_event, workstationId: unknown, role: unknown, code: unknown) => {
+        const refused = droneRefusal(workstationRoleNow);
+        if (refused) return { ok: false, reason: refused };
+        if (typeof workstationId !== 'string' || (role !== 'pilot' && role !== 'drone') || typeof code !== 'string') return { ok: false, reason: 'not a role change' };
+        const account = tynnAccount;
+        if (!account?.status().signedIn) return { ok: false, reason: 'Sign in to Tynn to change a workstation’s role' };
+        const result = await setWorkstationRole((path, init) => account.request(path, init), workstationId, role, code);
+        if (result.ok) void readWorkstationRoleNow?.();
+        return result;
+    });
     ipcMain.handle('genie:relay-open', async (event, workstationId: unknown) => {
         if (typeof workstationId !== 'string' || relayWorkstationOf(`relay:${workstationId}`) === null) return { ok: false, reason: 'not a Tynn workstation' };
         const refusedByRole = droneRefusal(workstationRoleNow);
@@ -2365,6 +2379,7 @@ async function boot(): Promise<void> {
         exec: (command, args) => new Promise<string>((resolve, reject) => { execFileCb(command, [...args], { windowsHide: true, timeout: 10_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
     }).then((id) => (id ? machineKeyOf(id) : null));
     // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
+    readWorkstationRoleNow = () => readRole();
     const readRole = async (): Promise<void> => {
         const account = tynnAccount;
         const signedIn = account?.status().signedIn === true;

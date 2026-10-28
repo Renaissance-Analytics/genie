@@ -13,7 +13,7 @@ import type { UpdateChip } from '../../core/update-chip.js';
 import { GenieLogo } from './GenieLogo.js';
 import { ConnectMenu } from './ConnectMenu.js';
 import { CONNECT_LABEL, CONNECT_ROUTE } from '../../core/connect-machine.js';
-import type { TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
+import type { RoleChange, TynnWorkstationList, TynnWorkstationRow } from '../relay-transport.js';
 import { DEFAULT_HOTKEYS, hotkeyLabel } from '../../core/hotkeys.js';
 import { WorkspaceSwatch, wsStyle } from '../workspace-colors.js';
 
@@ -92,6 +92,8 @@ export interface TitleBarProps {
         workstations: TynnWorkstationList | null;
         onOpenWorkstation?: ((workstation: TynnWorkstationRow) => void | Promise<unknown>) | undefined;
         onOpenLink?: (() => void) | undefined;
+        /** A pilot only (genie#1278 W6). */
+        onSetRole?: ((workstation: TynnWorkstationRow, role: 'pilot' | 'drone', code: string) => Promise<RoleChange>) | undefined;
     } | undefined;
 }
 
@@ -214,6 +216,7 @@ export function TitleBar({ route, workstation, remote, onNavigate, onOpenPalette
                             <ConnectMenu
                                 workstations={connect.workstations}
                                 onOpenWorkstation={connect.onOpenWorkstation}
+                                onSetRole={connect.onSetRole}
                                 onOpenLink={connect.onOpenLink ? () => { setConnectOpen(false); connect.onOpenLink?.(); } : undefined}
                                 onOpenSurface={() => { setConnectOpen(false); onNavigate(CONNECT_ROUTE); }}
                             />

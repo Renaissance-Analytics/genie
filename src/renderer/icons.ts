@@ -43,6 +43,8 @@ export const ICON_NAMES: readonly string[] = [
     'cpu',
     // Connect to another machine (the title bar's button, Genie 1's Hosts), and a Tynn workstation's desktop / cloud.
     'monitor', 'cloud',
+    // A Tynn workstation's role (genie#1278 W6): pilot, drone.
+    'navigation', 'bot',
     // A workspace's GitHub (IssueWatch) panel heading (Tynn #806), its rows' kinds and its Refresh.
     'git-pull-request', 'circle-dot', 'shield-alert', 'refresh-cw',
     // The workspace header's Files button (the board): `folder-tree` · Files · ⌘B.

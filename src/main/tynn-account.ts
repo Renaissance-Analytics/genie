@@ -5,7 +5,7 @@ import { migratePrivateCredential, preparePrivateCredential, writePrivateCredent
 
 /** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type SessionFetch = (url: string, init: { method: Method; headers: Record<string, string>; body?: string; credentials: 'include' | 'omit'; redirect: 'error'; signal: AbortSignal }) => Promise<{ ok: boolean; status: number; text(): Promise<string> }>;
 
 export interface TynnAccountPorts {
