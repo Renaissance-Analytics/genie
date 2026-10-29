@@ -157,7 +157,7 @@ describe('genie#1334: the ini Genie REWRITES keeps a CA bundle (a restart, a pin
     });
 
     it('Linux (a source-built PHP): the ini names the system bundle Genie found', () => {
-        const LROOT = '/home/genie/.genie/genie2-toolchain/php-versions';
+        const LROOT = join('/home', 'genie', '.genie', 'genie2-toolchain', 'php-versions');
         const LDIR = join(LROOT, V);
         const SYS = '/etc/ssl/certs/ca-certificates.crt';
         const disk = memFs({ [join(LDIR, 'php-cgi')]: '<bin>', [join(LDIR, 'php.ini')]: OLD_INI, [SYS]: PEM(2) });
