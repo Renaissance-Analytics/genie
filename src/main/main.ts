@@ -59,7 +59,7 @@ import { TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
 import type { RepoListing } from '../core/github.js';
-import { ensureWorkstation, identityFrom, workstationKeyStore } from './workstation-identity.js';
+import { ensureWorkstation, identityFrom, readGenie1Identity, workstationKeyStore } from './workstation-identity.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
@@ -2413,11 +2413,16 @@ async function boot(): Promise<void> {
     // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
     // sign-in landing during the launch's own check cannot make two workstations.
-    const identities = workstationKeyStore(join(genieHome(), 'workstation.json'), {
+    const identityCipher = {
         isAvailable: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (text) => safeStorage.encryptString(text),
-        decrypt: (bytes) => safeStorage.decryptString(bytes),
-    });
+        encrypt: (text: string) => safeStorage.encryptString(text),
+        decrypt: (bytes: Buffer) => safeStorage.decryptString(bytes),
+    };
+    const identities = workstationKeyStore(join(genieHome(), 'workstation.json'), identityCipher);
+    // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
+    // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
+    // duplicate, on the next registration — once.
+    const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
     // THIS MACHINE, ALL OF IT (this-machine.ts): this launch's registration, the identity Genie 2 stored for this Tynn,
     // and the one Genie 1 registered from the userData Genie 2 shares — "Your workstations" never lists any of them.
     thisMachineIds = () => identities.read(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
@@ -2451,7 +2456,7 @@ async function boot(): Promise<void> {
                 tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine', role: null };
                 return;
             }
-            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities, machineKey })
+            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities, machineKey, legacy: genie1Identity })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
             tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId, role: workstationRoleNow } : { registered: false, reason: result.reason, role: workstationRoleNow };
         })().finally(() => { registering = null; void applyRelayHost(); void readRole(); pushFeatures(); });

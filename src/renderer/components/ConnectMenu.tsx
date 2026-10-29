@@ -55,9 +55,12 @@ function Progress({ state, onRetry, retryAction }: { state: ConnectProgress; onR
  *
  * READ AT A GLANCE (the owner, 2026-10-28, on beta.50: "ugly"). As Genie 1's rows (master.tsx:5056-5079): one line per
  * machine, no box around it — a glyph, the name in full and bold (beta.50 cut it: "Foundati…"), a small Open. The role
- * is a badge with its word (beta.50's lone paper-plane glyph read as a stray "send" icon). Whether a machine is online is
- * NOT shown: Tynn's list does not say (its `status` is the record's, `active` while the machine is off), and the relay
- * has no presence call — so the window that connects says "offline" when the relay does (core/relay-connect.ts).
+ * is a badge with its word (beta.50's lone paper-plane glyph read as a stray "send" icon).
+ *
+ * ONLINE NOW (genie#1278 presence; the owner approved 2026-10-29): a dot before the name — filled green online, hollow
+ * grey offline, a faint dashed ring when it is not known — never a word (the owner's reduce-reading rule); the words are
+ * on hover and for a screen reader. Tynn asks the relay as it lists (`online`); its `status` is the record's, `active`
+ * while the machine is off, so it is never used for this.
  *
  * EMPTY IS NEVER BLANK: no machines, or Tynn could not be asked, shows the steps to take on the other machine, after
  * Tynn's own reason when it gave one.
@@ -65,6 +68,19 @@ function Progress({ state, onRetry, retryAction }: { state: ConnectProgress; onR
 type SetRole = (workstation: TynnWorkstationRow, role: 'pilot' | 'drone', code: string) => Promise<RoleChange>;
 
 const ROLE_ICON = { pilot: 'plane', drone: 'bot' } as const;
+
+/** The presence dot: its state, its words (hover, screen reader) and its look. */
+const PRESENCE = {
+    online: { label: 'Online now', className: 'bg-[var(--success)] ring-2 ring-[var(--success)]/25' },
+    offline: { label: 'Offline', className: 'border border-[var(--fg-4)] bg-transparent' },
+    unknown: { label: 'Not known whether it is online', className: 'border border-dashed border-[var(--fg-4)] bg-transparent opacity-60' },
+} as const;
+
+function PresenceDot({ online }: { online: boolean | null | undefined }) {
+    const state = online === true ? 'online' : online === false ? 'offline' : 'unknown';
+    const { label, className } = PRESENCE[state];
+    return <span data-online={state} title={label} aria-label={label} role="img" className={`inline-block h-2 w-2 shrink-0 rounded-full ${className}`} />;
+}
 const ROLE_NAME = { pilot: 'Pilot', drone: 'Drone' } as const;
 const ROLE_TITLE = { pilot: 'Pilot: it can open your other machines', drone: 'Drone: it can be opened, and opens nothing' } as const;
 /** The one thing to press on a row: filled, so it reads as a button at a glance (the owner, 2026-10-27). */
@@ -159,6 +175,7 @@ export function TynnWorkstationRows({ list, onOpenWorkstation, opening = {}, onS
                             <span title={w.local ? 'Desktop' : 'Cloud'} aria-label={w.local ? 'Desktop' : 'Cloud'} className="flex shrink-0 text-[var(--fg-3)]">
                                 <Icon name={w.local ? 'monitor' : 'cloud'} size="sm" />
                             </span>
+                            <PresenceDot online={w.online} />
                             <span className="min-w-0 flex-1 font-semibold break-words">{w.name}</span>
                             {w.source && w.source !== 'owner' ? <span title="Shared with you" aria-label="Shared with you" className="flex shrink-0 text-[var(--fg-4)]"><Icon name="link" size="xs" /></span> : null}
                             {role ? (
