@@ -501,3 +501,8 @@ export function withDrafts<T extends { agentId: string; messages: readonly ChatM
     }
     return { ...thread, messages: [...messages, ...pending] };
 }
+
+/** What the chat reads of the estate's agents (genie#1340): scaffolding, made exact by the fix. */
+export function chatAgentsKey(rows: readonly AgentRow[]): string {
+    return JSON.stringify(rows);
+}

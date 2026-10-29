@@ -669,3 +669,12 @@ export function resolveToolDurations(rows: readonly TimedEvent[]): Map<string, n
 
     return durations;
 }
+
+/** The Stream's rows across pushes (genie#1340): scaffolding — maps every time, made to keep rows by the fix. */
+export class LedgerRowCache {
+    row(row: TimedEvent, context: RowContext = {}): LedgerRow {
+        const e = row.event;
+        const diff = context.diff ?? (e.kind === 'tool' && e.toolKind === 'edit' ? editLineCounts(e.rawInput) ?? undefined : undefined);
+        return ledgerRow(row, diff === undefined ? context : { ...context, diff });
+    }
+}
