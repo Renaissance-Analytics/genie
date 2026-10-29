@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { InspectedContainer } from '../src/core/v1-services.js';
+import { mintAgentId } from '../src/core/identity.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import { hostingTools } from '../src/main/mcp-tools-hosting.js';
 import { runtimeDir } from '../src/main/paths.js';
 import { ServiceDriver, type DockerRunner } from '../src/main/service-driver.js';
 import { ServiceRegistry } from '../src/main/service-registry.js';
@@ -315,5 +317,27 @@ describe('at boot, through composition', () => {
         // A dedicated Redis: a shared one is never added now (hosting fixes 3.2, the owner's D2).
         const added = await services.engines.add({ engine: 'redis', major: '8', scope: { kind: 'dedicated', workspaceId: BETA }, consent: true });
         expect(added).toMatchObject({ kind: 'added', instance: { publishedPort: 4102 } });
+    });
+
+    // genie#1332: the take-over re-attaches EXACTLY the workspaces Genie 1 had attached (its `dev_services` entries); one it
+    // never attached gets none — and then its `services add` of that engine is what attaches it, as Genie 1's `add` did
+    // (tag v0.7.0-beta.342, main/mcp/dev-service-tools.ts:552: write the workspace's entry, acquire the running engine).
+    it("Genie 1's shared Mailpit: the workspace Genie 1 attached has MAIL_* after the take-over; one it never attached gets them from `services add`", async () => {
+        writeV1(v1File);
+        const live = await compose();
+        services = live;
+        expect(live.engines.envFor(ALPHA)).toMatchObject({ MAIL_PORT: '31025', GENIE_MAIL_TAG: 'ws_ws_alpha' });
+        expect(live.engines.envFor(BETA)).not.toHaveProperty('MAIL_PORT');
+
+        const caller = { agentId: mintAgentId(), agentName: 'beta-agent', workspaceId: BETA, workspacePath: home };
+        const tools = hostingTools({ resolveCaller: () => caller, approve: async () => 'allowed', services: live });
+        const reg = tools.find((t) => t.definition.name === 'services')!;
+        const r = await reg.handler({ action: 'add', engine: 'mailpit', version: '1.30', scope: 'shared', terminalId: 't-beta' }, { server: 'genie', tool: 'services', headers: {} });
+        expect(r.isError).toBe(false);
+        expect(JSON.parse(r.text)).toMatchObject({ outcome: 'exists', service: { id: 'svc_v1_mailpit-1.30', active: true, inUse: true } });
+        expect(live.engines.envFor(BETA)).toMatchObject({ MAIL_PORT: '31025', GENIE_MAIL_TAG: 'ws_ws_beta' });
+        // ALPHA's slice is Genie 1's, as it was.
+        expect(live.engines.envFor(ALPHA)).toMatchObject({ MAIL_PORT: '31025', GENIE_MAIL_TAG: 'ws_ws_alpha' });
+        expect(docker.calls.filter((c) => c[0] === 'create' || c[0] === 'pull' || c[0] === 'rm')).toEqual([]);
     });
 });
