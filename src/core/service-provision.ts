@@ -51,6 +51,13 @@ export interface ProvisionStep {
 /** The engines a shared instance is carved into per-workspace slices on. */
 export const SLICED_ENGINES: ReadonlySet<string> = new Set(['postgres', 'mysql', 'mariadb', 'redis', 'seaweedfs']);
 
+/**
+ * The engines whose slice is only a NAME derived from the workspace — nothing is created inside the engine for it. Mailpit's
+ * is the plus-address tag (genie#552). Genie 1's Mailpit is taken over with a slice per workspace Genie 1 had attached;
+ * a workspace attaching later gets its slice recorded with no step run (genie#1332).
+ */
+export const NAMESPACE_SLICED_ENGINES: ReadonlySet<string> = new Set(['mailpit']);
+
 const SQL_IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
 const GENERATED_PASSWORD = /^[A-Za-z0-9_-]{8,128}$/;
 /** Genie 1's DNS_NAME (provision.ts): a bucket name is a DNS label — the SQL identifier's underscores are illegal there. */

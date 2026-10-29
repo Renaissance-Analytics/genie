@@ -340,12 +340,22 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const what = form.custom
                         ? `a custom image ${image} named "${version}" (listening on ${form.custom.port} inside)${kind !== undefined ? `, as this workspace’s ${kind}` : ''}${Object.keys(env).length > 0 ? `, env ${Object.keys(env).join(', ')}` : ''}`
                         : `${engine}${variant !== undefined ? ` (${variant})` : ''} ${version}`;
-                    const verdict = await deps.approve(caller, 'services.add', `${what}, ${where} — Genie pulls the image ${image} if it is not on this machine yet, then creates and starts the container`);
+                    // A shared engine already here is ATTACHED to this workspace, as Genie 1's `add` did (genie#1332): nothing is
+                    // pulled or created, and the person is told so.
+                    const existing = form.scope === 'shared'
+                        ? s.engines.list().find((x) => x.engine === engine && x.version === version && (x.variant ?? null) === (variant ?? null) && x.scope.kind === 'shared')
+                        : undefined;
+                    const how = existing
+                        ? `it is already running (127.0.0.1:${existing.publishedPort}); Genie attaches this workspace to it — nothing is pulled or created`
+                        : `Genie pulls the image ${image} if it is not on this machine yet, then creates and starts the container`;
+                    const verdict = await deps.approve(caller, 'services.add', `${what}, ${where} — ${how}`);
                     if (verdict !== 'allowed') return err(`adding ${form.custom ? `the custom image ${image}` : `${engine} ${version}`} was denied by the person; nothing was pulled or created`);
                     // The person's approval, which named the image, IS the pull's consent.
                     const r = await createService(s, form, true);
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems });
                     if (r.kind === 'needs-consent') return err(`${r.image} was not pulled: ${r.note}`);
+                    // Never answer with an id `use` and `start` would refuse: an engine Genie cannot give this workspace a slice of says so.
+                    if (!visibleTo(r.instance, caller.workspaceId)) return err(`${labelOf(r.instance)} already exists, taken over from Genie 1, and serves only the workspaces Genie 1 gave it; Genie cannot attach this workspace to it. Nothing was changed`);
                     return ok({ ok: true, outcome: r.kind, service: serviceView(r.instance, caller.workspaceId, await statusOf(r.instance.id), inUseBy(s, caller.workspaceId)), note: ENV_NOTE });
                 }
                 case 'use':
