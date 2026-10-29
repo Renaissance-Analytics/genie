@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.3.0/contracts/workspace-ux/0.3.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.4.0/contracts/workspace-ux/0.4.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.3.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.3.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.4.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.4.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -81,6 +81,26 @@
             "qa": { "verb": "done", "guard": "version_active" },
             "blocked": { "verb": "restart" }
           }
+        },
+        "live": {
+          "about": "The board follows Tynn as it changes, by a person or an agent, on the web board's own channel and events. An event is a doorbell: the client asks what changed since its cursor and applies only that, never re-reading the whole board.",
+          "channel": "private-project.{projectId}",
+          "web": "the web board subscribes to the same channel with its session (routes/channels.php project.{projectId}); the app signs it through auth below",
+          "push": { "method": "GET", "path": "/api/v1/broadcasting-config", "scope": "genie:discovery" },
+          "auth": { "method": "POST", "path": "/broadcasting-auth", "body": ["socket_id", "channel_name"] },
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "cursor": "cursor",
+          "changes": {
+            "method": "GET",
+            "path": "/board/changes",
+            "query": ["since", "ids[]", "version", "story", "level", "features[]", "product"],
+            "answer": ["project_id", "level", "version_id", "story_id", "cursor", "ids", "rows", "active_version", "active_story", "claims"]
+          },
+          "reconnect": "backoff; on every (re)subscription the client asks for the changes since its last cursor before it shows live"
         }
       },
       "states": [
@@ -95,6 +115,8 @@
         { "id": "claim-start", "what": "a backlog card's Start follows the project's claim mode: off (or already the person's) starts; optional offers Claim + Start or Start; required claims, then starts" },
         { "id": "claimed", "what": "a claimed card shows its claimant (a person's initials, or an agent's mark) and its name on hover; the person who holds the claim can release it" },
         { "id": "assign", "what": "a person who may manage the project picks a claimant from the project's eligible list (members and agents, by its claimant policy) and the card is assigned to them" },
+        { "id": "live", "what": "the board follows Tynn as it changes, by a person or an agent, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, it retries with backoff, and it catches up from its cursor before it shows live again" },
         { "id": "not-linked", "what": "the workspace has no Tynn project" },
         { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
       ],

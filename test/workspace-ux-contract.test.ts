@@ -9,6 +9,7 @@ import {
     BOARD_FIELDS,
     BOARD_GAPS,
     BOARD_LEVELS,
+    BOARD_LIVE,
     BOARD_QUICK_ACTIONS,
     BOARD_STATES,
     BOARD_TRANSITIONS,
@@ -36,6 +37,7 @@ type Board = {
         drag: Record<string, unknown>;
         transitions: Record<string, Record<string, string[]>>;
         quickActions: Record<string, Record<string, { verb: string; guard?: string }>>;
+        live: Record<string, unknown>;
     };
     states: Array<{ id: string }>;
     actions: Action[];
@@ -104,6 +106,10 @@ describe('the Tynn tab\'s board, against the contract', () => {
 
     it('claims by the contract\'s rules: the settings it reads, the claim-aware Start, who releases and who assigns', () => {
         expect(BOARD_CLAIMS).toEqual(board.data.claims);
+    });
+
+    it('goes live as the contract says: the web board\'s own channel and events, its auth, cursor and changes (0.4.0)', () => {
+        expect(BOARD_LIVE).toEqual(board.data.live);
     });
 
     it('has a view for every state the contract names', () => {
