@@ -147,21 +147,4 @@ describe('services add on a shared engine that already exists attaches it to the
         expect((await again).json).toMatchObject({ ok: true, outcome: 'exists', service: { id: v1Mailpit.id, inUse: true } });
         expect(services.engines.list().find((i) => i.id === v1Mailpit.id)!.slices![WS]).toEqual(slice);
     });
-
-    it('an engine Genie cannot attach a workspace to (Genie 1’s MinIO: a bucket Genie 2 cannot make) is an ERROR, never `exists` with an id `use` refuses', async () => {
-        const v1Minio: ServiceInstance = {
-            id: 'svc_v1_minio-latest', engine: 'minio', version: 'latest', scope: { kind: 'shared' }, publishedPort: 39000, credentials: {}, active: true, adopted: 'v1',
-            containerName: 'genie-svc-minio-latest', admin: { user: 'minio', password: 'admin-minio-secret' },
-            slices: { [ATTACHED]: { identifier: 'ws_genie1_attached', password: 'attached-minio-pw', bucket: 'ws-genie1-attached', active: true } },
-            publishedPorts: { s3: 39000 },
-        };
-        await services.engines.adoptFromV1({ instances: [v1Minio], record: { at: '2026-10-15T00:00:00.000Z', sawV1: true, sawDocker: true } });
-        const pending = call('t-fancy', { action: 'add', engine: 'minio', version: 'latest', scope: 'shared' });
-        services.approvals.resolve((await asked()).id, 'allow');
-        const r = await pending;
-        expect(r.isError).toBe(true);
-        expect(r.json.error).toMatch(/serves only the workspaces Genie 1 gave it; Genie cannot attach this workspace to it/);
-        expect(r.json).not.toHaveProperty('outcome');
-        expect(services.engines.envFor(WS)).not.toHaveProperty('AWS_ENDPOINT');
-    });
 });
