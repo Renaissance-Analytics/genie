@@ -354,8 +354,6 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const r = await createService(s, form, true);
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems });
                     if (r.kind === 'needs-consent') return err(`${r.image} was not pulled: ${r.note}`);
-                    // Never answer with an id `use` and `start` would refuse: an engine Genie cannot give this workspace a slice of says so.
-                    if (!visibleTo(r.instance, caller.workspaceId)) return err(`${labelOf(r.instance)} already exists, taken over from Genie 1, and serves only the workspaces Genie 1 gave it; Genie cannot attach this workspace to it. Nothing was changed`);
                     return ok({ ok: true, outcome: r.kind, service: serviceView(r.instance, caller.workspaceId, await statusOf(r.instance.id), inUseBy(s, caller.workspaceId)), note: ENV_NOTE });
                 }
                 case 'use':
