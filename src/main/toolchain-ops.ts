@@ -22,6 +22,7 @@ import {
     type RepairReport,
     type ToolCopy,
 } from '../core/toolchain-repair.js';
+import { SYSTEM_CA_BUNDLES } from '../core/php-trust.js';
 import { probeInstalled, type CommandRunner } from './toolchain-prober.js';
 
 /**
@@ -227,6 +228,42 @@ async function repairPhpCa(ports: ToolchainOpsPorts): Promise<FindingResult> {
     const still = after === null ? 'PHP did not answer after the change' : phpTlsProblem(after, ports.platform, (p) => ports.fs.exists(p));
     if (still !== null) return { kind: 'unchanged', reason: `wrote ${ini}, but ${still}` };
     return { kind: 'repaired', detail: `${count} root certificates from this machine are in ${bundle}; the PHP Genie runs — sites' php-cgi included — reads it through ${ini}. Your php.ini is unchanged.` };
+}
+
+/**
+ * THE CA BUNDLE GENIE'S MANAGED PHP NAMES, as it is now (genie#1334) — a path that exists with certificates in it, or
+ * `null`. Windows: the machine's roots that Check and repair or {@link ensurePhpCaBundle} exported (one file for every
+ * version, so an update or a version switch names the same one). Elsewhere: the platform's own bundle file. Runs nothing.
+ */
+export function phpCaBundleNow(ports: Pick<ToolchainOpsPorts, 'platform' | 'fs' | 'dataDir'>): string | null {
+    const has = (path: string) => countCertificates(ports.fs.readText(path) ?? '') > 0;
+    if (ports.platform === 'win32') {
+        const { bundle } = toolchainPaths(ports.dataDir);
+        return has(bundle) ? bundle : null;
+    }
+    return SYSTEM_CA_BUNDLES.find(has) ?? null;
+}
+
+/**
+ * {@link phpCaBundleNow}, MAKING the Windows one when there is none: Genie 1's read-only export of the machine's root
+ * store (Windows Update's list, then the local store — `caExportArgv`), counted after it lands; a file with no
+ * certificate in it is deleted, never named (Genie 1 `writeCaBundle`). Never throws. Runs only when the bundle is missing,
+ * so a restart costs a file read.
+ */
+export async function ensurePhpCaBundle(ports: Pick<ToolchainOpsPorts, 'platform' | 'run' | 'fs' | 'dataDir'>): Promise<string | null> {
+    const now = phpCaBundleNow(ports);
+    if (now !== null || ports.platform !== 'win32') return now;
+    const { bundle } = toolchainPaths(ports.dataDir);
+    try {
+        ports.fs.mkdirp(dirOf(bundle));
+        const [bin, args] = caExportArgv(bundle);
+        const r = await ports.run(bin, args);
+        if (r.exitCode === 0 && countCertificates(ports.fs.readText(bundle) ?? '') > 0) return bundle;
+    } catch {
+        // below: nothing usable is left behind
+    }
+    try { ports.fs.remove(bundle); } catch { /* nothing to remove */ }
+    return null;
 }
 
 /** `toolchain-env.json`: the PATH order to replay, and Genie's npm prefix (see {@link preferGenieNode}). */

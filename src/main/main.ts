@@ -125,7 +125,7 @@ import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
 import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
-import { checkAndRepair, detectPackageManager, installTool, nodeToolchainFs, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
+import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from './toolchain-defaults.js';
 import { applyMachinePath, machinePathStatus, nodeMachinePathFs, removeMachinePath, type MachinePathPorts } from './machine-path.js';
 import { defaultPathEntries } from '../core/toolchain-defaults.js';
@@ -136,7 +136,7 @@ import { installRustVersion, listRustVersions, managedRust, removeRustVersion, r
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
-import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -994,7 +994,13 @@ const longRunner: CommandRunner = (binary, args, options) => execFileRunner(bina
 /** Genie 2's own toolchain data: the CA bundle and its ini, the remembered PATH order (toolchain-ops.ts). */
 const toolchainDataDir = (): string => join(genieHome(), 'genie2-toolchain');
 /** T4: where Genie's managed PHP versions live, and how a site's pin finds one (read at each start — no cache). */
-const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'> => ({ platform: process.platform as PhpVersionsPorts['platform'], root: phpVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs() });
+const phpVersionsBase = (): Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs' | 'ca'> => ({ platform: process.platform as PhpVersionsPorts['platform'], root: phpVersionsRoot(toolchainDataDir()), fs: nodePhpVersionsFs(), ca: phpCa });
+/**
+ * The CA bundle every managed php.ini names (genie#1334, toolchain-ops.ts): Windows' exported roots under Genie's
+ * toolchain directory, Linux's system bundle. The export is Genie 1's read-only one, two minutes at most (its timeout).
+ */
+const phpCaPorts = () => ({ platform: process.platform as Platform, fs: nodeToolchainFs(), dataDir: toolchainDataDir(), run: ((binary, args) => execFileRunner(binary, args, { timeoutMs: 120_000 })) as CommandRunner });
+const phpCa: PhpCaPort = { current: () => phpCaBundleNow(phpCaPorts()), ensure: () => ensurePhpCaBundle(phpCaPorts()) };
 /**
  * What a site start reads (genie#1043 part B): the managed versions, and Genie's toolchain PHP — PATH as the workers get
  * it, Genie's toolchain roots (Genie 1's, under the shared userData; Genie 2's own), and the opcache file cache's home.
@@ -1019,6 +1025,15 @@ async function boot(): Promise<void> {
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
     // Each language's chosen default goes first for everything Genie starts (main/toolchain-defaults.ts, plan TC3a).
     restoreDefaultsEnv({ platform: process.platform as Platform, toolchainDir: toolchainDataDir(), fs: nodeLinkFs(process.platform as Platform), env: processEnv });
+    // BEFORE any PHP starts (genie#1334): Genie's managed PHP has a CA bundle, and every managed version's php.ini names
+    // it — the one `current/php` points at too, which no site start rewrites. A file read when the bundle is there; the
+    // one-time read-only root-store export (Windows) when it is not. Never fatal: without a bundle PHP starts as before.
+    try {
+        await phpCa.ensure();
+        refreshAllManagedInis(phpVersionsBase());
+    } catch (error) {
+        console.error('[genie] could not give managed PHP a CA bundle', error);
+    }
     // Genie's data root is ~/.genie on every version (paths.ts); `userData` stays Chromium's.
     const store = new Store(genieHome());
     // Doctor mode reads this: that normal Genie is running, and which agents it has started (none yet) — doctor starts
