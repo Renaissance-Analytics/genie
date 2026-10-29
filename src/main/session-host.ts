@@ -547,7 +547,10 @@ export class SessionHost {
         lifecycle?: SessionLifecycle;
     }) {
         this.#userData = options.userData;
-        this.#store = options.store ?? (() => openDurableStore(sessionsDir(this.#userData)));
+        // ONE store for every thread this host reads and writes (genie#1340): it keeps each log's line count, so a run's
+        // first write does not count a long thread again. Opened afresh per use, every count began from nothing.
+        let shared: SessionStore | null = null;
+        this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#prepareMcpServers = options.prepareMcpServers;

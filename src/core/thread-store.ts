@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { open, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSessionStore, Thread, type SessionStore } from '@particle-academy/prism-harness';
 import { threadKeyFor, type AgentId } from './identity.js';
@@ -40,7 +41,118 @@ import type { StreamEvent } from './stream-event.js';
  * refusal is a guard we are relying on rather than a formality.
  */
 export function openDurableStore(directory: string): SessionStore {
-    return new FileSessionStore(directory);
+    return new ThreadStore(directory);
+}
+
+/** How much of a thread log one read takes: the event loop runs between chunks. */
+const CHUNK_BYTES = 1 << 20;
+
+/**
+ * prism-harness's file store, plus what a LONG thread needs (genie#1340): its log read from the END, and its length
+ * COUNTED rather than parsed.
+ *
+ * The harness answers `logLength` — which every `Thread.record` asks first, for the next position — from a count it keeps
+ * only for the instance that last read or wrote the log, and otherwise by parsing every line (`readLog`). Each run's first
+ * write paid that: 266k lines for the owner's largest thread, on the main process. Here the count is newlines, counted in
+ * chunks; kept per log with the size it was counted at; and grown by counting only the bytes appended since — trusted
+ * only while the byte it ended on is still a newline (a crash's torn tail is cut back by the next append, which would
+ * otherwise leave a stale count). Writes and reads are otherwise the harness's own.
+ */
+export class ThreadStore extends FileSessionStore {
+    readonly #directory: string;
+    readonly #counts = new Map<string, { size: number; count: number }>();
+
+    constructor(directory: string) {
+        super(directory);
+        this.#directory = directory;
+    }
+
+    /** The key's log file: see {@link threadLogFile}. */
+    logFile(key: string): string {
+        return join(this.#directory, `${createHash('sha256').update(key).digest('hex').slice(0, 32)}.jsonl`);
+    }
+
+    override async logLength(key: string): Promise<number | null> {
+        let handle: FileHandle;
+        try {
+            handle = await open(this.logFile(key), 'r');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
+        }
+        try {
+            const { size } = await handle.stat();
+            let known = this.#counts.get(key);
+            if (known !== undefined && (known.size > size || (known.size > 0 && !(await endsLine(handle, known.size))))) known = undefined;
+            const from = known?.size ?? 0;
+            let count = known?.count ?? 0;
+            const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, Math.max(1, size - from)));
+            for (let at = from; at < size; at += buf.length) {
+                const { bytesRead } = await handle.read(buf, 0, Math.min(buf.length, size - at), at);
+                for (let i = buf.indexOf(0x0a); i !== -1 && i < bytesRead; i = buf.indexOf(0x0a, i + 1)) count += 1;
+                if (bytesRead === 0) break;
+            }
+            this.#counts.set(key, { size, count });
+            return count;
+        } finally {
+            await handle.close();
+        }
+    }
+
+    /**
+     * The log's complete lines, NEWEST FIRST, a chunk at a time (each chunk's lines newest first). A torn last line — a
+     * write a crash cut short — is not a line, as in the harness's own read. Nothing when there is no log.
+     */
+    async *linesFromEnd(key: string): AsyncGenerator<Buffer[]> {
+        let handle: FileHandle;
+        try {
+            handle = await open(this.logFile(key), 'r');
+        } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+            throw error;
+        }
+        try {
+            const { size } = await handle.stat();
+            let end = size;
+            let carry: Buffer | null = null;
+            let tornCut = false;
+            while (end > 0) {
+                const start = Math.max(0, end - CHUNK_BYTES);
+                const read = Buffer.allocUnsafe(end - start);
+                await handle.read(read, 0, read.length, start);
+                const block: Buffer = carry === null ? read : Buffer.concat([read, carry]);
+                end = start;
+                let stop = block.length;
+                if (!tornCut) {
+                    // Everything after the log's last newline is a write that never finished.
+                    const nl = block.lastIndexOf(0x0a);
+                    if (nl === -1) { carry = block; continue; }
+                    stop = nl;
+                    tornCut = true;
+                }
+                const lines: Buffer[] = [];
+                let nl = stop > 0 ? block.lastIndexOf(0x0a, stop - 1) : -1;
+                while (nl !== -1) {
+                    lines.push(block.subarray(nl + 1, stop));
+                    stop = nl;
+                    nl = stop > 0 ? block.lastIndexOf(0x0a, stop - 1) : -1;
+                }
+                // The block's first line may begin in the chunk before: carried until that is read (or the file starts).
+                carry = block.subarray(0, stop);
+                if (lines.length > 0) yield lines;
+            }
+            if (tornCut && carry !== null) yield [carry];
+        } finally {
+            await handle.close();
+        }
+    }
+}
+
+/** Whether the byte before `size` is a newline: a count up to there ended on a whole line. */
+async function endsLine(handle: FileHandle, size: number): Promise<boolean> {
+    const one = Buffer.alloc(1);
+    const { bytesRead } = await handle.read(one, 0, 1, size - 1);
+    return bytesRead === 1 && one[0] === 0x0a;
 }
 
 /**
@@ -72,30 +184,117 @@ export function openAgentThread(store: SessionStore, agentId: AgentId): Thread {
  * gone). `before` (epoch ms) is that old rule, kept only for rows recorded before runs were named. `limit` keeps the
  * most recent rows; `earlier` says how many older ones were left out. A row written unserialisable is skipped.
  */
-export type History = { rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number; earlierTurns: number };
+export type HistoryRow = { event: StreamEvent; at: number | null; position: number };
+/** `lastTurn`: the highest turn number in the WHOLE record, window or not — where a new run's turns continue from. */
+export type History = { rows: HistoryRow[]; earlier: number; earlierTurns: number; lastTurn: number };
 export type HistoryOptions = { before?: number; run?: string; limit?: number };
 
+/** One stored message as a history row, or `null` when the read leaves it out (see {@link readHistory}). */
+function historyRow(m: { position: number; message: unknown; recordedAt: string }, options: HistoryOptions): HistoryRow | null {
+    const at = Date.parse(m.recordedAt);
+    const { [RUN_FIELD]: writtenBy, ...message } = m.message as Record<string, unknown>;
+    if (typeof writtenBy === 'string') {
+        if (options.run !== undefined && writtenBy === options.run) return null;
+    } else if (options.before !== undefined && Number.isFinite(at) && at >= options.before) return null;
+    if (typeof message.kind !== 'string' || message.unserialisable === true) return null;
+    return { event: message as unknown as StreamEvent, at: Number.isFinite(at) ? at : null, position: m.position };
+}
+
+/**
+ * The history from EVERY row of the thread: what a caller that needs all of it reads (a draft's delivery state can be
+ * anywhere in it), and the reference {@link readHistory}'s bounded read is checked against.
+ */
 export async function readWholeHistory(store: SessionStore, agentId: AgentId, options: HistoryOptions = {}): Promise<History> {
     const messages = await openAgentThread(store, agentId).messages();
-    const rows: { event: StreamEvent; at: number | null; position: number }[] = [];
+    const rows: HistoryRow[] = [];
     for (const m of messages) {
-        const at = Date.parse(m.recordedAt);
-        const { [RUN_FIELD]: writtenBy, ...message } = m.message as Record<string, unknown>;
-        if (typeof writtenBy === 'string') {
-            if (options.run !== undefined && writtenBy === options.run) continue;
-        } else if (options.before !== undefined && Number.isFinite(at) && at >= options.before) continue;
-        if (typeof message.kind !== 'string' || message.unserialisable === true) continue;
-        rows.push({ event: message as unknown as StreamEvent, at: Number.isFinite(at) ? at : null, position: m.position });
+        const row = historyRow(m, options);
+        if (row) rows.push(row);
     }
     const limit = options.limit ?? rows.length;
     const earlier = Math.max(0, rows.length - limit);
     // The turns the window cut off: the turns shown number on from them.
     const earlierTurns = rows.slice(0, earlier).filter((r) => r.event.kind === 'turn').length;
-    return { rows: rows.slice(earlier), earlier, earlierTurns };
+    return { rows: rows.slice(earlier), earlier, earlierTurns, lastTurn: lastTurnOf(rows) };
 }
 
-/** An agent's history (genie#1340: to be bounded to the window it keeps). */
-export const readHistory = readWholeHistory;
+/**
+ * AN AGENT'S HISTORY, AT THE COST OF THE WINDOW IT KEEPS (genie#1340; the owner, 2026-10-29: "right after a restart genie
+ * ui lags a lot … it took 4 seconds before the text showed up").
+ *
+ * With a `limit` and Genie's own store, the thread log is read FROM ITS END, a chunk at a time: the newest lines are
+ * parsed until the window holds `limit` rows, and every line before them is only COUNTED — `JSON.parse` touches one
+ * only when its bytes say it may matter: a turn (`"turn"` — never inside a JSON string, where every quote is escaped,
+ * except a string that ends in `"turn`, which is parsed and found not to be one), a row written unserialisable, a row
+ * of the run being kept out, a row whose message does not open with its kind, or one from before runs were named that
+ * was written at or after `before`. The answer is exactly the whole read's (test/thread-history-bounded.test.ts proves it
+ * against {@link readWholeHistory}); the cost is the window plus a byte scan, in chunks the event loop runs between.
+ *
+ * Before: every read parsed every line, in one synchronous run — 266k lines for the owner's largest thread, on Electron's
+ * main process, which is the thread that routes every keystroke to the window — and kept 3000.
+ *
+ * Without a `limit` (every row is wanted) or with another store, it is {@link readWholeHistory}.
+ */
+export async function readHistory(store: SessionStore, agentId: AgentId, options: HistoryOptions = {}): Promise<History> {
+    if (options.limit === undefined || !(store instanceof ThreadStore)) return readWholeHistory(store, agentId, options);
+    const limit = Math.max(0, options.limit);
+    const newestFirst: HistoryRow[] = [];
+    let earlier = 0;
+    let earlierTurns = 0;
+    let lastTurn = 0;
+    const runToken = options.run === undefined ? null : Buffer.from(`"${RUN_FIELD}":${JSON.stringify(options.run)}`);
+    const rowOf = (line: Buffer): HistoryRow | null => {
+        const entry: unknown = JSON.parse(line.toString('utf8'));
+        if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error(`a line of the thread log for ${agentId} is not an object`);
+        const e = entry as Record<string, unknown>;
+        if (typeof e.message !== 'object' || e.message === null || Array.isArray(e.message)) throw new Error(`a stored thread entry for ${agentId} has no message object`);
+        return historyRow({ position: typeof e.position === 'number' ? e.position : 0, message: e.message, recordedAt: typeof e.recorded_at === 'string' ? e.recorded_at : '' }, options);
+    };
+    for await (const lines of store.linesFromEnd(threadKeyFor(agentId))) {
+        for (const line of lines) {
+            if (newestFirst.length < limit || mayMatter(line, runToken, options.before)) {
+                const row = rowOf(line);
+                if (row === null) continue;
+                if (row.event.kind === 'turn' && row.event.n > lastTurn) lastTurn = row.event.n;
+                if (newestFirst.length < limit) { newestFirst.push(row); continue; }
+                earlier += 1;
+                if (row.event.kind === 'turn') earlierTurns += 1;
+            } else {
+                // A plain row of an earlier run: in the record, before the window, and not a turn.
+                earlier += 1;
+            }
+        }
+    }
+    return { rows: newestFirst.reverse(), earlier, earlierTurns, lastTurn };
+}
+
+const POSITION = Buffer.from('{"position":');
+const OPENS_WITH_KIND = Buffer.from(',"message":{"kind":"');
+const TURN = Buffer.from('"turn"');
+const UNSERIALISABLE = Buffer.from('"unserialisable"');
+const RECORDED_AT = Buffer.from('"recorded_at":"');
+
+/** `{"position":<n>,"message":{"kind":"` — the entry as the store writes it, its message opening with a string kind. */
+function opensWithKind(line: Buffer): boolean {
+    if (line.length < POSITION.length || line.compare(POSITION, 0, POSITION.length, 0, POSITION.length) !== 0) return false;
+    let i = POSITION.length;
+    while (i < line.length && line[i]! >= 0x30 && line[i]! <= 0x39) i += 1;
+    return i > POSITION.length && line.length - i >= OPENS_WITH_KIND.length && line.compare(OPENS_WITH_KIND, 0, OPENS_WITH_KIND.length, i, i + OPENS_WITH_KIND.length) === 0;
+}
+
+/** Whether a stored line before the window must be PARSED to be counted exactly (see {@link readHistory}). */
+function mayMatter(line: Buffer, runToken: Buffer | null, before: number | undefined): boolean {
+    if (!opensWithKind(line) || line.includes(TURN) || line.includes(UNSERIALISABLE)) return true;
+    if (runToken !== null && line.includes(runToken)) return true;
+    if (before === undefined) return false;
+    // Kept out by `before` only when it names no run; its time is the entry's last field, read without parsing the rest.
+    const at = line.lastIndexOf(RECORDED_AT);
+    if (at === -1) return true;
+    const from = at + RECORDED_AT.length;
+    const to = line.indexOf(0x22, from);
+    const when = Date.parse(line.toString('latin1', from, to === -1 ? line.length : to));
+    return !Number.isFinite(when) || when >= before;
+}
 
 /**
  * WHERE THE STORE KEEPS AN AGENT'S THREAD LOG: prism-harness FileSessionStore writes `<key digest>.jsonl` beside its payload,

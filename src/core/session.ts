@@ -1,6 +1,6 @@
 import type { SessionModelState } from '@particle-academy/prism-acp';
 import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
-import { lastTurnOf, openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
+import { openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
 import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
@@ -1095,8 +1095,9 @@ export class AgentSession {
         // Known at start (the record's last turn): nothing to count. Otherwise counted from the record, asynchronously.
         if (this.#options.turnsBefore === undefined) {
             const startedAt = Date.now();
-            void readHistory(this.#options.store, this.agentId, { before: startedAt, ...(this.#options.runId !== undefined ? { run: this.#options.runId } : {}) })
-                .then((h) => { const recorded = lastTurnOf(h.rows); this.#turns += recorded; this.#marked += recorded; })
+            // Only the last turn's number is wanted: no rows (`limit: 0`), so a long record is counted, not parsed (genie#1340).
+            void readHistory(this.#options.store, this.agentId, { before: startedAt, limit: 0, ...(this.#options.runId !== undefined ? { run: this.#options.runId } : {}) })
+                .then((h) => { const recorded = h.lastTurn; this.#turns += recorded; this.#marked += recorded; })
                 .catch(() => { /* no record yet: turns start at 1 */ });
         }
         this.#turnState = 'working';
