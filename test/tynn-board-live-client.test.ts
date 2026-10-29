@@ -8,7 +8,7 @@ import { readTynnBoardChanges, type TynnBoardPorts } from '../src/main/tynn-boar
  * THE LIVE BOARD, LISTENING TO TYNN (genie#1295 row B4, workspace-ux 0.4.0).
  *
  * One socket for the Tynn tabs that are open: Genie asks Tynn where to dial (`/api/v1/broadcasting-config`), dials, has
- * Tynn sign each open board's channel — the web board's own, `private-project.{id}` — at the board door
+ * Tynn sign each open board's channel — the board's own, `private-project-board.{id}` (workspace-ux 0.5.0) — at the board door
  * (`POST /api/v1/projects/{id}/broadcasting-auth`, the pairing token), and subscribes. Each board event is a ring for
  * that project; every (re)subscription is a ring too, a catch-up, so nothing that changed while the socket was down is
  * missed. A drop says "reconnecting" and tries again with a growing pause; a Tynn that will not sign the channel, or has
@@ -57,7 +57,7 @@ function harness(opts: { signedIn?: boolean; authStatus?: number; config?: unkno
         await settle();
     };
     const subscribed = async (s: (typeof sockets)[number], projectId: string) => {
-        s.emit({ event: 'pusher_internal:subscription_succeeded', channel: `private-project.${projectId}`, data: '{}' });
+        s.emit({ event: 'pusher_internal:subscription_succeeded', channel: `private-project-board.${projectId}`, data: '{}' });
         await settle();
     };
     const lastState = (projectId: string) => [...states].reverse().find((s) => s.projectId === projectId)?.state;
@@ -73,8 +73,8 @@ describe('going live', () => {
         expect(h.sockets[0]!.url).toBe('wss://ws.tynn.test:443/app/rk?protocol=7&client=genie&version=2.0');
 
         await h.establish(h.sockets[0]!);
-        expect(h.requests.at(-1)).toEqual({ method: 'POST', path: `/api/v1/projects/${P1}/broadcasting-auth`, body: { socket_id: '123.456', channel_name: `private-project.${P1}` } });
-        expect(JSON.parse(h.sockets[0]!.sent.at(-1)!)).toEqual({ event: 'pusher:subscribe', data: { auth: `rk:sig-for-private-project.${P1}`, channel: `private-project.${P1}` } });
+        expect(h.requests.at(-1)).toEqual({ method: 'POST', path: `/api/v1/projects/${P1}/broadcasting-auth`, body: { socket_id: '123.456', channel_name: `private-project-board.${P1}` } });
+        expect(JSON.parse(h.sockets[0]!.sent.at(-1)!)).toEqual({ event: 'pusher:subscribe', data: { auth: `rk:sig-for-private-project-board.${P1}`, channel: `private-project-board.${P1}` } });
 
         await h.subscribed(h.sockets[0]!, P1);
         expect(h.lastState(P1)).toBe('live');
@@ -91,11 +91,13 @@ describe('going live', () => {
         h.rings.length = 0;
 
         const s = h.sockets[0]!;
-        s.emit({ event: 'task.updated', channel: `private-project.${P1}`, data: JSON.stringify({ task: { id: 't1', story_id: 's1', status: 'done' } }) });
-        s.emit({ event: 'story.deleted', channel: `private-project.${P1}`, data: JSON.stringify({ story: { id: 's2', project_version_id: 'v1' } }) });
-        s.emit({ event: 'issue.created', channel: `private-project.${P1}`, data: '{}' });
-        s.emit({ event: 'task.updated', channel: `private-project.${P2}`, data: '{}' });
-        s.emit({ event: 'comment.created', channel: `private-project.${P1}`, data: '{}' });
+        s.emit({ event: 'task.updated', channel: `private-project-board.${P1}`, data: JSON.stringify({ task: { id: 't1', story_id: 's1', status: 'done' } }) });
+        s.emit({ event: 'story.deleted', channel: `private-project-board.${P1}`, data: JSON.stringify({ story: { id: 's2', project_version_id: 'v1' } }) });
+        s.emit({ event: 'issue.created', channel: `private-project-board.${P1}`, data: '{}' });
+        s.emit({ event: 'task.updated', channel: `private-project-board.${P2}`, data: '{}' });
+        s.emit({ event: 'comment.created', channel: `private-project-board.${P1}`, data: '{}' });
+        // The project's general channel (every page's, workspace-ux 0.5.0) is not the board's: Genie is never on it.
+        s.emit({ event: 'task.updated', channel: `private-project.${P1}`, data: JSON.stringify({ task: { id: 't9', story_id: 's9' } }) });
         await h.settle();
 
         expect(h.rings).toEqual([
@@ -122,7 +124,7 @@ describe('going live', () => {
         expect(h.sockets).toHaveLength(1);
         await h.establish(h.sockets[0]!);
         const channels = h.sockets[0]!.sent.map((f) => JSON.parse(f) as { data: { channel: string } }).map((f) => f.data.channel);
-        expect(channels.sort()).toEqual([`private-project.${P1}`, `private-project.${P2}`]);
+        expect(channels.sort()).toEqual([`private-project-board.${P1}`, `private-project-board.${P2}`]);
     });
 
     it('a board opened after the socket is up subscribes on that socket', async () => {
