@@ -84,6 +84,7 @@ import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
+import type { BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -1618,7 +1619,15 @@ function DesktopApp({ bridge }: AppProps) {
             // Live site panels — this machine's only (a remote bridge has none).
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
-            tynnBoard={resolvedBridge?.workspaces.tynnBoard && resolvedBridge.workspaces.tynnBoardAction ? { read: (id, scope) => resolvedBridge.workspaces.tynnBoard!(id, scope), act: (id, input) => resolvedBridge.workspaces.tynnBoardAction!(id, input) } : undefined}
+            tynnBoard={resolvedBridge?.workspaces.tynnBoard && resolvedBridge.workspaces.tynnBoardAction ? {
+                read: (id, scope) => resolvedBridge.workspaces.tynnBoard!(id, scope),
+                act: (id, input) => resolvedBridge.workspaces.tynnBoardAction!(id, input),
+                // Row B4: live, where the host can (a remote host has neither, and its tab is simply not live).
+                ...(resolvedBridge.workspaces.tynnBoardChanges && resolvedBridge.workspaces.tynnBoardWatch ? {
+                    changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => resolvedBridge.workspaces.tynnBoardChanges!(id, scope, cursor, ids),
+                    watch: (id: string, listener: (signal: BoardLiveSignal) => void) => resolvedBridge.workspaces.tynnBoardWatch!(id, listener),
+                } : {}),
+            } : undefined}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}

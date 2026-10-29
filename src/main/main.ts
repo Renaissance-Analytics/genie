@@ -1,6 +1,7 @@
 import { limitOf } from '../core/shell-limits.js';
-import { readTynnBoard, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
-import type { BoardIds, BoardScope } from '../core/tynn-board.js';
+import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
+import type { BoardIds, BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
+import { TynnBoardLive } from './tynn-board-live.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
@@ -388,6 +389,43 @@ function tynnBoardPorts(): TynnBoardPorts {
             return tynnAccount.request(path, init);
         },
     };
+}
+/**
+ * THE LIVE BOARD (genie#1295 row B4): one socket to Tynn for every open Tynn tab, on the web board's own channel. Each
+ * open tab is a watch (workspace → its project); a project's rings and live state go to the windows as
+ * `genie:workspace-tynn-board-live` for every workspace watching it. A window that closes drops its watches.
+ */
+let tynnBoardLiveClient: TynnBoardLive | null = null;
+const tynnBoardWatches = new Map<number, { workspaceId: string; projectId: string; stop: () => void }>();
+let tynnBoardWatchSeq = 0;
+function tynnBoardLiveSignal(projectId: string, signal: BoardLiveSignal): void {
+    const workspaces = new Set([...tynnBoardWatches.values()].filter((w) => w.projectId === projectId).map((w) => w.workspaceId));
+    for (const workspaceId of workspaces) broadcast('genie:workspace-tynn-board-live', workspaceId, signal);
+}
+function tynnBoardLive(): TynnBoardLive {
+    tynnBoardLiveClient ??= new TynnBoardLive({
+        tynn: () => {
+            const account = tynnAccount;
+            if (!account || account.status().signedIn !== true) return null;
+            return { request: (path, init) => account.request(path, init) };
+        },
+        socket: (url) => new WebSocket(url) as unknown as SocketLike,
+        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        onRing: (projectId, ring) => tynnBoardLiveSignal(projectId, { ring }),
+        onState: (projectId, state) => tynnBoardLiveSignal(projectId, { state }),
+    });
+    return tynnBoardLiveClient;
+}
+/** Start following a workspace's board for a window; answers the watch's id (to stop it), or null when not linked. */
+function watchTynnBoard(workspaceId: string, onGone: (stop: () => void) => void): number | null {
+    const projectId = tynnProjectFor(workspaceId);
+    if (projectId === null) return null;
+    const id = ++tynnBoardWatchSeq;
+    const stopLive = tynnBoardLive().watch(projectId);
+    const stop = () => { if (tynnBoardWatches.delete(id)) stopLive(); };
+    tynnBoardWatches.set(id, { workspaceId, projectId, stop });
+    onGone(stop);
+    return id;
 }
 function tynnProjectFor(workspaceId: string): string | null {
     const workspace = (registry?.snapshot().workspaces ?? []).find((w) => w.id === workspaceId);
@@ -2058,6 +2096,16 @@ async function boot(): Promise<void> {
     // THE TYNN TAB (genie#1295): the workspace's own project's board, through the person's pairing — never an agent's key.
     ipcMain.handle('genie:workspace-tynn-board', (_event, rawId: unknown, rawScope: unknown) =>
         (typeof rawId === 'string' ? readTynnBoard(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope) : { ok: false, state: 'error', reason: 'name a workspace' }));
+    // Row B4, the live board: what changed since a cursor (never the whole board), and following a workspace's board.
+    ipcMain.handle('genie:workspace-tynn-board-changes', (_event, rawId: unknown, rawScope: unknown, rawCursor: unknown, rawIds: unknown) =>
+        (typeof rawId === 'string' && typeof rawCursor === 'string'
+            ? readTynnBoardChanges(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope, rawCursor, Array.isArray(rawIds) ? rawIds.filter((x): x is string => typeof x === 'string') : [])
+            : { ok: false, state: 'error', reason: 'name a workspace and a cursor' }));
+    ipcMain.handle('genie:workspace-tynn-board-watch', (event, rawId: unknown) =>
+        (typeof rawId === 'string' ? watchTynnBoard(rawId, (stop) => { event.sender.once('destroyed', stop); }) : null));
+    ipcMain.handle('genie:workspace-tynn-board-unwatch', (_event, rawWatch: unknown) => {
+        if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.stop();
+    });
     ipcMain.handle('genie:workspace-tynn-board-action', (_event, rawId: unknown, rawInput: unknown) =>
         (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnBoardAction(tynnBoardPorts(), rawId, rawInput as { action: string; ids: BoardIds; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
     // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace

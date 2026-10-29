@@ -116,10 +116,22 @@ describe('what changed, applied to the board', () => {
         expect(apply(before, changes([], ALL)).view).toBe(before);
     });
 
-    it('takes the new cursor, and the version\'s new name in the crumbs', () => {
-        const { view: after } = apply(view(), changes([], ALL, { active_version: { ...BOARD.active_version, number: '0.5' } }));
-        expect(after.cursor).toBe('2026-10-28T12:05:00Z');
+    it('takes the version\'s new name in the crumbs; the answer\'s cursor is the next ask\'s (the tab holds it, not the view)', () => {
+        const json = changes([], ALL, { active_version: { ...BOARD.active_version, number: '0.5' } });
+        const { view: after } = apply(view(), json);
         expect(after.crumbs).toEqual([{ label: '0.5', scope: { version: 'v1' } }]);
+        expect(parseBoardChanges(json)!.cursor).toBe('2026-10-28T12:05:00Z');
+    });
+
+    it('a row sent again unchanged (the cursor overlaps) keeps its card object', () => {
+        const before = view();
+        expect(apply(before, changes([story('s2', 'backlog', 1)], ALL)).view).toBe(before);
+    });
+
+    it('a version that leaves the board (released) is known, not asked for again', () => {
+        const versions = parseBoard({ ...BOARD, level: 'versions', version_id: null, active_version: null, stories: null, versions: [{ id: 'v1', number: '0.4', title: 'A', status: 'active' }, { id: 'v0', number: '0.3', title: 'B', status: 'released' }] })!;
+        const { missing } = applyBoardChanges(versions, parseBoardChanges({ ...changes([], ['v1', 'v0']), level: 'versions', version_id: null, active_version: null })!);
+        expect(missing).toEqual([]);
     });
 
     it('an answer for another level or scope (the person moved on meanwhile) changes nothing', () => {

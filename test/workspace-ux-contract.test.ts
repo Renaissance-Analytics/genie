@@ -109,7 +109,9 @@ describe('the Tynn tab\'s board, against the contract', () => {
     });
 
     it('goes live as the contract says: the web board\'s own channel and events, its auth, cursor and changes (0.4.0)', () => {
-        expect(BOARD_LIVE).toEqual(board.data.live);
+        // The prose (`about`, `web`, `reconnect`) is for people; everything a client calls or listens to is compared.
+        const { about: _about, web: _web, reconnect: _reconnect, ...shape } = board.data.live;
+        expect(BOARD_LIVE).toEqual(shape);
     });
 
     it('has a view for every state the contract names', () => {

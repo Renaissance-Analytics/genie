@@ -1,5 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
-import type { BoardActionInput, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
+import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -298,6 +298,10 @@ export interface GenieBridge {
         tynnBoard?(workspaceId: string, scope: BoardScope): ReturnType<TynnBoardHost['read']>;
         /** One action on that board, by the workspace-UX contract's id (`task.start`, `story.move`…). */
         tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
+        /** Row B4: what changed on that board since a cursor. Optional: an older host (and a remote one) has none. */
+        tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
+        /** Row B4: follow that board (its live state and rings) until the answer is called. */
+        tynnBoardWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */

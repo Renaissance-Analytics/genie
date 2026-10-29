@@ -146,7 +146,7 @@ export const BOARD_GAPS: Readonly<Record<string, string>> = {
 };
 
 /** Every state the tab draws (TynnBoardPanel), as the contract names them. */
-export const BOARD_STATES = ['loading', 'empty-column', 'drill-down', 'illegal-drop', 'override-armed', 'transition-refused', 'detail', 'create-in-backlog', 'claim-start', 'claimed', 'assign', 'not-linked', 'signed-out'] as const;
+export const BOARD_STATES = ['loading', 'empty-column', 'drill-down', 'illegal-drop', 'override-armed', 'transition-refused', 'detail', 'create-in-backlog', 'claim-start', 'claimed', 'assign', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
 
 // ── The view ────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -202,6 +202,10 @@ export interface BoardView {
     readonly columns: readonly BoardColumnView[];
     readonly draggable: boolean;
     readonly claims: BoardClaims | null;
+    /** Every card at the level, in Tynn's order, including those no column shows (a released version). */
+    readonly cards: readonly BoardCard[];
+    /** Where the live board's first "what changed since" starts (row B4); null from a Tynn that does not send one. */
+    readonly cursor: string | null;
 }
 
 export type TynnBoardState =
@@ -232,6 +236,10 @@ export interface TynnBoardHost {
     read(workspaceId: string, scope: BoardScope): Promise<{ ok: true; view: BoardView; detail?: BoardDetail | null; detailRefused?: string | null } | BoardRefusal>;
     /** One action; `board.claimants` answers the project's eligible claimants. */
     act(workspaceId: string, input: BoardActionInput): Promise<{ ok: true; claimants?: readonly Claimant[] } | BoardRefusal>;
+    /** Row B4: what changed at a scope since a cursor (and the open card's detail, when that card changed). */
+    changes?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): Promise<{ ok: true; changes: BoardChanges; detail?: BoardDetail | null } | BoardRefusal>;
+    /** Row B4: follow the workspace's board — its live state and its rings — until the answer is called. */
+    watch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
 }
 
 type Row = Record<string, unknown>;
@@ -282,11 +290,7 @@ export function parseBoard(json: unknown): BoardView | null {
     if (!Array.isArray(rows)) return null;
     const kind = KIND_OF[level];
     const cards = rows.filter(isRow).map((r) => card(kind, r)).filter((c): c is BoardCard => c !== null);
-    const columns = BOARD_LEVELS[level].columns.map((status) => ({
-        status,
-        label: COLUMN_LABEL[status] ?? status,
-        cards: cards.filter((c) => c.status === status).sort((a, b) => a.order - b.order),
-    }));
+    const columns = columnsOf(level, cards);
 
     const activeVersion = isRow(json.active_version) ? json.active_version : null;
     const activeStory = isRow(json.active_story) ? json.active_story : null;
@@ -294,6 +298,23 @@ export function parseBoard(json: unknown): BoardView | null {
     const storyId = str(json.story_id) ?? (activeStory ? str(activeStory.id) : null);
     const storyVersion = activeStory ? str(activeStory.version_id) : null;
 
+    const upVersion = versionId ?? storyVersion;
+    const up: BoardScope | null = level === 'versions' ? null : level === 'stories' ? {} : upVersion !== null ? { version: upVersion } : {};
+    return {
+        level, versionId, storyId, up, crumbs: crumbsOf(level, activeVersion, activeStory, storyId), columns,
+        draggable: BOARD_DRAG[level], claims: parseClaims(json[BOARD_CLAIMS.field]), cards, cursor: str(json.cursor),
+    };
+}
+
+function columnsOf(level: BoardLevel, cards: readonly BoardCard[]): BoardColumnView[] {
+    return BOARD_LEVELS[level].columns.map((status) => ({
+        status,
+        label: COLUMN_LABEL[status] ?? status,
+        cards: cards.filter((c) => c.status === status).sort((a, b) => a.order - b.order),
+    }));
+}
+
+function crumbsOf(level: BoardLevel, activeVersion: Row | null, activeStory: Row | null, storyId: string | null): Array<{ label: string; scope: BoardScope }> {
     const crumbs: Array<{ label: string; scope: BoardScope }> = [];
     if (level !== 'versions' && activeVersion) {
         const id = str(activeVersion.id);
@@ -303,10 +324,7 @@ export function parseBoard(json: unknown): BoardView | null {
         const n = str(activeStory.story_number);
         crumbs.push({ label: [n !== null ? `#${n}` : null, str(activeStory.title)].filter(Boolean).join(' '), scope: { story: storyId } });
     }
-
-    const upVersion = versionId ?? storyVersion;
-    const up: BoardScope | null = level === 'versions' ? null : level === 'stories' ? {} : upVersion !== null ? { version: upVersion } : {};
-    return { level, versionId, storyId, up, crumbs, columns, draggable: BOARD_DRAG[level], claims: parseClaims(json[BOARD_CLAIMS.field]) };
+    return crumbs;
 }
 
 function parseClaims(raw: unknown): BoardClaims | null {
@@ -607,4 +625,217 @@ export async function performClaimThenStart(
     if (r.ok) r = await run('start');
     report(r.ok ? { action, phase: 'done' } : { action, phase: 'failed', reason: r.reason });
     return r;
+}
+
+// ── Row B4: the live board (workspace-ux 0.4.0) ──────────────────────────────────────────────────────────────────────
+
+/**
+ * How the board goes live, as the contract's `data.live` declares it (its prose left out). The channel and events are
+ * the web board's own (tynn.ai's useProjectChannel): Genie never listens to a second stream.
+ */
+export const BOARD_LIVE = {
+    channel: 'private-project.{projectId}',
+    push: { method: 'GET', path: '/api/v1/broadcasting-config', scope: 'genie:discovery' },
+    auth: { method: 'POST', path: '/broadcasting-auth', body: ['socket_id', 'channel_name'] },
+    events: ['version.created', 'version.updated', 'version.deleted', 'story.created', 'story.updated', 'story.deleted', 'task.created', 'task.updated', 'task.deleted'],
+    cursor: 'cursor',
+    changes: {
+        method: 'GET',
+        path: '/board/changes',
+        query: ['since', 'ids[]', 'version', 'story', 'level', 'features[]', 'product'],
+        answer: ['project_id', 'level', 'version_id', 'story_id', 'cursor', 'ids', 'rows', 'active_version', 'active_story', 'claims'],
+    },
+} as const;
+
+/** The live icon: following Tynn, getting there, the link dropped, or not live at all (no icon). */
+export type LiveState = 'connecting' | 'live' | 'reconnecting' | 'off';
+/** A ring: the ids an event named (the item and its parent), or a catch-up after (re)subscribing. */
+export interface BoardRing { readonly ids: readonly string[]; readonly catchUp: boolean }
+export type BoardLiveSignal = { readonly state: LiveState } | { readonly ring: BoardRing };
+
+/** What changed at a level since a cursor (GET /board/changes). */
+export interface BoardChanges {
+    readonly level: BoardLevel;
+    readonly versionId: string | null;
+    readonly storyId: string | null;
+    /** The next ask's cursor. */
+    readonly cursor: string;
+    /** Every row now at the level; a card not among them is gone. */
+    readonly ids: readonly string[];
+    readonly cards: readonly BoardCard[];
+    readonly activeVersion: Readonly<Record<string, unknown>> | null;
+    readonly activeStory: Readonly<Record<string, unknown>> | null;
+    readonly claims: BoardClaims | null;
+}
+
+export function liveChannel(projectId: string): string {
+    return BOARD_LIVE.channel.replace('{projectId}', projectId);
+}
+
+/** The pause before the next dial after `attempt` failed ones: 1 s, doubling, at most 30 s. */
+export function liveReconnectDelay(attempt: number): number {
+    return Math.min(30_000, 1_000 * 2 ** Math.max(0, attempt));
+}
+
+/** The ids a board event names: the item, and the parent it belongs to (a task's story, a story's version). */
+export function ringIds(event: string, data: unknown): string[] {
+    const kind = event.split('.')[0] ?? '';
+    const row = isRow(data) && isRow(data[kind]) ? (data[kind] as Row) : null;
+    if (row === null) return [];
+    const parent = kind === 'task' ? row.story_id : kind === 'story' ? row.project_version_id : null;
+    return [str(row.id), str(parent)].filter((id): id is string => id !== null);
+}
+
+/** GET what changed since a cursor, in the board's scope; `ids[]` asks for rows by id whatever their age. */
+export function boardChangesPath(projectId: string, scope: BoardScope, cursor: string, ids: readonly string[]): string {
+    const q = new URLSearchParams();
+    if (scope.story !== undefined) q.append('story', scope.story);
+    else if (scope.version !== undefined) q.append('version', scope.version);
+    q.append('since', cursor);
+    for (const id of ids) q.append('ids[]', id);
+    return `${base(projectId)}${BOARD_LIVE.changes.path}?${q.toString()}`;
+}
+
+/** Tynn's changes answer; null when it is not one. */
+export function parseBoardChanges(json: unknown): BoardChanges | null {
+    if (!isRow(json)) return null;
+    const level = json.level;
+    if (level !== 'versions' && level !== 'stories' && level !== 'tasks') return null;
+    const cursor = str(json.cursor);
+    if (cursor === null || !Array.isArray(json.ids) || !Array.isArray(json.rows)) return null;
+    const kind = KIND_OF[level];
+    return {
+        level,
+        versionId: str(json.version_id),
+        storyId: str(json.story_id),
+        cursor,
+        ids: json.ids.map(str).filter((id): id is string => id !== null),
+        cards: json.rows.filter(isRow).map((r) => card(kind, r)).filter((c): c is BoardCard => c !== null),
+        activeVersion: isRow(json.active_version) ? json.active_version : null,
+        activeStory: isRow(json.active_story) ? json.active_story : null,
+        claims: parseClaims(json[BOARD_CLAIMS.field]),
+    };
+}
+
+const sameJson = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * Apply what changed to the board, touching only what changed: a card whose row did not change keeps its object, a
+ * column whose cards did not change keeps its object, and when nothing changed the very same view comes back — so the
+ * tab redraws only what changed (the owner's rule for live views: never rebuild the whole view per update). `missing`
+ * is the ids the answer says are at the level that the view holds no card for: ask for them; never invent them.
+ * An answer for another level or scope (the person moved on while it was out) changes nothing.
+ */
+export function applyBoardChanges(view: BoardView, changes: BoardChanges): { view: BoardView; missing: string[] } {
+    const sameScope = changes.level === view.level
+        && (view.level !== 'tasks' || changes.storyId === view.storyId)
+        && (view.level !== 'stories' || changes.versionId === view.versionId);
+    if (!sameScope) return { view, missing: [] };
+
+    const held = new Map(view.cards.map((c) => [c.id, c]));
+    const fresh = new Map(changes.cards.map((c) => [c.id, c]));
+    const missing: string[] = [];
+    const cards: BoardCard[] = [];
+    for (const id of changes.ids) {
+        const old = held.get(id);
+        const now = fresh.get(id);
+        const next = now !== undefined && (old === undefined || !sameJson(now, old)) ? now : old;
+        if (next === undefined) missing.push(id);
+        else cards.push(next);
+    }
+
+    const columns = columnsOf(view.level, cards).map((col, i) => {
+        const old = view.columns[i];
+        return old !== undefined && old.cards.length === col.cards.length && old.cards.every((c, j) => c === col.cards[j]) ? old : col;
+    });
+    const nextCrumbs = changes.activeVersion !== null || changes.activeStory !== null
+        ? crumbsOf(view.level, changes.activeVersion, changes.activeStory, view.storyId)
+        : view.crumbs;
+    const crumbs = sameJson(nextCrumbs, view.crumbs) ? view.crumbs : nextCrumbs;
+    const claims = changes.claims !== null && !sameJson(changes.claims, view.claims) ? changes.claims : view.claims;
+    const unchanged = cards.length === view.cards.length && cards.every((c, i) => c === view.cards[i])
+        && columns.every((c, i) => c === view.columns[i]) && crumbs === view.crumbs && claims === view.claims;
+    return unchanged ? { view, missing } : { view: { ...view, cards, columns, crumbs, claims }, missing };
+}
+
+/** How long a burst of rings is gathered into one ask. */
+export const LIVE_QUIET_MS = 300;
+
+export interface BoardFollowerPorts {
+    /** The cursor the board is up to: from its read, then each applied answer. Null: this board cannot follow. */
+    cursor(): string | null;
+    fetch(cursor: string, ids: readonly string[]): Promise<{ ok: true; changes: BoardChanges } | { ok: false; state: string; reason: string }>;
+    /** Apply an answer (and take its cursor); answers the ids it named that the board holds no card for. */
+    apply(changes: BoardChanges): readonly string[];
+    refused(refusal: { state: string; reason: string }): void;
+    schedule(fn: () => void, ms: number): () => void;
+}
+
+/**
+ * RINGS IN, WHAT CHANGED OUT: one ask per burst of rings (LIVE_QUIET_MS), carrying every id they named; at once for a
+ * catch-up; one ask at a time, so a ring while one is out is asked after it, from the cursor it returned; and one more
+ * ask for rows an answer named but did not carry. It never re-reads the board.
+ */
+export class BoardFollower {
+    readonly #ports: BoardFollowerPorts;
+    readonly #pending = new Set<string>();
+    #cancel: (() => void) | null = null;
+    #armedMs: number | null = null;
+    #busy = false;
+    #again = false;
+    #urgent = false;
+    #stopped = false;
+
+    constructor(ports: BoardFollowerPorts) {
+        this.#ports = ports;
+    }
+
+    ring(ids: readonly string[], catchUp: boolean): void {
+        if (this.#stopped) return;
+        for (const id of ids) this.#pending.add(id);
+        if (catchUp) this.#urgent = true;
+        if (this.#busy) { this.#again = true; return; }
+        this.#arm();
+    }
+
+    stop(): void {
+        this.#stopped = true;
+        this.#cancel?.();
+        this.#cancel = null;
+    }
+
+    #arm(): void {
+        const ms = this.#urgent ? 0 : LIVE_QUIET_MS;
+        if (this.#cancel !== null && this.#armedMs !== null && this.#armedMs <= ms) return;
+        this.#cancel?.();
+        this.#armedMs = ms;
+        this.#cancel = this.#ports.schedule(() => { this.#cancel = null; this.#armedMs = null; void this.#pull(); }, ms);
+    }
+
+    async #pull(): Promise<void> {
+        if (this.#stopped) return;
+        const cursor = this.#ports.cursor();
+        const ids = [...this.#pending];
+        this.#pending.clear();
+        this.#urgent = false;
+        if (cursor === null) return;
+        this.#busy = true;
+        let answer: Awaited<ReturnType<BoardFollowerPorts['fetch']>>;
+        try {
+            answer = await this.#ports.fetch(cursor, ids);
+        } catch (error) {
+            answer = { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) };
+        }
+        this.#busy = false;
+        if (this.#stopped) return;
+        if (answer.ok) {
+            const asked = new Set(ids);
+            for (const id of this.#ports.apply(answer.changes)) {
+                if (!asked.has(id)) { this.#pending.add(id); this.#again = true; }
+            }
+        } else {
+            this.#ports.refused({ state: answer.state, reason: answer.reason });
+        }
+        if (this.#again) { this.#again = false; this.#arm(); }
+    }
 }
