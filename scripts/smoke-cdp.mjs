@@ -679,6 +679,37 @@ if (!approvalEnabled) {
         const after = JSON.parse(await cdp.evaluate(`JSON.stringify({ dashboard: Boolean(document.querySelector('[data-surface="dashboard"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), agent: Boolean(document.querySelector('[data-surface="agent"]')), subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, top: document.querySelector('[data-surface="dashboard"]')?.getBoundingClientRect().top ?? null })`) || '{}');
         check(waitingOnBoard && stayed && after.dashboard && !after.deck && !after.agent && after.subject === codexRow && new RegExp(ADDRESS.dashboard).test(after.address ?? '') && after.top === topBefore,
             '32a. clicking a WAITING agent on the Dashboard keeps the Dashboard (not the Deck, not its page, no jump) and the chat becomes that agent’s', JSON.stringify({ waitingOnBoard, topBefore, ...after }));
+
+        /*
+         * 32b. A CLICK ON THAT SAME WAITING AGENT IN ITS WORKSPACE'S OWN DASHBOARD OPENS ITS TAB, AND THE CHAT FOLLOWS (the
+         * owner, 2026-10-29: "if I am clicking on an agent in a workspace dashboard then I go to that agent tab that shows
+         * the activity and chat stream"). Its approval is still parked (CONTROL, read back again), so a pending item is
+         * there to divert the click to the Deck the way #1327's bug did. The docked chat is reset to genie first, so
+         * "the chat is the codex agent's" afterwards is the click's doing, not 32a's.
+         */
+        const codexWs = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.agents ?? []).find((a) => a.id === '${codexRow}')?.workspaceId ?? null)`);
+        await cdp.evaluate(`window.location.hash = '#genie://deck'; true`);
+        await waitFor(cdp, `Boolean(document.querySelector('[data-surface="deck"]'))`, 'the Deck, to reset the docked chat');
+        const chatBefore = await cdp.evaluate(`document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null`);
+        await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
+        const onLane = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane on its workspace dashboard');
+        const stillBlocking = await cdp.evaluate(`window.genie.snapshot().then((s) => (s.deckItems ?? []).some((i) => i.agentId === '${codexRow}' && i.source === 'agent-question' && i.blocking))`);
+        await cdp.evaluate(`document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]').click(); true`);
+        const toTab = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'the codex agent tab with its chat docked');
+        await new Promise((r) => setTimeout(r, 750));
+        const landed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agent: Boolean(document.querySelector('[data-surface="agent"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, stream: document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('data-active') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
+        check(typeof codexWs === 'string' && chatBefore !== codexRow && onLane && stillBlocking === true && toTab && landed.agent && !landed.deck && !landed.workspace
+            && landed.agentId === codexRow && landed.stream === 'true' && !String(landed.address ?? '').includes('deck') && landed.subject === codexRow,
+            '32b. clicking a WAITING agent on its workspace dashboard opens that agent’s tab (stream), not the Deck, and the docked chat follows', JSON.stringify({ codexWs, chatBefore, onLane, stillBlocking, toTab, ...landed }));
+        // 32c. The keyboard does the same: Enter on the focused lane (the real window's own key path, Card and all).
+        await cdp.evaluate(`window.location.hash = '#genie://deck'; true`);
+        await waitFor(cdp, `Boolean(document.querySelector('[data-surface="deck"]'))`, 'the Deck, to reset the docked chat');
+        await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
+        await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane again');
+        const focused = await cdp.evaluate(`(() => { const l = document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'); l.focus(); const ok = document.activeElement === l; l.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return ok; })()`);
+        const byKey = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="deck"]') && document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') === '${codexRow}' && document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('data-active') === 'true' && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'Enter on the lane: the codex agent tab with its chat docked');
+        const keyed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
+        check(focused === true && byKey, '32c. Enter on a focused workspace-dashboard lane does what the click does: the agent’s tab, its chat, never the Deck', JSON.stringify({ focused, byKey, ...keyed }));
         // Back to its page, where the approval card is answered below.
         await cdp.evaluate(`window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
         await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"] [data-approval]')) || Boolean(document.querySelector('[data-approval]'))`, 'the codex approval card again');
