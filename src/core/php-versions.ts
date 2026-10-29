@@ -218,11 +218,18 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
 /**
  * The php.ini Genie writes into a version's directory. The windows.php.net zip ships NO active php.ini — every
  * `extension=` in php.ini-production is commented out — so without this an installed PHP answers `-v` and cannot run a
- * Laravel app (Genie 1 `phpIniContents`). The CA bundle is NOT here: it is the #284 ini in `PHP_INI_SCAN_DIR`, loaded
- * after this one, so Check and repair keeps working for every version at once.
+ * Laravel app (Genie 1 `phpIniContents`).
+ *
+ * THE CA BUNDLE IS HERE (genie#1334). It used to be left to the #284 ini in `PHP_INI_SCAN_DIR` — which exists only after
+ * a Check and repair, and is never seen by a PHP started outside Genie's own environment — so a version Genie installed
+ * had NO trust anchors: the Windows zip ships none, and its compiled-in default names a file that does not exist. Every
+ * outbound HTTPS call failed with cURL 60 / verify 20 (fancy, 2026-10-29, after genie#1306 made such a version the
+ * owner's default). Genie 1 named its exported `cacert.pem` in this very file (v0.7.0-beta.342 `toolchain-versions.ts`
+ * `phpIniContents`, written by `toolchain-version-install.ts` after `writeCaBundle`). `ca` is {@link phpCaSettings}'s
+ * answer: a file that exists, or nothing — naming a missing file turns errno 60 into 77 and hides the cause.
  */
-export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win32'): string {
-    if (platform !== 'win32') return linuxIni(versionDir);
+export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win32', ca: PhpCaSettings = {}): string {
+    if (platform !== 'win32') return linuxIni(versionDir, ca);
     return [
         '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
         `; Owned by Genie: ${versionDir}`,
@@ -240,6 +247,7 @@ export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win3
         'display_errors = On',
         'error_reporting = E_ALL',
         '',
+        ...caLines(ca),
         // OPCACHE (genie#1043; moic, 2026-10-21: Laravel /up 2,606 ms — every request recompiled the framework). Genie 1
         // left it out because it "makes php-cgi.exe die at startup on Windows"; the file cache in a directory that EXISTS
         // (Genie makes it: `phpCacheDir`) with the fallback on is what lets php-cgi start — measured by
@@ -263,7 +271,7 @@ export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win3
  * again warns "Module already loaded" on every start) and no extension_dir — the build knows its own, where opcache.so
  * is. Opcache by name, without Windows' file cache (that answers a php-cgi.exe start-up failure Linux does not have).
  */
-function linuxIni(versionDir: string): string {
+function linuxIni(versionDir: string, ca: PhpCaSettings): string {
     return [
         '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
         `; Owned by Genie: ${versionDir}`,
@@ -278,6 +286,7 @@ function linuxIni(versionDir: string): string {
         'display_errors = On',
         'error_reporting = E_ALL',
         '',
+        ...caLines(ca),
         'zend_extension=opcache',
         'opcache.enable=1',
         'opcache.enable_cli=0',
@@ -287,6 +296,58 @@ function linuxIni(versionDir: string): string {
         'opcache.max_accelerated_files=50000',
         '',
     ].join('\n');
+}
+
+/** The CA file each of PHP's two TLS stacks is told to trust; an absent key is not written. */
+export interface PhpCaSettings {
+    readonly cainfo?: string;
+    readonly cafile?: string;
+}
+
+/**
+ * Both directives, because `file_get_contents('https://…')` and Guzzle's stream handler go through openssl, not curl
+ * (Genie 1: "`openssl.cafile` pins every other openssl consumer to the SAME anchors").
+ */
+function caLines(ca: PhpCaSettings): string[] {
+    if (ca.cainfo === undefined && ca.cafile === undefined) return [];
+    return [
+        '; Trust anchors for outbound HTTPS (genie#1334): Genie\'s CA bundle (on Windows exported from this machine\'s own',
+        '; root store, so a corporate proxy\'s root is in it; on Linux the system bundle). A CA file you set here is kept.',
+        ...(ca.cainfo !== undefined ? [`curl.cainfo = "${ca.cainfo}"`] : []),
+        ...(ca.cafile !== undefined ? [`openssl.cafile = "${ca.cafile}"`] : []),
+        '',
+    ];
+}
+
+/** What an ini sets `key` to, quotes stripped; `undefined` when unset or empty (a `;` comment is not a setting). */
+function iniValue(ini: string, key: string): string | undefined {
+    for (const line of ini.split(/\r?\n/)) {
+        const eq = line.indexOf('=');
+        if (eq < 0 || line.slice(0, eq).trim() !== key) continue;
+        const v = line.slice(eq + 1).trim().replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1').trim();
+        return v === '' ? undefined : v;
+    }
+    return undefined;
+}
+
+/**
+ * THE CA SETTINGS FOR A (RE)WRITTEN MANAGED php.ini (genie#1334). Genie owns the file and rewrites it whole, so what the
+ * person set is carried across, never silently emptied:
+ *
+ * - a CA file already set to one that EXISTS is kept, whoever set it (a corporate root bundle, an earlier Genie bundle);
+ * - one set to a file that is gone is replaced by Genie's bundle when there is one, and kept as it was when there is
+ *   not: emptying it would be Genie erasing the person's setting;
+ * - unset: Genie's bundle, or nothing when Genie has none.
+ */
+export function phpCaSettings(existingIni: string | null, bundle: string | null, exists: (path: string) => boolean): PhpCaSettings {
+    const pick = (key: string): string | undefined => {
+        const set = existingIni === null ? undefined : iniValue(existingIni, key);
+        if (set !== undefined && (exists(set) || bundle === null)) return set;
+        return bundle ?? undefined;
+    };
+    const cainfo = pick('curl.cainfo');
+    const cafile = pick('openssl.cafile');
+    return { ...(cainfo !== undefined ? { cainfo } : {}), ...(cafile !== undefined ? { cafile } : {}) };
 }
 
 /** The opcache file cache's directory for a managed version — it must exist before php-cgi starts. */

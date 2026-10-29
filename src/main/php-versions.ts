@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { phpAdvisoryText } from '../core/php-advisories.js';
 import {
@@ -22,6 +22,7 @@ import {
     phpBuildUrls,
     phpWindowsBuild,
     phpCacheDir,
+    phpCaSettings,
     phpIniContents,
     pickPinned,
     commandWord,
@@ -54,6 +55,25 @@ export interface PhpVersionsFs {
     rename(from: string, to: string): void;
     /** Delete a file or a directory tree. */
     removeTree(path: string): void;
+    /** A file's text, `null` when it cannot be read — the ini being rewritten (genie#1334). Absent = nothing to carry. */
+    readText?(path: string): string | null;
+}
+
+/**
+ * THE CA BUNDLE A MANAGED php.ini NAMES (genie#1334; main/toolchain-ops.ts `ensurePhpCaBundle`): on Windows the machine's
+ * roots exported to Genie's toolchain directory, on Linux the system bundle.
+ */
+export interface PhpCaPort {
+    /** The bundle as it is now — a path that exists, or `null`. Sync: read when a site starts. */
+    current(): string | null;
+    /** Make one when there is none (Windows: the read-only root-store export). Before an install writes its ini. */
+    ensure(): Promise<string | null>;
+}
+
+/** The ini Genie writes into a managed version's directory: its settings, the CA bundle, what the person set kept. */
+function managedIniText(dir: string, platform: PhpPlatform, ports: { fs: PhpVersionsFs; ca?: PhpCaPort }, bundle: string | null): string {
+    const existing = ports.fs.readText?.(join(dir, 'php.ini')) ?? null;
+    return phpIniContents(dir, platform, phpCaSettings(existing, bundle, (p) => ports.fs.exists(p)));
 }
 
 export type Fetched<T> = { readonly ok: true; readonly body: T } | { readonly ok: false; readonly error: string };
@@ -75,6 +95,8 @@ export interface PhpVersionsPorts {
     readonly progress?: (step: string | null) => void;
     /** How many compile jobs a source build runs at once (Linux). */
     readonly cpus?: number;
+    /** The CA bundle the new version's php.ini names (genie#1334). Absent = none is named. */
+    readonly ca?: PhpCaPort;
 }
 
 export interface PhpVersionsView {
@@ -133,6 +155,8 @@ export type PhpCgiPorts = Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs'> & {
         /** Where that PHP's opcache file cache lives — Genie's, never inside Genie 1's folders. */
         readonly cacheDir: string;
     };
+    /** The CA bundle a rewritten managed ini names (genie#1334). Absent = none is named. */
+    readonly ca?: PhpCaPort;
 };
 
 const underRoot = (dir: string, root: string): boolean => {
@@ -191,8 +215,30 @@ export function refreshManagedIni(pin: string | undefined, ports: PhpCgiPorts): 
     if (!PHP_VERSION.test(pin)) return;
     const found = pickPinned(managedPhp(ports), pin);
     if (!found) return;
-    ports.fs.writeText(join(found.dir, 'php.ini'), phpIniContents(found.dir, ports.platform));
+    ports.fs.writeText(join(found.dir, 'php.ini'), managedIniText(found.dir, ports.platform, ports, ports.ca?.current() ?? null));
     if (ports.platform === 'win32') ports.fs.mkdirp(phpCacheDir(found.dir));
+}
+
+/**
+ * AT BOOT (genie#1334): every managed version's ini brought current — the one `current/php` points at included, which an
+ * unpinned site, a queue worker and a terminal's `php` all read and which no site start rewrites. Written only where the
+ * text differs, so a restart with nothing to change writes nothing. Returns the inis written.
+ */
+export function refreshAllManagedInis(ports: Pick<PhpVersionsPorts, 'platform' | 'root' | 'fs' | 'ca'>): string[] {
+    const bundle = ports.ca?.current() ?? null;
+    const written: string[] = [];
+    for (const m of managedPhp(ports)) {
+        const ini = join(m.dir, 'php.ini');
+        const text = managedIniText(m.dir, ports.platform, ports, bundle);
+        if (ports.fs.readText?.(ini) === text) continue;
+        try {
+            ports.fs.writeText(ini, text);
+            written.push(ini);
+        } catch {
+            // one unwritable version must not stop the others (Genie 1 `refreshManagedInis`)
+        }
+    }
+    return written;
 }
 
 /** The advisory words as an optional field — present only for a version under its floor (core/php-advisories.ts). */
@@ -311,7 +357,11 @@ async function putInPlace(a: { version: string; file: string; dir: string; zip: 
         ports.fs.removeTree(zipPath);
         ports.fs.rename(staging, dir);
         const ini = join(dir, 'php.ini');
-        ports.fs.writeText(ini, phpIniContents(dir));
+        // The CA bundle BEFORE the ini, so the ini names a file that is already there (Genie 1
+        // toolchain-version-install.ts; genie#1334). None = neither directive is written.
+        say(`PHP ${version}: giving it this machine's trusted root certificates`);
+        const bundle = ports.ca ? await ports.ca.ensure() : null;
+        ports.fs.writeText(ini, managedIniText(dir, 'win32', ports, bundle));
         // The opcache file cache's directory must exist before php-cgi starts (core/php-versions.ts phpIniContents).
         ports.fs.mkdirp(phpCacheDir(dir));
 
@@ -380,7 +430,8 @@ async function buildPhpOnLinux(version: string, ports: PhpVersionsPorts): Promis
             { say: 'installing', bin: 'make', args: ['-s', '-C', src, 'install'] },
         ],
         finish: async (dir) => {
-            ports.fs.writeText(join(dir, 'php.ini'), phpIniContents(dir, 'linux'));
+            const bundle = ports.ca ? await ports.ca.ensure() : null;
+            ports.fs.writeText(join(dir, 'php.ini'), managedIniText(dir, 'linux', ports, bundle));
             return null;
         },
         prove: async (dir) => {
@@ -435,6 +486,7 @@ export function nodePhpVersionsFs(): PhpVersionsFs {
         writeBytes: (p, b) => writeFileSync(p, b),
         rename: (a, b) => renameSync(a, b),
         removeTree: (p) => rmSync(p, { recursive: true, force: true }),
+        readText: (p) => { try { return readFileSync(p, 'utf8'); } catch { return null; } },
     };
 }
 

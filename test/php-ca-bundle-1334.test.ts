@@ -2,10 +2,8 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { PHP_INI_EXTENSIONS, PHP_RECIPES, phpZipName } from '../src/core/php-versions.js';
-import * as phpVersions from '../src/main/php-versions.js';
-import { installPhpVersion, refreshManagedIni, type Fetched, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
-import * as toolchainOps from '../src/main/toolchain-ops.js';
-import type { ToolchainFs } from '../src/main/toolchain-ops.js';
+import { installPhpVersion, refreshAllManagedInis, refreshManagedIni, type Fetched, type PhpCaPort, type PhpVersionsFs, type PhpVersionsPorts } from '../src/main/php-versions.js';
+import { ensurePhpCaBundle, type ToolchainFs } from '../src/main/toolchain-ops.js';
 
 /**
  * genie#1334. GENIE-MANAGED PHP HAS A CA BUNDLE: AFTER AN INSTALL, A RESTART AND A VERSION SWITCH.
@@ -62,7 +60,7 @@ function directive(ini: string | null | undefined, key: string): string | undefi
 }
 
 /** The CA port: the bundle Genie has (current), and making one when there is none (ensure — Windows exports). */
-const caPort = (fs: { exists(p: string): boolean }, made?: () => void) => ({
+const caPort = (fs: { exists(p: string): boolean }, made?: () => void): PhpCaPort => ({
     current: () => (fs.exists(BUNDLE) ? BUNDLE : null),
     ensure: async () => { made?.(); return fs.exists(BUNDLE) ? BUNDLE : null; },
 });
@@ -84,15 +82,15 @@ function winInstallPorts(disk: ReturnType<typeof memFs>): PhpVersionsPorts {
             if (binary.endsWith('php.exe')) return { stdout: ['[PHP Modules]', 'Core', ...PHP_INI_EXTENSIONS, ''].join('\n'), exitCode: 0 };
             throw new Error(`unexpected ${binary}`);
         },
-        ...({ ca: caPort(disk.fs) } as object),
-    } as PhpVersionsPorts;
+        ca: caPort(disk.fs),
+    };
 }
 
 describe('genie#1334: a freshly installed PHP names a CA bundle that exists', () => {
     it('Windows install (what an Update runs, genie#1306): the bundle is made BEFORE the ini, and the ini names it for curl and openssl', async () => {
         const disk = memFs({ [BUNDLE]: PEM(3) });
         let ensured = 0;
-        const ports = { ...winInstallPorts(disk), ca: caPort(disk.fs, () => { ensured += 1; }) } as PhpVersionsPorts;
+        const ports: PhpVersionsPorts = { ...winInstallPorts(disk), ca: caPort(disk.fs, () => { ensured += 1; }) };
         const outcome = await installPhpVersion(V, true, ports);
         expect(outcome.kind).toBe('installed');
         expect(ensured).toBe(1);
@@ -118,7 +116,7 @@ describe('genie#1334: the ini Genie REWRITES keeps a CA bundle (a restart, a pin
 
     it('a pinned site start rewrites the ini whole, and the rewrite names the existing bundle (fancy’s 05:24:25Z rewrite)', () => {
         const disk = memFs({ [join(DIR, 'php-cgi.exe')]: '<bin>', [join(DIR, 'php.ini')]: OLD_INI, [BUNDLE]: PEM(3) });
-        refreshManagedIni('8.4', { platform: 'win32', root: ROOT, fs: disk.fs, ...({ ca: caPort(disk.fs) } as object) });
+        refreshManagedIni('8.4', { platform: 'win32', root: ROOT, fs: disk.fs, ca: caPort(disk.fs) });
         const ini = disk.files.get(join(DIR, 'php.ini'));
         expect(directive(ini, 'curl.cainfo')).toBe(BUNDLE);
         expect(directive(ini, 'openssl.cafile')).toBe(BUNDLE);
@@ -133,7 +131,7 @@ describe('genie#1334: the ini Genie REWRITES keeps a CA bundle (a restart, a pin
                 [mine]: PEM(1),
                 ...(withBundle ? { [BUNDLE]: PEM(3) } : {}),
             });
-            refreshManagedIni('8.4', { platform: 'win32', root: ROOT, fs: disk.fs, ...({ ca: caPort(disk.fs) } as object) });
+            refreshManagedIni('8.4', { platform: 'win32', root: ROOT, fs: disk.fs, ca: caPort(disk.fs) });
             const ini = disk.files.get(join(DIR, 'php.ini'));
             expect(directive(ini, 'curl.cainfo')).toBe(mine);
             expect(directive(ini, 'openssl.cafile')).toBe(mine);
@@ -147,8 +145,7 @@ describe('genie#1334: the ini Genie REWRITES keeps a CA bundle (a restart, a pin
             [join(DIR, 'php-cgi.exe')]: '<bin>', [join(DIR, 'php.ini')]: OLD_INI,
             [BUNDLE]: PEM(3),
         });
-        const refreshAll = (phpVersions as Record<string, unknown>)['refreshAllManagedInis'] as (p: object) => string[];
-        expect(typeof refreshAll).toBe('function');
+        const refreshAll = refreshAllManagedInis;
         const written = refreshAll({ platform: 'win32', root: ROOT, fs: disk.fs, ca: caPort(disk.fs) });
         expect(written.sort()).toEqual([join(DIR, 'php.ini'), join(OLD, 'php.ini')].sort());
         for (const d of [OLD, DIR]) {
@@ -164,7 +161,7 @@ describe('genie#1334: the ini Genie REWRITES keeps a CA bundle (a restart, a pin
         const LDIR = join(LROOT, V);
         const SYS = '/etc/ssl/certs/ca-certificates.crt';
         const disk = memFs({ [join(LDIR, 'php-cgi')]: '<bin>', [join(LDIR, 'php.ini')]: OLD_INI, [SYS]: PEM(2) });
-        refreshManagedIni('8.4', { platform: 'linux', root: LROOT, fs: disk.fs, ...({ ca: { current: () => SYS, ensure: async () => SYS } } as object) });
+        refreshManagedIni('8.4', { platform: 'linux', root: LROOT, fs: disk.fs, ca: { current: () => SYS, ensure: async () => SYS } });
         const ini = disk.files.get(join(LDIR, 'php.ini'));
         expect(directive(ini, 'curl.cainfo')).toBe(SYS);
         expect(directive(ini, 'openssl.cafile')).toBe(SYS);
@@ -177,10 +174,9 @@ describe('genie#1334: the bundle itself — made once, verified, kept', () => {
         const files = new Map<string, string>(Object.entries(initial));
         return { files, exists: (p) => files.has(p), readText: (p) => files.get(p) ?? null, writeText: (p, c) => { files.set(p, c); }, mkdirp: () => {}, remove: (p) => { files.delete(p); } };
     }
-    const ensure = () => (toolchainOps as Record<string, unknown>)['ensurePhpCaBundle'] as (p: object) => Promise<string | null>;
+    const ensure = () => ensurePhpCaBundle;
 
     it('Windows, no bundle yet: the machine’s roots are exported (Genie 1’s read-only export), counted, and the path returned', async () => {
-        expect(typeof ensure()).toBe('function');
         const fs = opsFs();
         const ran: string[] = [];
         const path = await ensure()({ platform: 'win32', dataDir: DATA, fs, run: async (bin: string) => { ran.push(bin); fs.files.set(BUNDLE, PEM(5)); return { stdout: '5', exitCode: 0 }; } });
