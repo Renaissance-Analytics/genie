@@ -34,7 +34,7 @@ import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../cor
 import { chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
-import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
+import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
@@ -84,7 +84,6 @@ import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
-import type { BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -612,6 +611,12 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
+    /**
+     * The Tynn tab's host, ONE object per bridge (genie#1295 B4). Built inline it was a new object on every render of this
+     * window, and the tab keys its read and its live subscription on it: every render re-read the whole board and signed
+     * a new socket (the B4 end-to-end run on omarchy-test: 10 whole-board re-reads and 8 channel signatures for one tab).
+     */
+    const tynnBoardHost = useMemo(() => tynnBoardHostOf(resolvedBridge), [resolvedBridge]);
     /**
      * THE ONE RESTART (genie#1238): every Start and Restart in this window — the Agent view's header, the Dashboard's
      * broken row and lane, the chat — calls this, and it is main's `restartAgent(…, 'graceful')`: it works from every
@@ -1619,15 +1624,7 @@ function DesktopApp({ bridge }: AppProps) {
             // Live site panels — this machine's only (a remote bridge has none).
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
-            tynnBoard={resolvedBridge?.workspaces.tynnBoard && resolvedBridge.workspaces.tynnBoardAction ? {
-                read: (id, scope) => resolvedBridge.workspaces.tynnBoard!(id, scope),
-                act: (id, input) => resolvedBridge.workspaces.tynnBoardAction!(id, input),
-                // Row B4: live, where the host can (a remote host has neither, and its tab is simply not live).
-                ...(resolvedBridge.workspaces.tynnBoardChanges && resolvedBridge.workspaces.tynnBoardWatch ? {
-                    changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => resolvedBridge.workspaces.tynnBoardChanges!(id, scope, cursor, ids),
-                    watch: (id: string, listener: (signal: BoardLiveSignal) => void) => resolvedBridge.workspaces.tynnBoardWatch!(id, listener),
-                } : {}),
-            } : undefined}
+            tynnBoard={tynnBoardHost}
             readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
