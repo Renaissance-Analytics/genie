@@ -38,8 +38,8 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
         expect(result).toEqual({
             ok: true,
             workstations: [
-                { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner', role: null },
-                { id: 'ws_pat', name: 'Pat’s laptop', active: true, connectable: false, local: true, source: null, role: null },
+                { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner', role: null, online: null },
+                { id: 'ws_pat', name: 'Pat’s laptop', active: true, connectable: false, local: true, source: null, role: null, online: null },
             ],
         });
     });

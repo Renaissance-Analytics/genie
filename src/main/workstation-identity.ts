@@ -87,6 +87,20 @@ export interface IdentityStore {
     canWrite(): boolean;
     read(host: string): Promise<StoredIdentity | null>;
     write(host: string, identity: StoredIdentity): Promise<void>;
+    /** The Genie 1 record already settled with this Tynn (genie#1278 adopt), or null. */
+    legacyDone?(host: string): Promise<string | null>;
+    markLegacyDone?(host: string, workstationId: string): Promise<void>;
+}
+
+/** The record GENIE 1 registered for this machine (its genie.db), and its key when this Genie can decrypt it. */
+export interface LegacyIdentity {
+    readonly workstationId: string;
+    readonly privateKeyPem: string | null;
+}
+
+/** STUB (red first). */
+export function readGenie1Identity(_settings: Readonly<Record<string, string>> | null, _cipher: IdentityCipher): LegacyIdentity | null {
+    throw new Error('not implemented');
 }
 
 /** Electron's safeStorage, as a port. */
@@ -149,6 +163,8 @@ export interface EnsureWorkstationPorts {
     readonly generate?: () => HostKeypair;
     /** This machine's stable key (machine-key.ts), or null when the OS gives no machine id (genie#1278 W2). */
     readonly machineKey?: () => Promise<string | null>;
+    /** Genie 1's record of this machine (genie#1278 adopt on sign-in), or null. */
+    readonly legacy?: () => Promise<LegacyIdentity | null>;
     readonly now?: () => number;
 }
 

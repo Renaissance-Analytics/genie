@@ -18,6 +18,8 @@ export interface TynnWorkstationRow {
     readonly source: string | null;
     /** Its Pilot/Drone role as Tynn holds it (genie#1278); `null`/absent = Tynn did not say. */
     readonly role?: 'pilot' | 'drone' | null | undefined;
+    /** STUB (red first). */
+    readonly online?: boolean | null | undefined;
 }
 
 export type TynnWorkstationList = { readonly ok: true; readonly workstations: readonly TynnWorkstationRow[] } | { readonly ok: false; readonly reason: string };

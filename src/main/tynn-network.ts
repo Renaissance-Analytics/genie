@@ -27,6 +27,8 @@ export interface TynnWorkstation {
     readonly source: string | null;
     /** Its Pilot/Drone role as Tynn holds it (genie#1278): exactly one of the two, else `null`. */
     readonly role: 'pilot' | 'drone' | null;
+    /** STUB (red first): connected to its relay now. */
+    readonly online?: boolean | null;
 }
 
 /** `refusedByTynn`: Tynn refused THIS caller (401/404/419 — it never says why), as against Tynn unreachable or broken. */
