@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import { provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
+import { NAMESPACE_SLICED_ENGINES, provisionSteps, readinessProbe, SLICED_ENGINES, stepSucceeded, type ProvisionStep } from '../core/service-provision.js';
 import { deleteDataVerdict } from '../core/service-tenancy.js';
 import { chooseEngines, containerNameOf, CUSTOM_KINDS, dataVolumeOf, engineKindOf, imageFor, SERVICE_CATALOG, serviceEnvFor, SHARED_TENANCY, sliceIsDroppable, switchActiveWarning, variantExtensions, type AdoptedSlice, type Credentials, type CustomEngineSpec, type EngineAdmin, type EngineChoice, type ServiceInstance, type ServiceScope } from '../core/services.js';
 import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
@@ -357,11 +357,13 @@ export class ServiceRegistry {
             const i = this.#find(id);
             if (i.slices === undefined || i.scope.kind !== 'shared' || i.slices[workspaceId]) return i;
             const app = sliceIsDroppable(i.engine);
-            if (!app && (!i.admin || !SLICED_ENGINES.has(i.engine))) return i;
+            // A namespace slice (Genie 1's Mailpit: the workspace's mail tag) is only recorded — nothing is made in the engine.
+            const named = NAMESPACE_SLICED_ENGINES.has(i.engine);
+            if (!app && !named && (!i.admin || !SLICED_ENGINES.has(i.engine))) return i;
             const slice = this.#newSlice(workspaceId, i.engine, i.slices, `${i.engine} ${i.version}`);
             // A WebSocket app is a line in the engine's config; a database slice is made inside the engine.
             if (app) await this.#applyApps({ ...i, slices: { ...i.slices, [workspaceId]: slice } });
-            else await this.#provision(i, [slice]);
+            else if (!named) await this.#provision(i, [slice]);
             const updated: ServiceInstance = { ...this.#find(id), slices: { ...this.#find(id).slices, [workspaceId]: slice } };
             this.#data = { ...this.#data, instances: this.#data.instances.map((x) => (x.id === id ? updated : x)) };
             await this.#flush();
