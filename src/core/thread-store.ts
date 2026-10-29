@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
 import { FileSessionStore, Thread, type SessionStore } from '@particle-academy/prism-harness';
 import { threadKeyFor, type AgentId } from './identity.js';
 import type { StreamEvent } from './stream-event.js';
@@ -70,7 +72,10 @@ export function openAgentThread(store: SessionStore, agentId: AgentId): Thread {
  * gone). `before` (epoch ms) is that old rule, kept only for rows recorded before runs were named. `limit` keeps the
  * most recent rows; `earlier` says how many older ones were left out. A row written unserialisable is skipped.
  */
-export async function readHistory(store: SessionStore, agentId: AgentId, options: { before?: number; run?: string; limit?: number } = {}): Promise<{ rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number; earlierTurns: number }> {
+export type History = { rows: { event: StreamEvent; at: number | null; position: number }[]; earlier: number; earlierTurns: number };
+export type HistoryOptions = { before?: number; run?: string; limit?: number };
+
+export async function readWholeHistory(store: SessionStore, agentId: AgentId, options: HistoryOptions = {}): Promise<History> {
     const messages = await openAgentThread(store, agentId).messages();
     const rows: { event: StreamEvent; at: number | null; position: number }[] = [];
     for (const m of messages) {
@@ -87,6 +92,18 @@ export async function readHistory(store: SessionStore, agentId: AgentId, options
     // The turns the window cut off: the turns shown number on from them.
     const earlierTurns = rows.slice(0, earlier).filter((r) => r.event.kind === 'turn').length;
     return { rows: rows.slice(earlier), earlier, earlierTurns };
+}
+
+/** An agent's history (genie#1340: to be bounded to the window it keeps). */
+export const readHistory = readWholeHistory;
+
+/**
+ * WHERE THE STORE KEEPS AN AGENT'S THREAD LOG: prism-harness FileSessionStore writes `<key digest>.jsonl` beside its payload,
+ * the digest being the first 32 hex characters of the key's SHA-256. A durable on-disk name (changing it would orphan every
+ * thread ever written), pinned against the real store by test/thread-history-bounded.test.ts.
+ */
+export function threadLogFile(directory: string, agentId: AgentId): string {
+    return join(directory, `${createHash('sha256').update(threadKeyFor(agentId)).digest('hex').slice(0, 32)}.jsonl`);
 }
 
 /** The highest turn number in an agent's record (0 when none) — where its next run's turns continue from. */
