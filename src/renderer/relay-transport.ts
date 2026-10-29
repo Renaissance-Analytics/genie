@@ -18,7 +18,7 @@ export interface TynnWorkstationRow {
     readonly source: string | null;
     /** Its Pilot/Drone role as Tynn holds it (genie#1278); `null`/absent = Tynn did not say. */
     readonly role?: 'pilot' | 'drone' | null | undefined;
-    /** STUB (red first). */
+    /** Connected to its relay now (genie#1278 presence); `null`/absent = not known. */
     readonly online?: boolean | null | undefined;
 }
 

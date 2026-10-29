@@ -27,8 +27,11 @@ export interface TynnWorkstation {
     readonly source: string | null;
     /** Its Pilot/Drone role as Tynn holds it (genie#1278): exactly one of the two, else `null`. */
     readonly role: 'pilot' | 'drone' | null;
-    /** STUB (red first): connected to its relay now. */
-    readonly online?: boolean | null;
+    /**
+     * Its Genie is connected to its relay right now (genie#1278 presence): Tynn asks the relay as it lists. `null` = not
+     * known (the relay could not be asked, or an older Tynn that does not say). `active` above is the RECORD's state.
+     */
+    readonly online: boolean | null;
 }
 
 /** `refusedByTynn`: Tynn refused THIS caller (401/404/419 — it never says why), as against Tynn unreachable or broken. */
@@ -67,6 +70,7 @@ export async function connectableWorkstations(request: SessionRequest, thisMachi
             local: r.is_local === true,
             source: typeof r.source === 'string' ? r.source : null,
             role: r.role === 'pilot' || r.role === 'drone' ? r.role : null,
+            online: typeof r.online === 'boolean' ? r.online : null,
         });
     }
     return { ok: true, workstations: [...byId.values()] };
