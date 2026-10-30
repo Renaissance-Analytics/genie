@@ -126,9 +126,11 @@ describe('a started site waits for its port', () => {
         expect(siteTone([{ workspaceId: 'acme', state: 'starting' }], 'acme')).toBe('starting');
     });
 
-    it('Genie wires the real probe into its site manager (compose.ts)', () => {
+    it('Genie wires the real probe into its site manager (main.ts -> compose.ts -> SiteManager)', () => {
+        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         const compose = readFileSync(new URL('../src/main/compose.ts', import.meta.url), 'utf8');
-        expect(compose).toMatch(/new SiteManager\(\{[\s\S]{0,4000}?probeReady: \(port, options\) => siteAnswers\(port, options\)/);
+        expect(main).toMatch(/composeServices\(\{[\s\S]{0,6000}?siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
+        expect(compose).toMatch(/new SiteManager\(\{[\s\S]{0,4000}?\.\.\.\(input\.siteProbe \? \{ probeReady: input\.siteProbe \} : \{\}\)/);
     });
 });
 

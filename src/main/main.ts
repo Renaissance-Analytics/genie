@@ -7,6 +7,7 @@ import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
 import { forwardRendererConsole } from '../core/render-error.js';
+import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { transportHub } from '../core/remote-protocol.js';
 import { chatCommsOf } from '../core/chat-view.js';
@@ -2242,6 +2243,9 @@ async function boot(): Promise<void> {
         },
         // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
         caddyBin: caddyCopy?.path ?? null,
+        // A started site is `starting` until its port answers, then running and routed (parity audit #9; Genie 1's
+        // readiness wait, main/port-probe.ts).
+        siteProbe: (port, options) => siteAnswers(port, options),
         // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
         phpWorkerEnv: () => phpWorkerEnv(processEnv),
         // The system roots for PHP's trust bundle, beside Genie's own CA (main/php-trust-host.ts).
