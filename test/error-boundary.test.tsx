@@ -11,7 +11,7 @@
  * A boundary catching a throw is a claim about React's commit — a static render (renderToStaticMarkup) does not use
  * boundaries at all — so this file renders in a DOM (happy-dom, scoped here; docs/decisions.md D4).
  */
-import { act, createElement } from 'react';
+import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
@@ -23,19 +23,27 @@ import type { ChatThread } from '../src/renderer/components/ChatFlyout.js';
 import { ErrorBoundary } from '../src/renderer/components/ErrorBoundary.js';
 import { Workspace } from '../src/renderer/components/Workspace.js';
 
-/** Which surface throws on its next render. */
-const boom = vi.hoisted(() => ({ Dashboard: false, AgentView: false, ChatFlyout: false, InboxFlyout: false, Deck: false, Workspace: false, TynnBoardTab: false }));
-const thrower = <P extends object>(name: keyof typeof boom, real: (p: P) => unknown) => (p: P) => {
-    if (boom[name]) throw new Error(`${name} exploded`);
-    return createElement(real as never, p as never);
-};
-vi.mock('../src/renderer/components/Dashboard.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Dashboard.js')>(); return { ...m, Dashboard: thrower('Dashboard', m.Dashboard) }; });
-vi.mock('../src/renderer/components/AgentView.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/AgentView.js')>(); return { ...m, AgentView: thrower('AgentView', m.AgentView as never) }; });
-vi.mock('../src/renderer/components/ChatFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/ChatFlyout.js')>(); return { ...m, ChatFlyout: thrower('ChatFlyout', m.ChatFlyout as never) }; });
-vi.mock('../src/renderer/components/InboxFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/InboxFlyout.js')>(); return { ...m, InboxFlyout: thrower('InboxFlyout', m.InboxFlyout) }; });
-vi.mock('../src/renderer/components/Deck.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Deck.js')>(); return { ...m, Deck: thrower('Deck', m.Deck) }; });
-vi.mock('../src/renderer/components/Workspace.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Workspace.js')>(); return { ...m, Workspace: thrower('Workspace', m.Workspace) }; });
-vi.mock('../src/renderer/components/TynnBoardPanel.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/TynnBoardPanel.js')>(); return { ...m, TynnBoardTab: thrower('TynnBoardTab', m.TynnBoardTab) }; });
+/**
+ * Which surface throws on its next render, and the wrapper that makes it. Hoisted with the mocks (vi.mock factories run
+ * before the file's own top level); each factory passes React's createElement in, so a memoised view (AgentView, the
+ * chat) is still drawn as an element.
+ */
+const { boom, thrower, ce } = vi.hoisted(() => {
+    const boom = { Dashboard: false, AgentView: false, ChatFlyout: false, InboxFlyout: false, Deck: false, Workspace: false, TynnBoardTab: false };
+    const thrower = (ce: (type: never, props: never) => unknown, name: keyof typeof boom, real: unknown) => (p: object) => {
+        if (boom[name]) throw new Error(`${name} exploded`);
+        return ce(real as never, p as never);
+    };
+    const ce = async () => (await import('react')).createElement as (type: never, props: never) => unknown;
+    return { boom, thrower, ce };
+});
+vi.mock('../src/renderer/components/Dashboard.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Dashboard.js')>(); return { ...m, Dashboard: thrower(await ce(), 'Dashboard', m.Dashboard) }; });
+vi.mock('../src/renderer/components/AgentView.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/AgentView.js')>(); return { ...m, AgentView: thrower(await ce(), 'AgentView', m.AgentView) }; });
+vi.mock('../src/renderer/components/ChatFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/ChatFlyout.js')>(); return { ...m, ChatFlyout: thrower(await ce(), 'ChatFlyout', m.ChatFlyout) }; });
+vi.mock('../src/renderer/components/InboxFlyout.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/InboxFlyout.js')>(); return { ...m, InboxFlyout: thrower(await ce(), 'InboxFlyout', m.InboxFlyout) }; });
+vi.mock('../src/renderer/components/Deck.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Deck.js')>(); return { ...m, Deck: thrower(await ce(), 'Deck', m.Deck) }; });
+vi.mock('../src/renderer/components/Workspace.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/Workspace.js')>(); return { ...m, Workspace: thrower(await ce(), 'Workspace', m.Workspace) }; });
+vi.mock('../src/renderer/components/TynnBoardPanel.js', async (orig) => { const m = await orig<typeof import('../src/renderer/components/TynnBoardPanel.js')>(); return { ...m, TynnBoardTab: thrower(await ce(), 'TynnBoardTab', m.TynnBoardTab) }; });
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean; genieClipboard?: { write(text: string): Promise<boolean> } };
 
