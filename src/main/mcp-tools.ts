@@ -283,14 +283,14 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     action: { type: 'string', enum: ['list', 'send', 'receive', 'receipts', 'saveAttachment'] },
                     to: { type: 'string' },
                     text: { type: 'string' },
-                    attachments: { type: 'array', items: { type: 'string' }, description: 'Paths. Read and copied at send time; never stored as paths. Executables refused.' },
+                    attachments: { type: 'array', items: { type: 'string' }, description: 'Files inside YOUR OWN workspace (relative to it, or absolute within it). Read and copied at send time; never stored as paths. A path outside your workspace, or a link that leads out of it, fails the whole send. Executables refused.' },
                     wait: { type: 'boolean' },
                     timeoutMs: { type: 'number' },
                     cursor: { type: 'number' },
                     acknowledge: { type: 'boolean' },
                     limit: { type: 'number' },
                     attachmentId: { type: 'string' },
-                    path: { type: 'string' },
+                    path: { type: 'string', description: 'saveAttachment: where to write it, inside YOUR OWN workspace (relative to it, or absolute within it). Outside it is refused.' },
                     overwrite: { type: 'boolean' },
                 },
                 required: ['action'],
@@ -341,7 +341,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     }
                     const attachments = Array.isArray(args.attachments) ? (args.attachments as unknown[]).filter((a): a is string => typeof a === 'string') : [];
                     // A flow's message says which flow it is from, first (Genie 1's genie#543: name the task, not the kind).
-                    const message = await deps.inbox.send({ from: caller.agentId, to: recipient, text: caller.kind === 'flow' ? `${caller.agentName}: ${text}` : text, attachments });
+                    const message = await deps.inbox.send({ from: caller.agentId, to: recipient, text: caller.kind === 'flow' ? `${caller.agentName}: ${text}` : text, attachments, workspaceRoot: caller.workspacePath });
                     return ok({ ok: true, delivered: 1, messageId: message.id, attachments: message.attachments });
                 }
                 case 'receive': {
@@ -361,7 +361,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     const attachmentId = str(args.attachmentId);
                     const path = str(args.path);
                     if (!attachmentId || !path) return err('saveAttachment needs `attachmentId` and `path`');
-                    const saved = await deps.inbox.saveAttachment(caller.agentId, attachmentId, path, { overwrite: args.overwrite === true });
+                    const saved = await deps.inbox.saveAttachment(caller.agentId, attachmentId, path, { overwrite: args.overwrite === true, workspaceRoot: caller.workspacePath });
                     return ok({ ok: true, path: saved });
                 }
                 default:

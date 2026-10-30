@@ -62,7 +62,7 @@ describe('inbox.send with attachments', () => {
     });
 
     it('mail to the human carries its attachments into the snapshot', async () => {
-        await services.inbox.send({ from: 'agent_a' as never, to: HUMAN, text: 'done, see the diff', attachments: [join(files, 'notes.md')] });
+        await services.inbox.send({ from: 'agent_a' as never, to: HUMAN, text: 'done, see the diff', attachments: [join(files, 'notes.md')], workspaceRoot: files });
         const snap = await featureSnapshot(services, state());
         expect(snap.inbox!.unread[0]!.attachments[0]).toMatchObject({ name: 'notes.md', size: Buffer.byteLength('# plan\nship it\n') });
     });
