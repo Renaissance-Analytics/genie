@@ -13,7 +13,7 @@
  */
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
 import { ChatDraftKeeper } from '../src/core/chat-draft-keeper.js';
 import { RENDER_ERROR_PREFIX } from '../src/core/render-error.js';
@@ -57,7 +57,7 @@ const thread: ChatThread = { agentId: 'a_atlas', name: 'atlas', fidelity: 'decla
 describe('a render error stays in the surface that threw (the real Shell, rendered)', () => {
     let host: HTMLElement;
     let root: Root;
-    let errors: ReturnType<typeof vi.spyOn>;
+    let errors: MockInstance<typeof console.error>;
     const keeper = new ChatDraftKeeper({ load: async () => ({}), save: async () => {}, putFile: async () => null, readFile: async () => null, release: async () => {} }, { setTimer: () => 0, clearTimer: () => {} });
     const draw = (route: string) => (
         <Shell
@@ -209,7 +209,7 @@ describe('a render error stays in the surface that threw (the real Shell, render
 describe('the Tynn tab throwing keeps the workspace around it', () => {
     let host: HTMLElement;
     let root: Root;
-    let errors: ReturnType<typeof vi.spyOn>;
+    let errors: MockInstance<typeof console.error>;
     beforeEach(() => {
         g.IS_REACT_ACT_ENVIRONMENT = true;
         host = document.createElement('div');
@@ -236,7 +236,7 @@ describe('the Tynn tab throwing keeps the workspace around it', () => {
 describe('the boundary itself', () => {
     let host: HTMLElement;
     let root: Root;
-    let errors: ReturnType<typeof vi.spyOn>;
+    let errors: MockInstance<typeof console.error>;
     beforeEach(() => {
         g.IS_REACT_ACT_ENVIRONMENT = true;
         host = document.createElement('div');
