@@ -198,10 +198,9 @@ export class UploadStaging {
         if (index !== s.next) return { ok: false, reason: `expected chunk ${s.next}` };
         if (typeof base64 !== 'string') return { ok: false, reason: 'a chunk is base64 text' };
         const bytes = fromBase64(base64);
-        if (bytes === null || bytes.byteLength === 0 || bytes.byteLength > UPLOAD_CHUNK_BYTES || s.received + bytes.byteLength > s.size) {
-            this.#staged.delete(id);
-            return { ok: false, reason: `${s.name}: more bytes than it said it had; the upload was dropped` };
-        }
+        // Refused, and nothing of it kept: the upload stays where it was.
+        if (bytes === null || bytes.byteLength === 0 || bytes.byteLength > UPLOAD_CHUNK_BYTES) return { ok: false, reason: `${s.name}: a chunk is 1 to ${UPLOAD_CHUNK_BYTES} bytes of base64` };
+        if (s.received + bytes.byteLength > s.size) return { ok: false, reason: `${s.name}: more bytes than it said it had` };
         s.chunks.push(bytes);
         s.received += bytes.byteLength;
         s.next += 1;

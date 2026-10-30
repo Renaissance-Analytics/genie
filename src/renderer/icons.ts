@@ -123,6 +123,8 @@ export const ICON_NAMES: readonly string[] = [
     'layers', 'arrow-right',
     // The optional Tynn project's "Create new project" (Add workspace parity item 5): back to Select existing.
     'arrow-left',
+    // The phone (genie#1346): a workspace's Files, the composer's camera and gallery, a folder's Up and Upload.
+    'folder-open', 'camera', 'image', 'corner-left-up', 'upload', 'file',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
 ];

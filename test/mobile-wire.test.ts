@@ -216,7 +216,8 @@ describe('security: the PIN, the bind, and device expiry', () => {
 
     it('a device unseen for DEVICE_IDLE_MS is unpaired: its token is refused and Settings no longer lists it; a used one slides', async () => {
         let now = 1_000_000;
-        const store = await DeviceStore.open(dir, { now: () => now, random: () => `tok${now}` });
+        let n = 0;
+        const store = await DeviceStore.open(dir, { now: () => now, random: () => `tok${n++}` });
         const kept = store.pair('daily phone');
         const idle = store.pair('old tablet');
         now += DEVICE_IDLE_MS - 1000;

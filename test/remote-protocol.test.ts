@@ -79,7 +79,9 @@ describe('the capability table', () => {
         // 79 since `workspaces.setColor` (a workspace's colour from its Settings, genie#1300): a write, workspace-scoped.
         // 81 since the Tynn tab (genie#1295): `workspaces.tynnBoard` (a read) and `workspaces.tynnBoardAction` (a write) —
         // owner-only on a host (they act as the host's Tynn person), scoped to their workspace.
-        expect(REMOTE_METHODS.length).toBe(81);
+        // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
+        // (a write) — workspace-scoped, through the panel's confined files host.
+        expect(REMOTE_METHODS.length).toBe(85);
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');
