@@ -6,6 +6,10 @@ import type { ReadinessHandshake } from '../core/engine-reconcile.js';
  * every interface would raise the Windows firewall prompt for a port nobody asked to expose).
  */
 
+/** STUB for the red commit (parity audit #9): the readiness wait lands with the fix. */
+export const SITE_READY_TIMEOUT_MS = 15_000;
+export async function siteAnswers(_port: number, _options: { behindCaddy: boolean; timeoutMs?: number }): Promise<boolean> { return false; }
+
 /** Whether 127.0.0.1:<port> can be bound right now: bind exclusively, close at once. Any error = not free. */
 export function loopbackPortFree(port: number): Promise<boolean> {
     return new Promise((resolve) => {

@@ -51,7 +51,7 @@ export interface CreateSiteInput {
  * `unservable`: a site a workspace DECLARES (its project.json) that Genie 2 cannot serve — listed with
  * the reason in `problem`, never started, never routed. Never silently dropped.
  */
-export type SiteState = 'running' | 'restarting' | 'stopped' | 'exited' | 'failed' | 'external' | 'unservable';
+export type SiteState = 'running' | 'starting' | 'restarting' | 'stopped' | 'exited' | 'failed' | 'external' | 'unservable';
 
 export interface SiteInfo {
     readonly id: string;
@@ -110,6 +110,8 @@ export interface SiteManagerDeps {
      * kept no DB_PORT through every restart (moic, 2026-10-15). Absent = none. The site's own env wins over it.
      */
     readonly serviceEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
+    /** STUB for the red commit (parity audit #9): not consulted yet. */
+    readonly probeReady?: (port: number, options: { behindCaddy: boolean }) => Promise<boolean>;
 }
 
 interface SiteRecord {
