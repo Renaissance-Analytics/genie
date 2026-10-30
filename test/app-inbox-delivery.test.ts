@@ -158,7 +158,7 @@ describe('the agent’s own tool', () => {
             userActive: () => true, glow: () => true, thumbsUp: () => {},
         } as GenieToolsDeps);
         const box = regs.find((t) => t.definition.name === 'agentinbox')!;
-        return async (caller: string, args: Record<string, unknown>) => {
+        return async (caller: string, args: Record<string, unknown>): Promise<Record<string, unknown> & { isError: boolean }> => {
             const r = await box.handler({ terminalId: caller, ...args } as never, { server: 'genie', tool: 'agentinbox', headers: {} });
             return { ...(JSON.parse(r.text) as Record<string, unknown>), isError: r.isError };
         };

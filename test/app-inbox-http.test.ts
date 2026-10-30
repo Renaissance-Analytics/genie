@@ -31,7 +31,7 @@ const site = { kind: 'site' as const, id: 'site_flabs', name: 'flabs', workspace
 let token: string;
 
 const PORT = 47999;
-function req(over: Partial<AppInboxRequest> & { body?: unknown; auth?: string | null }): AppInboxRequest {
+function req(over: Omit<Partial<AppInboxRequest>, 'body'> & { body?: unknown; auth?: string | null }): AppInboxRequest {
     const { body, auth, ...rest } = over;
     return {
         method: 'POST',
