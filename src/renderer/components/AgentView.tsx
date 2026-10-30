@@ -1,5 +1,6 @@
 import { activityRows } from '../../core/stream-view.js';
 import { countRender } from '../render-count.js';
+import { stableView } from '../stable-view.js';
 import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomTitle, headroomOf } from '../../core/headroom.js';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
@@ -295,7 +296,13 @@ function CopyLogButton({ text }: { text: string }) {
     );
 }
 
-export function AgentView({
+/**
+ * Drawn only when something it shows changed (renderer/stable-view.tsx, genie#1340): another agent's estate push, or a
+ * handler made afresh by the Shell, is not a reason to draw this agent's page and measure its Stream again.
+ */
+export const AgentView = stableView(AgentViewBody, 'AgentView');
+
+function AgentViewBody({
     agent, session, rows, tab, lanes, at, selectedId, cursor: cursorProp = null, turns, cost, onNavigate, chatRefs, onSelect, now,
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,

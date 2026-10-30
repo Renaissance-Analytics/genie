@@ -1,5 +1,6 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { countRender } from '../render-count.js';
+import { stableView } from '../stable-view.js';
 import { Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
@@ -320,7 +321,10 @@ export function ComposerSendError({ chat, error }: { chat: string; error: string
 /** The stored files a sent message carried (genie#1261): released once the message holds their bytes. */
 const sentRefs = (picked: readonly { ref?: string }[]): string[] => picked.flatMap((a) => (typeof a.ref === 'string' ? [a.ref] : []));
 
-export function ChatFlyout({
+/** Drawn only when something it shows changed (renderer/stable-view.tsx, genie#1340): never for another agent's push. */
+export const ChatFlyout = stableView(ChatFlyoutBody, 'ChatFlyout');
+
+function ChatFlyoutBody({
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
     onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {

@@ -45,7 +45,7 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
-import { useSnapshot } from './use-snapshot.js';
+import { pushed, useSnapshot } from './use-snapshot.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
 import type { RelayConnect } from '../core/relay-connect.js';
@@ -218,7 +218,8 @@ function useAgentDetail(
             // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
             // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
             const id = chatSubscriptionId(agentId, detail);
-            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; detailCache.remember(agentId, next); setState({ detail: next, resolved: true }); });
+            // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
+            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; detailCache.remember(agentId, next); pushed(() => setState({ detail: next, resolved: true })); });
             // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
             // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
             const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
