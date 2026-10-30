@@ -20,6 +20,8 @@ if [ "${SKIP_BUILD:-0}" != 1 ]; then
 fi
 chmod +x scripts/perf-lag/stub-codex-busy.mjs
 export GENIE2_CODEX_BINARY="$PWD/scripts/perf-lag/stub-codex-busy.mjs"
+# STUB_BUSY_MS=<ms>: how long each turn works (default 10 min). Written beside the stub: Genie filters a provider's env.
+if [ -n "${STUB_BUSY_MS:-}" ]; then printf '%s' "$STUB_BUSY_MS" > scripts/perf-lag/.busy-ms; else rm -f scripts/perf-lag/.busy-ms; fi
 echo "cpus $(nproc)"; free -m | head -2
 probed=0
 rendered=0
