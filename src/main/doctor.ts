@@ -15,6 +15,7 @@ import { genieMcpServer } from './mcp-server.js';
 import { genieHome, installDir } from './paths.js';
 import { genieWindowIcon } from './app-identity.js';
 import { SessionHost } from './session-host.js';
+import { forwardRendererConsole } from '../core/render-error.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 
 /**
@@ -130,8 +131,8 @@ export async function runDoctor(): Promise<void> {
         webPreferences: { preload: join(here, 'doctor-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     win.once('ready-to-show', () => win.show());
-    // The renderer's composer-focus log (genie#1235): written to main's log, as Genie's window does.
-    win.webContents.on('console-message', (details) => { if (details.message.startsWith('[genie] focus:')) console.log(details.message); });
+    // The renderer's composer-focus log (genie#1235) and render errors (parity audit #7): written to main's log, as Genie's window does.
+    win.webContents.on('console-message', (details) => forwardRendererConsole(details.message, { out: (l) => console.log(l), err: (l) => console.error(l), log: () => {} }));
     void win.loadFile(join(here, '../renderer/doctor.html'));
     // Pushed, never polled: every change to genie's session tells the window to read again.
     host.subscribe(() => { if (!win.isDestroyed()) win.webContents.send('doctor:changed'); });

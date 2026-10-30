@@ -6,6 +6,7 @@ import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
+import { forwardRendererConsole } from '../core/render-error.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { transportHub } from '../core/remote-protocol.js';
 import { chatCommsOf } from '../core/chat-view.js';
@@ -736,6 +737,9 @@ async function reapV1Runtime(includeShells: boolean): Promise<void> {
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
 }
 
+/** Where a window's render errors are written (core/render-error.ts): the lifecycle log, once boot has opened it. */
+let rendererErrorLog: ((line: string) => void) | null = null;
+
 function createWindow(show: boolean, search?: string): BrowserWindow {
     const win = new BrowserWindow({
         // The frame — hidden OS title bar, the native window buttons drawn over our 36 px bar on
@@ -758,8 +762,9 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    // The renderer's composer-focus log (genie#1235, core/composer-focus.ts): its console reaches no file, so main writes it.
-    win.webContents.on('console-message', (details) => { if (details.message.startsWith('[genie] focus:')) console.log(details.message); });
+    // The renderer's console reaches no file, so main writes the lines Genie keeps: the composer-focus log (genie#1235,
+    // core/composer-focus.ts) and a surface's render error (parity audit #7), which also goes to the lifecycle log.
+    win.webContents.on('console-message', (details) => forwardRendererConsole(details.message, { out: (l) => console.log(l), err: (l) => console.error(l), log: (l) => rendererErrorLog?.(l) }));
 
     // Paint when there is something to paint. A visible empty frame that then fills in is the
     // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
@@ -1126,6 +1131,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);

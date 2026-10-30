@@ -42,7 +42,9 @@ describe('the wiring', () => {
     });
 
     it('main writes the renderer’s focus lines to its own log (the renderer console reaches no file) — both windows', () => {
-        const forward = /win\.webContents\.on\('console-message', \(details\) => \{ if \(details\.message\.startsWith\('\[genie\] focus:'\)\) console\.log\(details\.message\); \}\);/;
+        // Through core/render-error.ts's forwardRendererConsole since parity audit #7, which sends a focus line to main's
+        // output exactly as before (test/render-error-log.test.ts holds that routing).
+        const forward = /win[.]webContents[.]on[(]'console-message', [(]details[)] => forwardRendererConsole[(]details[.]message, [{] out: [(]l[)] => console[.]log[(]l[)]/;
         expect(strip('../src/main/main.ts')).toMatch(forward);
         expect(strip('../src/main/doctor.ts')).toMatch(forward);
     });
