@@ -170,7 +170,7 @@ describe('attachments are BYTE COPIES, never path references', () => {
     it('the recipient reads the bytes after the sender’s file is deleted', async () => {
         const src = join(dir, 'notes.md');
         await writeFile(src, 'hello attachment');
-        const sent = await store.send({ from: a, to: b, text: 'see attached', attachments: [src] });
+        const sent = await store.send({ from: a, to: b, text: 'see attached', attachments: [src], workspaceRoot: dir });
         await rm(src);
 
         const got = await store.receive({ participant: b });
@@ -183,21 +183,21 @@ describe('attachments are BYTE COPIES, never path references', () => {
     it('identical files are stored ONCE', async () => {
         await writeFile(join(dir, 'x.md'), 'same bytes');
         await writeFile(join(dir, 'y.md'), 'same bytes');
-        await store.send({ from: a, to: b, text: '1', attachments: [join(dir, 'x.md')] });
-        await store.send({ from: a, to: b, text: '2', attachments: [join(dir, 'y.md')] });
+        await store.send({ from: a, to: b, text: '1', attachments: [join(dir, 'x.md')], workspaceRoot: dir });
+        await store.send({ from: a, to: b, text: '2', attachments: [join(dir, 'y.md')], workspaceRoot: dir });
 
         const stored = await readdir(store.attachmentsDir);
         expect(stored).toHaveLength(1);
         // And a DIFFERENT file makes a second blob — the positive control for "once".
         await writeFile(join(dir, 'z.md'), 'other bytes');
-        await store.send({ from: a, to: b, text: '3', attachments: [join(dir, 'z.md')] });
+        await store.send({ from: a, to: b, text: '3', attachments: [join(dir, 'z.md')], workspaceRoot: dir });
         expect(await readdir(store.attachmentsDir)).toHaveLength(2);
     });
 
     it('one unreadable path fails the WHOLE send — nothing is delivered', async () => {
         await writeFile(join(dir, 'ok.md'), 'fine');
         await expect(
-            store.send({ from: a, to: b, text: 'partial?', attachments: [join(dir, 'ok.md'), join(dir, 'missing.md')] }),
+            store.send({ from: a, to: b, text: 'partial?', attachments: [join(dir, 'ok.md'), join(dir, 'missing.md')], workspaceRoot: dir }),
         ).rejects.toThrow(/missing\.md/);
         expect((await store.receive({ participant: b })).messages).toEqual([]);
         expect(await readdir(store.attachmentsDir).catch(() => [])).toEqual([]);
@@ -205,33 +205,33 @@ describe('attachments are BYTE COPIES, never path references', () => {
 
     it('an executable is refused at the sending end', async () => {
         await writeFile(join(dir, 'tool.exe'), 'MZ');
-        await expect(store.send({ from: a, to: b, text: 'run this', attachments: [join(dir, 'tool.exe')] })).rejects.toThrow(/executable/);
+        await expect(store.send({ from: a, to: b, text: 'run this', attachments: [join(dir, 'tool.exe')], workspaceRoot: dir })).rejects.toThrow(/executable/);
         expect((await store.receive({ participant: b })).messages).toEqual([]);
     });
 
     it('…and at the receiving end, even if a blob with that name is on disk', async () => {
         await writeFile(join(dir, 'tool.md'), 'MZ');
-        const sent = await store.send({ from: a, to: b, text: 'x', attachments: [join(dir, 'tool.md')] });
-        await expect(store.saveAttachment(b, sent.attachments[0]!.id, join(dir, 'out', 'tool.cmd'))).rejects.toThrow(/executable/);
+        const sent = await store.send({ from: a, to: b, text: 'x', attachments: [join(dir, 'tool.md')], workspaceRoot: dir });
+        await expect(store.saveAttachment(b, sent.attachments[0]!.id, join(dir, 'out', 'tool.cmd'), { workspaceRoot: dir })).rejects.toThrow(/executable/);
         // POSITIVE CONTROL: the same bytes save fine under a non-executable name.
-        const saved = await store.saveAttachment(b, sent.attachments[0]!.id, join(dir, 'out', 'tool.md'));
+        const saved = await store.saveAttachment(b, sent.attachments[0]!.id, join(dir, 'out', 'tool.md'), { workspaceRoot: dir });
         expect((await readFile(saved)).toString()).toBe('MZ');
     });
 
     it('a save that would clobber a file fails unless overwrite is asked for', async () => {
         await writeFile(join(dir, 'a.md'), 'new');
-        const sent = await store.send({ from: a, to: b, text: 'x', attachments: [join(dir, 'a.md')] });
+        const sent = await store.send({ from: a, to: b, text: 'x', attachments: [join(dir, 'a.md')], workspaceRoot: dir });
         const dest = join(dir, 'existing.md');
         await writeFile(dest, 'old');
-        await expect(store.saveAttachment(b, sent.attachments[0]!.id, dest)).rejects.toThrow(/exists/);
+        await expect(store.saveAttachment(b, sent.attachments[0]!.id, dest, { workspaceRoot: dir })).rejects.toThrow(/exists/);
         expect((await readFile(dest)).toString()).toBe('old');
-        await store.saveAttachment(b, sent.attachments[0]!.id, dest, { overwrite: true });
+        await store.saveAttachment(b, sent.attachments[0]!.id, dest, { overwrite: true, workspaceRoot: dir });
         expect((await readFile(dest)).toString()).toBe('new');
     });
 
     it('only a party to the message can fetch its bytes — the id alone is not access', async () => {
         await writeFile(join(dir, 'secret.md'), 'for b only');
-        const sent = await store.send({ from: a, to: b, text: 'x', attachments: [join(dir, 'secret.md')] });
+        const sent = await store.send({ from: a, to: b, text: 'x', attachments: [join(dir, 'secret.md')], workspaceRoot: dir });
         const stranger = mintAgentId();
         await expect(store.attachmentBytes(stranger, sent.attachments[0]!.id)).rejects.toThrow(/not a party/);
         // Sender and recipient both can.
@@ -242,7 +242,7 @@ describe('attachments are BYTE COPIES, never path references', () => {
     it('the per-file cap is enforced on the real size, before anything is copied', async () => {
         const big = join(dir, 'big.bin');
         await writeFile(big, Buffer.alloc(25 * 1024 * 1024 + 1));
-        await expect(store.send({ from: a, to: b, text: 'x', attachments: [big] })).rejects.toThrow(/25 MB/);
+        await expect(store.send({ from: a, to: b, text: 'x', attachments: [big], workspaceRoot: dir })).rejects.toThrow(/25 MB/);
         expect(await readdir(store.attachmentsDir).catch(() => [])).toEqual([]);
         expect((await stat(big)).size).toBe(25 * 1024 * 1024 + 1);
     });

@@ -67,6 +67,7 @@ else gets added without the same paragraph.
 | `vite` | bundler | Build tooling, not shipped code. Required by `@tailwindcss/vite`. |
 | `tailwindcss`, `@tailwindcss/vite` | styling | A **declared peer of `react-fancy`** — in-kit, the same category as `node-pty` under `fancy-term`. |
 | `vitest` | test runner | Build tooling. Upgraded 3 → 5 on arrival: `npm audit` reported two CRITICAL advisories (`tinypool` prototype-pollution → RCE) and one moderate path traversal in `@vitest/mocker`. Clean at 5. |
+| `happy-dom` | a DOM for a few render-count tests (dev only) | genie#1340: "a push re-renders only what it changed" and "a keystroke is committed before a push" are claims about how often and in what order React renders, which a static render cannot make — it renders once. Scoped per file (`// @vitest-environment happy-dom`); every other test still runs without a DOM, as D3 says. Never shipped; `npm audit` clean at 21.0.4. Nothing in Fancy provides a DOM. |
 
 Still to come with their phases, and flagged in advance because each needs this paragraph
 written: `electron-updater` (P7) and `electron-builder` (P7). `better-sqlite3` is **not**

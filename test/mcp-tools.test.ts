@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolDefinition, type JsonObject } from '@particle-academy/prism-mcp';
@@ -229,19 +229,21 @@ describe('agentinbox', () => {
     });
 
     it('attachments are byte copies the recipient can save; an executable is refused with the reason', async () => {
-        const src = join(dir, 'note.md');
+        // Both agents work in ws-tynn: the attachment is read from inside it and saved inside it (genie#1347).
+        await mkdir(join(dir, 'ws-tynn'), { recursive: true });
+        const src = join(dir, 'ws-tynn', 'note.md');
         await writeFile(src, 'bytes');
         const sent = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'claude:kai', text: 'file', attachments: [src] });
         expect(sent.isError).toBe(false);
         await rm(src);
         const got = await call('agentinbox', { terminalId: 't-kai', action: 'receive' });
         const att = (got.json.messages as Array<{ attachments: Array<{ id: string; name: string }> }>)[0]!.attachments[0]!;
-        const saved = await call('agentinbox', { terminalId: 't-kai', action: 'saveAttachment', attachmentId: att.id, path: join(dir, 'out', 'note.md') });
+        const saved = await call('agentinbox', { terminalId: 't-kai', action: 'saveAttachment', attachmentId: att.id, path: join(dir, 'ws-tynn', 'out', 'note.md') });
         expect(saved.isError).toBe(false);
-        expect((await readFile(join(dir, 'out', 'note.md'))).toString()).toBe('bytes');
+        expect((await readFile(join(dir, 'ws-tynn', 'out', 'note.md'))).toString()).toBe('bytes');
 
-        await writeFile(join(dir, 'x.exe'), 'MZ');
-        const refused = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'claude:kai', text: 'x', attachments: [join(dir, 'x.exe')] });
+        await writeFile(join(dir, 'ws-tynn', 'x.exe'), 'MZ');
+        const refused = await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'claude:kai', text: 'x', attachments: [join(dir, 'ws-tynn', 'x.exe')] });
         expect(refused.isError).toBe(true);
         expect(refused.text).toMatch(/executable/);
     });

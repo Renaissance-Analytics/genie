@@ -45,6 +45,7 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import { pushed, useSnapshot } from './use-snapshot.js';
 import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
 import type { TreeNode } from '../core/files-panel.js';
@@ -183,25 +184,6 @@ function useChatDrafts(bridge: GenieBridge | undefined): ChatDraftKeeper | 'load
     return loaded === keeper ? keeper : 'loading';
 }
 
-function useSnapshot(bridge: GenieBridge | undefined): GenieSnapshot {
-    const [snapshot, setSnapshot] = useState<GenieSnapshot>(EMPTY_SNAPSHOT);
-
-    useEffect(() => {
-        if (!bridge) return;
-        let live = true;
-
-        // One read to start from, then PUSH. No interval anywhere: a polled dashboard is wrong
-        // for up to its interval, and with thirty agents it re-reads the registry a hundred
-        // times a minute to learn nothing.
-        void bridge.snapshot().then((s) => { if (live) setSnapshot(s); });
-        const off = bridge.subscribe((s) => { if (live) setSnapshot(s); });
-
-        return () => { live = false; off(); };
-    }, [bridge]);
-
-    return snapshot;
-}
-
 /** Every agent's last detail, for the first frame of a switch (agent-detail.ts). One per window. */
 const detailCache = new AgentDetailCache<AgentDetail>();
 
@@ -240,7 +222,8 @@ function useAgentDetail(
             // Live updates by the RESOLVED id: main pushes on a channel keyed by id, and a route may name the agent
             // (`chat=moic`) — subscribing by that name heard nothing, so the chat never saw a reply arrive.
             const id = chatSubscriptionId(agentId, detail);
-            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; detailCache.remember(agentId, next); setState({ detail: next, resolved: true }); });
+            // A push is a transition (use-snapshot.ts `pushed`): typing is committed before it.
+            if (id !== null) off = bridge.subscribeAgent(id, (next) => { if (!live) return; detailCache.remember(agentId, next); pushed(() => setState({ detail: next, resolved: true })); });
             // Reached by name (the rail's `genie` row): settle on the id, so the live channel and every
             // link key correctly. `replace`, so Back still leaves the agent rather than bouncing here.
             const canonical = detail && settle ? canonicalAgentRoute(window.location.hash.slice(1) || '', detail.agent.id) : null;
