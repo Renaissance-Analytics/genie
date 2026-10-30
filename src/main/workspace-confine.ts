@@ -123,3 +123,23 @@ export async function confineWrite(root: string, given: string, consequence: str
     }
     return abs;
 }
+
+/** STUB (genie#1354, test-first commit): `requested` inside `root`, the root itself allowed. Lexical. */
+export function insideOrRoot(root: string, requested: string, api: PlatformPath = nodePath): string | null {
+    if (!root || !api.isAbsolute(root)) return null;
+    const base = api.resolve(root);
+    const abs = api.resolve(base, requested);
+    return within(base, abs, api) ? abs : null;
+}
+
+/** STUB (genie#1354, test-first commit): lexical only — links are not followed yet. */
+export function confinePathSync(root: string, given: string, consequence: string, options: { allowRoot?: boolean } = {}): string {
+    const abs = options.allowRoot ? insideOrRoot(root, given) : insideRoot(root, given);
+    if (abs === null) throw new OutsideWorkspaceError(given, consequence);
+    return abs;
+}
+
+/** STUB (genie#1354, test-first commit). */
+export async function confinePath(root: string, given: string, consequence: string, options: { allowRoot?: boolean } = {}): Promise<string> {
+    return confinePathSync(root, given, consequence, options);
+}

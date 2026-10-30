@@ -7,6 +7,7 @@ import type { AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
+import { featureOrigin, HostPicks } from '../src/main/host-picks.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
@@ -45,9 +46,12 @@ afterEach(async () => {
     await rm(files, { recursive: true, force: true });
 });
 
+/** The host's own window, with these paths picked in its picker (genie#1354: only that window names a host path). */
+const picked = (...paths: string[]) => { const picks = new HostPicks(); picks.record(paths); return featureOrigin({ remoteWindow: false, picks }); };
+
 describe('inbox.send with attachments', () => {
     it('stores byte copies the recipient can fetch, with name, size and sha256; the path itself is not kept', async () => {
-        await handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'read this', attachments: [join(files, 'notes.md')] }, state());
+        await handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'read this', attachments: [join(files, 'notes.md')] }, state(), {}, picked(join(files, 'notes.md')));
         const [msg] = services.inbox.unread('agent_a' as never);
         expect(msg!.attachments).toHaveLength(1);
         const a = msg!.attachments[0]!;
@@ -57,7 +61,7 @@ describe('inbox.send with attachments', () => {
     });
 
     it('an executable is refused at the send and nothing is delivered', async () => {
-        await expect(handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'run this', attachments: [join(files, 'tool.exe')] }, state())).rejects.toThrow(/tool\.exe/);
+        await expect(handleFeatureAction(services, { kind: 'inbox.send', to: 'claude:atlas', text: 'run this', attachments: [join(files, 'tool.exe')] }, state(), {}, picked(join(files, 'tool.exe')))).rejects.toThrow(/tool\.exe/);
         expect(services.inbox.unread('agent_a' as never)).toEqual([]);
     });
 

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -303,5 +303,36 @@ describe('genie/agent_prompt on a live agent — held back while it is busy, nev
         expect(idle.prompts).toHaveLength(1);
         idle.finishTurn('agent_atlas', 'queue is empty');
         expect(await running).toEqual({ outcome: 'ran' });
+    });
+});
+
+/*
+ * genie#1354: a flow's `terminal_run` folder (a flow an agent may have written) goes through the SHARED confinement
+ * (workspace-confine.ts): a link inside the workspace pointing out of it is refused before anything starts, and a folder
+ * whose name only starts with two dots is inside the workspace (the old check refused `..build`).
+ */
+describe('genie/terminal_run — the folder, after links (genie#1354)', () => {
+    let base: string;
+    beforeEach(async () => { base = await mkdtemp(join(tmpdir(), 'genie2-flow-run-links-')); });
+    afterEach(async () => { await rm(base, { recursive: true, force: true }); });
+
+    it('a directory link inside the workspace that points OUT is refused, and nothing starts', async () => {
+        const ws = join(base, 'ws');
+        await mkdir(ws, { recursive: true });
+        await mkdir(join(base, 'outside'), { recursive: true });
+        await symlink(join(base, 'outside'), join(ws, 'escape'), 'junction');
+        const pty = scriptedPty(() => ({ output: '', exit: 0 }));
+        const run = supervisedCommand({ supervisor: new ProcessSupervisor(pty.port), workspacePath: () => ws }, { processId: 'flow-run:l', name: 'flow: l' });
+        await expect(run('ws', 'npm test', 'escape')).rejects.toThrow(/outside the workspace/);
+        expect(pty.opened).toHaveLength(0);
+    });
+
+    it('a folder named `..build` is inside the workspace, and the command runs there', async () => {
+        const ws = join(base, 'ws');
+        await mkdir(join(ws, '..build'), { recursive: true });
+        const pty = scriptedPty(() => ({ output: 'ok', exit: 0 }));
+        const run = supervisedCommand({ supervisor: new ProcessSupervisor(pty.port), workspacePath: () => ws }, { processId: 'flow-run:d', name: 'flow: d' });
+        expect((await run('ws', 'npm test', '..build')).exitCode).toBe(0);
+        expect(pty.opened[0]).toMatchObject({ cwd: resolve(ws, '..build') });
     });
 });

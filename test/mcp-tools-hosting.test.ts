@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { JsonObject } from '@particle-academy/prism-mcp';
@@ -653,5 +653,30 @@ describe('who is calling, and where', () => {
             expect(typeof t.definition.title).toBe('string');
         }
         expect(tools.map((t) => t.definition.name)).toEqual(['services', 'sites']);
+    });
+});
+
+/*
+ * genie#1354: the folder an agent names for a site goes through the SHARED confinement (workspace-confine.ts): a link
+ * inside the workspace that points into another workspace (or anywhere out of it) is refused before anything is read
+ * there, and a folder whose name only starts with two dots is inside the workspace.
+ */
+describe('sites — the folder, after links (genie#1354)', () => {
+    it('detect and add refuse a directory link that points OUT of the workspace; nothing is read or created', async () => {
+        await symlink(join(dir, 'example-other'), join(dir, 'example', 'other-link'), 'junction');
+        for (const action of ['detect', 'add']) {
+            const r = await call('sites', 't-example', { action, repoPath: 'other-link', hostPort: 4999 });
+            expect(r.isError).toBe(true);
+            expect(r.json.error).toMatch(/outside this workspace/);
+        }
+        expect(services.sites.list()).toEqual([]);
+    });
+
+    it('a folder named `..web` is inside the workspace: detect reads it', async () => {
+        await mkdir(join(dir, 'example', '..web'), { recursive: true });
+        await writeFile(join(dir, 'example', '..web', 'index.html'), '<h1>hi</h1>');
+        const r = await call('sites', 't-example', { action: 'detect', repoPath: '..web' });
+        expect(r.json.error ?? '').not.toMatch(/outside/);
+        expect(r.isError).toBe(false);
     });
 });

@@ -108,6 +108,17 @@ describe('a failed write is not a kept site', () => {
         await expect(h.envelope.create({ name: 'c', workspaceId: 'ghost', repoPath: W('ghost'), serve: { mode: 'proxy' }, hostPort: 1 })).rejects.toThrow(/no workspace ghost/);
         expect(h.sites.list()).toEqual([]);
     });
+
+    // genie#1354: the lexical half is the SHARED one (workspace-confine.ts): a folder whose name only starts with two dots
+    // is inside the workspace. The old check refused `..shop` as "outside" — whatever else may be wrong with it, not that.
+    it('a folder named `..shop` is not refused as outside the workspace', async () => {
+        const h = harness({ [join(W('acme'), 'project.json')]: JSON.stringify(manifest({})) });
+        await h.envelope.sync([{ id: 'acme', path: W('acme') }]);
+        const reason = (p: Promise<unknown>) => p.then(() => 'created', (e: Error) => e.message);
+        expect(await reason(h.envelope.create({ name: 'dots', workspaceId: 'acme', repoPath: join(W('acme'), '..shop'), serve: { mode: 'proxy' }, hostPort: 1 }))).not.toMatch(/outside/);
+        // CONTROL: a real step out is still refused as outside.
+        expect(await reason(h.envelope.create({ name: 'out', workspaceId: 'acme', repoPath: join(W('acme'), '..', 'shop'), serve: { mode: 'proxy' }, hostPort: 1 }))).toMatch(/outside it/);
+    });
 });
 
 describe('what cannot be read is named, and the rest still loads', () => {
