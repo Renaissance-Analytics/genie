@@ -1,4 +1,5 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import { countRender } from '../render-count.js';
 import { Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
@@ -79,6 +80,7 @@ export function GenieMark() {
  * (the owner, 2026-10-20: "severe UI lag like 3 seconds to show any text at all"). Only the reply that grew renders again.
  */
 const ChatReply = memo(function ChatReply({ text, refs, streaming = false }: { text: string; refs: ChatRefs; streaming?: boolean }) {
+    countRender('ChatReply');
     // With moic's markup (genie#1263, components/ChatProse.tsx): copy buttons on code and tables, <result> cards, pills.
     // `streaming`: this reply is still arriving (the thread's `arriving`), drawn progressively by react-fancy 5.68.
     return <ChatProse text={text} refs={refs} streaming={streaming} className="text-[13px] text-[var(--fg-2)]" />;
@@ -322,6 +324,7 @@ export function ChatFlyout({
     thread, onWindowLines, contextUsage = null, approval, commands, answeringApproval, approvalRefusal, onAnswerApproval,
     onSend, onClose, onOpenFile, onOpenAgent, onOpenWorkspace, refs: refsIn, onOpenMail, onRestartAndSend, onDiscardDraft, onStopTurn, onInterruptAndSend, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, widthStorage, scope, dockWidth, onDockWidth, drafts, insert, onInserted,
 }: ChatFlyoutProps) {
+    countRender('ChatFlyout');
     const keeper = drafts === 'loading' ? undefined : drafts;
     const storage = widthStorage === undefined ? browserStorage() : widthStorage;
     const [ownDockWidth, setOwnDockWidth] = useState(() => readChatDockWidth(storage));

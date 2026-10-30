@@ -45,6 +45,7 @@ import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
 import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import { useSnapshot } from './use-snapshot.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
 import type { RelayConnect } from '../core/relay-connect.js';
@@ -177,25 +178,6 @@ function useChatDrafts(bridge: GenieBridge | undefined): ChatDraftKeeper | 'load
     }, [keeper]);
     if (!keeper) return undefined;
     return loaded === keeper ? keeper : 'loading';
-}
-
-function useSnapshot(bridge: GenieBridge | undefined): GenieSnapshot {
-    const [snapshot, setSnapshot] = useState<GenieSnapshot>(EMPTY_SNAPSHOT);
-
-    useEffect(() => {
-        if (!bridge) return;
-        let live = true;
-
-        // One read to start from, then PUSH. No interval anywhere: a polled dashboard is wrong
-        // for up to its interval, and with thirty agents it re-reads the registry a hundred
-        // times a minute to learn nothing.
-        void bridge.snapshot().then((s) => { if (live) setSnapshot(s); });
-        const off = bridge.subscribe((s) => { if (live) setSnapshot(s); });
-
-        return () => { live = false; off(); };
-    }, [bridge]);
-
-    return snapshot;
 }
 
 /** Every agent's last detail, for the first frame of a switch (agent-detail.ts). One per window. */

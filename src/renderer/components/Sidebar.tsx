@@ -1,4 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
+import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
 import { deckBadge, filterRail, type RailItem, type RailSurface } from '../../core/rail-view.js';
@@ -186,6 +187,7 @@ function readShowAsleep(): boolean {
 }
 
 export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null }: SidebarProps) {
+    countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
     // COLLAPSED (Tynn #799): an icon rail where every destination is still one click away; remembered on this device.

@@ -111,7 +111,14 @@ console.log(`composer ready at +${composerAt} ms`);
 const keys = [];
 const until = launchedAt + SECONDS * 1000;
 let typed = 0;
+// The render probe's counters (probe-renders.mjs; absent in an unprobed build), read where the steady phase starts and at the end.
+// The views' own render counts (src/renderer/render-count.ts) are kept once __genieRenders is an object.
+await page.eval('(globalThis.__genieRenders = {}, true)').catch(() => undefined);
+const counters = () => page.eval('JSON.stringify({ ...(globalThis.__r ?? {}), ...Object.fromEntries(Object.entries(globalThis.__genieRenders ?? {}).map(([k, v]) => [`render:${k}`, v])) })').then((v) => JSON.parse(v)).catch(() => null);
+let steadyFrom = null;
+let steadyAt = null;
 while (Date.now() < until) {
+    if (steadyFrom === null && since(Date.now()) >= 120_000) { steadyFrom = await counters(); steadyAt = Date.now(); }
     await page.call(function focus(composer) { document.querySelector(composer)?.focus(); return true; }, [COMPOSER]).catch(() => undefined);
     const ch = 'abcdefghij'[typed % 10];
     const t0 = Date.now();
@@ -136,6 +143,8 @@ while (Date.now() < until) {
     await sleep(250);
 }
 
+const steadyTo = await counters();
+const perSecond = steadyFrom && steadyTo ? Object.fromEntries(Object.keys(steadyTo).sort().map((k) => [k, Math.round(((steadyTo[k] - (steadyFrom[k] ?? 0)) / ((Date.now() - steadyAt) / 1000)) * 10) / 10])) : null;
 const lag = (await main.eval('globalThis.__lag')).map(([t, d]) => [since(t), d]);
 const long = (await page.eval('window.__long')).map(([t, d]) => [since(Math.round(t)), Math.round(d)]);
 const mainProfile = (await main.send('Profiler.stop')).result.profile;
@@ -168,6 +177,7 @@ const result = {
     label, seconds: SECONDS, mainAttached, composerAt, memory,
     boot: phase(0, 90_000), steady: phase(120_000, SECONDS * 1000), all: phase(0, SECONDS * 1000),
     keysMissed: keys.filter(([, , s]) => !s).length,
+    steadyPerSecond: perSecond,
     mainTop: top(mainProfile), rendererTop: top(pageProfile),
     worstMainGaps: [...lag].sort((a, b) => b[1] - a[1]).slice(0, 15),
     worstLongTasks: [...long].sort((a, b) => b[1] - a[1]).slice(0, 15),

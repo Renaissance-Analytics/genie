@@ -1,4 +1,5 @@
 import { Icon, VirtualList } from '@particle-academy/react-fancy';
+import { countRender } from '../render-count.js';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STREAM_LIVE_ROWS, StreamPrep } from '../../core/stream-prep.js';
 import {
@@ -76,6 +77,7 @@ export function initialFollowTail(at: string | null): boolean {
 }
 
 export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName, persona = null, onChat, onEditPersona, findQuery = '', live = false, parked = null, cursorId = null, markup }: StreamProps) {
+    countRender('Stream');
     const [following, setFollowing] = useState(() => initialFollowTail(at));
     const [unseen, setUnseen] = useState(0);
     // Thoughts opened to their whole reasoning, by row id.

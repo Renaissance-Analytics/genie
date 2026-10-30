@@ -1,4 +1,5 @@
 import { activityRows } from '../../core/stream-view.js';
+import { countRender } from '../render-count.js';
 import { providerLogin } from '../../core/provider-login.js';
 import { headroomLine, headroomTitle, headroomOf } from '../../core/headroom.js';
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react';
@@ -299,6 +300,7 @@ export function AgentView({
     chatSubject, answeringApproval, approvalRefusal, onAnswerApproval, onLanes, range = null, onRange, onTakeOver, chatInView = false, ops,
     files, workspace, initialChanges, initialDiskChanges, readCommits, initialCommits, takeOver = null, terminals, onStop, onCancelTurn, onResumeLimit, onProviderLogin, onAccountRetry, onDesignLogin, onStart, lanesOpen: lanesOpenProp, find: findProp, log = [], layout = 'ledger', personaText: personaTextProp, personaError: personaErrorProp = null, personaGit: personaGitProp, width: widthProp, indexStorage, planOpen = true, planStorage, onPlanCollapse, onDiscussStep, settingsSection: settingsSectionProp,
 }: AgentViewProps) {
+    countRender('AgentView');
     const tabs = tabsFor(agent.fidelity);
     // A message's pills in the Stream (genie#1263): a file opens in this agent's workspace, an agent or a workspace opens
     // it — each only on the person's click (genie#1265). Stable across renders (the latest navigate read through a ref),
