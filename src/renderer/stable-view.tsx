@@ -75,6 +75,17 @@ export class StableProps<P extends object> {
     }
 }
 
+/**
+ * `value`, as the same object as last render's while it is EQUAL to it (core/share.ts) — for a value a context hands to
+ * every consumer: a new-but-equal value would redraw each of them, memoised or not.
+ */
+export function useShared<T>(value: T): T {
+    const last = useRef<T>(value);
+    const shared = share(last.current, value);
+    last.current = shared;
+    return shared;
+}
+
 /** `Inner`, drawn only when a prop it shows changed (see above). */
 export function stableView<P extends object>(Inner: ComponentType<P>, name: string): FunctionComponent<P> {
     const Memo = memo(Inner) as unknown as ComponentType<P>;

@@ -24,6 +24,7 @@ import { ChatFlyout, type ChatThread } from './components/ChatFlyout.js';
 import { Dashboard } from './components/Dashboard.js';
 import { Onboarding } from './components/Onboarding.js';
 import { Sidebar } from './components/Sidebar.js';
+import { useShared } from './stable-view.js';
 import { TitleBar } from './components/TitleBar.js';
 import { UpdateWindow } from './components/UpdateWindow.js';
 import { Workspace, type WorkspaceOpsProps } from './components/Workspace.js';
@@ -468,7 +469,9 @@ export function Shell({
     const refLists = chatRefLists(snapshot.agents, snapshot.workspaces ?? []);
     const chatRefs = useMemo(() => ({ agents: refLists.agents, workspaces: refLists.workspaces }), [refLists.key]);
     // WORKSPACE COLOURS (genie#1300): every surface below reads its recipient's colour from here.
-    const colorMap = useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]);
+    // The same object while every colour is the same (genie#1340): a context value, so a new-but-equal map would redraw every
+    // consumer — the chat among them — for each estate push, memoised or not.
+    const colorMap = useShared(useMemo(() => workspaceColorMap(snapshot), [snapshot.workspaces, snapshot.agents]));
     // The workspace on screen — its own page, or the page of one of its agents — named with its colour in the title bar.
     const onScreen = workspaceFor(routeWorkspace(route, snapshot.agents) ?? '');
 

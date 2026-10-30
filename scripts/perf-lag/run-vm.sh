@@ -11,10 +11,13 @@
 set -u
 export DISPLAY=:0
 mkdir -p perf-out
-echo "=== npm ci"
-npm ci --no-audit --no-fund >perf-out/ci.log 2>&1 || { tail -30 perf-out/ci.log; exit 1; }
-echo "=== build"
-npm run build >perf-out/build.log 2>&1 || { tail -30 perf-out/build.log; exit 1; }
+# SKIP_BUILD=1: this tree is already installed and built (a same-session A/B run alternates two built trees).
+if [ "${SKIP_BUILD:-0}" != 1 ]; then
+    echo "=== npm ci"
+    npm ci --no-audit --no-fund >perf-out/ci.log 2>&1 || { tail -30 perf-out/ci.log; exit 1; }
+    echo "=== build"
+    npm run build >perf-out/build.log 2>&1 || { tail -30 perf-out/build.log; exit 1; }
+fi
 chmod +x scripts/perf-lag/stub-codex-busy.mjs
 export GENIE2_CODEX_BINARY="$PWD/scripts/perf-lag/stub-codex-busy.mjs"
 echo "cpus $(nproc)"; free -m | head -2
