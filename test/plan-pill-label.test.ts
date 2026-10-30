@@ -111,9 +111,9 @@ describe('the label survives the draft round trip (genie#1279)', () => {
 });
 
 describe('the react-fancy Genie runs has text-pill labels', () => {
-    it('pinned (5.71.1 since VirtualList measures a row once, genie#1340; 5.70.0 brought its acknowledged send; 5.69.0 brought focus without scrolling, genie#1290), and installed at 5.66 or later', () => {
+    it('pinned (5.71.2 since VirtualList's follow-tail reads no scrollTop in a commit, 5.71.1 since it measures a row once, genie#1340; 5.70.0 brought its acknowledged send; 5.69.0 brought focus without scrolling, genie#1290), and installed at 5.66 or later', () => {
         const ours = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { dependencies: Record<string, string> };
-        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('5.71.1');
+        expect(ours.dependencies['@particle-academy/react-fancy']).toBe('5.71.2');
         const pkg = JSON.parse(readFileSync(new URL('../node_modules/@particle-academy/react-fancy/package.json', import.meta.url), 'utf8')) as { version: string };
         const [major, minor] = pkg.version.split('.').map(Number) as [number, number];
         expect(major > 5 || (major === 5 && minor >= 66), pkg.version).toBe(true);
