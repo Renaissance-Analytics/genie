@@ -59,7 +59,8 @@ async function seedThread(agentId: AgentId, turns: number, perTurn: number, extr
     return rows;
 }
 
-describe('reading an agent’s history (genie#1340)', () => {
+// Each seeds a thread of tens of thousands of rows through the real store: seconds on a loaded 4-CPU test VM.
+describe('reading an agent’s history (genie#1340)', { timeout: 60_000 }, () => {
     it('parses only the window it keeps, not the whole thread', async () => {
         const id = mintAgentId();
         const total = await seedThread(id, 100, 200); // 20,400 rows
@@ -94,6 +95,26 @@ describe('reading an agent’s history (genie#1340)', () => {
         }
     });
 
+    it('numbers every write right without parsing the log: its own appends, another writer’s, and a torn tail', async () => {
+        const id = mintAgentId();
+        const sessions = sessionsDir(dir);
+        const mine = openAgentThread(openDurableStore(sessions), id);
+        const theirs = openAgentThread(openDurableStore(sessions), id);
+        const row = (n: number) => ({ kind: 'notice', level: 'info', message: `row ${n}`, headroom: null, model: null, estimate: null });
+        const { parsed } = await linesParsed(async () => {
+            for (let n = 1; n <= 3; n += 1) await mine.record([row(n)] as never);
+            await theirs.record([row(4), row(5)] as never);
+            await mine.record([row(6)] as never);
+            // A write a crash cut short: the next append cuts it back, and the count must not include it.
+            await appendFile(threadLogFile(sessions, id), '{"position":7,"message":{"kind":"no');
+            await mine.record([row(7)] as never);
+            await theirs.record([row(8)] as never);
+        });
+        expect(parsed).toBe(0);
+        const positions = (await openAgentThread(openDurableStore(sessions), id).messages()).map((m) => m.position);
+        expect(positions).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    });
+
     it('finds the log where the store keeps it', async () => {
         const id = mintAgentId();
         await seedThread(id, 1, 1);
@@ -113,7 +134,7 @@ function host() {
     return { host: made, end: () => events.onTurnEnd?.({ stopReason: 'end_turn' } as never) };
 }
 
-describe('a restart of an agent with a long thread (genie#1340)', () => {
+describe('a restart of an agent with a long thread (genie#1340)', { timeout: 60_000 }, () => {
     it('shows its history, resumes it and writes its next row without parsing the whole thread', async () => {
         const record = agentRecord({ id: mintAgentId(), workspaceId: 'moic', provider: 'claude', name: 'moic' });
         const total = await seedThread(record.id, 150, 200); // 30,600 rows

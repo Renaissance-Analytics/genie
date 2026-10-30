@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { open, type FileHandle } from 'node:fs/promises';
+import { open, stat, type FileHandle } from 'node:fs/promises';
 import { join } from 'node:path';
 import { FileSessionStore, Thread, type SessionStore } from '@particle-academy/prism-harness';
 import { threadKeyFor, type AgentId } from './identity.js';
@@ -54,13 +54,20 @@ const CHUNK_BYTES = 1 << 20;
  * The harness answers `logLength` — which every `Thread.record` asks first, for the next position — from a count it keeps
  * only for the instance that last read or wrote the log, and otherwise by parsing every line (`readLog`). Each run's first
  * write paid that: 266k lines for the owner's largest thread, on the main process. Here the count is newlines, counted in
- * chunks; kept per log with the size it was counted at; and grown by counting only the bytes appended since — trusted
- * only while the byte it ended on is still a newline (a crash's torn tail is cut back by the next append, which would
- * otherwise leave a stale count). Writes and reads are otherwise the harness's own.
+ * chunks, and kept per log with the size it was counted at:
+ *
+ *  - asked again at that size, it is answered from a `stat`, as the harness's own is;
+ *  - this store's own append moves it on by the entries appended (one line each), when the log was exactly that size
+ *    and ended on a whole line before it — the append runs under the thread's lock, so nobody else wrote between;
+ *  - grown by anyone else, only the bytes since are counted — trusted only while the byte it ended on is still a newline
+ *    (a crash's torn tail is cut back by the next append, which would otherwise leave a stale count).
+ *
+ * Writes and reads are otherwise the harness's own.
  */
 export class ThreadStore extends FileSessionStore {
     readonly #directory: string;
-    readonly #counts = new Map<string, { size: number; count: number }>();
+    /** Per log: the size counted at, the newlines before it, and whether its last byte was one (no torn tail). */
+    readonly #counts = new Map<string, { size: number; count: number; clean: boolean }>();
 
     constructor(directory: string) {
         super(directory);
@@ -73,30 +80,43 @@ export class ThreadStore extends FileSessionStore {
     }
 
     override async logLength(key: string): Promise<number | null> {
-        let handle: FileHandle;
+        const size = await sizeOf(this.logFile(key));
+        if (size === null) return null;
+        const known = this.#counts.get(key);
+        if (known !== undefined && known.size === size) return known.count;
+        const handle = await open(this.logFile(key), 'r');
         try {
-            handle = await open(this.logFile(key), 'r');
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-            throw error;
-        }
-        try {
-            const { size } = await handle.stat();
-            let known = this.#counts.get(key);
-            if (known !== undefined && (known.size > size || (known.size > 0 && !(await endsLine(handle, known.size))))) known = undefined;
-            const from = known?.size ?? 0;
-            let count = known?.count ?? 0;
+            const base = known !== undefined && known.size < size && (known.size === 0 || (await endsLine(handle, known.size))) ? known : undefined;
+            const from = base?.size ?? 0;
+            let count = base?.count ?? 0;
+            let clean = from === 0 || base!.clean;
             const buf = Buffer.allocUnsafe(Math.min(CHUNK_BYTES, Math.max(1, size - from)));
-            for (let at = from; at < size; at += buf.length) {
+            for (let at = from; at < size;) {
                 const { bytesRead } = await handle.read(buf, 0, Math.min(buf.length, size - at), at);
-                for (let i = buf.indexOf(0x0a); i !== -1 && i < bytesRead; i = buf.indexOf(0x0a, i + 1)) count += 1;
                 if (bytesRead === 0) break;
+                for (let i = buf.indexOf(0x0a); i !== -1 && i < bytesRead; i = buf.indexOf(0x0a, i + 1)) count += 1;
+                clean = buf[bytesRead - 1] === 0x0a;
+                at += bytesRead;
             }
-            this.#counts.set(key, { size, count });
+            this.#counts.set(key, { size, count, clean });
             return count;
         } finally {
             await handle.close();
         }
+    }
+
+    override async appendLog(key: string, entries: Parameters<FileSessionStore['appendLog']>[1]): Promise<void> {
+        const known = this.#counts.get(key);
+        const before = known === undefined ? null : await sizeOf(this.logFile(key));
+        try {
+            await super.appendLog(key, entries);
+        } catch (error) {
+            this.#counts.delete(key);
+            throw error;
+        }
+        const after = known !== undefined && known.clean && before === known.size ? await sizeOf(this.logFile(key)) : null;
+        if (known !== undefined && after !== null) this.#counts.set(key, { size: after, count: known.count + entries.length, clean: true });
+        else this.#counts.delete(key);
     }
 
     /**
@@ -145,6 +165,16 @@ export class ThreadStore extends FileSessionStore {
         } finally {
             await handle.close();
         }
+    }
+}
+
+/** The file's size, or `null` when there is none. */
+async function sizeOf(path: string): Promise<number | null> {
+    try {
+        return (await stat(path)).size;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+        throw error;
     }
 }
 
