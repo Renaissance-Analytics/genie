@@ -31,7 +31,7 @@ import { FilesWindow } from './components/FilesWindow.js';
 import { conflictMessage, pauseMessage, resumeMessage } from '../core/files-popout.js';
 import { dockHolder, pinPanel, routeAfterPin, type DockNotice, type PinnedPanel } from '../core/dock.js';
 import { approvalChoice, chatAction, globalAction, isTypingTarget } from '../core/keys.js';
-import { chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
+import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThread, withDrafts, type Draft } from '../core/chat-view.js';
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
@@ -1327,14 +1327,23 @@ function DesktopApp({ bridge }: AppProps) {
     // FOLLOWING LIVE (the owner, 2026-10-22): an update derives only the lines the chat shows (core/chat-view.ts
     // chatTailStart) — the flyout says how many, and asks for more when the person pages into earlier history.
     const [chatLines, setChatLines] = useState(CHAT_LIVE_LINES);
-    const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, snapshot.agents, Date.now, chatLines)), [chatDetail, chatSubject, snapshot.agents, chatLines]);
-    const chatDrafts: ChatThread | null = chatBase === null
+    // NOT ON EVERY ESTATE SNAPSHOT (genie#1340): the thread reads only the agents' ids, names and fidelity, and the
+    // snapshot changes whenever any agent's status does — twenty times a second with eleven at work. Keyed on what it
+    // reads, the list it is given changes only when one of those does.
+    const agentsKey = chatAgentsKey(snapshot.agents);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const chatAgents = useMemo(() => snapshot.agents, [agentsKey]);
+    const chatBase = useMemo(() => (chatSubject === null ? null : chatThreadFrom(chatDetail, chatSubject, chatAgents, Date.now, chatLines)), [chatDetail, chatSubject, chatAgents, chatLines]);
+    const chatRunning = chatDetail !== null && chatBase !== null && chatDetail.agent.id === chatBase.agentId && chatDetail.session?.running === true;
+    const inboxRecent = features.inbox?.recent ?? null;
+    // The same thread object until something it shows changed, so the chat does not draw again for nothing.
+    const chatDrafts: ChatThread | null = useMemo(() => chatBase === null
         ? null
-        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(features.inbox?.recent ?? null, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatDetail?.agent.id === chatBase.agentId && chatDetail.session?.running === true });
-    const chatThread: ChatThread | null = chatDrafts === null || Object.keys(draftProblems).length === 0 ? chatDrafts : { ...chatDrafts, messages: chatDrafts.messages.map((m) => {
+        : withDrafts(chatBase.fidelity === 'observed' ? { ...chatBase, ...observedMail(inboxRecent, chatBase.agentId, chatBase.name) } : chatBase, drafts, { running: chatRunning }), [chatBase, inboxRecent, drafts, chatRunning]);
+    const chatThread: ChatThread | null = useMemo(() => (chatDrafts === null || Object.keys(draftProblems).length === 0 ? chatDrafts : { ...chatDrafts, messages: chatDrafts.messages.map((m) => {
         const problem = draftProblems[m.id];
         return problem ? { ...m, draftProblem: problem } : m;
-    }) };
+    }) }), [chatDrafts, draftProblems]);
     const discardDraft = (draftId: string): void => {
         const queued = chatThread?.messages.find((m) => m.id === draftId && m.promptId);
         if (queued && chatThread && resolvedBridge) draftAction(draftId, resolvedBridge.resolvePrompt(chatThread.agentId, queued.promptId!, 'discard'));

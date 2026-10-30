@@ -501,3 +501,12 @@ export function withDrafts<T extends { agentId: string; messages: readonly ChatM
     }
     return { ...thread, messages: [...messages, ...pending] };
 }
+
+/**
+ * WHAT THE CHAT READS OF THE ESTATE'S AGENTS (genie#1340): their ids, names and fidelity — the subject's name, a mail
+ * sender's name — and nothing else. The estate snapshot changes whenever any agent's status does (20 times a second
+ * with eleven at work); keyed on this, the chat's thread is derived again only when something it shows could change.
+ */
+export function chatAgentsKey(rows: readonly AgentRow[]): string {
+    return rows.map((r) => `${r.id}\u0000${r.name}\u0000${r.fidelity}`).join('\u0001');
+}

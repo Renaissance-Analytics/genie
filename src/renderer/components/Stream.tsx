@@ -1,9 +1,8 @@
 import { Icon, VirtualList } from '@particle-academy/react-fancy';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { STREAM_LIVE_ROWS, StreamPrep } from '../../core/stream-prep.js';
 import {
-    editLineCounts,
-    ledgerRow,
+    LedgerRowCache,
     visibleRows,
     type StreamFilter,
     type TimedEvent,
@@ -81,7 +80,11 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
     const [unseen, setUnseen] = useState(0);
     // Thoughts opened to their whole reasoning, by row id.
     const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-    const toggle = (id: string) => setExpanded((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+    // Stable, so a memoised row is not drawn again for a new callback (genie#1340).
+    const toggle = useCallback((id: string) => setExpanded((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
+    // A row the push did not change keeps its mapped object (core/stream-view.ts LedgerRowCache): it is not drawn again.
+    const rowCache = useRef<LedgerRowCache | null>(null);
+    rowCache.current ??= new LedgerRowCache();
 
     // A deep link arriving later — an agent sends one mid-turn — must stop following too.
     useEffect(() => {
@@ -120,14 +123,15 @@ export function Stream({ rows, lanes, at, selectedId, onSelect, diffs, agentName
                 row.event.kind === 'tool'
                     ? {
                           durationMs: durations.get(row.event.toolCallId),
-                          // A real diff: given, or counted from the edit's own old/new strings. Never estimated.
-                          diff: diffs?.get(row.id) ?? (row.event.toolKind === 'edit' ? editLineCounts(row.event.rawInput) ?? undefined : undefined),
+                          // A real diff: given, or counted from the edit's own old/new strings (by the cache, once per
+                          // edit). Never estimated.
+                          diff: diffs?.get(row.id),
                           agentName,
                       }
                     : row.event.kind === 'divider'
                       ? { summarisedTurns: summarised.get(row.id), agentName }
                       : { agentName };
-            return ledgerRow(row, context);
+            return rowCache.current!.row(row, context);
         });
         return { rows: mapped, behind: start };
     }, [rows, lanes, diffs, agentName, at, following, extra]);
