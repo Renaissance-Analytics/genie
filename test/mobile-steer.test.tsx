@@ -107,8 +107,8 @@ describe('MobileAgent', () => {
 describe('mobileView', () => {
     it('the agent on screen rides the hash so the back button works; anything else is home', () => {
         expect(mobileView('#agent=agent_kai')).toEqual({ kind: 'agent', agentId: 'agent_kai' });
-        expect(mobileView('')).toEqual({ kind: 'home' });
-        expect(mobileView('#pin=482913')).toEqual({ kind: 'home' });
-        expect(mobileView('#agent=')).toEqual({ kind: 'home' });
+        expect(mobileView('')).toEqual({ kind: 'home', workspaceId: null });
+        expect(mobileView('#pin=482913')).toEqual({ kind: 'home', workspaceId: null });
+        expect(mobileView('#agent=')).toEqual({ kind: 'home', workspaceId: null });
     });
 });

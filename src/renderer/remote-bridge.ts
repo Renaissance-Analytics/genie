@@ -3,6 +3,9 @@ import type { RepoListing } from '../core/github.js';
 import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
+import { bytesToBase64 } from '../core/mobile.js';
+import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
+import type { TimedEvent } from '../core/stream-view.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -48,6 +51,45 @@ type Result = { ok: true; value: unknown } | { ok: false; reason: string };
  */
 export interface RemoteOptions {
     readonly browse?: (address: string | undefined, hosts: readonly string[]) => Promise<{ ok: true } | { ok: false; error: string }>;
+    /**
+     * A PHONE (genie#1346): hello as `mobile`, so the host sends the snapshot and the agents this screen watches — as a
+     * window of the ledger, then patches — and never terminal bytes. Files read through the host and upload in chunks; a
+     * prompt's photos cross as chunks too.
+     */
+    readonly profile?: 'mobile';
+    /** The phone's agent windows, kept ACROSS connections so the next one resumes from a cursor (`AgentWindows`). */
+    readonly windows?: AgentWindows;
+}
+
+/**
+ * WHAT THE PHONE HOLDS OF EACH AGENT IT HAS WATCHED (genie#1346): its ledger window, outliving any one connection — a
+ * socket that dropped (the phone slept, it changed networks) is replaced by a new one that asks the host only for what
+ * came after the cursor.
+ */
+export class AgentWindows {
+    readonly #receivers = new Map<string, WindowReceiver<TimedEvent>>();
+
+    receiver(agentId: string): WindowReceiver<TimedEvent> {
+        let r = this.#receivers.get(agentId);
+        if (!r) { r = new WindowReceiver<TimedEvent>(); this.#receivers.set(agentId, r); }
+        return r;
+    }
+
+    cursor(agentId: string): WindowCursor | null {
+        return this.#receivers.get(agentId)?.cursor() ?? null;
+    }
+
+    /** How the last push for an agent was based (`null` whole, a number a patch, `'resume'` a cursor). */
+    lastBase(agentId: string): WindowRows<TimedEvent>['base'] | undefined {
+        return this.#receivers.get(agentId)?.lastBase();
+    }
+}
+
+/** One push to a phone for one agent: its detail without rows, and the rows as a window patch. */
+interface PhonePush {
+    readonly seq: number;
+    readonly detail: Omit<AgentDetail, 'rows'> | null;
+    readonly rows: WindowRows<TimedEvent>;
 }
 
 export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
@@ -105,7 +147,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         pending.clear();
     });
 
-    transport.send(JSON.stringify({ kind: 'hello', auth, label }));
+    transport.send(JSON.stringify({ kind: 'hello', auth, label, ...(options.profile ? { profile: options.profile } : {}) }));
 
     const call = (method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<Result> =>
         new Promise((resolve) => {
@@ -138,6 +180,44 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         }
     };
 
+    const phone = options.profile === 'mobile';
+    const windows = options.windows ?? new AgentWindows();
+
+    /** Bytes staged on the host in chunks under the socket's frame cap; the id a call then names (`{ staged: id }`). */
+    const stage = async (name: string, bytes: Uint8Array, onProgress?: (sent: number, total: number) => void): Promise<{ ok: true; id: string } | { ok: false; reason: string }> => {
+        const begun = await call('upload.begin', { name, size: bytes.byteLength });
+        if (!begun.ok) return begun;
+        const id = (begun.value as { id: string }).id;
+        for (let i = 0, at = 0; at < bytes.byteLength; i++, at += UPLOAD_CHUNK_BYTES) {
+            const r = await call('upload.chunk', id, i, bytesToBase64(bytes.subarray(at, at + UPLOAD_CHUNK_BYTES)));
+            if (!r.ok) { void call('upload.abort', id); return r; }
+            onProgress?.(Math.min(bytes.byteLength, at + UPLOAD_CHUNK_BYTES), bytes.byteLength);
+        }
+        return { ok: true, id };
+    };
+
+    /** A phone's push applied to its window: the whole detail, `null` for no such agent, or `undefined` = ask again. */
+    const applyPush = (agentId: string, push: PhonePush): AgentDetail | null | undefined => {
+        const receiver = windows.receiver(agentId);
+        if (push.detail === null) { receiver.reset(); return null; }
+        const rows = receiver.apply(push.seq, push.rows);
+        return rows === undefined ? undefined : ({ ...push.detail, rows } as AgentDetail);
+    };
+    /** Open (or re-open) this connection's window on an agent, resuming from what the phone already holds. */
+    const watch = async (agentId: string): Promise<AgentDetail | null> => {
+        const cursor = windows.cursor(agentId);
+        const r = await call('agent.watch', agentId, cursor ? { resume: cursor } : {});
+        if (!r.ok) throw new Error(r.reason);
+        const detail = applyPush(agentId, r.value as PhonePush);
+        if (detail !== undefined) return detail;
+        // The cursor did not fit what is held here: start this agent over from a fresh tail.
+        windows.receiver(agentId).reset();
+        const fresh = await call('agent.watch', agentId, {});
+        if (!fresh.ok) throw new Error(fresh.reason);
+        return applyPush(agentId, fresh.value as PhonePush) ?? null;
+    };
+    const watchers = new Map<string, number>();
+
     const bridge: GenieBridge = {
         snapshot: () => read<GenieSnapshot>('snapshot'),
         subscribe: (onChange) => on('snapshot', (p) => onChange(p as GenieSnapshot)),
@@ -146,8 +226,27 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             feeds: (workspaceId) => read<Record<string, ActivityFeed>>('activity', workspaceId),
             subscribe: (onFeed) => on('activity', (p) => onFeed(p as ActivityFeed)),
         },
-        agentDetail: (agentId) => read<AgentDetail | null>('agentDetail', agentId),
-        subscribeAgent: (agentId, onChange) => on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null)),
+        agentDetail: (agentId) => (phone ? watch(agentId) : read<AgentDetail | null>('agentDetail', agentId)),
+        subscribeAgent: (agentId, onChange) => {
+            if (!phone) return on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null));
+            // The phone's window: patches applied to what it holds; one it cannot place re-opens the window.
+            const off = on(`agent:${agentId}`, (p) => {
+                const detail = applyPush(agentId, p as PhonePush);
+                if (detail === undefined) { void watch(agentId).then(onChange, () => {}); return; }
+                onChange(detail);
+            });
+            const count = (watchers.get(agentId) ?? 0) + 1;
+            watchers.set(agentId, count);
+            // Watched already (agentDetail opened it) — or opened now, for a subscriber that came first.
+            if (count === 1 && windows.receiver(agentId).rows() === null) void watch(agentId).then(onChange, () => {});
+            return () => {
+                off();
+                const left = (watchers.get(agentId) ?? 1) - 1;
+                if (left > 0) { watchers.set(agentId, left); return; }
+                watchers.delete(agentId);
+                if (state.connected) void call('agent.unwatch', agentId);
+            };
+        },
         openAgent: (agentId) => fire('openAgent', agentId),
         stopAgent: (agentId) => fire('stopAgent', agentId),
         cancelTurn: (agentId) => answer<{ ok: true } | { ok: false; reason: string }>('cancelTurn', agentId),
@@ -157,7 +256,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.
         prompt: (agentId, text, attachments) => attachments && attachments.length > 0
-            ? Promise.resolve({ ok: false, reason: 'Files cannot be sent to an agent on another workstation yet' })
+            ? (phone ? promptWithFiles(agentId, text, attachments) : Promise.resolve({ ok: false, reason: 'Files cannot be sent to an agent on another workstation yet' }))
             : call('prompt', agentId, text).then((r) => {
             if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false }; }
             return { ok: (r.value as { ok?: boolean } | null)?.ok === true };
@@ -223,7 +322,17 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             diagnose: (agentId) => answer('agents.diagnose', agentId),
         },
         // The file panel is host-local today: a remote window gets the honest "no files host" rather than another machine's tree.
-        files: NO_FILES,
+        files: phone ? {
+            ...NO_FILES,
+            children: (workspaceId, dir) => read('files.children', workspaceId, dir),
+            open: (workspaceId, path) => answer('files.open', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
+            readMedia: (workspaceId, path) => answer('files.readMedia', workspaceId, path).then((r) => ('reason' in r && !('path' in r) ? { ok: false as const, path, error: (r as { reason: string }).reason } : r)) as never,
+            upload: async (workspaceId, dir, name, bytes, onProgress) => {
+                const staged = await stage(name, bytes, onProgress);
+                if (!staged.ok) return staged;
+                return answer('files.upload', workspaceId, dir, { staged: staged.id }) as never;
+            },
+        } : NO_FILES,
         // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
         uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
         terminals: {
@@ -272,6 +381,20 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             install: () => read<{ report: string } | null>('updates.install'),
         },
     };
+
+    /** A phone's message with photos/files: each staged in chunks, then the prompt names them (genie#1346). */
+    async function promptWithFiles(agentId: string, text: string, attachments: readonly { name: string; type: string; bytes: Uint8Array }[]): Promise<{ ok: boolean; reason?: string }> {
+        const refs: Array<{ staged: string; type: string }> = [];
+        for (const a of attachments) {
+            const staged = await stage(a.name, a.bytes);
+            if (!staged.ok) return { ok: false, reason: `${a.name}: ${staged.reason}` };
+            refs.push({ staged: staged.id, type: a.type });
+        }
+        const r = await call('prompt', agentId, text, refs);
+        if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false, reason: r.reason }; }
+        const v = r.value as { ok?: boolean; reason?: string } | null;
+        return v?.ok === true ? { ok: true } : { ok: false, ...(v?.reason ? { reason: v.reason } : {}) };
+    }
 
     const control = async (method: ControlMethod): Promise<{ ok: true } | { ok: false; reason: string }> => {
         const r = await call(method);

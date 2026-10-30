@@ -147,14 +147,35 @@ function publicView(r: ShareRecord): ShareLink {
 const PIN_TTL_MS = 120_000;
 const PIN_ATTEMPTS = 5;
 
+/**
+ * A uniform 0..999999 from the OS's CSPRNG (Web Crypto, in main and in a window alike) — Genie 1's `crypto.randomInt`.
+ * Rejection sampling, so no code is likelier than another. `Math.random` drew the PIN before genie#1346.
+ */
+function cryptoPinDraw(): number {
+    const limit = Math.floor(0x1_0000_0000 / 1_000_000) * 1_000_000;
+    const word = new Uint32Array(1);
+    for (;;) {
+        globalThis.crypto.getRandomValues(word);
+        if (word[0]! < limit) return (word[0]! % 1_000_000) / 1_000_000;
+    }
+}
+
+/** Equal strings, compared without stopping at the first difference (Genie 1 compared the PIN with timingSafeEqual). */
+function sameCode(a: string, b: string): boolean {
+    let diff = a.length ^ b.length;
+    for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
+    return diff === 0;
+}
+
 export class PairingPins {
     readonly #now: () => number;
     readonly #random: () => number;
     #active: { code: string; expiresAt: number; attemptsLeft: number } | null = null;
 
-    constructor(deps: { now: () => number; random: () => number }) {
+    /** `random` is for tests that need a known PIN; absent, the PIN comes from the CSPRNG. */
+    constructor(deps: { now: () => number; random?: () => number }) {
         this.#now = deps.now;
-        this.#random = deps.random;
+        this.#random = deps.random ?? cryptoPinDraw;
     }
 
     issue(): { code: string; expiresAt: number } {
@@ -170,7 +191,7 @@ export class PairingPins {
             this.#active = null;
             return { ok: false, reason: 'the PIN expired; issue a new one', attemptsLeft: 0 };
         }
-        if (code !== a.code) {
+        if (!sameCode(code, a.code)) {
             a.attemptsLeft -= 1;
             if (a.attemptsLeft <= 0) {
                 this.#active = null;

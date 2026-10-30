@@ -1,7 +1,8 @@
 import type { GitFileState, GitTreeState } from './git-ports.js';
 import { createHash } from 'node:crypto';
 import { watch, type FSWatcher } from 'node:fs';
-import { access, copyFile, mkdir, open as openFile, readdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, open as openFile, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
+import { uploadName, uploadSizeRefusal } from '../core/mobile-wire.js';
 import { dirname, join } from 'node:path';
 import { copyName } from '../core/file-ops.js';
 import {
@@ -292,6 +293,49 @@ export class FilesHost {
         const rel = confine(ws.path, path);
         if (rel === null || rel === '') return { ok: false, reason: CHANGES_OUTSIDE };
         return { ok: true, root: ws.path, rel, full: join(ws.path, ...rel.split('/')) };
+    }
+
+    /**
+     * AN UPLOAD FROM THE PHONE (genie#1346) into a folder of the workspace. The folder is confined lexically AND by its
+     * real path (a symlinked folder pointing out is refused), it must already exist, the name is its last segment only
+     * (core/mobile-wire.ts `uploadName`: no executables, no control characters), the size is capped, and NOTHING is
+     * overwritten — a taken name lands as `<name>-copy…`, written with `wx` so a file that appeared meanwhile is not
+     * truncated either.
+     */
+    async upload(workspaceId: string, dir: string, rawName: string, bytes: Uint8Array): Promise<FileOpResult> {
+        const ws = this.#ports.workspace(workspaceId);
+        if (!ws) return { ok: false, reason: 'no such workspace' };
+        const named = uploadName(rawName);
+        if (!named.ok) return named;
+        const tooBig = uploadSizeRefusal(named.name, bytes.byteLength);
+        if (tooBig) return { ok: false, reason: tooBig };
+        const rel = dir === '' ? '' : confine(ws.path, dir);
+        if (rel === null) return { ok: false, reason: CHANGES_OUTSIDE };
+        const folder = rel === '' ? ws.path : join(ws.path, ...rel.split('/'));
+        try {
+            const [realRoot, realFolder] = await Promise.all([realpath(ws.path), realpath(folder)]);
+            if (confine(realRoot, realFolder) === null) return { ok: false, reason: CHANGES_OUTSIDE };
+            if (!(await stat(realFolder)).isDirectory()) return { ok: false, reason: `${rel} is not a folder` };
+        } catch {
+            return { ok: false, reason: `${rel || 'the workspace folder'} does not exist` };
+        }
+        for (let n = 0; n < 100; n++) {
+            const name = n === 0 ? named.name : copyName(named.name, n);
+            const full = join(folder, name);
+            try {
+                const handle = await openFile(full, 'wx');
+                try { await handle.writeFile(bytes); } finally { await handle.close(); }
+                const landed = rel === '' ? name : `${rel}/${name}`;
+                const mine = this.#mine.get(workspaceId) ?? new Set<string>();
+                mine.add(landed);
+                this.#mine.set(workspaceId, mine);
+                return { ok: true, path: landed };
+            } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+                return { ok: false, reason: messageOf(error) };
+            }
+        }
+        return { ok: false, reason: `${named.name}: too many files by that name already` };
     }
 
     async create(workspaceId: string, path: string, kind: 'file' | 'folder'): Promise<FileOpResult> {

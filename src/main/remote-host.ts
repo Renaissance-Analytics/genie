@@ -12,6 +12,7 @@ import {
     type WireMessage,
 } from '../core/remote-protocol.js';
 import type { Device, DeviceStore } from './remote-devices.js';
+import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -27,8 +28,11 @@ import type { Device, DeviceStore } from './remote-devices.js';
 export interface HostApi {
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
-    /** Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`. */
-    onEvent(listener: (channel: string, payload: unknown) => void): () => void;
+    /**
+     * Everything the host pushes: `snapshot`, `agent:<id>`, `features`, `updates`, `terminal-data`, `terminal-exit`.
+     * `wantsAgent`: whether anyone listening wants an agent's detail now — one nobody wants is not built (genie#1346).
+     */
+    onEvent(listener: (channel: string, payload: unknown) => void, options?: { wantsAgent?: (agentId: string) => boolean }): () => void;
     workspaceOfAgent(agentId: string): string | null;
     /** The workspace a terminal is in — what decides whether a guest receives its output. Absent = a guest receives none. */
     workspaceOfTerminal?(terminalId: string): string | null;
@@ -68,7 +72,16 @@ interface Connection {
     readonly id: string;
     readonly socket: ServerConnection;
     auth: { label: string; isOwner: boolean; workspaceId: string | null; readonly: boolean } | null;
+    /** The paired device this connection is (PIN or token) — what removing it in Settings closes. */
+    deviceId: string | null;
+    /** `mobile`: a phone (genie#1346) — the snapshot and its watched agents only, no terminals. */
+    profile: 'mobile' | null;
+    /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
+    readonly watching: Map<string, WindowState<WireRow>>;
 }
+
+/** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
+const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.');
 
 /** A push a connection does not receive. */
 const NOT_SENT = Symbol('not sent');
@@ -91,6 +104,8 @@ export class RemoteHost {
     readonly #connections = new Map<string, Connection>();
     readonly #transport: ServerTransport;
     readonly #now: () => number;
+    /** Bytes a connection sent ahead of the call that uses them (genie#1346). */
+    readonly #staging: UploadStaging;
     #pin: { code: string; expiresAt: number } | null = null;
     #next = 0;
     #locked = false;
@@ -110,12 +125,22 @@ export class RemoteHost {
         this.#devices = deps.devices;
         this.#transport = deps.transport;
         this.#now = deps.now ?? Date.now;
+        this.#staging = new UploadStaging({ now: this.#now });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
 
     /** Someone is connected and known: hear the host API (once, however many connect). */
     #listen(): void {
-        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload));
+        this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), { wantsAgent: (agentId) => this.#wantsAgent(agentId) });
+    }
+
+    /** Someone wants this agent's detail: a window that is not a phone (it hears every agent), or a phone watching it. */
+    #wantsAgent(agentId: string): boolean {
+        for (const c of this.#connections.values()) {
+            if (c.auth === null) continue;
+            if (c.profile !== 'mobile' || c.watching.has(agentId)) return true;
+        }
+        return false;
     }
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
@@ -161,8 +186,15 @@ export class RemoteHost {
         return this.#devices.list();
     }
 
+    /** Remove a paired device — and end its live connections NOW, not at its next reconnect (genie#1346). */
     revokeDevice(id: string): boolean {
-        return this.#devices.revoke(id);
+        if (!this.#devices.revoke(id)) return false;
+        for (const c of [...this.#connections.values()]) {
+            if (c.deviceId !== id) continue;
+            this.#baton.connectionLost(c.id);
+            this.#refuse(c, `this device is not paired with ${this.#hostName} any more`, true);
+        }
+        return true;
     }
 
     shares(): ShareLink[] {
@@ -200,11 +232,12 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, profile: null, watching: new Map() };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
             this.#baton.connectionLost(connection.id);
+            this.#staging.dropOwner(connection.id);
             this.#drop(connection);
         });
     }
@@ -247,11 +280,14 @@ export class RemoteHost {
         if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
-            token = this.#devices.pair(label).token;
+            const paired = this.#devices.pair(label);
+            token = paired.token;
+            connection.deviceId = paired.device.id;
             connection.auth = { label, isOwner: true, workspaceId: null, readonly: false };
         } else if (auth.kind === 'token') {
             const device = this.#devices.byToken(auth.token);
             if (!device) return this.#refuse(connection, `this device is not paired with ${this.#hostName}`, true);
+            connection.deviceId = device.id;
             connection.auth = { label: auth.label ?? message.label ?? device.label, isOwner: true, workspaceId: null, readonly: false };
         } else if (auth.kind === 'relay') {
             // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
@@ -263,6 +299,7 @@ export class RemoteHost {
             if (!r.ok) return this.#refuse(connection, r.reason, true);
             connection.auth = { label: auth.label ?? message.label ?? r.grantedTo, isOwner: false, workspaceId: r.workspaceId, readonly: false };
         }
+        if (message.profile === 'mobile') connection.profile = 'mobile';
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -300,7 +337,26 @@ export class RemoteHost {
                 if (!auth.isOwner) return refuse(`only the host owner may unlock ${this.#hostName}`);
                 this.unlock();
                 return ok({ locked: false });
+            case 'agent.watch':
+                return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
+            case 'agent.unwatch':
+                return ok({ unwatched: connection.watching.delete(String(args[0] ?? '')) });
+            case 'upload.begin': {
+                if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
+                const input = (args[0] ?? {}) as { name?: unknown; size?: unknown };
+                const r = this.#staging.begin(connection.id, { name: input.name, size: input.size });
+                return r.ok ? ok({ id: r.id }) : refuse(r.reason);
+            }
+            case 'upload.chunk': {
+                const r = this.#staging.chunk(connection.id, String(args[0] ?? ''), args[1], args[2]);
+                return r.ok ? ok({ received: r.received }) : refuse(r.reason);
+            }
+            case 'upload.abort':
+                return ok({ aborted: this.#staging.abort(connection.id, String(args[0] ?? '')) });
         }
+
+        // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
+        if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
 
         const capability = capabilityOf(method);
         // A read-only grant (Tynn #838): reads, nothing else.
@@ -330,8 +386,12 @@ export class RemoteHost {
             if (scoped) return refuse(scoped);
         }
 
+        // Staged bytes are taken only now, after every gate passed (genie#1346): never a path, never bytes inline.
+        const materialized = this.#materialize(connection, method, args);
+        if (!materialized.ok) return refuse(materialized.reason);
+
         try {
-            const value = await this.#api.invoke(method, args);
+            const value = await this.#api.invoke(method, materialized.args);
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices, the share links (their URLs carry the secret) and the connections. Only an owner sees them.
@@ -340,6 +400,67 @@ export class RemoteHost {
         } catch (error) {
             return refuse(error instanceof Error ? error.message : String(error));
         }
+    }
+
+    /**
+     * `files.upload` and a prompt's attachments name bytes STAGED on this connection (`{ staged: id }`); they are swapped
+     * for the bytes here, taken once. Anything else in their place — a path, inline bytes, another connection's id — is
+     * refused. Every other call passes through untouched.
+     */
+    #materialize(connection: Connection, method: string, args: unknown[]): { ok: true; args: unknown[] } | { ok: false; reason: string } {
+        const stagedId = (v: unknown): string | null => (typeof v === 'object' && v !== null && typeof (v as { staged?: unknown }).staged === 'string' ? (v as { staged: string }).staged : null);
+        if (method === 'files.upload') {
+            const id = stagedId(args[2]);
+            const file = id === null ? null : this.#staging.take(connection.id, id);
+            if (!file) return { ok: false, reason: 'that upload is not finished on this connection; send it again' };
+            return { ok: true, args: [args[0], args[1], file] };
+        }
+        if (method === 'prompt' && args.length > 2 && args[2] !== undefined) {
+            if (!Array.isArray(args[2])) return { ok: false, reason: 'attachments are a list' };
+            const files: Array<{ name: string; type: string; bytes: Uint8Array }> = [];
+            for (const a of args[2] as unknown[]) {
+                const id = stagedId(a);
+                const file = id === null ? null : this.#staging.take(connection.id, id);
+                if (!file) return { ok: false, reason: 'an attachment is not finished on this connection; send it again' };
+                const type = typeof (a as { type?: unknown }).type === 'string' ? (a as { type: string }).type : '';
+                files.push({ name: file.name, type, bytes: file.bytes });
+            }
+            return { ok: true, args: [args[0], args[1], files] };
+        }
+        return { ok: true, args };
+    }
+
+    /** A phone opens a window on one agent's ledger: its detail without rows, and the window (core/mobile-wire.ts). */
+    async #watch(connection: Connection, agentId: string, options: WatchOptions): Promise<{ seq: number; detail: unknown; rows: unknown }> {
+        const auth = connection.auth!;
+        if (auth.workspaceId !== null && this.#api.workspaceOfAgent(agentId) !== auth.workspaceId) throw new Error(`${agentId} is not in the workspace this link shares`);
+        const detail = (await this.#api.invoke('agentDetail', [agentId])) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
+        if (detail === null || detail === undefined) {
+            connection.watching.delete(agentId);
+            return { seq: 0, detail: null, rows: { base: null, keep: 0, append: [] } };
+        }
+        const { rows = [], ...rest } = detail;
+        const opened = openWindow(rows, options);
+        connection.watching.set(agentId, opened.state);
+        if (!this.#stopListening) this.#listen();
+        return { seq: opened.state.seq, detail: rest, rows: opened.rows };
+    }
+
+    /** A phone hears `snapshot`, and `agent:<id>` for an agent it watches as a patch on its window; nothing else. */
+    #forPhone(connection: Connection, channel: string, payload: unknown): unknown {
+        if (channel === 'snapshot') return payload;
+        if (!channel.startsWith('agent:')) return NOT_SENT;
+        const agentId = channel.slice('agent:'.length);
+        const state = connection.watching.get(agentId);
+        if (!state) return NOT_SENT;
+        if (payload === null || payload === undefined) {
+            connection.watching.delete(agentId);
+            return { seq: state.seq + 1, detail: null, rows: { base: null, keep: 0, append: [] } };
+        }
+        const { rows = [], ...rest } = payload as { rows?: readonly WireRow[] } & Record<string, unknown>;
+        const next = nextWindow(state, rows);
+        connection.watching.set(agentId, next.state);
+        return { seq: next.state.seq, detail: rest, rows: next.rows };
     }
 
     /** A guest holds a link to ONE workspace; anything outside it is refused by name. */
@@ -356,12 +477,10 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
-            if (c.auth.workspaceId === null) {
-                this.#send(c, { kind: 'event', channel, payload });
-                continue;
-            }
-            const scoped = this.#forGuest(channel, payload, c.auth.workspaceId);
-            if (scoped !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: scoped });
+            let out: unknown = payload;
+            if (c.auth.workspaceId !== null) out = this.#forGuest(channel, out, c.auth.workspaceId);
+            if (out !== NOT_SENT && c.profile === 'mobile') out = this.#forPhone(c, channel, out);
+            if (out !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: out });
         }
     }
 

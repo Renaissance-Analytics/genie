@@ -426,6 +426,9 @@ export interface GenieBridge {
         export?(workspaceId: string, path: string): Promise<ExportResult>;
         /** The tree's file operations (Tynn #844), confined to the workspace and never overwriting; Delete goes to the host's
          *  trash. Absent on a bridge whose host does not offer them — the menu then does not either. */
+        /** A PHONE'S UPLOAD into a folder of the workspace (genie#1346): chunked over the socket, confined and capped on the
+         *  host, never overwriting. `onProgress` hears the bytes sent so far. Only a phone's remote bridge has it. */
+        upload?(workspaceId: string, dir: string, name: string, bytes: Uint8Array, onProgress?: (sent: number, total: number) => void): Promise<FileOpResult>;
         create?(workspaceId: string, path: string, kind: 'file' | 'folder'): Promise<FileOpResult>;
         rename?(workspaceId: string, from: string, to: string): Promise<FileOpResult>;
         duplicate?(workspaceId: string, path: string): Promise<FileOpResult>;

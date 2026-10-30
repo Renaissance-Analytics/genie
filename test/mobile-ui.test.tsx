@@ -121,7 +121,7 @@ describe('4. the file browser and viewer', () => {
     });
 
     it('null entries is "not read yet" (a skeleton), [] is a sentence', () => {
-        const props = { workspaceName: 'Tynn', path: '', onOpen: () => {}, onUp: () => {}, onUpload: () => {}, uploading: false, outcome: null, onBack: () => {} };
+        const props = { workspaceName: 'Tynn', path: '', onOpen: () => {}, onUp: () => {}, onUpload: () => {}, uploading: false as const, outcome: null, onBack: () => {} };
         expect(renderToStaticMarkup(<MobileFiles {...props} entries={null} />)).toContain('data-mobile-files-loading');
         expect(renderToStaticMarkup(<MobileFiles {...props} entries={[]} />)).toContain('data-mobile-files-empty');
     });

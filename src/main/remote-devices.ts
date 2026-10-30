@@ -26,22 +26,31 @@ interface DevicesFile {
 
 const hash = (token: string): string => createHash('sha256').update(token).digest('hex');
 
+/**
+ * A paired device that has not connected for this long is no longer paired (genie#1346): its token is refused and Settings
+ * stops listing it. Sliding — every connection renews it — so a phone in daily use never re-pairs; a lost one stops working
+ * on its own within a month even if nobody remembers to remove it. Genie 1's tokens never expired.
+ */
+export const DEVICE_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
+
 export class DeviceStore {
     readonly #file: string;
     readonly #now: () => number;
     readonly #random: () => string;
+    readonly #idleMs: number;
     #data: DevicesFile;
     /** Writes are serialized and awaitable: a caller that is about to leave (or a test about to delete the dir) awaits `flushed()`. */
     #pending: Promise<void> = Promise.resolve();
 
-    private constructor(file: string, deps: { now: () => number; random: () => string }, data: DevicesFile) {
+    private constructor(file: string, deps: { now: () => number; random: () => string; idleMs?: number }, data: DevicesFile) {
         this.#file = file;
         this.#now = deps.now;
         this.#random = deps.random;
+        this.#idleMs = deps.idleMs ?? DEVICE_IDLE_MS;
         this.#data = data;
     }
 
-    static async open(userData: string, deps: { now: () => number; random: () => string }): Promise<DeviceStore> {
+    static async open(userData: string, deps: { now: () => number; random: () => string; idleMs?: number }): Promise<DeviceStore> {
         const file = join(runtimeDir(userData), 'remote-devices.json');
         return new DeviceStore(file, deps, await readJson<DevicesFile>(file, { devices: [] }));
     }
@@ -57,6 +66,7 @@ export class DeviceStore {
     }
 
     byToken(token: string): Device | null {
+        this.#expire();
         const h = hash(token);
         const record = this.#data.devices.find((d) => d.tokenHash === h);
         if (!record) return null;
@@ -67,7 +77,17 @@ export class DeviceStore {
     }
 
     list(): Device[] {
+        this.#expire();
         return this.#data.devices.map(publicView);
+    }
+
+    /** Drop every device unseen for longer than the idle limit, and write that down. */
+    #expire(): void {
+        const now = this.#now();
+        const kept = this.#data.devices.filter((d) => now - Date.parse(d.lastSeenAt) <= this.#idleMs);
+        if (kept.length === this.#data.devices.length) return;
+        this.#data.devices = kept;
+        reportFlush(this.#flush(), 'the remote devices store');
     }
 
     revoke(id: string): boolean {

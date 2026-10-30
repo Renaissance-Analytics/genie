@@ -64,7 +64,7 @@ export function remoteListener(input: RemoteListenerInput): RemoteListener {
             const status = parseTailscaleStatus(json);
             const where = remoteListenAddress(status, input.port);
             if (!where) {
-                reason = status.ok ? 'Tailscale gave no address to listen on' : status.reason;
+                reason = status.ok ? `${status.ip} is not a Tailscale address (100.64.0.0/10); Genie listens only on the tailnet` : status.reason;
                 return;
             }
             const s = (input.createServer ?? nodeCreateServer)();

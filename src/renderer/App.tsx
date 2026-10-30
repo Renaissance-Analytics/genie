@@ -44,7 +44,11 @@ import { ALERT_KINDS, alertDelivery, alertSound, toastFor, type AlertKind } from
 import { toolchainSecurityAlerts } from '../core/toolchain-alerts.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import { playAlertSound, setCustomSoundLoader } from './alert-sound.js';
-import { connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import { AgentWindows, connectRemote, type RemoteClient, type RemoteState } from './remote-bridge.js';
+import type { AuthRequest } from '../core/remote-protocol.js';
+import type { DeckItem } from '../core/deck.js';
+import type { TreeNode } from '../core/files-panel.js';
+import { fromBase64 } from '../core/mobile-wire.js';
 import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
 import type { RelayConnect } from '../core/relay-connect.js';
@@ -69,8 +73,8 @@ import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
-import { bytesToBase64, mobileEntry, mobileView, uploadRefusal, type MobileEntry } from '../core/mobile.js';
-import { MobileAgent, MobilePair, MobileShell } from './components/MobileShell.js';
+import { fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { MobileAgent, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
@@ -479,24 +483,136 @@ export function App({ bridge }: AppProps) {
 }
 
 /**
- * THE PHONE (§6.8 mobile UI: questions mirrored). One remote client to the page's own origin — the
- * QR's PIN or a remembered token dials it on arrival, otherwise the pairing form asks — then the
- * host's snapshot drives `MobileShell`. Answers take the Deck's own routing: an approval goes to
- * the provider, a feature answer to `features.act`, and an "open it" option is said to belong to
- * the desktop rather than navigating a screen that has nowhere to go.
+ * THE PHONE'S CONNECTION (genie#1346). A phone says hello as `mobile` (the snapshot and the agents it watches, never
+ * terminal bytes) and keeps its agent windows ACROSS connections, so a socket that drops — the phone slept, it changed
+ * networks — is dialed again with its token and resumes from a cursor. Backoff between tries; at once when the phone comes
+ * back online or to the front. The baton is asked for after EVERY welcome (a new connection holds none). Only the host
+ * saying this device is not paired (removed in Settings, expired) forgets the token and shows the pairing form.
+ */
+function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
+    const windows = useRef(new AgentWindows()).current;
+    const tokens = useMemo(() => (typeof window === 'undefined' ? null : rememberedTokens(window.localStorage)), []);
+    const [client, setClient] = useState<RemoteClient | null>(null);
+    const [state, setState] = useState<RemoteState | null>(null);
+    const [refusal, setRefusal] = useState<string | null>(null);
+    const [everConnected, setEverConnected] = useState(false);
+    const current = useRef<RemoteClient | null>(null);
+    const attempt = useRef(0);
+    const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const userClosed = useRef(false);
+
+    const tokenNow = (): string | null => tokens?.tokenFor(entry.socketUrl) ?? null;
+    const dial = (auth: AuthRequest): void => {
+        if (timer.current) { clearTimeout(timer.current); timer.current = null; }
+        userClosed.current = false;
+        current.current?.close();
+        const next = connectRemote(webSocketTransport(entry.socketUrl), auth, auth.label ?? 'phone', { profile: 'mobile', windows });
+        current.current = next;
+        setClient(next);
+        setState(next.state());
+        next.onState((s) => { if (current.current === next) setState(s); });
+        void next.ready.then((r) => {
+            if (current.current !== next) return;
+            if (r.ok) {
+                attempt.current = 0;
+                setRefusal(null);
+                setEverConnected(true);
+                const t = next.state().token;
+                if (t) tokens?.remember(entry.socketUrl, t);
+                void next.takeBaton();
+                return;
+            }
+            setRefusal(r.reason);
+            if (/not paired/i.test(r.reason)) { tokens?.forget(entry.socketUrl); setEverConnected(false); }
+        });
+    };
+    const redialSoon = (now = false): void => {
+        const token = tokenNow();
+        if (!token || userClosed.current || timer.current) return;
+        const wait = now ? 0 : reconnectDelay(attempt.current);
+        attempt.current += 1;
+        timer.current = setTimeout(() => { timer.current = null; dial({ kind: 'token', token, label: 'phone' }); }, wait);
+    };
+    // A connection that was up and dropped (or a redial that failed): dial again — unless the host unpaired this device.
+    useEffect(() => {
+        if (!everConnected || state === null || state.connected) return;
+        const said = state.lastRefusal ?? refusal;
+        if (said && /not paired/i.test(said)) { tokens?.forget(entry.socketUrl); setRefusal(said); setEverConnected(false); return; }
+        redialSoon();
+    }, [state?.connected, everConnected, refusal]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Back online, or back in front: try now rather than wait out the backoff.
+    useEffect(() => {
+        const now = () => { if (current.current?.state().connected !== true) { if (timer.current) { clearTimeout(timer.current); timer.current = null; } redialSoon(true); } };
+        const visible = () => { if (document.visibilityState === 'visible') now(); };
+        window.addEventListener('online', now);
+        document.addEventListener('visibilitychange', visible);
+        return () => { window.removeEventListener('online', now); document.removeEventListener('visibilitychange', visible); };
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // On arrival: the QR's PIN, or the token this phone already holds.
+    const dialed = useRef(false);
+    useEffect(() => {
+        if (dialed.current) return;
+        dialed.current = true;
+        const token = tokenNow();
+        if (entry.pin !== null) {
+            dial({ kind: 'pin', code: entry.pin, label: 'phone' });
+            // The PIN is spent once dialed; a reload must not resend it (the token is remembered on welcome).
+            window.history.replaceState(null, '', window.location.pathname);
+        } else if (token) {
+            setEverConnected(true);
+            dial({ kind: 'token', token, label: 'phone' });
+        }
+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    const connected = state?.connected === true;
+    const phase = mobilePhase({ connected, everConnected, hasToken: tokenNow() !== null, refusal: refusal ?? state?.lastRefusal ?? null });
+    return {
+        client,
+        state,
+        phase,
+        refusal: refusal ?? state?.lastRefusal ?? null,
+        connecting: client !== null && !connected && refusal === null,
+        pair: (pin: string, label: string) => { setRefusal(null); dial({ kind: 'pin', code: pin.trim(), label: label || 'phone' }); },
+        disconnect: () => { userClosed.current = true; if (timer.current) clearTimeout(timer.current); timer.current = null; current.current?.close(); setEverConnected(false); setClient(null); setState(null); },
+    };
+}
+
+/** A photo for the chat: drawn at most 2048 px on its longest side as a JPEG — what a provider takes, a fraction of the bytes. */
+async function photoForChat(file: File): Promise<Attachment> {
+    const raw = async (): Promise<Attachment> => ({ name: file.name, type: file.type, bytes: new Uint8Array(await file.arrayBuffer()) });
+    if (!/^image\/(jpeg|png|webp|heic|heif)$/i.test(file.type) || typeof createImageBitmap !== 'function') return raw();
+    try {
+        const bitmap = await createImageBitmap(file);
+        const size = fitWithin(bitmap.width, bitmap.height, 2048);
+        const canvas = document.createElement('canvas');
+        canvas.width = size.width;
+        canvas.height = size.height;
+        canvas.getContext('2d')!.drawImage(bitmap, 0, 0, size.width, size.height);
+        bitmap.close();
+        const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+        if (!blob) return raw();
+        const base = file.name.replace(/\.[^.]+$/, '') || 'photo';
+        return { name: `${base}.jpg`, type: 'image/jpeg', bytes: new Uint8Array(await blob.arrayBuffer()) };
+    } catch {
+        return raw();
+    }
+}
+
+/**
+ * THE PHONE (§6.8; the owner, 2026-10-30): the workspace selector, the workstation dashboard, an agent's chat with its live
+ * stream and the photos/files you attach, and a workspace's files to browse, preview and upload into. Every screen rides
+ * the hash, so the phone's back button works. Answers take the Deck's own routing.
  */
 function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> }) {
-    const remote = useRemote();
+    const remote = useMobileRemote(entry);
     const connected = remote.state?.connected === true;
-    const bridge = connected ? remote.client!.bridge : undefined;
+    // While it reconnects the last screen stays up, drawn from the last connection's data.
+    const lastBridge = useRef<GenieBridge | undefined>(undefined);
+    if (connected && remote.client) lastBridge.current = remote.client.bridge;
+    const bridge = lastBridge.current;
     const snapshot = useSnapshot(bridge);
-    // The option id in flight (the phone shows one agent's one question at a time); ended by the host's reply, always.
     const [inFlight, setInFlight] = useState<string | null>(null);
     const [note, setNote] = useState<string | null>(null);
-    const dialed = useRef(false);
-    const canDial = entry.pin !== null || remote.remembered.includes(entry.socketUrl);
-    // WHAT IS ON SCREEN rides the hash (home, or one agent) so the phone's back button works. The PIN that
-    // may have arrived in the hash is spent before the first view is read.
     const [hash, setHash] = useState(() => (typeof window === 'undefined' ? '' : window.location.hash));
     useEffect(() => {
         const onHash = () => setHash(window.location.hash);
@@ -504,96 +620,171 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
         return () => window.removeEventListener('hashchange', onHash);
     }, []);
     const view = mobileView(hash);
+    const go = (next: Parameters<typeof mobileHash>[0]) => { window.location.hash = mobileHash(next); };
     const agentId = view.kind === 'agent' ? view.agentId : null;
     const { detail } = useAgentDetail(bridge, agentId);
     const [sending, setSending] = useState(false);
-    const [upload, setUpload] = useState<{ sending: boolean; outcome: string | null }>({ sending: false, outcome: null });
-    // Writes need the baton (§6.8); the phone asks for it once it is in. A refusal is said in the shell.
-    const batonAsked = useRef(false);
-    useEffect(() => {
-        if (!connected || batonAsked.current || !remote.client) return;
-        batonAsked.current = true;
-        void remote.client.takeBaton().then((r) => { if (!r.ok) setNote(r.reason); });
-    }, [connected, remote.client]);
-    useEffect(() => {
-        if (dialed.current || !canDial) return;
-        dialed.current = true;
-        remote.connect({ host: entry.socketUrl, pin: entry.pin ?? '', label: 'phone' });
-        // The PIN is spent once dialed; a reload must not resend it (the token is remembered on welcome).
-        if (entry.pin !== null) { window.history.replaceState(null, '', window.location.pathname); setHash(''); }
-    }, [canDial, entry, remote]);
+    const [sendRefusal, setSendRefusal] = useState<string | null>(null);
 
-    if (!connected || !remote.state) {
-        const connecting = remote.client !== null && (remote.state?.lastRefusal ?? null) === null;
-        return <MobilePair host={window.location.host} refusal={remote.state?.lastRefusal ?? null} connecting={connecting} onConnect={({ pin, label }) => remote.connect({ host: entry.socketUrl, pin, label: label || 'phone' })} />;
+    if (remote.phase === 'pair' || !bridge) {
+        return <MobilePair host={window.location.host} refusal={remote.refusal} connecting={remote.connecting} onConnect={({ pin, label }) => remote.pair(pin, label)} />;
     }
-    const host = remote.state.host ?? window.location.host;
+    const reconnecting = remote.phase === 'reconnecting';
+    const host = remote.state?.host ?? window.location.host;
+    const answer = (item: DeckItem, optionId: string, answerNote?: string): void => {
+        setNote(null);
+        const route = deckAnswerRoute(item, optionId, answerNote ?? '');
+        switch (route.kind) {
+            case 'refused':
+                setNote(route.reason);
+                return;
+            case 'navigate':
+                setNote(`Open it on ${host}'s screen — this one only answers.`);
+                return;
+            case 'restart-with-handoff':
+                void bridge.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
+                return;
+            case 'provider':
+                setInFlight(optionId);
+                void bridge.answerApproval(route.agentId, optionId, route.note).then((r) => { if (!r.ok) setNote(refusalWords(r)); }, (error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
+                return;
+            case 'feature':
+                setInFlight(optionId);
+                void bridge.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
+                return;
+        }
+    };
 
-    // ONE AGENT: its activity, and a composer to keep it going (or Start). Back is the browser's back.
+    // ONE AGENT: its chat stream, what it waits on you for, and a composer that takes photos. Back is the browser's back.
     if (agentId !== null) {
         return (
             <MobileAgent
                 detail={detail}
                 sending={sending}
+                reconnecting={reconnecting}
+                needs={(snapshot.deckItems ?? []).filter((i) => i.agentId === agentId)}
+                answering={inFlight}
+                onAnswer={answer}
+                sendRefusal={sendRefusal ?? note}
                 onBack={() => { window.history.back(); }}
-                onSend={(text) => { setSending(true); void bridge!.prompt(agentId, text); setTimeout(() => setSending(false), 400); }}
+                onSend={(text, files) => {
+                    setSending(true);
+                    setSendRefusal(null);
+                    void Promise.all(files.map(photoForChat))
+                        .then((attachments) => bridge.prompt(agentId, text, attachments.length > 0 ? attachments : undefined))
+                        .then((r) => { if (!r.ok) setSendRefusal(r.reason ?? `${detail?.agent.name ?? 'The agent'} is not running; nothing was sent`); }, (error: unknown) => setSendRefusal((error as Error).message))
+                        .finally(() => setSending(false));
+                }}
                 // The phone's Start is the one restart too (genie#1238).
-                onStart={() => { void bridge!.agents.restart(agentId, 'graceful'); }}
+                onStart={() => { void bridge.agents.restart(agentId, 'graceful'); }}
                 onResumeLimit={() => { void bridge!.resumeLimit(agentId); }}
             />
         );
     }
+    if (view.kind === 'files') {
+        const ws = snapshot.workspaces?.find((w) => w.id === view.workspaceId);
+        return <MobileFilesScreen bridge={bridge} workspaceId={view.workspaceId} workspaceName={ws?.name ?? view.workspaceId} path={view.path} file={view.file === true} go={go} />;
+    }
     return (
         <MobileShell
             host={host}
-            locked={remote.state.locked}
-            refusal={note ?? remote.state.lastRefusal}
+            locked={remote.state?.locked ?? false}
+            refusal={note ?? remote.refusal}
+            reconnecting={reconnecting}
             items={snapshot.deckItems}
             answering={inFlight}
-            onAnswer={(item, optionId, answerNote) => {
-                setNote(null);
-                const route = deckAnswerRoute(item, optionId, answerNote ?? '');
-                switch (route.kind) {
-                    case 'refused':
-                        setNote(route.reason);
-                        return;
-                    case 'navigate':
-                        setNote(`Open it on ${host}'s screen — this one only answers.`);
-                        return;
-                    case 'restart-with-handoff':
-                        void bridge!.restartWithHandoff(route.agentId, route.finishedId).then((r) => { if (!r.ok) setNote(r.reason); });
-                        return;
-                    case 'provider':
-                        // The host's reply ends the flight; its refusal is said in the shell (it used to be set and never cleared here too).
-                        setInFlight(optionId);
-                        void bridge!.answerApproval(route.agentId, optionId, route.note).then((r) => { if (!r.ok) setNote(refusalWords(r)); }, (error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
-                        return;
-                    case 'feature':
-                        setInFlight(optionId);
-                        void bridge!.features.act({ kind: 'deck.answer', item, optionId, ...(answerNote ? { note: answerNote } : {}) }).catch((error: unknown) => setNote((error as Error).message)).finally(() => setInFlight(null));
-                        return;
-                }
-            }}
+            onAnswer={answer}
             onDisconnect={remote.disconnect}
             workspaces={snapshot.workspaces}
+            selectedWorkspace={view.kind === 'home' ? view.workspaceId : null}
+            onSelectWorkspace={(workspaceId) => { window.history.replaceState(null, '', `${window.location.pathname}${mobileHash({ kind: 'home', workspaceId })}`); setHash(window.location.hash); }}
+            onOpenFiles={(workspaceId) => go({ kind: 'files', workspaceId, path: '' })}
             agents={{
                 rows: snapshot.workspaces === null ? null : snapshot.agents,
-                onOpen: (id) => { window.location.hash = `#agent=${id}`; },
+                onOpen: (id) => go({ kind: 'agent', agentId: id }),
             }}
-            upload={{
-                agents: snapshot.agents.map((a) => ({ id: a.id, name: a.name, provider: a.provider, workspaceId: a.workspaceId })),
-                sending: upload.sending,
-                outcome: upload.outcome,
-                onSend: ({ to, text, file }) => {
-                    const refusal = uploadRefusal(file.name, file.size);
-                    if (refusal) { setUpload({ sending: false, outcome: refusal }); return; }
-                    if (!bridge?.uploads) { setUpload({ sending: false, outcome: 'this host does not take uploads' }); return; }
-                    setUpload({ sending: true, outcome: null });
-                    void file.arrayBuffer()
-                        .then((buf) => bridge.uploads!.sendFile(to, text, file.name, bytesToBase64(new Uint8Array(buf))))
-                        .then((r) => setUpload({ sending: false, outcome: r.ok ? `sent ${file.name} to ${to}` : r.reason }))
-                        .catch((error: unknown) => setUpload({ sending: false, outcome: (error as Error).message }));
-                },
+        />
+    );
+}
+
+/** A WORKSPACE'S FILES on the phone: a folder through the host's files host, a file previewed by kind, uploads into the folder. */
+function MobileFilesScreen({ bridge, workspaceId, workspaceName, path, file, go }: { bridge: GenieBridge; workspaceId: string; workspaceName: string; path: string; file: boolean; go: (view: Parameters<typeof mobileHash>[0]) => void }) {
+    const [entries, setEntries] = useState<readonly TreeNode[] | null>(null);
+    const [error, setError] = useState<string | null>(null);
+    const [preview, setPreview] = useState<MobilePreview | null>(null);
+    const [uploading, setUploading] = useState<string | false>(false);
+    const [outcome, setOutcome] = useState<string | null>(null);
+    const [reload, setReload] = useState(0);
+    const parent = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+
+    useEffect(() => {
+        if (file) return;
+        let live = true;
+        setEntries(null);
+        setError(null);
+        const children = bridge.files.children;
+        if (!children) { setError('This host does not offer its files.'); setEntries([]); return; }
+        children(workspaceId, path).then((list) => {
+            if (!live) return;
+            if (list === null) { setError(`${path || workspaceName} cannot be read.`); setEntries([]); }
+            else setEntries(list);
+        }, (e: unknown) => { if (live) { setError((e as Error).message); setEntries([]); } });
+        return () => { live = false; };
+    }, [bridge, workspaceId, path, file, reload, workspaceName]);
+
+    useEffect(() => {
+        if (!file) return;
+        let live = true;
+        let url: string | null = null;
+        setPreview(null);
+        const kind = previewKind(path);
+        if (kind === 'markdown' || kind === 'text') {
+            bridge.files.open(workspaceId, path).then((r) => {
+                if (!live) return;
+                setPreview(r.ok ? { kind, text: r.text } : { kind: 'error', reason: r.error });
+            }, (e: unknown) => { if (live) setPreview({ kind: 'error', reason: (e as Error).message }); });
+        } else {
+            const media = bridge.files.readMedia;
+            if (!media) setPreview({ kind: 'error', reason: 'This host does not send files’ bytes.' });
+            else media(workspaceId, path).then((r) => {
+                if (!live) return;
+                if (!r.ok) { setPreview({ kind: 'error', reason: r.error }); return; }
+                const bytes = fromBase64(r.base64) ?? new Uint8Array(0);
+                url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: previewMime(path) }));
+                setPreview(kind === 'image' ? { kind: 'image', url } : kind === 'pdf' ? { kind: 'pdf', url } : { kind: 'other', url });
+            }, (e: unknown) => { if (live) setPreview({ kind: 'error', reason: (e as Error).message }); });
+        }
+        return () => { live = false; if (url) URL.revokeObjectURL(url); };
+    }, [bridge, workspaceId, path, file]);
+
+    if (file) return <MobileFileView path={path} preview={preview} onBack={() => { window.history.back(); }} />;
+    return (
+        <MobileFiles
+            workspaceName={workspaceName}
+            path={path}
+            entries={entries}
+            error={error}
+            onBack={() => go({ kind: 'home', workspaceId })}
+            onUp={() => go({ kind: 'files', workspaceId, path: parent })}
+            onOpen={(entry) => go(entry.type === 'folder' ? { kind: 'files', workspaceId, path: entry.id } : { kind: 'files', workspaceId, path: entry.id, file: true })}
+            uploading={uploading}
+            outcome={outcome}
+            onUpload={(files) => {
+                const upload = bridge.files.upload;
+                if (!upload) { setOutcome('This host does not take uploads.'); return; }
+                setOutcome(null);
+                void (async () => {
+                    const done: string[] = [];
+                    for (const f of files) {
+                        setUploading(`Sending ${f.name}…`);
+                        const r = await upload(workspaceId, path, f.name, new Uint8Array(await f.arrayBuffer()), (sent, total) => setUploading(`Sending ${f.name} — ${Math.round((sent / total) * 100)}%`));
+                        if (!r.ok) { setUploading(false); setOutcome(`${f.name} was not uploaded: ${r.reason}`); setReload((n) => n + 1); return; }
+                        done.push(r.path);
+                    }
+                    setUploading(false);
+                    setOutcome(`Uploaded ${done.join(', ')}`);
+                    setReload((n) => n + 1);
+                })().catch((e: unknown) => { setUploading(false); setOutcome((e as Error).message); });
             }}
         />
     );

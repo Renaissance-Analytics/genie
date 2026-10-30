@@ -2307,9 +2307,18 @@ async function boot(): Promise<void> {
                 cancel: (id) => host!.cancel(id),
                 resumeLimit: (provider) => host!.resumeLimit(provider),
                 prompt: (id, text, by) => host!.prompt(id, text, by),
+                // A phone's photo in the chat (genie#1346): the composer's own attach path, the same as `genie:prompt`.
+                promptWith: (id, text, attachments, by) => host!.promptWith(id, text, attachments, by),
                 resolvePrompt: (id, promptId, action) => host!.resolvePrompt(id, promptId, action),
                 answerApproval: (id, optionId, note) => host!.answerApproval(id, optionId, note ?? ''),
                 subscribe: (cb) => host!.subscribe(cb),
+            },
+            // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
+            files: {
+                children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
+                open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
+                readBytes: (workspaceId, path) => filesHost?.readBytes(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
+                upload: (workspaceId, dir, name, bytes) => filesHost?.upload(workspaceId, dir, name, bytes) ?? Promise.resolve({ ok: false as const, reason: 'no files host' }),
             },
             registerAgent: (workspaceId, input) => createAgent(agentCreatePorts(), workspaceId, input),
             attention: { finished: () => services!.attention.finished(), markSeen: (id) => services!.attention.markSeen(id) },

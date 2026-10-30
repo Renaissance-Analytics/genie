@@ -27,7 +27,21 @@ export function parseTailscaleStatus(json: string): TailscaleStatus {
     return { ok: true, ip, dnsName: dns || ip };
 }
 
+/**
+ * An address the socket may bind: Tailscale's CGNAT block 100.64.0.0/10 (every tailnet node's IPv4, Genie 1's
+ * `isCgnatIp`, main/mobile/tailnet.ts:31 at v0.7.0-beta.342) or the loopback. Never a LAN, public or wildcard address,
+ * whatever `tailscale status` happens to report (genie#1346).
+ */
+export function bindableAddress(ip: string): boolean {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+    if (!m) return false;
+    const [a, b, c, d] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
+    if ([a, b, c, d].some((n) => n > 255)) return false;
+    if (a === 127) return true;
+    return a === 100 && b >= 64 && b <= 127;
+}
+
 export function remoteListenAddress(status: TailscaleStatus, port: number): { bind: string; url: string } | null {
-    if (!status.ok) return null;
+    if (!status.ok || !bindableAddress(status.ip)) return null;
     return { bind: status.ip, url: `ws://${status.dnsName}:${port}${REMOTE_PATH}` };
 }

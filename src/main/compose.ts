@@ -830,7 +830,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
         hostName,
         baton: new Baton(),
-        pins: new PairingPins({ now, random: Math.random }),
+        // The PIN from the CSPRNG (PairingPins' default), as Genie 1's crypto.randomInt — not Math.random (genie#1346).
+        pins: new PairingPins({ now }),
         shares: new ShareLinks({ host: hostName, now, random: () => randomBytes(18).toString('base64url') }),
         devices: remoteDevices,
         transport: input.remoteTransport ?? { onConnection: () => () => {} },
