@@ -27,7 +27,8 @@ describe('the route to the processes', () => {
 
     it('the Shell hands the route’s tab to the Hosting surface, which switches to it even when already open', () => {
         const shell = readFileSync('src/renderer/Shell.tsx', 'utf8');
-        expect(shell).toMatch(/parsed\.surface === 'hosting' \? <HostingSurface [^>]*tab=\{parsed\.tab\}/);
+        // Inside its error boundary since parity audit #7 (renderer/components/ErrorBoundary.tsx); the tab is still the route's.
+        expect(shell).toMatch(/parsed\.surface === 'hosting' \? (?:<ErrorBoundary [^>]*>)?<HostingSurface [^>]*tab=\{parsed\.tab\}/);
         const surfaces = readFileSync('src/renderer/components/FeatureSurfaces.tsx', 'utf8');
         expect(surfaces).toMatch(/<Tabs key=\{tab \?\? 'sites'\} defaultTab=\{tab \?\? 'sites'\}/);
     });
