@@ -1,3 +1,6 @@
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MobileConnecting } from '../src/renderer/components/MobileShell.js';
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { get as httpsGet } from 'node:https';
 import { tmpdir } from 'node:os';
@@ -61,6 +64,15 @@ describe('the page at /mobile', () => {
         const html = mobileHtml(base, 'x"><script>alert(1)</script>');
         expect(html).not.toContain('<script>alert(1)</script>');
         expect(html).toContain('&quot;&gt;&lt;script&gt;');
+    });
+});
+
+describe('reopened from the home screen', () => {
+    it('a remembered phone shows Connecting while it dials — never the PIN form', () => {
+        const html = renderToStaticMarkup(createElement(MobileConnecting, { host: 'alphar.tail.ts.net' }));
+        expect(html).toContain('data-mobile="connecting"');
+        expect(html).toContain('alphar.tail.ts.net');
+        expect(html).not.toContain('name="pin"');
     });
 });
 

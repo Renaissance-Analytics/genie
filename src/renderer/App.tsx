@@ -74,7 +74,7 @@ import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
 import { fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
-import { MobileAgent, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
+import { MobileAgent, MobileConnecting, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
 import type { WorkspaceOpsProps } from './components/Workspace.js';
@@ -610,6 +610,11 @@ async function photoForChat(file: File): Promise<Attachment> {
  */
 function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> }) {
     const remote = useMobileRemote(entry);
+    // THE INSTALLABLE APP (genie#1346): the app-shell worker, where the page is a secure context (HTTPS on the tailnet name).
+    useEffect(() => {
+        if (typeof navigator === 'undefined' || !('serviceWorker' in navigator) || !window.isSecureContext) return;
+        void navigator.serviceWorker.register('/mobile/sw.js', { scope: '/mobile' }).catch(() => {});
+    }, []);
     const connected = remote.state?.connected === true;
     // While it reconnects the last screen stays up, drawn from the last connection's data.
     const lastBridge = useRef<GenieBridge | undefined>(undefined);
@@ -631,9 +636,11 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const [sending, setSending] = useState(false);
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
 
-    if (remote.phase === 'pair' || !bridge) {
+    if (remote.phase === 'pair') {
         return <MobilePair host={window.location.host} refusal={remote.refusal} connecting={remote.connecting} onConnect={({ pin, label }) => remote.pair(pin, label)} />;
     }
+    // A phone that holds its token — reopened from the home screen, or back from sleep — dials; it is never asked for a PIN.
+    if (!bridge) return <MobileConnecting host={window.location.hostname} />;
     const reconnecting = remote.phase === 'reconnecting';
     const host = remote.state?.host ?? window.location.host;
     const answer = (item: DeckItem, optionId: string, answerNote?: string): void => {

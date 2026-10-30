@@ -15,7 +15,8 @@
  *
  * Every check is written to `mobile-evidence/checks.json`; a failed one fails the run.
  */
-import { createHash } from 'node:crypto';
+import { X509Certificate, createHash } from 'node:crypto';
+import { homedir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
@@ -23,7 +24,10 @@ import { chromium, devices } from 'playwright-core';
 const OUT = join(process.cwd(), 'mobile-evidence');
 const WS_DIR = process.env.MOBILE_WS ?? '';
 const IP = process.env.TAILNET_IP ?? '100.100.7.7';
-const PAGE = `http://${IP}:7421/mobile`;
+// A Tailscale cert names the MagicDNS name, never the raw 100.x address: the phone opens the name (genie#1346 PWA).
+const DNS = 'omarchy-test.tailnet-proof.ts.net';
+const PAGE = `https://${DNS}:7421/mobile`;
+const CERT = join(homedir(), '.genie', 'runtime', 'mobile-tls', 'cert.pem');
 const ATLAS = `agent_${'a1b2c3d4'.repeat(4)}`;
 const RECEIVED = '/tmp/genie-stub-claude-received';
 mkdirSync(OUT, { recursive: true });
@@ -86,13 +90,17 @@ async function main() {
     const g = await genieWindow();
     let remote = await act(g, { kind: 'settings.set', key: 'remote_access', value: true });
     for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await g.evaluate('window.genie.features.snapshot().then((d) => d.remote)'); }
-    check('remote access listens on the tailnet address only', remote.url === `ws://omarchy-test.tailnet-proof.ts.net:7421/genie`, `url=${remote.url} unavailable=${remote.unavailable}`);
+    check('remote access listens on the tailnet name over HTTPS (wss), with the cert `tailscale cert` issued', remote.url === `wss://${DNS}:7421/genie`, `url=${remote.url} unavailable=${remote.unavailable}`);
     remote = await act(g, { kind: 'remote.issuePin' });
     const pin = remote.pin?.code;
     check('a PIN is issued on the host’s screen', /^\d{6}$/.test(pin ?? ''), `pin=${pin ? '******' : 'none'}`);
 
-    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox'] });
+    // The phone's browser trusts the tailnet cert the way a real one trusts Let's Encrypt's: here, by its key (the VM's fake
+    // `tailscale cert` is self-signed), and resolves the MagicDNS name to the tailnet address as MagicDNS would.
+    const spki = createHash('sha256').update(new X509Certificate(readFileSync(CERT)).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
+    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox', `--host-resolver-rules=MAP ${DNS} ${IP}`, `--ignore-certificate-errors-spki-list=${spki}`] });
     const context = await browser.newContext({ ...devices['Pixel 7'] });
+    await context.addInitScript(() => { window.addEventListener('beforeinstallprompt', () => { window.__installPrompt = true; }); });
     const page = await context.newPage();
     const frames = { sent: [], received: [] };
     page.on('websocket', (ws) => {
@@ -116,6 +124,25 @@ async function main() {
     await page.waitForSelector('[data-mobile-ws="tynn"][data-selected="true"]');
     await shot(page, '02-workspace-selected');
     check('picking a workspace narrows the dashboard and offers its Files', await page.locator('[data-action="open-files"]').count() === 1);
+
+    // THE INSTALLABLE APP: a secure context, this host's manifest, the app-shell worker, Chromium's own installability verdict.
+    const cdp = await context.newCDPSession(page);
+    check('the page is a secure context (HTTPS on the tailnet name)', await page.evaluate(() => window.isSecureContext));
+    const manifest = await cdp.send('Page.getAppManifest');
+    const parsed = JSON.parse(manifest.data || '{}');
+    writeFileSync(join(OUT, 'manifest.json'), JSON.stringify({ url: manifest.url, errors: manifest.errors, manifest: parsed }, null, 2));
+    check('the manifest is this host’s: named after it, standalone, with a maskable icon', manifest.errors.length === 0 && parsed.name === 'Genie — omarchy-test' && parsed.display === 'standalone' && parsed.icons?.some((i) => i.purpose === 'maskable'), `${parsed.name} · ${parsed.display} · errors ${JSON.stringify(manifest.errors)}`);
+    await page.waitForFunction(() => navigator.serviceWorker?.controller !== null || navigator.serviceWorker?.ready, null, { timeout: 20_000 }).catch(() => {});
+    const sw = await page.evaluate(async () => { const r = await navigator.serviceWorker.ready; return { scope: r.scope, state: r.active?.state ?? null }; });
+    check('the app-shell service worker is active for /mobile', sw.state === 'activated' && sw.scope.endsWith('/mobile'), JSON.stringify(sw));
+    let installability = await cdp.send('Page.getInstallabilityErrors');
+    for (let i = 0; i < 10 && installability.installabilityErrors.length > 0; i++) { await sleep(1000); installability = await cdp.send('Page.getInstallabilityErrors'); }
+    writeFileSync(join(OUT, 'installability.json'), JSON.stringify(installability, null, 2));
+    check('Chromium says the app is INSTALLABLE (Page.getInstallabilityErrors is empty)', installability.installabilityErrors.length === 0, JSON.stringify(installability.installabilityErrors));
+    await page.reload();
+    await page.waitForSelector('[data-mobile="shell"] [data-mobile-agent]', { timeout: 30_000 });
+    check('beforeinstallprompt fired (the browser offers Install / Add to Home Screen)', await page.evaluate(() => window.__installPrompt === true), 'headless Chromium may withhold it; the installability verdict above is the gate');
+    await shot(page, '02b-installable');
 
     // 3. An agent's chat. Start it when it is not running.
     await page.tap(`[data-mobile-agent="${ATLAS}"]`);
@@ -203,6 +230,23 @@ async function main() {
     await page.waitForSelector('[data-upload-outcome] >> text=IMG_0002.jpg', { timeout: 60_000 });
     await shot(page, '14-photo-uploaded');
     check('Take photo uploads into the folder', existsSync(join(WS_DIR, 'docs', 'IMG_0002.jpg')));
+
+    // 7b. Only the app shell is cached: no socket, no data, no token.
+    const cached = await page.evaluate(async () => { const out = []; for (const k of await caches.keys()) for (const r of await (await caches.open(k)).keys()) out.push(new URL(r.url).pathname); return out; });
+    writeFileSync(join(OUT, 'sw-cache.json'), JSON.stringify(cached, null, 2));
+    check('the service worker cached the app shell only (page, hashed assets, icons)', cached.length > 0 && cached.every((p) => p === '/mobile' || /^\/(mobile\/)?assets\//.test(p) || /^\/mobile\/.*\.png$/.test(p)), `${cached.length} entries`);
+
+    // 7c. Reopened from the home screen with the host unreachable: the cached shell says Connecting — no stale agents
+    // dressed as live — and when the network is back it connects by itself with its token, no PIN.
+    await context.setOffline(true);
+    await page.goto(PAGE).catch(() => {});
+    await page.waitForSelector('[data-mobile="connecting"]', { timeout: 20_000 }).catch(() => {});
+    await shot(page, '14b-reopened-offline');
+    check('reopened offline: the cached shell shows Connecting, and no agent data', await page.locator('[data-mobile="connecting"]').count() === 1 && await page.locator('[data-mobile-agent]').count() === 0);
+    await context.setOffline(false);
+    await page.waitForSelector('[data-mobile="shell"] [data-mobile-agent]', { timeout: 60_000 });
+    await shot(page, '14c-reopened-online');
+    check('back online: it reconnected by itself with its token, no PIN asked', await page.locator('[data-mobile="pair"]').count() === 0);
 
     // 8. The connection drops (Settings → Restart): the phone says Reconnecting and comes back on its own, resuming.
     await page.goto(`${PAGE}#agent=${ATLAS}`);

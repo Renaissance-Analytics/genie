@@ -30,6 +30,13 @@ if [ "\${1:-}" = status ]; then
   echo '{"BackendState":"Running","Self":{"DNSName":"omarchy-test.tailnet-proof.ts.net.","TailscaleIPs":["$IP","fd7a:115c:a1e0::7"]}}'
   exit 0
 fi
+# tailscale cert --cert-file F --key-file K <name>: a real Tailscale cert is Let's Encrypt's; this one is self-signed for the
+# same name, and the phone's browser is told to trust its key (drive.mjs). Genie's code path is the same.
+if [ "\${1:-}" = cert ]; then
+  certf="\$3"; keyf="\$5"; name="\$6"
+  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "\$keyf" -out "\$certf" -days 30 -subj "/CN=\$name" -addext "subjectAltName=DNS:\$name" 2>/dev/null
+  exit \$?
+fi
 echo "fake tailscale: \$*" >&2; exit 1
 EOF
 chmod +x "$HOME/fakebin/tailscale"
@@ -65,17 +72,17 @@ echo "=== what the remote socket is bound to (ss -ltn)"
 ss -ltn | grep -E ':7421\b' | tee "$EVIDENCE/bind.txt" || echo "nothing on 7421 (remote access is off after the device was removed? it stays on)" | tee "$EVIDENCE/bind.txt"
 
 echo "=== an unpaired socket: a made-up token is refused and closed; a call before hello is refused"
-node -e "
-const ws = new WebSocket('ws://$IP:7421/genie');
+NODE_TLS_REJECT_UNAUTHORIZED=0 node -e "
+const ws = new WebSocket('wss://$IP:7421/genie');
 const got = [];
 ws.onopen = () => { ws.send(JSON.stringify({kind:'call',id:1,method:'snapshot',args:[]})); ws.send(JSON.stringify({kind:'hello',auth:{kind:'token',token:'not-a-real-token'},label:'intruder'})); };
 ws.onmessage = (e) => got.push(String(e.data));
 ws.onclose = () => { console.log(JSON.stringify(got)); process.exit(0); };
 setTimeout(() => { console.log('still open after 5s: ' + JSON.stringify(got)); process.exit(1); }, 5000);
-" | tee "$EVIDENCE/unpaired.txt"
+" 2>&1 | tee "$EVIDENCE/unpaired.txt"
 echo "=== nothing answers on the VM's other addresses"
 for a in 127.0.0.1 $(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1); do
-    if curl -s -o /dev/null -m 3 "http://$a:7421/mobile"; then echo "$a:7421 ANSWERED"; else echo "$a:7421 refused"; fi
+    if curl -sk -o /dev/null -m 3 "https://$a:7421/mobile" || curl -s -o /dev/null -m 3 "http://$a:7421/mobile"; then echo "$a:7421 ANSWERED"; else echo "$a:7421 refused"; fi
 done | tee "$EVIDENCE/other-addresses.txt"
 
 cp /tmp/electron.log "$EVIDENCE/electron.log" 2>/dev/null || true

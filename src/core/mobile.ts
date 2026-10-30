@@ -87,6 +87,9 @@ const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export function staticFile(urlPath: string): StaticFile | null {
     const path = urlPath.split(/[?#]/, 1)[0] ?? '';
     if (path === '/' || path === MOBILE_PATH || path === `${MOBILE_PATH}/`) return HTML;
+    // The installed app's icons (genie#1346 PWA): the Genie logo, from the build's `mobile/` folder.
+    const icon = /^\/mobile\/((?:icon-(?:192|512|maskable-512))|apple-touch-icon)\.png$/.exec(path);
+    if (icon) return { relative: `mobile/${icon[1]}.png`, contentType: 'image/png', cache: 'public, max-age=86400' };
     // The page at `/mobile/` resolves its relative `./assets/…` under `/mobile/assets/` — the same files (genie#1346).
     const m = /^(?:\/mobile)?\/assets\/([^/]+)$/.exec(path);
     if (!m) return null;

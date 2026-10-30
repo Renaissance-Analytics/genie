@@ -1,4 +1,5 @@
 import { createServer as nodeCreateServer, type Server } from 'node:http';
+import { createServer as nodeCreateSecureServer } from 'node:https';
 import type { AddressInfo } from 'node:net';
 import type { ServerConnection, ServerTransport } from '../core/remote-protocol.js';
 import { REMOTE_PATH, parseTailscaleStatus, remoteListenAddress } from '../core/tailscale.js';
@@ -21,6 +22,12 @@ export interface RemoteListenerInput {
     readonly createServer?: () => Server;
     /** The phone's page (§6.8): GET on this port serves the built renderer through it. Absent, the port serves nothing but the socket. */
     readonly serve?: PageServer;
+    /**
+     * HTTPS ON THE TAILNET NAME (genie#1346 — an installable app needs a secure context). A Tailscale cert for this node's
+     * MagicDNS name (`tailscale cert`, Genie 1's main/mobile/tls.ts), or `null` when the tailnet gives none (MagicDNS or
+     * HTTPS certificates off): then the port serves http, still inside WireGuard — Genie 1's fallback. Absent = http.
+     */
+    readonly cert?: (dnsName: string) => Promise<{ cert: string; key: string } | null>;
 }
 
 /** The listener's transport always answers where it listens and why not — never optional here. */
@@ -67,7 +74,10 @@ export function remoteListener(input: RemoteListenerInput): RemoteListener {
                 reason = status.ok ? `${status.ip} is not a Tailscale address (100.64.0.0/10); Genie listens only on the tailnet` : status.reason;
                 return;
             }
-            const s = (input.createServer ?? nodeCreateServer)();
+            // A cert can only name the MagicDNS name, never the raw 100.x address, so HTTPS is addressed by the name.
+            const dnsName = status.ok && status.dnsName !== status.ip ? status.dnsName : null;
+            const tls = input.cert && dnsName ? await input.cert(dnsName).catch(() => null) : null;
+            const s: Server = tls ? (nodeCreateSecureServer({ cert: tls.cert, key: tls.key }) as unknown as Server) : (input.createServer ?? nodeCreateServer)();
             // THE PHONE'S PAGE (§6.8) rides the same port: GET/HEAD for what `serve` allows, 405 for any other method,
             // 404 for everything else — and with no `serve`, 404 for everything: the port carries the socket alone.
             const serve = input.serve;
@@ -81,6 +91,7 @@ export function remoteListener(input: RemoteListenerInput): RemoteListener {
                     res.setHeader('Content-Type', served.contentType);
                     res.setHeader('Cache-Control', served.cache);
                     res.setHeader('X-Content-Type-Options', 'nosniff');
+                    for (const [k, v] of Object.entries(served.headers ?? {})) res.setHeader(k, v);
                     res.setHeader('Content-Length', served.body.byteLength);
                     if (req.method === 'HEAD') res.end();
                     else res.end(Buffer.from(served.body));
@@ -91,7 +102,7 @@ export function remoteListener(input: RemoteListenerInput): RemoteListener {
                 s.listen(input.port, where.bind, () => { s.off('error', reject); resolve(); });
             });
             const port = (s.address() as AddressInfo).port;
-            const url = where.url.replace(`:${input.port}${REMOTE_PATH}`, `:${port}${REMOTE_PATH}`);
+            const url = where.url.replace(`:${input.port}${REMOTE_PATH}`, `:${port}${REMOTE_PATH}`).replace(/^ws:/, tls ? 'wss:' : 'ws:');
             const inner = fancyWsTransport({ attach: input.attach, server: s, path: REMOTE_PATH, address: () => address });
             inner.onConnection((c) => {
                 open.add(c);

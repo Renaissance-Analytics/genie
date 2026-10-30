@@ -78,7 +78,7 @@ import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
 import { buildEnvelope, discardStaged, readSource, registerExisting, stageFromGit, type EnvelopePorts } from './envelope-wizard-host.js';
 import { parseEnvelopePlan } from '../core/envelope-plan.js';
-import { mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile as readFileText, stat as statPath, writeFile as writeFileText } from 'node:fs/promises';
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
@@ -2200,8 +2200,27 @@ async function boot(): Promise<void> {
         tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
-        // The phone's page (§6.8): the built renderer, from the same directory the window loads it from.
-        serve: staticServer(join(here, '../renderer')),
+        // The phone's page (§6.8): the built renderer, from the same directory the window loads it from — and, named after
+        // this host, its installable app: manifest, app-shell worker, icons (genie#1346).
+        serve: staticServer(join(here, '../renderer'), { hostName: () => hostname() }),
+        // HTTPS on the MagicDNS name, so the app is installable (a service worker needs a secure context): a Tailscale cert
+        // via `tailscale cert`, renewed in place each time the listener starts — Genie 1's main/mobile/tls.ts. Any failure
+        // (MagicDNS or HTTPS certificates off on the tailnet) is http inside WireGuard, as Genie 1 fell back.
+        cert: async (dnsName) => {
+            const dir = join(runtimeDir(genieHome()), 'mobile-tls');
+            const certFile = join(dir, 'cert.pem');
+            const keyFile = join(dir, 'key.pem');
+            try {
+                await mkdir(dir, { recursive: true });
+                await new Promise<void>((resolve, reject) => { execFileCb('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { windowsHide: true, timeout: 60_000 }, (error) => (error ? reject(error) : resolve())); });
+                // The private key, the user's only (best effort; on Windows the per-user profile is the guard) — as Genie 1.
+                await chmod(keyFile, 0o600).catch(() => {});
+                return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
+            } catch (error) {
+                console.error(`[remote] no Tailscale cert for ${dnsName}, serving http inside the tailnet: ${error instanceof Error ? error.message : String(error)}`);
+                return null;
+            }
+        },
     });
     remoteSocketNow = remoteSocket;
     const remoteHub = transportHub(remoteSocket.transport);

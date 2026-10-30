@@ -507,6 +507,17 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
     );
 }
 
+/** A remembered phone dialing its host — opened from the home screen, or back from sleep. Never the PIN form. */
+export function MobileConnecting({ host }: { host: string }) {
+    return (
+        <div data-mobile="connecting" role="status" className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-[var(--bg-0)] px-6 text-[var(--fg-1)]">
+            <span className="size-10 rounded-[10px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
+            <p className="flex items-center gap-2 text-sm"><Icon name="loader" size="sm" className="animate-spin" />Connecting to <span className="font-mono">{host}</span>…</p>
+            <p className="text-center text-xs text-[var(--fg-3)]">It must be on and on your tailnet. This keeps trying on its own.</p>
+        </div>
+    );
+}
+
 export interface MobilePairProps {
     /** The page's own origin — where the socket is. Shown, never typed. */
     host: string;
