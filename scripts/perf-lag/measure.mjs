@@ -123,7 +123,9 @@ while (Date.now() < until) {
     const ch = 'abcdefghij'[typed % 10];
     const t0 = Date.now();
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, code: `Key${ch.toUpperCase()}`, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+    const tDown = Date.now();
     await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code: `Key${ch.toUpperCase()}`, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+    const tUp = Date.now();
     let shown = false;
     try {
         shown = await page.call(function painted(composer, typed) {
@@ -131,7 +133,8 @@ while (Date.now() < until) {
         }, [COMPOSER, ch], true);
     } catch { shown = false; }
     const t1 = Date.now();
-    keys.push([since(t0), t1 - t0, shown]);
+    // Where the time went: the key down handled (browser process → renderer → ack), the key up, then the next frame.
+    keys.push([since(t0), t1 - t0, shown, tDown - t0, tUp - tDown, t1 - tUp]);
     typed += 1;
     if (typed % 40 === 0) {
         // Clear the composer the way a person does, so the draft stays small.
@@ -169,6 +172,7 @@ const phase = (from, to) => {
     const lt = long.filter(([t]) => t >= from && t < to);
     return {
         keys: { n: ks.length, p50: q(0.5), p95: q(0.95), max: ks.at(-1) ?? null, over100: ks.filter((d) => d > 100).length, over1000: ks.filter((d) => d > 1000).length },
+        phases: Object.fromEntries(['down', 'up', 'frame'].map((name, j) => { const v = keys.filter(([t]) => t >= from && t < to).map((k) => k[3 + j]).filter((x) => x !== undefined).sort((a, b) => a - b); return [name, v.length ? { p50: v[Math.floor(0.5 * v.length)], p95: v[Math.min(v.length - 1, Math.floor(0.95 * v.length))] } : null]; })),
         mainLag: { gaps: lg.length, totalMs: lg.reduce((a, [, d]) => a + d, 0), maxMs: Math.max(0, ...lg.map(([, d]) => d)) },
         rendererLong: { n: lt.length, totalMs: lt.reduce((a, [, d]) => a + d, 0), maxMs: Math.max(0, ...lt.map(([, d]) => d)) },
     };

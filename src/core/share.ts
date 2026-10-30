@@ -6,8 +6,8 @@
  * is a NEW object graph, equal or not. A view handed `snapshot.workspaces.find(…)` got a new object each time and redrew,
  * and its effects keyed on it ran again (a files IPC per push). Shared, the workspace is the same object until it changes.
  *
- * - Plain objects and arrays are compared member by member; anything else (a class instance, a Map, a function, a React
- *   element) is equal only to itself. Arrays of objects with a string `id` are matched by id, so a reorder still shares each element.
+ * - Plain objects and arrays are compared member by member — arrays by position, then by `id` for an element that
+ *   moved. Anything else (a class instance, a Map, a function, a React element) is equal only to itself.
  * - O(size of `next`), and O(1) where `prev` and `next` are already the same object.
  * - Never mutates either argument.
  */
@@ -35,16 +35,22 @@ function shareAny(prev: unknown, next: unknown): unknown {
 }
 
 function shareArray(prev: readonly unknown[], next: readonly unknown[]): readonly unknown[] {
-    // By id when every element of both has one (a list of agents, workspaces, deck items); by position otherwise.
+    // By POSITION first, and an element that is the same object there costs one comparison — a ledger of thousands of
+    // rows with one appended is thousands of identity checks, nothing more. An element whose id moved (a reorder of agents,
+    // workspaces, deck items) is matched by id, from a map built only when one is met.
     let byId: Map<string, unknown> | null = null;
-    if (next.length > 0 && next.every((v) => idOf(v) !== null) && prev.every((v) => idOf(v) !== null)) {
-        byId = new Map(prev.map((v) => [idOf(v)!, v]));
-    }
     let same = prev.length === next.length;
     const out = next.map((v, i) => {
-        const before = byId ? byId.get(idOf(v)!) : prev[i];
+        const at = prev[i];
+        if (Object.is(at, v)) return at;
+        let before = at;
+        const id = idOf(v);
+        if (id !== null && idOf(at) !== id) {
+            byId ??= new Map(prev.flatMap((p) => { const pid = idOf(p); return pid === null ? [] : [[pid, p] as const]; }));
+            before = byId.get(id);
+        }
         const kept = shareAny(before, v);
-        if (kept !== prev[i]) same = false;
+        if (kept !== at) same = false;
         return kept;
     });
     return same ? prev : out;
