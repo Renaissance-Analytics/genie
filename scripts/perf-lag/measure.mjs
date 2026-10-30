@@ -27,6 +27,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const since = (t) => t - launchedAt;
 const agents = JSON.parse(readFileSync(join(homedir(), 'lag-agents.json'), 'utf8'));
 const subject = agents[0];
+if (!/^agent_[0-9a-f]{32}$/.test(subject.id)) throw new Error(`not an agent id: ${subject.id}`);
 const COMPOSER = '[data-chat-composer] :is([contenteditable="true"][role="textbox"], textarea:not([disabled]))';
 
 class Cdp {
@@ -34,13 +35,30 @@ class Cdp {
     static async connect(url) {
         const c = new Cdp();
         c.#ws = new WebSocket(url);
-        c.#ws.addEventListener('message', (e) => { const f = JSON.parse(e.data); const r = c.#pending.get(f.id); if (r) { c.#pending.delete(f.id); r(f); } });
+        c.#ws.addEventListener('message', (e) => {
+            const f = JSON.parse(e.data);
+            // Only a reply to a request this client sent: a numeric id it holds a resolver for.
+            if (typeof f?.id !== 'number' || !c.#pending.has(f.id)) return;
+            const resolve = c.#pending.get(f.id);
+            c.#pending.delete(f.id);
+            if (typeof resolve === 'function') resolve(f);
+        });
         await new Promise((res, rej) => { c.#ws.addEventListener('open', res, { once: true }); c.#ws.addEventListener('error', () => rej(new Error('cdp socket')), { once: true }); });
         return c;
     }
     send(method, params = {}) { const id = this.#id++; return new Promise((r) => { this.#pending.set(id, r); this.#ws.send(JSON.stringify({ id, method, params })); }); }
     async eval(expression, awaitPromise = false) {
         const f = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise });
+        if (f.result?.exceptionDetails) throw new Error(JSON.stringify(f.result.exceptionDetails).slice(0, 400));
+        return f.result?.result?.value;
+    }
+    /**
+     * Call a FIXED function in the page with data as arguments — never code built from data. Its source is `fn`'s own
+     * text; the values travel as CDP call arguments.
+     */
+    async call(fn, args = [], awaitPromise = false) {
+        this.global ??= (await this.send('Runtime.evaluate', { expression: 'globalThis' })).result.result.objectId;
+        const f = await this.send('Runtime.callFunctionOn', { functionDeclaration: fn.toString(), objectId: this.global, arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise });
         if (f.result?.exceptionDetails) throw new Error(JSON.stringify(f.result.exceptionDetails).slice(0, 400));
         return f.result?.result?.value;
     }
@@ -79,7 +97,11 @@ await page.eval(`(() => { window.__long = []; try { new PerformanceObserver((l) 
 let composerAt = null;
 for (let i = 0; i < 1200 && composerAt === null; i += 1) {
     try {
-        const ok = await page.eval(`(() => { if (!location.hash.includes(${JSON.stringify(subject.id)})) location.hash = '#genie://agent/${subject.id}?tab=stream'; if (!document.querySelector(${JSON.stringify(COMPOSER)})) document.querySelector('[data-action="chat"]')?.click(); return Boolean(document.querySelector(${JSON.stringify(COMPOSER)})); })()`);
+        const ok = await page.call(function openChat(id, composer) {
+            if (!location.hash.includes(id)) location.hash = `#genie://agent/${id}?tab=stream`;
+            if (!document.querySelector(composer)) document.querySelector('[data-action="chat"]')?.click();
+            return Boolean(document.querySelector(composer));
+        }, [subject.id, COMPOSER]);
         if (ok) composerAt = since(Date.now());
     } catch { /* page navigating */ }
     if (composerAt === null) await sleep(100);
@@ -90,14 +112,16 @@ const keys = [];
 const until = launchedAt + SECONDS * 1000;
 let typed = 0;
 while (Date.now() < until) {
-    await page.eval(`document.querySelector(${JSON.stringify(COMPOSER)})?.focus(); true`).catch(() => undefined);
+    await page.call(function focus(composer) { document.querySelector(composer)?.focus(); return true; }, [COMPOSER]).catch(() => undefined);
     const ch = 'abcdefghij'[typed % 10];
     const t0 = Date.now();
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, code: `Key${ch.toUpperCase()}`, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
     await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code: `Key${ch.toUpperCase()}`, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
     let shown = false;
     try {
-        shown = await page.eval(`new Promise((r) => requestAnimationFrame(() => { const el = document.querySelector(${JSON.stringify(COMPOSER)}); const v = el ? (el.value ?? el.textContent ?? '') : ''; r(v.endsWith(${JSON.stringify(ch)})); }))`, true);
+        shown = await page.call(function painted(composer, typed) {
+            return new Promise((r) => requestAnimationFrame(() => { const el = document.querySelector(composer); const v = el ? (el.value ?? el.textContent ?? '') : ''; r(v.endsWith(typed)); }));
+        }, [COMPOSER, ch], true);
     } catch { shown = false; }
     const t1 = Date.now();
     keys.push([since(t0), t1 - t0, shown]);
