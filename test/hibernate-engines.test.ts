@@ -70,7 +70,8 @@ describe('at Genie start, an engine only sleeping workspaces use stays stopped',
         const report = await reconcileEngines({
             available: async () => ({ ok: true }) as never,
             instances: () => [own, theirs],
-            state: async () => 'exited',
+            // Running once started, so the readiness wait for one it starts ends (the clock here never moves).
+            state: async (id) => (started.includes(id) ? 'running' : 'exited'),
             personStopped: () => new Set(),
             asleepOnly: (i) => i.id === 'pg_acme',
             start: async (id) => { started.push(id); },
