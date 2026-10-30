@@ -1,5 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
-import type { BoardActionInput, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
+import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -298,6 +298,10 @@ export interface GenieBridge {
         tynnBoard?(workspaceId: string, scope: BoardScope): ReturnType<TynnBoardHost['read']>;
         /** One action on that board, by the workspace-UX contract's id (`task.start`, `story.move`…). */
         tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
+        /** Row B4: what changed on that board since a cursor. Optional: an older host (and a remote one) has none. */
+        tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
+        /** Row B4: follow that board (its live state and rings) until the answer is called. */
+        tynnBoardWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
@@ -559,6 +563,28 @@ export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent'> & {
 const pageBridges = new WeakMap<PreloadBridge, GenieBridge>();
 
 /** The preload's bridge as the page uses it: one per window, so each agent has ONE receiver however many views watch it. */
+/**
+ * The Tynn tab's host over a bridge (genie#1295): its read and actions, and — where the bridge can — its live board (row
+ * B4; a remote host has neither, and its tab is simply not live). Undefined when the bridge has no Tynn tab. Build it once
+ * per bridge (App memoises it): the tab keys its read and its live subscription on this object.
+ */
+export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnBoardHost | undefined {
+    const ws = bridge?.workspaces;
+    if (!ws?.tynnBoard || !ws.tynnBoardAction) return undefined;
+    const read = ws.tynnBoard;
+    const act = ws.tynnBoardAction;
+    const changes = ws.tynnBoardChanges;
+    const watch = ws.tynnBoardWatch;
+    return {
+        read: (id, scope) => read(id, scope),
+        act: (id, input) => act(id, input),
+        ...(changes && watch ? {
+            changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
+            watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),
+        } : {}),
+    };
+}
+
 export function pageBridge(preload: PreloadBridge): GenieBridge {
     const known = pageBridges.get(preload);
     if (known !== undefined) return known;

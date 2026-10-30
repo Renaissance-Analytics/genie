@@ -1,13 +1,16 @@
 import {
     assignBody,
     boardActionRequest,
+    boardChangesPath,
     boardDetailRequest,
     boardQueryPath,
     createBody,
     editBody,
     parseBoard,
+    parseBoardChanges,
     parseClaimants,
     parseDetail,
+    type BoardChanges,
     type BoardDetail,
     type BoardIds,
     type BoardMethod,
@@ -139,4 +142,42 @@ export async function runTynnBoardAction(ports: TynnBoardPorts, workspaceId: str
     try { res = await ports.request(request.path, { method: request.method, ...(body ? { body } : {}) }); }
     catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }
     return res.ok ? { ok: true } : refusal(res);
+}
+
+/**
+ * Row B4: what changed on the workspace's board since a cursor (GET /board/changes), and — when the open card (the
+ * scope's focus) is among the rows that changed — that card's detail again, so an edit made elsewhere shows in the
+ * flyout too. Never the whole board.
+ */
+export async function readTynnBoardChanges(
+    ports: TynnBoardPorts,
+    workspaceId: string,
+    scope: BoardScope,
+    cursor: string,
+    ids: readonly string[],
+): Promise<{ ok: true; changes: BoardChanges; detail?: BoardDetail | null } | TynnBoardRefusal> {
+    const projectId = ports.projectFor(workspaceId);
+    if (projectId === null) return NOT_LINKED;
+    if (!ports.signedIn()) return SIGNED_OUT;
+    if (typeof cursor !== 'string' || cursor === '') return { ok: false, state: 'error', reason: 'No cursor to catch up from.' };
+    const at = scopeOf(scope);
+    const asked = Array.isArray(ids) ? ids.filter((id): id is string => typeof id === 'string' && id !== '').slice(0, 200) : [];
+    let res;
+    try { res = await ports.request(boardChangesPath(projectId, at, cursor, asked), { method: 'GET' }); }
+    catch (error) { return { ok: false, state: 'error', reason: error instanceof Error ? error.message : String(error) }; }
+    if (!res.ok) return refusal(res);
+    const changes = parseBoardChanges(await bodyOf(res));
+    if (!changes) return { ok: false, state: 'error', reason: 'Tynn answered with something that is not a list of changes.' };
+
+    const focusId = at.focus?.split(':')[1];
+    if (focusId === undefined || !changes.cards.some((c) => c.id === focusId)) return { ok: true, changes };
+    const detailCall = boardDetailRequest(projectId, at.focus);
+    if (detailCall === null) return { ok: true, changes };
+    try {
+        const dres = await ports.request(detailCall.path, { method: 'GET' });
+        const detail = dres.ok ? parseDetail(await bodyOf(dres)) : null;
+        return detail ? { ok: true, changes, detail } : { ok: true, changes };
+    } catch {
+        return { ok: true, changes };
+    }
 }

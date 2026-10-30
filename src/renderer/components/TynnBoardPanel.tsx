@@ -1,6 +1,8 @@
 import { Icon, Kanban, useKanban } from '@particle-academy/react-fancy';
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
+    applyBoardChanges,
+    BoardFollower,
     canDrop,
     changedEdit,
     idsOf,
@@ -18,7 +20,10 @@ import {
     type BoardOp,
     type BoardScope,
     type BoardView,
+    type BoardChanges,
+    type BoardDetail as BoardDetailRow,
     type Claimant,
+    type LiveState,
     type TynnBoardHost,
     type TynnBoardState,
 } from '../../core/tynn-board.js';
@@ -43,6 +48,11 @@ export type { BoardActionInput, TynnBoardHost };
  * who may manage the project assigns from the project's eligible claimants. Each says it is running, then that it
  * worked, or Tynn's reason with Retry.
  *
+ * Row B4 (workspace-ux 0.4.0): the board is live. When it changes on Tynn, by a person or an agent, the tab asks what
+ * changed since its cursor and redraws only the cards that changed (core/tynn-board.ts applyBoardChanges keeps every other
+ * card and column object, and cards are memoised). An icon says live, or reconnecting while the link is down; after a
+ * reconnect it catches up from its cursor, so nothing is missed.
+ *
  * What a card can do and where it can go are declared in core/tynn-board.ts against the workspace-UX contract.
  */
 
@@ -56,6 +66,8 @@ export interface TynnBoardPanelProps {
     /** The project's eligible claimants for the Assign picker: null until asked for, 'loading' while read. */
     readonly claimants?: readonly Claimant[] | 'loading' | null | undefined;
     readonly onLoadClaimants?: (() => void) | undefined;
+    /** Row B4: following Tynn live (an icon), or not (none). */
+    readonly live?: LiveState | undefined;
 }
 
 const SINGULAR: Record<BoardLevel, string> = { versions: 'versions', stories: 'stories', tasks: 'tasks' };
@@ -263,7 +275,16 @@ function NewItemForm({ kind, view, op, onAction, onClose, onRetry }: { kind: 'st
 
 interface ClaimProps { readonly claims: BoardView['claims']; readonly claimants: TynnBoardPanelProps['claimants']; readonly onLoadClaimants?: (() => void) | undefined }
 
-function Card({ card, scope, onScope, onAction, claim }: { card: BoardCard; scope: BoardScope; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; claim: ClaimProps }) {
+type CardProps = { card: BoardCard; scope: BoardScope; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; claim: ClaimProps };
+
+/**
+ * A card redraws when ITS card changed (a live update keeps every other card's object), when the scope or the claim
+ * settings change. The handlers are not compared: they act on the tab's current scope through a ref.
+ */
+const Card = memo(CardView, (a: CardProps, b: CardProps) => a.card === b.card && a.scope.version === b.scope.version && a.scope.story === b.scope.story
+    && a.scope.focus === b.scope.focus && a.claim.claims === b.claim.claims && a.claim.claimants === b.claim.claimants);
+
+function CardView({ card, scope, onScope, onAction, claim }: CardProps) {
     const drill = card.drill;
     const remove = () => {
         if (globalThis.confirm?.(`Delete this ${card.kind}? This cannot be undone.`) !== false) onAction({ action: `${card.kind}.delete`, ids: idsOf(card) });
@@ -474,9 +495,23 @@ function Detail({ detail, op, onClose, onAction, onRetry }: { detail: BoardDetai
     );
 }
 
-function Board({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoadClaimants }: { state: Extract<TynnBoardState, { state: 'ready' }>; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; onRefresh?: (() => void) | undefined; onRetry?: (() => void) | undefined; claimants?: TynnBoardPanelProps['claimants']; onLoadClaimants?: (() => void) | undefined }) {
+/** Live, getting there, or the link dropped — an icon named for a screen reader; nothing when the board is not live. */
+function LiveMark({ live }: { live: LiveState | undefined }) {
+    if (live === undefined || live === 'off') return null;
+    const look = live === 'live'
+        ? { label: 'Live: following Tynn', className: 'text-[var(--success)]', glyph: <Icon name="radio" size="xs" /> }
+        : live === 'reconnecting'
+            ? { label: 'Reconnecting to Tynn', className: 'text-[var(--warning)]', glyph: <Icon name="wifi-off" size="xs" /> }
+            : { label: 'Connecting to Tynn', className: 'text-[var(--fg-3)]', glyph: <Icon name="loader" size="xs" className="animate-spin" /> };
+    return <span data-tynn-live={live} role="img" aria-label={look.label} title={look.label} className={`inline-flex p-1 ${look.className}`}>{look.glyph}</span>;
+}
+
+function Board({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoadClaimants, live }: { state: Extract<TynnBoardState, { state: 'ready' }>; onScope: TynnBoardPanelProps['onScope']; onAction: TynnBoardPanelProps['onAction']; onRefresh?: (() => void) | undefined; onRetry?: (() => void) | undefined; claimants?: TynnBoardPanelProps['claimants']; onLoadClaimants?: (() => void) | undefined; live?: LiveState | undefined }) {
     const { view, refused = null, detail = null, detailRefused = null, op = null } = state;
-    const claim: ClaimProps = { claims: view.claims, claimants, onLoadClaimants };
+    // Held across renders, so a live update does not hand every card a new claim object (and redraw them all).
+    const claimRef = useRef<ClaimProps | null>(null);
+    if (claimRef.current === null || claimRef.current.claims !== view.claims || claimRef.current.claimants !== claimants) claimRef.current = { claims: view.claims, claimants, onLoadClaimants };
+    const claim = claimRef.current;
     const claimOp = op !== null && CLAIM_OP.test(op.action) ? op : null;
     const shift = useShift();
     const kind = view.level === 'versions' ? 'version' : view.level === 'stories' ? 'story' : 'task';
@@ -519,6 +554,7 @@ function Board({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoad
                         {newKind !== null ? (
                             <IconButton icon="plus" label={`New ${newKind}`} disabled={composing} onClick={() => setComposing(true)} data={{ 'data-tynn-new': newKind }} />
                         ) : null}
+                        <LiveMark live={live} />
                         {onRefresh ? <IconButton icon="refresh-cw" label="Refresh" onClick={onRefresh} data={{ 'data-tynn-refresh': '' }} /> : null}
                     </span>
                 </div>
@@ -534,8 +570,8 @@ function Board({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoad
     );
 }
 
-export function TynnBoardPanel({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoadClaimants }: TynnBoardPanelProps) {
-    if (state.state === 'ready') return <Board state={state} onScope={onScope} onAction={onAction} onRefresh={onRefresh} onRetry={onRetry} claimants={claimants} onLoadClaimants={onLoadClaimants} />;
+export function TynnBoardPanel({ state, onScope, onAction, onRefresh, onRetry, claimants, onLoadClaimants, live }: TynnBoardPanelProps) {
+    if (state.state === 'ready') return <Board state={state} onScope={onScope} onAction={onAction} onRefresh={onRefresh} onRetry={onRetry} claimants={claimants} onLoadClaimants={onLoadClaimants} live={live} />;
     const line = state.state === 'loading'
         ? <><Icon name="loader" size="xs" /> Reading Tynn…</>
         : state.state === 'not-linked'
@@ -561,12 +597,66 @@ export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host:
         // A list Tynn will not show reads as nobody to assign, never a spinner that does not end.
         setClaimants(r.ok ? (r.claimants ?? []) : []);
     }, [host, workspaceId]);
+    // Row B4: where the board is up to (its read's cursor, then each applied answer's), the scope and state as of now.
+    const cursorRef = useRef<string | null>(null);
+    const scopeRef = useRef(scope);
+    scopeRef.current = scope;
+    const stateRef = useRef(state);
+    stateRef.current = state;
+    const [live, setLive] = useState<LiveState | undefined>(undefined);
     const read = useCallback(async (at: BoardScope, refused: string | null = null) => {
         const r = await host.read(workspaceId, at);
+        if (r.ok) cursorRef.current = r.view.cursor;
         if (r.ok) setState({ state: 'ready', view: r.view, refused, detail: r.detail ?? null, detailRefused: r.detailRefused ?? null });
         else setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason });
     }, [host, workspaceId]);
     useEffect(() => { void read(scope); }, [read, scope]);
+    const changeScope = (next: BoardScope) => { setOp(null); setScope(next); };
+    const changeScopeRef = useRef(changeScope);
+    changeScopeRef.current = changeScope;
+    // LIVE (row B4): every ring is a doorbell — ask what changed since the cursor, apply only that. Never the whole board.
+    useEffect(() => {
+        const { watch, changes } = host;
+        if (!watch || !changes) return undefined;
+        let detail: BoardDetailRow | null | undefined;
+        const follower = new BoardFollower({
+            cursor: () => cursorRef.current,
+            fetch: async (cursor, ids) => {
+                const r = await changes(workspaceId, scopeRef.current, cursor, ids);
+                if (!r.ok) return { ok: false, state: r.state, reason: r.reason };
+                detail = r.detail;
+                return { ok: true, changes: r.changes };
+            },
+            apply: (answer: BoardChanges) => {
+                cursorRef.current = answer.cursor;
+                const now = stateRef.current;
+                const fresh = detail;
+                detail = undefined;
+                setState((s) => {
+                    if (s.state !== 'ready') return s;
+                    const r = applyBoardChanges(s.view, answer);
+                    if (r.view === s.view && fresh === undefined) return s;
+                    return { ...s, view: r.view, ...(fresh !== undefined && fresh !== null ? { detail: fresh, detailRefused: null } : {}) };
+                });
+                return now.state === 'ready' ? applyBoardChanges(now.view, answer).missing : [];
+            },
+            refused: (refusal) => {
+                // A scope Tynn no longer shows (its story or version was deleted): one level up. Anything else: the
+                // board's own read says what is wrong. A dropped connection is not a refusal; the next ring retries.
+                if (refusal.state === 'error') return;
+                const now = stateRef.current;
+                const at = scopeRef.current;
+                if (now.state === 'ready' && (at.story !== undefined || at.version !== undefined)) changeScopeRef.current(now.view.up ?? {});
+                else void read(at);
+            },
+            schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        });
+        const stop = watch(workspaceId, (signal) => {
+            if ('state' in signal) setLive(signal.state);
+            else follower.ring(signal.ring.ids, signal.ring.catchUp);
+        });
+        return () => { stop(); follower.stop(); setLive(undefined); };
+    }, [host, workspaceId, read]);
     const act = async (input: BoardActionInput) => {
         const tracked = REPORTS_PROGRESS.test(input.action);
         if (tracked) setLastInput(input);
@@ -579,10 +669,10 @@ export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host:
             return;
         }
         // A tracked action's failure is said by its own line (with Retry); the others keep the board's refused line.
-        await read(scope, r.ok || tracked ? null : r.reason);
+        // The scope as it is NOW (a memoised card may hold an older handler).
+        await read(scopeRef.current, r.ok || tracked ? null : r.reason);
     };
     const shown: TynnBoardState = state.state === 'ready' ? { ...state, op } : state;
-    const changeScope = (next: BoardScope) => { setOp(null); setScope(next); };
     return (
         <TynnBoardPanel
             state={shown}
@@ -592,6 +682,7 @@ export function TynnBoardTab({ workspaceId, host }: { workspaceId: string; host:
             onRetry={lastInput ? () => { void act(lastInput); } : undefined}
             claimants={claimants}
             onLoadClaimants={() => { void loadClaimants(); }}
+            live={live}
         />
     );
 }
