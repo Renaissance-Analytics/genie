@@ -3,8 +3,8 @@
   "contract": "workspace-ux",
   "version": "0.5.0",
   "tag": "workspace-ux/v0.5.0",
-  "tagObject": null,
-  "commit": "37b1acbdc91bb3cde079dc5a245271e2d6d6241a",
+  "tagObject": "71a74bf8c8555e0906b50f9d5aef2fe1bc09fb50",
+  "commit": "a58cc992b13aa6215c36dc6c029691517306898e",
   "path": "contracts/workspace-ux/0.5.0/workspace-ux.json",
   "sha256": "01789f462ab5ae600caa867a691e67482e3d1a57cf76c0b16a5dc32523b7d54c"
 }
