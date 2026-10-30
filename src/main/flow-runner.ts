@@ -1,4 +1,4 @@
-import { isAbsolute, relative, resolve } from 'node:path';
+import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import { getNodeKind, runFlow, type NodeExecutor } from '@particle-academy/fancy-flow/engine';
 import { canonicalKind, type NodeOutcome } from '../core/flow-canvas.js';
 import { stepLabel } from '../core/flow-reach.js';
@@ -181,10 +181,12 @@ export function supervisedCommand(deps: SupervisedCommandDeps, run: { processId:
                 reject(new Error(`workspace ${workspaceId} is not registered here; "${command}" was not run`));
                 return;
             }
-            const dir = resolve(root, cwd ?? '.');
-            const inside = relative(root, dir);
-            if (inside.startsWith('..') || isAbsolute(inside)) {
-                reject(new Error(`the folder ${cwd} is outside the workspace ${root}; "${command}" was not run`));
+            // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links; the workspace itself is a folder.
+            let dir: string;
+            try {
+                dir = confinePathSync(root, cwd ?? '.', `"${command}" was not run`, { allowRoot: true });
+            } catch (error) {
+                reject(error instanceof OutsideWorkspaceError ? new Error(`the folder ${cwd} is outside the workspace ${root}; "${command}" was not run`) : error);
                 return;
             }
             const before = deps.supervisor.status(run.processId);

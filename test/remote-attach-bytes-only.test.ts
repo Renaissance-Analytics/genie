@@ -77,16 +77,21 @@ describe('a remote client names a host path', () => {
 });
 
 describe('a remote client uploads bytes', () => {
-    it('delivers them — the inbox keeps its own copy, and the temp file is gone', async () => {
-        const uploads = join(dir, 'uploads');
-        const sender = uploadSender({ dir: uploads, resolve: (to) => services.resolveAddress(to), send: (input) => services.inbox.send(input) });
+    it('delivers them under the name the device gave — the inbox keeps its own copy; no path on the host is involved', async () => {
+        const sender = uploadSender({ resolve: (to) => services.resolveAddress(to), send: (input) => services.inbox.send(input) });
         const r = await sender.sendFile('claude:atlas', 'from my phone', 'photo.png', new TextEncoder().encode('png bytes'));
         expect(r).toMatchObject({ ok: true });
         const [msg] = services.inbox.unread('agent_a' as never);
         expect(msg!.text).toBe('from my phone');
         expect(msg!.attachments.map((a) => a.name)).toEqual(['photo.png']);
         expect((await services.inbox.attachmentBytes('agent_a' as never, msg!.attachments[0]!.id)).toString()).toBe('png bytes');
-        expect(await readdir(uploads)).toEqual([]);
+    });
+
+    it('the inbox applies a path’s rules to bytes too: an executable is refused and nothing is delivered; a name keeps its base only', async () => {
+        await expect(services.inbox.send({ from: 'human' as never, to: 'agent_a' as never, text: 'x', files: [{ name: 'setup.exe', bytes: new TextEncoder().encode('MZ') }] })).rejects.toThrow(/setup\.exe is a natively executable/);
+        expect(services.inbox.unread('agent_a' as never)).toEqual([]);
+        await services.inbox.send({ from: 'human' as never, to: 'agent_a' as never, text: 'y', files: [{ name: '../../etc/passwd', bytes: new TextEncoder().encode('z') }] });
+        expect(services.inbox.unread('agent_a' as never)[0]!.attachments.map((a) => a.name)).toEqual(['passwd']);
     });
 });
 

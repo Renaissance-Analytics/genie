@@ -1,11 +1,12 @@
 import { callerFrom } from './mcp-callers.js';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { relative, resolve } from 'node:path';
+import { confinePath, OutsideWorkspaceError } from './workspace-confine.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
 
 /**
  * THE ATTENTION TOOL (§6.3). `openFileForUser` puts a file in front of the person: the path is CONFINED to the caller's
- * workspace, so an agent cannot open the host's own files through it, and a refusal names whose workspace.
+ * workspace by the shared check (workspace-confine.ts — after links too, genie#1354), so an agent cannot open the host's own files through it, and a refusal names whose workspace.
  * (`submitFeedback` was removed — the owner, 2026-10-18; the person's Feedback window files to Tynn, Tynn #760.)
  */
 
@@ -29,14 +30,6 @@ const ok = (payload: unknown): McpToolResult => ({ text: JSON.stringify(payload)
 const err = (message: string): McpToolResult => ({ text: JSON.stringify({ ok: false, error: message }), isError: true });
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 
-/** The absolute path when it lies inside the workspace, else `null`. `..` and absolute escapes both fail here. */
-export function confineToWorkspace(workspacePath: string, requested: string): string | null {
-    const abs = isAbsolute(requested) ? resolve(requested) : resolve(workspacePath, requested);
-    const rel = relative(resolve(workspacePath), abs);
-    if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) return rel === '' ? abs : null;
-    return abs;
-}
-
 export function attentionTools(deps: AttentionToolsDeps): Registration[] {
     const withCaller = (body: (caller: Caller, args: JsonObject, context: ToolContext) => McpToolResult | Promise<McpToolResult>): ToolHandler => async (args, context) => {
         const caller = callerFrom(args, context.headers, deps.resolveCaller);
@@ -58,8 +51,15 @@ export function attentionTools(deps: AttentionToolsDeps): Registration[] {
         handler: withCaller(async (caller, args) => {
             const requested = str(args.path);
             if (!requested) return err('openFileForUser needs `path`');
-            const abs = confineToWorkspace(caller.workspacePath, requested);
-            if (abs === null) return err(`${requested} is outside ${caller.agentName}’s workspace (${caller.workspacePath}); Genie opens nothing there`);
+            // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a symlink or junction inside the
+            // workspace that leads out of it is refused, and a name that only starts with two dots (`..config`) is inside.
+            let abs: string;
+            try {
+                abs = await confinePath(caller.workspacePath, requested, 'Genie opens nothing there');
+            } catch (error) {
+                if (error instanceof OutsideWorkspaceError) return err(`${requested} is outside ${caller.agentName}’s workspace (${caller.workspacePath}); Genie opens nothing there`);
+                throw error;
+            }
             const line = typeof args.line === 'number' && args.line > 0 ? Math.floor(args.line) : null;
             const rel = relative(resolve(caller.workspacePath), abs).split(/[\\/]/).join('/');
             const r = await deps.openFile({ workspaceId: caller.workspaceId, path: rel, absolutePath: abs, line });

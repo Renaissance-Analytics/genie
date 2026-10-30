@@ -1,21 +1,14 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { ATTACHMENT_LIMITS, type Resolution } from '../src/core/inbox.js';
 import { uploadSender } from '../src/main/uploads.js';
 
 /**
- * UPLOAD FROM A PHONE (§6.8 mobile UI: upload). A phone has no path on the host, so its bytes ride the
- * socket and land in a temp file under Genie's own directory for exactly as long as the inbox needs
- * to COPY them (§6.4: attachments are byte copies, never path references) — then the temp file is
- * gone, whether the send landed or failed. The inbox's own rules apply before a byte is written:
- * a natively executable name and a file over the per-file cap are refused with no file created.
+ * UPLOAD FROM A DEVICE THAT IS NOT THE HOST (§6.8 mobile UI: upload; genie#1354). A phone, a relay or a share guest has no
+ * path on the host, so its bytes ride the socket and go to the inbox AS BYTES (§6.4: attachments are byte copies, never path
+ * references) — Genie 1's `storeInlineAttachments`. No temp file is written, so the file keeps the name the device gave
+ * (an earlier temp-file version stored it as `<uuid>-<name>`). The inbox's own rules apply first: a natively executable
+ * name and a file over the per-file cap are refused before the send is called.
  */
-
-let dir: string;
-beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie2-uploads-')); });
-afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
 const resolve = (to: string): Resolution =>
     to === 'kai' ? { kind: 'one', id: 'agent_kai' as never }
@@ -23,42 +16,32 @@ const resolve = (to: string): Resolution =>
     : to === 'me' ? { kind: 'human' }
     : { kind: 'none' };
 
+type Sent = { from: string; to: string; text: string; files: readonly { name: string; bytes: Uint8Array }[]; attachments?: unknown };
+
 describe('uploadSender', () => {
-    it('writes the bytes to a temp file under its directory, sends them as the human with that ONE attachment, and removes the file after', async () => {
-        const seen: Array<{ from: string; to: string; text: string; attachments: readonly string[]; bytes: Buffer; existedAtSend: boolean }> = [];
-        const sender = uploadSender({
-            dir,
-            resolve,
-            send: async (input) => {
-                const path = input.attachments![0]!;
-                seen.push({ from: input.from, to: input.to, text: input.text, attachments: input.attachments!, bytes: await readFile(path), existedAtSend: true });
-                return { id: 'msg_1' };
-            },
-        });
+    it('sends the bytes as the human, as ONE file under the name the device gave — and no path at all', async () => {
+        const seen: Sent[] = [];
+        const sender = uploadSender({ resolve, send: async (input) => { seen.push(input as Sent); return { id: 'msg_1' }; } });
         const bytes = Buffer.from('PNG-ish bytes');
         expect(await sender.sendFile('kai', 'look at this', 'shot.png', bytes)).toEqual({ ok: true, messageId: 'msg_1' });
         expect(seen).toHaveLength(1);
-        expect(seen[0]).toMatchObject({ from: 'human', to: 'agent_kai', text: 'look at this', existedAtSend: true });
-        expect(seen[0]!.attachments).toHaveLength(1);
-        expect(dirname(seen[0]!.attachments[0]!)).toBe(dir);
-        expect(basename(seen[0]!.attachments[0]!)).toMatch(/shot\.png$/);
-        expect(seen[0]!.bytes.equals(bytes)).toBe(true);
-        // Gone once the inbox has its copy.
-        expect(await readdir(dir)).toEqual([]);
+        expect(seen[0]).toMatchObject({ from: 'human', to: 'agent_kai', text: 'look at this' });
+        expect(seen[0]!.attachments).toBeUndefined();
+        expect(seen[0]!.files.map((f) => f.name)).toEqual(['shot.png']);
+        expect(Buffer.from(seen[0]!.files[0]!.bytes).equals(bytes)).toBe(true);
     });
 
-    it('a name with a path in it lands as its basename, inside the directory — never where the name points', async () => {
-        const paths: string[] = [];
-        const sender = uploadSender({ dir, resolve, send: async (input) => { paths.push(input.attachments![0]!); return { id: 'm' }; } });
+    it('a name with a path in it is its base name only — either separator', async () => {
+        const names: string[] = [];
+        const sender = uploadSender({ resolve, send: async (input) => { names.push(input.files[0]!.name); return { id: 'm' }; } });
         expect(await sender.sendFile('kai', '', '../../etc/passwd', Buffer.from('x'))).toMatchObject({ ok: true });
-        expect(dirname(paths[0]!)).toBe(dir);
-        expect(basename(paths[0]!)).toMatch(/passwd$/);
-        expect(paths[0]).not.toContain('..');
+        expect(await sender.sendFile('kai', '', 'C:\\Users\\u\\notes.md', Buffer.from('x'))).toMatchObject({ ok: true });
+        expect(names).toEqual(['passwd', 'notes.md']);
     });
 
-    it('refuses an executable name and an over-cap file BEFORE writing anything; the send is never called', async () => {
+    it('refuses an executable name, an over-cap file, no name and no bytes BEFORE sending', async () => {
         let sends = 0;
-        const sender = uploadSender({ dir, resolve, send: async () => { sends += 1; return { id: 'm' }; } });
+        const sender = uploadSender({ resolve, send: async () => { sends += 1; return { id: 'm' }; } });
         const exe = await sender.sendFile('kai', '', 'setup.exe', Buffer.from('MZ'));
         expect(exe).toMatchObject({ ok: false });
         expect((exe as { reason: string }).reason).toMatch(/executable/);
@@ -68,22 +51,19 @@ describe('uploadSender', () => {
         expect(await sender.sendFile('kai', '', '', Buffer.from('x'))).toMatchObject({ ok: false });
         expect(await sender.sendFile('kai', '', 'empty.txt', Buffer.alloc(0))).toMatchObject({ ok: false });
         expect(sends).toBe(0);
-        expect(await readdir(dir)).toEqual([]);
     });
 
     it('addresses resolve the inbox way: nobody, both full forms for a shared name, and "that is you" for the human', async () => {
-        const sender = uploadSender({ dir, resolve, send: async () => ({ id: 'm' }) });
+        const sender = uploadSender({ resolve, send: async () => ({ id: 'm' }) });
         expect(await sender.sendFile('nope', '', 'a.txt', Buffer.from('x'))).toEqual({ ok: false, reason: 'nobody at nope' });
         const two = await sender.sendFile('two', '', 'a.txt', Buffer.from('x'));
         expect((two as { reason: string }).reason).toContain('tynn:claude:two');
         expect((two as { reason: string }).reason).toContain('fancy:claude:two');
         expect(await sender.sendFile('me', '', 'a.txt', Buffer.from('x'))).toEqual({ ok: false, reason: 'that is you' });
-        expect(await readdir(dir)).toEqual([]);
     });
 
-    it('a send that fails is reported in the inbox’s own words and the temp file is still removed', async () => {
-        const sender = uploadSender({ dir, resolve, send: async () => { throw new Error('agent_kai does not accept attachments'); } });
+    it('a send that fails is reported in the inbox’s own words', async () => {
+        const sender = uploadSender({ resolve, send: async () => { throw new Error('agent_kai does not accept attachments'); } });
         expect(await sender.sendFile('kai', '', 'a.txt', Buffer.from('x'))).toEqual({ ok: false, reason: 'agent_kai does not accept attachments' });
-        expect(await readdir(dir)).toEqual([]);
     });
 });

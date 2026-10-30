@@ -372,6 +372,7 @@ const bridge: PreloadBridge = {
         act: (action) => ipcRenderer.invoke(FEATURE_CHANNELS.act, action) as Promise<FeatureData>,
         setBrowserBounds: (bounds) => ipcRenderer.invoke(FEATURE_CHANNELS.browserBounds, bounds) as Promise<void>,
         soundData: (key) => ipcRenderer.invoke(FEATURE_CHANNELS.soundData, key) as Promise<string | null>,
+        picked: (paths) => ipcRenderer.invoke(FEATURE_CHANNELS.picked, paths) as Promise<void>,
     },
 
     // The window's native buttons (Windows / Linux): their space and their colours (the owner: "content covered and

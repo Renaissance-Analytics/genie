@@ -94,6 +94,12 @@ export interface SendInput {
      * read an agent's path unconfined. Only the PERSON's own picks (the host's file picker, a phone upload) go without.
      */
     readonly workspaceRoot?: string;
+    /**
+     * BYTES the person uploaded from a device that is not this host (genie#1354): stored under their given base name, read
+     * from no path. Genie 1's `storeInlineAttachments` (main/agentinbox/attachments.ts, v0.7.0-beta.342). The same rules
+     * as a path's: no executable, the same caps, counted together with any paths.
+     */
+    readonly files?: readonly { readonly name: string; readonly bytes: Uint8Array }[];
 }
 
 /** What a refusal at each end tells the agent will happen instead. */
@@ -229,7 +235,7 @@ export class InboxStore {
     async send(input: SendInput): Promise<InboxMessage> {
         // Everything that can refuse happens BEFORE anything is written: one bad path and the
         // message is not delivered, no blob lands, and the caller is told which path.
-        const attachments = await this.#stageAttachments(input.from, input.attachments ?? [], input.workspaceRoot);
+        const attachments = await this.#stageAttachments(input.from, input.attachments ?? [], input.workspaceRoot, input.files ?? []);
         const seq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0) + 1;
         this.#mail.lastSeq = seq;
         const message: InboxMessage = {
@@ -444,7 +450,7 @@ export class InboxStore {
      * An AGENT's paths are confined to its workspace first (genie#1347), every one before any is read: one path
      * outside it fails the send. The bytes are read from the real path; the name is the one the agent gave.
      */
-    async #stageAttachments(from: Participant, paths: readonly string[], workspaceRoot: string | undefined): Promise<StoredAttachment[]> {
+    async #stageAttachments(from: Participant, paths: readonly string[], workspaceRoot: string | undefined, uploaded: NonNullable<SendInput['files']>): Promise<StoredAttachment[]> {
         if (paths.length > 0 && from !== HUMAN && !workspaceRoot) {
             throw new Error('an agent attaches only files inside its own workspace, and none was given; nothing was sent');
         }
@@ -467,17 +473,23 @@ export class InboxStore {
             }
             sized.push({ path: f.read, name: f.name, size });
         }
-        const refusal = attachmentRefusal(sized);
+        // Uploaded bytes: the client chose the name, so only its last segment survives (either separator).
+        const inline = uploaded.map((f) => ({ name: basename(String(f.name ?? '').replace(/\\/g, '/')) || 'attachment', bytes: Buffer.from(f.bytes) }));
+        const refusal = attachmentRefusal([...sized, ...inline.map((f) => ({ name: f.name, size: f.bytes.length }))]);
         if (refusal !== null) throw new Error(refusal);
 
         const stored: StoredAttachment[] = [];
+        const keep = async (name: string, bytes: Buffer): Promise<void> => {
+            const sha256 = createHash('sha256').update(bytes).digest('hex');
+            await this.#storeBlob(sha256, bytes);
+            stored.push({ id: `att_${randomUUID()}`, name, size: bytes.length, sha256 });
+        };
         for (const f of sized) {
             const bytes = await readFile(f.path);
             if (bytes.length > ATTACHMENT_LIMITS.perFileBytes) throw new Error(`${f.name} grew past 25 MB while being read`);
-            const sha256 = createHash('sha256').update(bytes).digest('hex');
-            await this.#storeBlob(sha256, bytes);
-            stored.push({ id: `att_${randomUUID()}`, name: f.name, size: bytes.length, sha256 });
+            await keep(f.name, bytes);
         }
+        for (const f of inline) await keep(f.name, f.bytes);
         return stored;
     }
 

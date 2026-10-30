@@ -1,6 +1,7 @@
 import { limitRefusal } from '../core/shell-limits.js';
 import { randomUUID } from 'node:crypto';
-import { isAbsolute, join, normalize, relative, sep } from 'node:path';
+import { isAbsolute, join, normalize } from 'node:path';
+import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import type { ProcessLog } from '../core/output-tail.js';
 import { runtimeDir } from './paths.js';
 import type { ProcessStatus, ProcessSupervisor, RestartPolicy } from './process-supervisor.js';
@@ -520,8 +521,14 @@ function folderInside(workspacePath: string, folder: string | undefined): string
     if (!f) return workspacePath;
     const refuse = (): never => { throw new Error(`the folder must be inside the workspace (${workspacePath}); "${f}" is not`); };
     if (isAbsolute(f) || /^[a-zA-Z]:/.test(f) || f.startsWith('/') || f.startsWith('\\')) refuse();
-    const cwd = normalize(join(workspacePath, f));
-    const rel = relative(workspacePath, cwd);
-    if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) refuse();
-    return cwd;
+    // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a symlink or junction inside the
+    // workspace that leads out of it is refused, not started in.
+    try {
+        confinePathSync(workspacePath, f, 'nothing was started', { allowRoot: true });
+    } catch (error) {
+        if (error instanceof OutsideWorkspaceError) refuse();
+        throw error;
+    }
+    // The folder as the workspace's path names it (kept and shown as written, not resolved onto a drive).
+    return normalize(join(workspacePath, f));
 }

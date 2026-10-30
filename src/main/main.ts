@@ -73,6 +73,7 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
+import { featureOrigin, HostPicks } from './host-picks.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -782,6 +783,10 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
  * opened under another account (`closeRelayWindowsOfOtherAccounts`).
  */
 const remoteWindows = new Map<string, BrowserWindow>();
+/** A window driving ANOTHER host: never the host's own window, whatever it asks (genie#1354). */
+const isRemoteWindow = (sender: Electron.WebContents): boolean => [...remoteWindows.values()].some((w) => !w.isDestroyed() && w.webContents === sender);
+/** What the host's own file picker picked: the only host paths the person's AgentInbox may attach (host-picks.ts). */
+const hostPicks = new HostPicks();
 /** The Tynn account each relay window was opened under (accountKeyOf). */
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
@@ -2323,8 +2328,8 @@ async function boot(): Promise<void> {
                 onData: (cb) => terminals!.onData(cb),
                 onExit: (cb) => terminals!.onExit(cb),
             },
-            // A phone's upload (§6.8): a temp file under ~/.genie/uploads for exactly as long as the inbox copies it.
-            uploads: uploadSender({ dir: join(genieHome(), 'uploads'), resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
+            // A remote device's upload (§6.8, genie#1354): its bytes go to the inbox as bytes — never a path on this host.
+            uploads: uploadSender({ resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
                 previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
@@ -3163,9 +3168,18 @@ async function boot(): Promise<void> {
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
     // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
     ipcMain.handle(FEATURE_CHANNELS.soundData, (_event, key: unknown) => (typeof key === 'string' ? customSoundData(composed.settings, key) : null));
-    ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
+    /*
+     * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
+     * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.
+     * The picks are the host picker's, reported by such a window — an attachment path it never picked is refused.
+     */
+    ipcMain.handle(FEATURE_CHANNELS.picked, (event, raw: unknown) => {
+        if (isRemoteWindow(event.sender)) return;
+        if (Array.isArray(raw)) hostPicks.record(raw);
+    });
+    ipcMain.handle(FEATURE_CHANNELS.act, async (event, raw: unknown) => {
         const action = raw as FeatureAction;
-        const data = await handleFeatureAction(composed, action, featureState, featurePorts);
+        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOrigin({ remoteWindow: isRemoteWindow(event.sender), picks: hostPicks }));
         if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
         featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };
