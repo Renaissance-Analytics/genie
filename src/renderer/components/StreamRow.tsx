@@ -1,4 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
+import { memo } from 'react';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
 import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
 import { ChatProse } from './ChatProse.js';
@@ -23,10 +24,15 @@ const TONE: Record<Tone, string> = {
 /** The speaker's colour (the board): you blue, the agent violet, a peer violet too — it is an agent. */
 const WHO_TONE = { you: 'text-[var(--primary)]', agent: 'text-[var(--violet-400)]', peer: 'text-[var(--violet-400)]' } as const;
 
-/** `14:07:12`, in the viewer's own locale. `null` for a row with no recorded time. */
+/**
+ * `14:07:12`, in the viewer's own locale — what `toLocaleTimeString(undefined, { hour12: false })` says. `null` for a row
+ * with no recorded time. ONE formatter for every row (genie#1340): `toLocaleTimeString` builds an ICU formatter per
+ * call, and with every visible row drawn per push it was the hottest function in the window (9.4 s of 76 s busy).
+ */
+const CLOCK = new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: 'numeric', second: 'numeric', hour12: false });
 function timeOf(at: number | null): string | null {
     if (at === null) return null;
-    return new Date(at).toLocaleTimeString(undefined, { hour12: false });
+    return CLOCK.format(at);
 }
 
 export interface StreamRowProps {
@@ -54,7 +60,9 @@ export interface StreamMarkup {
     onOpen: (target: ChatLinkTarget) => void;
 }
 
-export function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
+/** MEMOISED (genie#1340): a push redraws only the rows whose props changed. Rows keep their object while unchanged
+ * (core/stream-view.ts LedgerRowCache) and the Stream's callbacks are stable, so an unchanged row is skipped. */
+export const StreamRow = memo(function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
     const time = timeOf(row.at);
 
     return (
@@ -169,4 +177,4 @@ export function StreamRow({ row, selected, live = false, streaming = false, curs
             ) : null}
         </div>
     );
-}
+});

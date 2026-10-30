@@ -670,11 +670,35 @@ export function resolveToolDurations(rows: readonly TimedEvent[]): Map<string, n
     return durations;
 }
 
-/** The Stream's rows across pushes (genie#1340): scaffolding — maps every time, made to keep rows by the fix. */
+/** An edit's line counts, counted once per edit input (an LCS each), not once per push. */
+const editCounts = new WeakMap<object, ReturnType<typeof editLineCounts>>();
+function editCountsOf(rawInput: unknown): ReturnType<typeof editLineCounts> {
+    if (typeof rawInput !== 'object' || rawInput === null) return null;
+    if (!editCounts.has(rawInput)) editCounts.set(rawInput, editLineCounts(rawInput));
+    return editCounts.get(rawInput) ?? null;
+}
+
+/**
+ * THE STREAM'S ROWS ACROSS PUSHES (genie#1340): a row the push did not change is the SAME object it was, so a memoised
+ * row does not draw again. The host keeps a ledger row's object while it is unchanged and replaces it when it changes
+ * (core/agent-push-wire.ts), and StreamPrep keeps its rows the same way; so a row is mapped again only when its object or
+ * what its context says (duration, diff, agent name, summarised turns) changed. An edit's diff, when not given, is
+ * counted from its own input once per edit.
+ */
 export class LedgerRowCache {
+    readonly #kept = new WeakMap<TimedEvent, { durationMs: number | undefined; diff: RowContext['diff']; agentName: string | undefined; summarisedTurns: number | undefined; out: LedgerRow }>();
+
     row(row: TimedEvent, context: RowContext = {}): LedgerRow {
         const e = row.event;
-        const diff = context.diff ?? (e.kind === 'tool' && e.toolKind === 'edit' ? editLineCounts(e.rawInput) ?? undefined : undefined);
-        return ledgerRow(row, diff === undefined ? context : { ...context, diff });
+        const diff = context.diff ?? (e.kind === 'tool' && e.toolKind === 'edit' ? editCountsOf(e.rawInput) ?? undefined : undefined);
+        const kept = this.#kept.get(row);
+        if (kept && kept.durationMs === context.durationMs && kept.agentName === context.agentName && kept.summarisedTurns === context.summarisedTurns && sameDiff(kept.diff, diff)) return kept.out;
+        const out = ledgerRow(row, diff === undefined ? context : { ...context, diff });
+        this.#kept.set(row, { durationMs: context.durationMs, diff, agentName: context.agentName, summarisedTurns: context.summarisedTurns, out });
+        return out;
     }
+}
+
+function sameDiff(a: RowContext['diff'], b: RowContext['diff']): boolean {
+    return a === b || (a !== undefined && b !== undefined && a.plus === b.plus && a.minus === b.minus && a.newFile === b.newFile);
 }
