@@ -627,14 +627,16 @@ export async function performClaimThenStart(
     return r;
 }
 
-// ── Row B4: the live board (workspace-ux 0.4.0) ──────────────────────────────────────────────────────────────────────
+// ── Row B4: the live board (workspace-ux 0.5.0) ──────────────────────────────────────────────────────────────────────
 
 /**
- * How the board goes live, as the contract's `data.live` declares it (its prose left out). The channel and events are
- * the web board's own (tynn.ai's useProjectChannel): Genie never listens to a second stream.
+ * How the board goes live, as the contract's `data.live` declares it (its prose left out). The events are the web
+ * board's own; the channel is the board's own (0.5.0, the owner's "split per audience"): Tynn admits to it exactly
+ * whoever may open the board, and rings the board's events there too. Genie never listens to a second stream, and never
+ * to the project's general channel (its issues, its comments).
  */
 export const BOARD_LIVE = {
-    channel: 'private-project.{projectId}',
+    channel: 'private-project-board.{projectId}',
     push: { method: 'GET', path: '/api/v1/broadcasting-config', scope: 'genie:discovery' },
     auth: { method: 'POST', path: '/broadcasting-auth', body: ['socket_id', 'channel_name'] },
     events: ['version.created', 'version.updated', 'version.deleted', 'story.created', 'story.updated', 'story.deleted', 'task.created', 'task.updated', 'task.deleted'],
