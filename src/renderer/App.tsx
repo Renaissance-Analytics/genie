@@ -510,7 +510,17 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
         current.current = next;
         setClient(next);
         setState(next.state());
-        next.onState((s) => { if (current.current === next) setState(s); });
+        // A connection that was UP and dropped dials again — unless the host said this device is not paired any more.
+        let up = false;
+        next.onState((s) => {
+            if (current.current !== next) return;
+            setState(s);
+            if (s.connected) { up = true; return; }
+            if (!up) return;
+            up = false;
+            if (s.lastRefusal && /not paired/i.test(s.lastRefusal)) { tokens?.forget(entry.socketUrl); setRefusal(s.lastRefusal); setEverConnected(false); return; }
+            redialSoon();
+        });
         void next.ready.then((r) => {
             if (current.current !== next) return;
             if (r.ok) {
@@ -522,8 +532,10 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
                 void next.takeBaton();
                 return;
             }
-            setRefusal(r.reason);
-            if (/not paired/i.test(r.reason)) { tokens?.forget(entry.socketUrl); setEverConnected(false); }
+            if (/not paired/i.test(r.reason)) { setRefusal(r.reason); tokens?.forget(entry.socketUrl); setEverConnected(false); return; }
+            // A redial that did not get through (the host is restarting, the network is not back): try again, backing off.
+            if (auth.kind === 'token') redialSoon();
+            else setRefusal(r.reason);
         });
     };
     const redialSoon = (now = false): void => {
@@ -533,13 +545,6 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
         attempt.current += 1;
         timer.current = setTimeout(() => { timer.current = null; dial({ kind: 'token', token, label: 'phone' }); }, wait);
     };
-    // A connection that was up and dropped (or a redial that failed): dial again — unless the host unpaired this device.
-    useEffect(() => {
-        if (!everConnected || state === null || state.connected) return;
-        const said = state.lastRefusal ?? refusal;
-        if (said && /not paired/i.test(said)) { tokens?.forget(entry.socketUrl); setRefusal(said); setEverConnected(false); return; }
-        redialSoon();
-    }, [state?.connected, everConnected, refusal]); // eslint-disable-line react-hooks/exhaustive-deps
     // Back online, or back in front: try now rather than wait out the backoff.
     useEffect(() => {
         const now = () => { if (current.current?.state().connected !== true) { if (timer.current) { clearTimeout(timer.current); timer.current = null; } redialSoon(true); } };
