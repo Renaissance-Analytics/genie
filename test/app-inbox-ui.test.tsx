@@ -21,6 +21,8 @@ const names: Record<string, string> = { agent_clerk: 'clerk', agent_scribe: 'scr
 const threads = inboxThreads([appMail, agentMail], (p) => names[p] ?? p);
 const key = pairKey(appMail.from, appMail.to);
 const noop = () => {};
+/** A string as a literal inside a RegExp — every metacharacter escaped, backslash included. */
+const esc = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const props = (over: Partial<InboxFlyoutViewProps> = {}): InboxFlyoutViewProps => ({
     threads, peers: [], thread: null, openKey: null, query: '', filter: 'all', now: T, uncollected: 2, unread: 0, draft: '',
     onQuery: noop, onFilter: noop, onOpenThread: noop, onLoadOlder: noop, onDraft: noop, onSend: noop, onDownload: noop, onMarkAllRead: noop, onDelete: noop, onClose: noop,
@@ -31,10 +33,10 @@ const html = (p: InboxFlyoutViewProps) => renderToStaticMarkup(<Drawer open onCl
 describe('the flyout', () => {
     it('an app’s thread carries the app’s icon, not a lock or an agent swatch; an agent pair keeps its lock (both ways)', () => {
         const out = html(props());
-        expect(out).toMatch(new RegExp(`data-inbox-thread="${key.replace(/[|]/g, '\\|')}"[\\s\\S]*?data-app-sender="site"`));
+        expect(out).toMatch(new RegExp(`data-inbox-thread="${esc(key)}"[\\s\\S]*?data-app-sender="site"`));
         expect(out).toContain('data-app-icon="globe"');
         const agentKey = pairKey(agentMail.from, agentMail.to);
-        expect(out).toMatch(new RegExp(`data-inbox-thread="${agentKey.replace(/[|]/g, '\\|')}"[\\s\\S]*?data-thread-lock`));
+        expect(out).toMatch(new RegExp(`data-inbox-thread="${esc(agentKey)}"[\\s\\S]*?data-thread-lock`));
     });
 
     it('an app message: its subject, a level icon, the link as its own button, the body as PLAIN text, read-only', () => {
