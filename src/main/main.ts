@@ -1969,6 +1969,13 @@ async function boot(): Promise<void> {
         attention: { finished: () => services?.attention.finished() ?? [] },
         terminals: { list: () => terminals?.list() ?? [], close: (id) => terminals?.close(id) ?? false },
         supervisor: { list: () => services?.supervisor.list() ?? [], stop: (id) => services?.supervisor.stop(id) ?? false },
+        // Hibernate releases the workspace's engines, wake resumes them (parity audit #12; Genie 1 hibernation.ts step 3).
+        engines: {
+            toRelease: (id) => services?.hibernationEngines.toRelease(id) ?? [],
+            toResume: (id) => services?.hibernationEngines.toResume(id) ?? [],
+            stop: async (id) => { await services?.hibernationEngines.stop(id); },
+            start: async (id) => { await services?.hibernationEngines.start(id); },
+        },
         now: Date.now,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         // TYNN (§6.1 add from Tynn): the host and token from settings, read at call time; the client is one fetch.

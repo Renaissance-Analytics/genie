@@ -43,7 +43,10 @@ export interface EnginePorts {
 export interface ReconcilePorts extends EnginePorts {
     /** The instance ids the person stopped (persisted; machine-local). */
     readonly personStopped: () => ReadonlySet<string>;
-    /** STUB for the red commit (parity audit #12): not consulted yet. */
+    /**
+     * An engine only HIBERNATED workspaces use (core/hibernate-engines.ts `asleepOnlyEngine`; parity audit #12): left
+     * stopped at Genie start — a sleeping workspace stays asleep through a restart, as in Genie 1. Absent = none.
+     */
     readonly asleepOnly?: (instance: ServiceInstance) => boolean;
     readonly start: (id: string) => Promise<void>;
     /** ONE readiness probe of the engine on 127.0.0.1:<publishedPort>; true when it answers. */
@@ -63,6 +66,8 @@ export type EngineOutcome =
     | { readonly id: string; readonly outcome: 'running' }
     | { readonly id: string; readonly outcome: 'started' }
     | { readonly id: string; readonly outcome: 'person-stopped' }
+    /** Only hibernated workspaces use it: left stopped until one of them wakes (parity audit #12). */
+    | { readonly id: string; readonly outcome: 'asleep' }
     | { readonly id: string; readonly outcome: 'unused'; readonly reason: string }
     | { readonly id: string; readonly outcome: 'docker-not-running'; readonly reason: string }
     | { readonly id: string; readonly outcome: 'absent'; readonly reason: string }
@@ -115,6 +120,7 @@ export async function reconcileEngines(ports: ReconcilePorts, bound: ReadinessBo
         instances.map(async (i): Promise<EngineOutcome> => {
             if (stopped.has(i.id)) return { id: i.id, outcome: 'person-stopped' };
             const state = await ports.state(i.id);
+            if (state !== 'running' && ports.asleepOnly?.(i) === true) return { id: i.id, outcome: 'asleep' };
             if (state !== 'running' && unusedAdopted(i)) return { id: i.id, outcome: 'unused', reason: `${label(i)}: taken over from Genie 1, but no workspace uses it; left stopped` };
             if (state === 'running') {
                 try {

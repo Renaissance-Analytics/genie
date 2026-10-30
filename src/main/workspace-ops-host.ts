@@ -60,7 +60,11 @@ export interface WorkspaceOpsPorts {
     attention: { finished(): readonly { agentId: string; handoff: string | null; at: string }[] };
     terminals: { list(): readonly { id: string; workspaceId: string }[]; close(id: string): boolean };
     supervisor: { list(): readonly { id: string; workspaceId: string }[]; stop(id: string): boolean };
-    /** STUB for the red commit (parity audit #12): not consulted yet. */
+    /**
+     * The workspace's service engines (parity audit #12; Genie 1 `main/workspace/hibernation.ts` step 3 and its wake):
+     * which a hibernation releases and a wake resumes (core/hibernate-engines.ts), and the registry's stop and start —
+     * never the person's Stop, so a woken workspace gets them back. Absent = this Genie has no engines to tell.
+     */
     engines?: { toRelease(workspaceId: string): readonly string[]; toResume(workspaceId: string): readonly string[]; stop(id: string): Promise<void>; start(id: string): Promise<void> };
     now(): number;
     sleep(ms: number): Promise<void>;
@@ -199,14 +203,23 @@ export async function addWorkspace(ports: WorkspaceOpsPorts, path: string, overl
 
 const HANDOFF_ASK = (workspaceId: string) => `Genie is hibernating ${workspaceId}: call imDone with a handoff now — what you were doing, what is unfinished, what the next run picks up. You will be stopped shortly.`;
 
-export async function hibernateWorkspace(ports: WorkspaceOpsPorts, workspaceId: string, options: { handoffWaitMs: number; pollMs: number }): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] } } | Refusal> {
+/** What a hibernate or wake did to the workspace's engines: those it stopped (or started), and those that refused, with why. */
+export interface EnginesTouched { readonly failed: ReadonlyArray<{ id: string; reason: string }> }
+
+const reasonOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+export async function hibernateWorkspace(ports: WorkspaceOpsPorts, workspaceId: string, options: { handoffWaitMs: number; pollMs: number }): Promise<{ ok: true; asleep: true; handoffs: { landed: string[]; missing: string[] }; services?: EnginesTouched & { stopped: string[] } } | Refusal> {
     const workspace = ports.registry.workspace(workspaceId);
     if (!workspace) return { ok: false, reason: `no workspace ${workspaceId}` };
     const running = ports.registry.agentsOf(workspaceId).filter((a) => ports.host.probe(a.id)?.running === true).map((a) => a.id as string);
     const terminals = ports.terminals.list().filter((t) => t.workspaceId === workspaceId).map((t) => t.id);
     const processes = ports.supervisor.list().filter((p) => p.workspaceId === workspaceId).map((p) => p.id);
-    const plan = hibernate({ workspaceId, agents: running, terminals, processes, handoffWaitMs: options.handoffWaitMs });
+    // Decided now, while every other workspace's sleep is as it is: a shared engine stays up for any awake user.
+    const engines = ports.engines ? [...ports.engines.toRelease(workspaceId)] : [];
+    const plan = hibernate({ workspaceId, agents: running, terminals, processes, engines, handoffWaitMs: options.handoffWaitMs });
 
+    const stopped: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
     const landed = new Set<string>();
     for (const step of plan.steps) {
         switch (step.kind) {
@@ -234,16 +247,46 @@ export async function hibernateWorkspace(ports: WorkspaceOpsPorts, workspaceId: 
             case 'stop-processes':
                 for (const id of step.processes) ports.supervisor.stop(id);
                 break;
+            case 'stop-engines':
+                // One that refuses is reported; the rest still stop (Genie 1: half a shutdown is worse than a named leftover).
+                for (const id of step.engines) {
+                    try {
+                        await ports.engines!.stop(id);
+                        stopped.push(id);
+                    } catch (error) {
+                        failed.push({ id, reason: reasonOf(error) });
+                    }
+                }
+                break;
             case 'leave-inbox':
                 // Stopped agents are no longer reachable; the inbox store's receive path answers that itself.
                 break;
         }
     }
-    return { ok: true, asleep: true, handoffs: { landed: running.filter((id) => landed.has(id)), missing: running.filter((id) => !landed.has(id)) } };
+    const handoffs = { landed: running.filter((id) => landed.has(id)), missing: running.filter((id) => !landed.has(id)) };
+    return { ok: true, asleep: true, handoffs, ...(ports.engines ? { services: { stopped, failed } } : {}) };
 }
 
-export async function wakeWorkspace(ports: WorkspaceOpsPorts, workspaceId: string): Promise<{ ok: true } | Refusal> {
-    return (await ports.registry.setAsleep(workspaceId, false)) ? { ok: true } : { ok: false, reason: `no workspace ${workspaceId}` };
+/**
+ * Wake: the flag cleared FIRST (every start refuses while it is set), then the workspace's engines started again
+ * (Genie 1 `onWorkspaceWake`: "every enabled service"; one the person stopped stays stopped). Its sites and background
+ * processes come back on their own once it is awake (envelope-sites-host.ts, process-book.ts). A refused engine start is
+ * reported; the wake stands.
+ */
+export async function wakeWorkspace(ports: WorkspaceOpsPorts, workspaceId: string): Promise<{ ok: true; services?: EnginesTouched & { started: string[] } } | Refusal> {
+    if (!(await ports.registry.setAsleep(workspaceId, false))) return { ok: false, reason: `no workspace ${workspaceId}` };
+    if (!ports.engines) return { ok: true };
+    const started: string[] = [];
+    const failed: Array<{ id: string; reason: string }> = [];
+    for (const id of ports.engines.toResume(workspaceId)) {
+        try {
+            await ports.engines.start(id);
+            started.push(id);
+        } catch (error) {
+            failed.push({ id, reason: reasonOf(error) });
+        }
+    }
+    return { ok: true, services: { started, failed } };
 }
 
 /** Why an agent may not start right now, or `null`. The one rule: an asleep workspace starts nothing. */
