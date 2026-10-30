@@ -3,15 +3,15 @@ import { BOARD_LIVE, liveChannel, liveReconnectDelay, ringIds, type LiveState } 
 import type { SocketLike } from './issue-watch-client.js';
 
 /**
- * THE LIVE BOARD, LISTENING TO TYNN (genie#1295 row B4, workspace-ux 0.4.0 `data.live`).
+ * THE LIVE BOARD, LISTENING TO TYNN (genie#1295 row B4, workspace-ux 0.5.0 `data.live`).
  *
- * tynn.ai's own board goes live on the project's private channel (`project.{id}`, routes/channels.php) with the web
- * session. Genie listens to that SAME channel and those SAME events — never a second stream — signed for its socket at
- * the board door with the person's pairing token:
+ * Tynn rings the board's events on the board's own channel (`project-board.{id}`, routes/channels.php: exactly whoever
+ * may open the board) as well as on the project's. Genie listens to the board's channel and those SAME events — never a
+ * second stream — signed for its socket at the board door with the person's pairing token:
  *
  *   1. `GET  /api/v1/broadcasting-config`                   — where to dial (Reverb or Pusher; the key is public);
  *   2. dial; on `connection_established`, for each open board `POST /api/v1/projects/{id}/broadcasting-auth` signs
- *      `private-project.{id}` for THIS socket, for exactly who the web board lets in — and Genie subscribes;
+ *      `private-project-board.{id}` for THIS socket, for exactly who may open the board — and Genie subscribes;
  *   3. subscribed: live, and a catch-up ring (the tab asks what changed since its cursor), on EVERY (re)subscription;
  *   4. each board event on that channel is a ring for that project, with the ids it names.
  *

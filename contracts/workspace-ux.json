@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.4.0/contracts/workspace-ux/0.4.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.5.0/contracts/workspace-ux/0.5.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.4.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.4.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.5.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.5.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -83,9 +83,9 @@
           }
         },
         "live": {
-          "about": "The board follows Tynn as it changes, by a person or an agent, on the web board's own channel and events. An event is a doorbell: the client asks what changed since its cursor and applies only that, never re-reading the whole board.",
-          "channel": "private-project.{projectId}",
-          "web": "the web board subscribes to the same channel with its session (routes/channels.php project.{projectId}); the app signs it through auth below",
+          "about": "The board follows Tynn as it changes, by a person or an agent, on the board's own channel and the web board's own events. An event is a doorbell: the client asks what changed since its cursor and applies only that, never re-reading the whole board.",
+          "channel": "private-project-board.{projectId}",
+          "web": "routes/channels.php project-board.{projectId}: exactly whoever may open the board (page work); the board's events ring there and on project.{projectId}, the channel every project page goes live on (whoever may open any page). The app is signed for the board's channel only, through auth below",
           "push": { "method": "GET", "path": "/api/v1/broadcasting-config", "scope": "genie:discovery" },
           "auth": { "method": "POST", "path": "/broadcasting-auth", "body": ["socket_id", "channel_name"] },
           "events": [

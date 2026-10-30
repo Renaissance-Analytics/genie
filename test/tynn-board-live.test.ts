@@ -19,7 +19,7 @@ import { TynnBoardPanel } from '../src/renderer/components/TynnBoardPanel.js';
 /**
  * THE LIVE BOARD (genie#1295 row B4, workspace-ux 0.4.0 `data.live`).
  *
- * Tynn rings the web board's own channel (`private-project.{id}`) when the board changes, by a person or an agent. A ring
+ * Tynn rings the board's own channel (`private-project-board.{id}`) when the board changes, by a person or an agent. A ring
  * is a doorbell: the tab asks `GET /board/changes?since=<cursor>` and applies only what came back — the rows that
  * changed, and the ids of every row now at the level (a card not among them is gone). It never re-reads the whole
  * board, and it never rebuilds the whole view: a card that did not change keeps its object, a column whose cards did
@@ -44,7 +44,7 @@ const apply = (v: BoardView, json: unknown) => applyBoardChanges(v, parseBoardCh
 
 describe('the contract\'s live block, as the tab declares it', () => {
     it('listens on the web board\'s own channel, to the board\'s own events', () => {
-        expect(liveChannel('01JPROJ')).toBe('private-project.01JPROJ');
+        expect(liveChannel('01JPROJ')).toBe('private-project-board.01JPROJ');
         expect(BOARD_LIVE.events).toEqual(['version.created', 'version.updated', 'version.deleted', 'story.created', 'story.updated', 'story.deleted', 'task.created', 'task.updated', 'task.deleted']);
     });
 
