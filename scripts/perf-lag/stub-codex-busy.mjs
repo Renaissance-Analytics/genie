@@ -5,7 +5,10 @@
  * the load eleven resumed agents put on Genie while the person types. Pointed at with GENIE2_CODEX_BINARY.
  */
 const THREAD_ID = 'stub_thread_0001';
-const BUSY_MS = Number(process.env.STUB_BUSY_MS ?? 600_000);
+import { readFileSync } from 'node:fs';
+// Genie hands a provider a filtered environment, so the harness also says it in a file beside this script (run-vm.sh).
+const busyFile = (() => { try { return readFileSync(new URL('./.busy-ms', import.meta.url), 'utf8').trim(); } catch { return undefined; } })();
+const BUSY_MS = Number(process.env.STUB_BUSY_MS ?? busyFile ?? 600_000);
 const send = (frame) => process.stdout.write(`${JSON.stringify(frame)}\n`);
 const respond = (id, result) => send({ jsonrpc: '2.0', id, result });
 const LOREM = 'Reading the suite output and checking each failure against the plan before the next step. ';

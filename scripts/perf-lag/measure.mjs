@@ -111,12 +111,23 @@ console.log(`composer ready at +${composerAt} ms`);
 const keys = [];
 const until = launchedAt + SECONDS * 1000;
 let typed = 0;
+// The render probe's counters (probe-renders.mjs; absent in an unprobed build), read where the steady phase starts and at the end.
+// The views' own render counts (src/renderer/render-count.ts) are kept once __genieRenders is an object.
+await page.eval('(globalThis.__genieRenders = {}, true)').catch(() => undefined);
+// The window's frame rate: every animation frame's interval, so a slow keystroke can be told from a slow frame.
+await page.eval('(() => { window.__frames = []; let last = performance.now(); const tick = (t) => { window.__frames.push([performance.timeOrigin + t, t - last]); last = t; requestAnimationFrame(tick); }; requestAnimationFrame(tick); return true; })()').catch(() => undefined);
+const counters = () => page.eval('JSON.stringify({ ...(globalThis.__r ?? {}), ...Object.fromEntries(Object.entries(globalThis.__genieRenders ?? {}).map(([k, v]) => [`render:${k}`, v])) })').then((v) => JSON.parse(v)).catch(() => null);
+let steadyFrom = null;
+let steadyAt = null;
 while (Date.now() < until) {
+    if (steadyFrom === null && since(Date.now()) >= 120_000) { steadyFrom = await counters(); steadyAt = Date.now(); }
     await page.call(function focus(composer) { document.querySelector(composer)?.focus(); return true; }, [COMPOSER]).catch(() => undefined);
     const ch = 'abcdefghij'[typed % 10];
     const t0 = Date.now();
     await page.send('Input.dispatchKeyEvent', { type: 'keyDown', key: ch, code: `Key${ch.toUpperCase()}`, text: ch, unmodifiedText: ch, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+    const tDown = Date.now();
     await page.send('Input.dispatchKeyEvent', { type: 'keyUp', key: ch, code: `Key${ch.toUpperCase()}`, windowsVirtualKeyCode: ch.toUpperCase().charCodeAt(0) });
+    const tUp = Date.now();
     let shown = false;
     try {
         shown = await page.call(function painted(composer, typed) {
@@ -124,7 +135,8 @@ while (Date.now() < until) {
         }, [COMPOSER, ch], true);
     } catch { shown = false; }
     const t1 = Date.now();
-    keys.push([since(t0), t1 - t0, shown]);
+    // Where the time went: the key down handled (browser process → renderer → ack), the key up, then the next frame.
+    keys.push([since(t0), t1 - t0, shown, tDown - t0, tUp - tDown, t1 - tUp]);
     typed += 1;
     if (typed % 40 === 0) {
         // Clear the composer the way a person does, so the draft stays small.
@@ -136,7 +148,10 @@ while (Date.now() < until) {
     await sleep(250);
 }
 
+const steadyTo = await counters();
+const perSecond = steadyFrom && steadyTo ? Object.fromEntries(Object.keys(steadyTo).sort().map((k) => [k, Math.round(((steadyTo[k] - (steadyFrom[k] ?? 0)) / ((Date.now() - steadyAt) / 1000)) * 10) / 10])) : null;
 const lag = (await main.eval('globalThis.__lag')).map(([t, d]) => [since(t), d]);
+const frames = ((await page.eval('window.__frames').catch(() => null)) ?? []).map(([t, d]) => [since(Math.round(t)), d]);
 const long = (await page.eval('window.__long')).map(([t, d]) => [since(Math.round(t)), Math.round(d)]);
 const mainProfile = (await main.send('Profiler.stop')).result.profile;
 const pageProfile = (await page.send('Profiler.stop')).result.profile;
@@ -160,6 +175,8 @@ const phase = (from, to) => {
     const lt = long.filter(([t]) => t >= from && t < to);
     return {
         keys: { n: ks.length, p50: q(0.5), p95: q(0.95), max: ks.at(-1) ?? null, over100: ks.filter((d) => d > 100).length, over1000: ks.filter((d) => d > 1000).length },
+        frameMs: (() => { const v = frames.filter(([t]) => t >= from && t < to).map(([, d]) => d).sort((a, b) => a - b); return v.length ? { n: v.length, p50: Math.round(v[Math.floor(0.5 * v.length)]), p95: Math.round(v[Math.floor(0.95 * v.length)]) } : null; })(),
+        phases: Object.fromEntries(['down', 'up', 'frame'].map((name, j) => { const v = keys.filter(([t]) => t >= from && t < to).map((k) => k[3 + j]).filter((x) => x !== undefined).sort((a, b) => a - b); return [name, v.length ? { p50: v[Math.floor(0.5 * v.length)], p95: v[Math.min(v.length - 1, Math.floor(0.95 * v.length))] } : null]; })),
         mainLag: { gaps: lg.length, totalMs: lg.reduce((a, [, d]) => a + d, 0), maxMs: Math.max(0, ...lg.map(([, d]) => d)) },
         rendererLong: { n: lt.length, totalMs: lt.reduce((a, [, d]) => a + d, 0), maxMs: Math.max(0, ...lt.map(([, d]) => d)) },
     };
@@ -168,6 +185,7 @@ const result = {
     label, seconds: SECONDS, mainAttached, composerAt, memory,
     boot: phase(0, 90_000), steady: phase(120_000, SECONDS * 1000), all: phase(0, SECONDS * 1000),
     keysMissed: keys.filter(([, , s]) => !s).length,
+    steadyPerSecond: perSecond,
     mainTop: top(mainProfile), rendererTop: top(pageProfile),
     worstMainGaps: [...lag].sort((a, b) => b[1] - a[1]).slice(0, 15),
     worstLongTasks: [...long].sort((a, b) => b[1] - a[1]).slice(0, 15),

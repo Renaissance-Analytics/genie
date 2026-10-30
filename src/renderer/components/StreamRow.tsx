@@ -1,4 +1,5 @@
 import { Icon } from '@particle-academy/react-fancy';
+import { countRender } from '../render-count.js';
 import { memo } from 'react';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
 import { chatLinkTarget, type ChatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -63,6 +64,7 @@ export interface StreamMarkup {
 /** MEMOISED (genie#1340): a push redraws only the rows whose props changed. Rows keep their object while unchanged
  * (core/stream-view.ts LedgerRowCache) and the Stream's callbacks are stable, so an unchanged row is skipped. */
 export const StreamRow = memo(function StreamRow({ row, selected, live = false, streaming = false, cursor = false, expanded = false, onToggle, onSelect, markup }: StreamRowProps) {
+    countRender('StreamRow');
     const time = timeOf(row.at);
 
     return (
