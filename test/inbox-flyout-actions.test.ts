@@ -72,7 +72,7 @@ describe('attachments', () => {
     it('the person downloads one from an agent-to-agent thread too (Genie 1’s rule); an unknown id is refused by name', async () => {
         const file = join(dir, 'plan.md');
         await writeFile(file, '# the plan');
-        const msg = await services.inbox.send({ from: 'agent_atlas' as never, to: 'agent_wren' as never, text: 'see attached', attachments: [file] });
+        const msg = await services.inbox.send({ from: 'agent_atlas' as never, to: 'agent_wren' as never, text: 'see attached', attachments: [file], workspaceRoot: dir });
         const served = (await handleFeatureAction(services, { kind: 'inbox.attachment', attachmentId: msg.attachments[0]!.id }, state)).inbox!.servedAttachment!;
         expect(served.name).toBe('plan.md');
         expect(Buffer.from(served.base64, 'base64').toString('utf8')).toBe('# the plan');
