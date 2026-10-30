@@ -54,7 +54,7 @@ export GENIE2_CLAUDE_BINARY="$TREE/scripts/mobile-proof/stub-claude-chat.mjs"
 export GENIE2_CODEX_BINARY="$TREE/scripts/stub-codex.mjs"
 chmod +x "$GENIE2_CLAUDE_BINARY" "$GENIE2_CODEX_BINARY"
 rm -rf /tmp/genie-stub-claude-received
-npx electron . --no-sandbox --remote-debugging-port=9222 >/tmp/electron.log 2>&1 &
+npx electron . --no-sandbox --ozone-platform=wayland --enable-features=UseOzonePlatform --remote-debugging-port=9222 >/tmp/electron.log 2>&1 &
 GENIE_PID=$!
 
 echo "=== drive the phone"
