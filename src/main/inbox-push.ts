@@ -2,6 +2,7 @@ import type { AgentId } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
 import type { NoticeMail } from '../core/stream-event.js';
+import type { AppDelivery } from '../core/app-inbox.js';
 
 /**
  * §6.4 THE INBOX PUSH — GENIE'S, FOR EVERY PROVIDER. When mail lands for an agent, Genie puts the notice into that
@@ -23,7 +24,7 @@ import type { NoticeMail } from '../core/stream-event.js';
  * told only after somebody else had prompted it and that turn had ended (B26, a Codex sidecar in beta.27).
  */
 export interface InboxPushPorts {
-    readonly inbox: { onSend(listener: (to: string) => void): () => void };
+    readonly inbox: { onSend(listener: (to: string, message?: { readonly from: string }) => void): () => void };
     readonly host: {
         subscribe(listener: (agentId: AgentId) => void): () => void;
         /** The agent's run when its session can take a turn now, else `null` (SessionHost.promptable). */
@@ -48,6 +49,15 @@ export interface InboxPushPorts {
      * the agent cap. Answers whether it started; its start event then delivers the notice. Absent = mail waits.
      */
     readonly wake?: ((agentId: AgentId) => boolean) | undefined;
+    /**
+     * APP MAIL (genie#1345, the owner's D1): how a message an APP sent reaches its agent — `push` (told now, woken if
+     * stopped), `push-no-wake` (told now if it can take a turn, never woken: the app wake allowance is spent) or
+     * `next-turn` (a manual agent: no wake and no turn of its own; told at its next session event, its next turn ending).
+     * `null` = not an app's message: delivered exactly as mail always was. Absent = every message as mail.
+     */
+    readonly appMail?: ((to: AgentId, message: { readonly from: string }) => AppDelivery | null) | undefined;
+    /** An app's message woke `agentId` (what the app wake allowance counts). */
+    readonly appWoke?: ((agentId: AgentId) => void) | undefined;
 }
 
 export function wireInboxPush(ports: InboxPushPorts): () => void {
@@ -94,12 +104,18 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         }
     };
     // Only an ARRIVAL wakes an agent with no session: on the host's own events (its stop among them) it is not restarted.
-    const offSend = inbox.onSend((to) => {
+    const offSend = inbox.onSend((to, message) => {
         if (to === 'human') return;
-        if (host.runOf(to as AgentId) === null && ports.wake) {
+        const app = message ? ports.appMail?.(to as AgentId, message) ?? null : null;
+        // A manual agent is given no turn of its own for an app's message: the next event it has tells it.
+        if (app === 'next-turn') return;
+        if (host.runOf(to as AgentId) === null && ports.wake && app !== 'push-no-wake') {
             let started = false;
             try { started = ports.wake(to as AgentId); } catch { started = false; }
-            if (started) return; // its start announces itself, and that event delivers the notice
+            if (started) {
+                if (app === 'push') ports.appWoke?.(to as AgentId);
+                return; // its start announces itself, and that event delivers the notice
+            }
         }
         push(to);
     });

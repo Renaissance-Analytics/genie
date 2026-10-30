@@ -191,6 +191,9 @@ import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './o
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { wireInboxPush } from './inbox-push.js';
+import { AppInboxKeys } from './app-inbox-keys.js';
+import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
+import { appDelivery, isAppSender, type AppSourceKind } from '../core/app-inbox.js';
 import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
 import { WorkspaceColors } from './workspace-color-host.js';
@@ -2248,6 +2251,41 @@ async function boot(): Promise<void> {
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
     const caddyCopy = bundledCaddy === null ? null : await userCaddyCopy(bundledCaddy, join(runtimeDir(genieHome()), 'caddy-bin'));
     if (caddyCopy?.error) console.error(`[caddy] ${caddyCopy.error}`);
+    /*
+     * APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner, FTQ q_eb705239): a loopback door a Genie-hosted site, a
+     * kept process or a script key posts into an agent's AgentInbox through (main/app-inbox-service.ts). It listens BEFORE
+     * composition, so the sites compose starts are handed their own credential at their first start. Its port is
+     * remembered (a script outside Genie keeps one address); the keys are app-inbox-keys.ts's.
+     */
+    const appInboxKeys = await AppInboxKeys.open(genieHome());
+    const appInboxEndpointFile = join(genieHome(), 'app-inbox-endpoint.json');
+    let appInboxServer: AppInboxServer | null = null;
+    const appInboxService = new AppInboxService({
+        keys: appInboxKeys,
+        // Late-bound: a request that arrives while Genie is still composing is answered, never crashed on.
+        inbox: {
+            send: (input) => (services ? services.inbox.send(input) : Promise.reject(new Error('Genie is still starting; try again in a moment'))),
+            unread: (participant) => services?.inbox.unread(participant) ?? [],
+            all: () => services?.inbox.all() ?? [],
+        },
+        roster: () => registry?.listAgents() ?? [],
+        slugs: () => registry?.workspaceSlugs() ?? new Map(),
+        defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
+        enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
+        siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
+        log: (line) => console.log(line),
+    });
+    try {
+        let remembered: number | undefined;
+        try { const v = JSON.parse(readFileSync(appInboxEndpointFile, 'utf8')) as { port?: unknown }; if (typeof v.port === 'number') remembered = v.port; } catch { remembered = undefined; }
+        appInboxServer = await startAppInboxServer({ service: appInboxService, port: remembered ?? APP_INBOX_PORT });
+        if (appInboxServer.port !== remembered) writeFileSync(appInboxEndpointFile, JSON.stringify({ url: appInboxServer.url, port: appInboxServer.port }), { mode: 0o600 });
+        console.log(`[app-inbox] apps and scripts post to ${appInboxServer.url}`);
+    } catch (error) {
+        console.error(`[app-inbox] the door for apps could not listen: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
+    const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
@@ -2308,6 +2346,8 @@ async function boot(): Promise<void> {
         // names — reading the snapshot here recursed until the stack overflowed (CI's real window, #161).
         roster: () => registry?.listAgents() ?? [],
         workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
+        // Each site's own app credential (genie#1345), under its workspace's switch — compose never puts it in the service env.
+        appInboxEnv: (source) => appInboxEnv(source),
         // The registered workspaces, whose envelopes declare the sites Hosting lists and serves (§6.6); a plain
         // list for the same reason as the roster. Their changes (added, removed, hibernated, woken) re-sync the sites.
         workspaces: () => registry?.listWorkspaces() ?? [],
@@ -2643,6 +2683,8 @@ async function boot(): Promise<void> {
     processBook = await ProcessBook.open(genieHome(), {
         supervisor: composed.supervisor,
         envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+        // Each kept process's own app credential (genie#1345), under its workspace's switch.
+        appEnv: (p) => composed.appEnv(p),
         asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
         // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
         limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
@@ -2657,6 +2699,7 @@ async function boot(): Promise<void> {
         book: processBook,
         supervisor: composed.supervisor,
         envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+        appEnv: (p) => composed.appEnv(p),
         asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
         nudge: (address, text, from) => {
             const found = composed.resolveAddress(address);
@@ -2874,9 +2917,65 @@ async function boot(): Promise<void> {
         return host.start(record, cwdFor(record)).ok;
     };
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
+    // An app's message (genie#1345, the owner's D1): an automated agent is told now — woken, at most once per window by
+    // apps; a manual agent hears it on its next turn.
+    const appWakes = new Map<string, number>();
     wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
         wake: wakeAgent,
+        appMail: (to, message) => (isAppSender(message.from) ? appDelivery(registry?.find(to)?.mode ?? 'manual', appWakes.get(to) ?? null, Date.now()) : null),
+        appWoke: (agentId) => { appWakes.set(agentId, Date.now()); },
+    });
+    // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own window only (preload `appInbox`); a key is
+    // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
+    // its new credential, or none.
+    const appInboxState = (workspaceId: string) => ({
+        url: appInboxServer?.url ?? null,
+        enabled: composed.settings.snapshotFor(workspaceId).app_inbox !== false,
+        sources: appInboxKeys.sources(workspaceId),
+        revoked: appInboxKeys.revokedSources(workspaceId),
+        scriptKeys: appInboxKeys.scriptKeys(workspaceId),
+    });
+    const restartSource = async (workspaceId: string, kind: AppSourceKind, id: string): Promise<string> => {
+        if (kind === 'site') {
+            const restarted = composed.sites.serviceEnvChanged(workspaceId);
+            return restarted.includes(id) ? 'restarted with it' : 'its next start uses it';
+        }
+        if (kind === 'process' && processBook) {
+            const live = composed.supervisor.status(id);
+            if (live?.state === 'running' || live?.state === 'restarting') { await processBook.restart(id); return 'restarted with it'; }
+        }
+        return 'its next start uses it';
+    };
+    const named = (v: unknown): v is string => typeof v === 'string' && v.length > 0;
+    ipcMain.handle('genie:app-inbox-state', (_event, workspaceId: unknown) => (named(workspaceId) ? { ok: true, state: appInboxState(workspaceId) } : { ok: false, reason: 'name a workspace' }));
+    ipcMain.handle('genie:app-inbox-create-key', async (_event, workspaceId: unknown, name: unknown) => {
+        if (!named(workspaceId) || typeof name !== 'string') return { ok: false, reason: 'name a workspace and the key' };
+        if (!registry?.workspace(workspaceId)) return { ok: false, reason: `no workspace ${workspaceId}` };
+        try {
+            const made = await appInboxKeys.createScriptKey(workspaceId, name);
+            return { ok: true, id: made.id, name: name.trim(), token: made.token, state: appInboxState(workspaceId) };
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
+    });
+    ipcMain.handle('genie:app-inbox-revoke-key', async (_event, workspaceId: unknown, keyId: unknown) => {
+        if (!named(workspaceId) || !named(keyId)) return { ok: false, reason: 'name a workspace and the key' };
+        if (!appInboxKeys.scriptKeys(workspaceId).some((k) => k.id === keyId)) return { ok: false, reason: 'that key is not one of this workspace’s' };
+        await appInboxKeys.revokeScriptKey(keyId);
+        return { ok: true, state: appInboxState(workspaceId) };
+    });
+    ipcMain.handle('genie:app-inbox-source', async (_event, workspaceId: unknown, op: unknown, kind: unknown, id: unknown) => {
+        if (!named(workspaceId) || (op !== 'rotate' && op !== 'revoke' && op !== 'allow') || (kind !== 'site' && kind !== 'process') || !named(id)) return { ok: false, reason: 'rotate, revoke or allow a site or a process' };
+        try {
+            if (op === 'rotate') appInboxKeys.rotate(kind, id);
+            else if (op === 'revoke') await appInboxKeys.revokeSource({ kind, id, workspaceId });
+            else await appInboxKeys.allowSource(kind, id);
+            const after = await restartSource(workspaceId, kind, id);
+            return { ok: true, text: `${op === 'rotate' ? 'Rotated' : op === 'revoke' ? 'Revoked' : 'Allowed'}: ${after}`, state: appInboxState(workspaceId) };
+        } catch (error) {
+            return { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
     });
     // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
     // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through

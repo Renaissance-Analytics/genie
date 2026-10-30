@@ -473,7 +473,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
     const mail = services.inbox.all();
-    const nameOf = participantNamer(roster);
+    const nameOf = participantNamer(roster, mail);
     return {
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         // Genie's tools as steps (genie#1204): their kinds go to the editor window, which registers them before its canvas mounts.
@@ -521,9 +521,14 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
 
 const USER = { kind: 'user' } as const;
 
-/** A participant by name: the person is `you`, an agent its roster name, one no longer here its id. */
-function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>): (participant: string) => string {
-    return (participant) => (participant === HUMAN ? 'you' : roster.find((a) => a.agentId === participant)?.name ?? participant);
+/**
+ * A participant by name: the person is `you`, an agent its roster name, an APP the label its mail carries
+ * (`site:flabs@fancy`, genie#1345), one no longer here its id.
+ */
+function participantNamer(roster: ReadonlyArray<{ agentId: string; name: string }>, mail: ReadonlyArray<{ from: string; app?: { label: string } }> = []): (participant: string) => string {
+    const apps = new Map<string, string>();
+    for (const m of mail) if (m.app) apps.set(m.from, m.app.label);
+    return (participant) => (participant === HUMAN ? 'you' : apps.get(participant) ?? roster.find((a) => a.agentId === participant)?.name ?? participant);
 }
 
 /** An agent a flow would prompt must be one address on the roster NOW — the same rule the run resolves it by. */

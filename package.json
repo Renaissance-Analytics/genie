@@ -17,7 +17,8 @@
     "verify:resume": "tsx test/live/resume.live.ts",
     "verify:terminal": "tsx test/live/terminal.live.ts",
     "verify:leak": "tsx test/live/terminal-leak.live.ts",
-    "verify:flows": "vitest run -c vitest.flows.config.mts"
+    "verify:flows": "vitest run -c vitest.flows.config.mts",
+    "verify:app-inbox": "tsx test/live/app-inbox.live.ts"
   },
   "dependencies": {
     "@particle-academy/agent-integrations": "0.47.1",

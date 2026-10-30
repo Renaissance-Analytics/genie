@@ -81,7 +81,7 @@ describe('a source’s token', () => {
         const next = await AppInboxKeys.open(dir);
         expect(next.tokenFor(site)).toBeNull();
         expect(next.sources('fancy')).toEqual([]);
-        expect(next.revokedSources('fancy')).toEqual([{ kind: 'site', id: 'site_flabs' }]);
+        expect(next.revokedSources('fancy')).toEqual([{ kind: 'site', id: 'site_flabs', name: 'flabs' }]);
         await next.allowSource('site', 'site_flabs');
         expect(next.tokenFor(site)).not.toBeNull();
     });

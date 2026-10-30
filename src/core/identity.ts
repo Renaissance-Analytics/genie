@@ -100,7 +100,8 @@ export interface AgentRecord {
     readonly createdAt: string;
     readonly lastUsedAt: string | null;
     /**
-     * Changes how Genie WORDS its notices to this agent and nothing else.
+     * Changes how Genie WORDS its notices to this agent — and when an APP's message reaches it (genie#1345, the owner's
+     * D1): an automated agent is told at once (woken if stopped), a manual one on its next turn. Nothing else.
      *
      * **Not a permission boundary.** It restricts nothing, is not a security control, and
      * nothing may be built on it as though it were.

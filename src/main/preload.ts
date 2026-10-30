@@ -284,6 +284,13 @@ const bridge: PreloadBridge = {
     // This machine's disk, one folder at a time, for every picker (Tynn #835).
     host: { listDir: (path) => ipcRenderer.invoke('genie:host-list-dir', path) as Promise<never>, mkdir: (parent, name) => ipcRenderer.invoke('genie:host-mkdir', parent, name) as Promise<never>, home: () => ipcRenderer.invoke('genie:host-home') as Promise<string> },
     // The Tynn network (Tynn #837): main holds the grant, the proof key and the relay socket; the window gets a channel.
+    // A workspace's Apps and scripts (genie#1345): its keys, on this machine only — a remote window has no `appInbox`.
+    appInbox: {
+        state: (workspaceId) => ipcRenderer.invoke('genie:app-inbox-state', workspaceId) as Promise<never>,
+        createKey: (workspaceId, name) => ipcRenderer.invoke('genie:app-inbox-create-key', workspaceId, name) as Promise<never>,
+        revokeKey: (workspaceId, keyId) => ipcRenderer.invoke('genie:app-inbox-revoke-key', workspaceId, keyId) as Promise<never>,
+        source: (workspaceId, op, kind, id) => ipcRenderer.invoke('genie:app-inbox-source', workspaceId, op, kind, id) as Promise<never>,
+    },
     tynnNetwork: {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
         open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,
