@@ -43,6 +43,8 @@ export interface EnginePorts {
 export interface ReconcilePorts extends EnginePorts {
     /** The instance ids the person stopped (persisted; machine-local). */
     readonly personStopped: () => ReadonlySet<string>;
+    /** STUB for the red commit (parity audit #12): not consulted yet. */
+    readonly asleepOnly?: (instance: ServiceInstance) => boolean;
     readonly start: (id: string) => Promise<void>;
     /** ONE readiness probe of the engine on 127.0.0.1:<publishedPort>; true when it answers. */
     readonly answers: (instance: ServiceInstance) => Promise<boolean>;

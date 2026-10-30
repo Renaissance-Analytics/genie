@@ -60,6 +60,8 @@ export interface WorkspaceOpsPorts {
     attention: { finished(): readonly { agentId: string; handoff: string | null; at: string }[] };
     terminals: { list(): readonly { id: string; workspaceId: string }[]; close(id: string): boolean };
     supervisor: { list(): readonly { id: string; workspaceId: string }[]; stop(id: string): boolean };
+    /** STUB for the red commit (parity audit #12): not consulted yet. */
+    engines?: { toRelease(workspaceId: string): readonly string[]; toResume(workspaceId: string): readonly string[]; stop(id: string): Promise<void>; start(id: string): Promise<void> };
     now(): number;
     sleep(ms: number): Promise<void>;
     /** Tynn (§6.1 add from Tynn): the host, and the signed-in person's projects (main/tynn-account.ts); absent on a host without it. */

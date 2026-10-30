@@ -226,6 +226,45 @@ describe('hibernate, wake, start refusal', () => {
     });
 });
 
+describe('hibernate releases the workspace\'s engines; wake resumes them (parity audit #12, Genie 1 hibernation.ts step 3)', () => {
+    const withEngines = (opts: { release: string[]; resume: string[]; failStop?: string; failStart?: string }) => {
+        const f = fakes({ running: [] });
+        const asked: string[] = [];
+        f.ports.engines = {
+            toRelease: (ws) => { asked.push(`release?:${ws}`); return opts.release; },
+            toResume: (ws) => { asked.push(`resume?:${ws}`); return opts.resume; },
+            stop: async (id) => { f.calls.push(`stopEngine:${id}`); if (id === opts.failStop) throw new Error(`docker stop ${id}: refused`); },
+            start: async (id) => { f.calls.push(`startEngine:${id}`); if (id === opts.failStart) throw new Error(`docker start ${id}: refused`); },
+        };
+        return { f, asked };
+    };
+
+    it('stops the engines it is told to release, after the processes — and says which', async () => {
+        const { f, asked } = withEngines({ release: ['pg_tynn', 'redis_shared'], resume: [] });
+        const r = await hibernateWorkspace(f.ports, 'tynn', { handoffWaitMs: 10, pollMs: 5 });
+        expect(asked).toEqual(['release?:tynn']);
+        expect(f.calls).toEqual(['asleep:tynn:true', 'closeTerminal:term_1', 'stopProcess:proc_1', 'stopEngine:pg_tynn', 'stopEngine:redis_shared']);
+        expect(r).toMatchObject({ ok: true, asleep: true, services: { stopped: ['pg_tynn', 'redis_shared'], failed: [] } });
+    });
+
+    it('an engine that will not stop is reported with its reason; the others still stop, and the workspace is asleep', async () => {
+        const { f } = withEngines({ release: ['pg_tynn', 'redis_shared'], resume: [], failStop: 'pg_tynn' });
+        const r = await hibernateWorkspace(f.ports, 'tynn', { handoffWaitMs: 10, pollMs: 5 });
+        expect(f.calls).toContain('stopEngine:redis_shared');
+        expect(r).toMatchObject({ ok: true, asleep: true, services: { stopped: ['redis_shared'], failed: [{ id: 'pg_tynn', reason: 'docker stop pg_tynn: refused' }] } });
+        expect(f.workspaces().find((w) => w.id === 'tynn')?.asleep).toBe(true);
+    });
+
+    it('wake clears the flag FIRST, then starts the engines to resume; a refused start is reported, the wake still stands', async () => {
+        const { f } = withEngines({ release: [], resume: ['pg_tynn', 'redis_shared'], failStart: 'redis_shared' });
+        await hibernateWorkspace(f.ports, 'tynn', { handoffWaitMs: 10, pollMs: 5 });
+        f.calls.length = 0;
+        const r = await wakeWorkspace(f.ports, 'tynn');
+        expect(f.calls).toEqual(['asleep:tynn:false', 'startEngine:pg_tynn', 'startEngine:redis_shared']);
+        expect(r).toEqual({ ok: true, services: { started: ['pg_tynn'], failed: [{ id: 'redis_shared', reason: 'docker start redis_shared: refused' }] } });
+    });
+});
+
 describe('remove from Genie', () => {
     it('stops its agents, forgets the workspace and its agents, and says plainly that the folder was not touched', async () => {
         const f = fakes({ running: ['agent_a'] });
