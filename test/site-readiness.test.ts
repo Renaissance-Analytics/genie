@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { PtyOpened, PtyPort } from '../src/main/terminal-host.js';
 import { ProcessSupervisor } from '../src/main/process-supervisor.js';
-import { SiteManager, type SiteManagerDeps } from '../src/main/site-manager.js';
+import { SiteManager, type CreateSiteInput, type SiteManagerDeps } from '../src/main/site-manager.js';
 import { siteAnswers, SITE_READY_TIMEOUT_MS } from '../src/main/port-probe.js';
 import { siteTone } from '../src/core/rail-indicators.js';
 
@@ -45,7 +45,7 @@ function make(over: Partial<SiteManagerDeps> = {}) {
     sites.onChange(() => { changes++; });
     return { sites, supervisor, changes: () => changes };
 }
-const proxy = { name: 'web', workspaceId: 'acme', repoPath: '/repos/acme', serve: { mode: 'proxy' as const }, devServer: { stack: 'node', command: 'npm run dev -- --port {port}' } };
+const proxy: CreateSiteInput = { name: 'web', workspaceId: 'acme', repoPath: '/repos/acme', serve: { mode: 'proxy' as const }, devServer: { stack: 'node', command: 'npm run dev -- --port {port}' } };
 
 describe('a started site waits for its port', () => {
     it('reads "starting" — and is not routed — until the port answers, then "running" and routed, with a change event', async () => {
