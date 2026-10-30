@@ -1,10 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { ATTACHMENT_LIMITS, attachmentRefusal, isExecutableName, type Participant } from '../core/inbox.js';
+import { ATTACHMENT_LIMITS, HUMAN, attachmentRefusal, isExecutableName, type Participant } from '../core/inbox.js';
 import { sequenceV1Mail, type V1InboxPlan } from '../core/v1-inbox.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
+import { confineRead, confineWrite } from './workspace-confine.js';
 
 /**
  * AGENTINBOX — the durable half (§6.4).
@@ -84,9 +86,19 @@ export interface SendInput {
     readonly from: Participant;
     readonly to: Participant;
     readonly text: string;
-    /** Absolute paths. Read and copied at send time; the paths themselves are never stored. */
+    /** Paths, read and copied at send time; the paths themselves are never stored. */
     readonly attachments?: readonly string[];
+    /**
+     * The sending AGENT's workspace root (genie#1347): every attachment must resolve inside it, after links, and a
+     * relative path is relative to it. Required whenever an agent attaches anything — the store refuses rather than
+     * read an agent's path unconfined. Only the PERSON's own picks (the host's file picker, a phone upload) go without.
+     */
+    readonly workspaceRoot?: string;
 }
+
+/** What a refusal at each end tells the agent will happen instead. */
+const SEND_REFUSED = 'only files inside it can be attached, and nothing was sent';
+const SAVE_REFUSED = 'a received file can only be saved inside it, and nothing was written';
 
 export interface ReceiveInput {
     readonly participant: Participant;
@@ -217,7 +229,7 @@ export class InboxStore {
     async send(input: SendInput): Promise<InboxMessage> {
         // Everything that can refuse happens BEFORE anything is written: one bad path and the
         // message is not delivered, no blob lands, and the caller is told which path.
-        const attachments = await this.#stageAttachments(input.attachments ?? []);
+        const attachments = await this.#stageAttachments(input.from, input.attachments ?? [], input.workspaceRoot);
         const seq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0) + 1;
         this.#mail.lastSeq = seq;
         const message: InboxMessage = {
@@ -300,23 +312,32 @@ export class InboxStore {
         return readFile(join(this.attachmentsDir, attachment.sha256));
     }
 
-    /** Write an attachment to `dest`. Refuses an executable name and, without `overwrite`, an existing file. */
+    /**
+     * Write an attachment to `dest`, inside the agent's `workspaceRoot` (genie#1347: relative to it, and refused when it
+     * leads out of it, links followed). Refuses an executable name and, without `overwrite`, an existing file. An agent
+     * without a root is refused: there is no unconfined save for an agent.
+     */
     async saveAttachment(
         participant: Participant,
         attachmentId: string,
         dest: string,
-        options: { overwrite?: boolean } = {},
+        options: { overwrite?: boolean; workspaceRoot?: string } = {},
     ): Promise<string> {
         const { attachment } = this.#attachmentFor(participant, attachmentId);
-        if (isExecutableName(basename(dest))) {
-            throw new Error(`${basename(dest)} is a natively executable name and is refused at the receiving end`);
+        if (participant !== HUMAN && !options.workspaceRoot) {
+            throw new Error('an agent saves attachments only inside its own workspace, and none was given; nothing was written');
         }
-        if (!options.overwrite && (await exists(dest))) {
+        const target = options.workspaceRoot ? await confineWrite(options.workspaceRoot, dest, SAVE_REFUSED) : dest;
+        if (isExecutableName(basename(target))) {
+            throw new Error(`${basename(target)} is a natively executable name and is refused at the receiving end`);
+        }
+        if (!options.overwrite && (await exists(target))) {
             throw new Error(`${dest} exists; pass overwrite to replace it`);
         }
-        await mkdir(dirname(dest), { recursive: true });
-        await copyFile(join(this.attachmentsDir, attachment.sha256), dest);
-        return dest;
+        await mkdir(dirname(target), { recursive: true });
+        // EXCL without overwrite: a file (or link) that appeared since the check is not replaced.
+        await copyFile(join(this.attachmentsDir, attachment.sha256), target, options.overwrite ? 0 : fsConstants.COPYFILE_EXCL);
+        return target;
     }
 
     /** Genie 1's history import, if it ran here. */
@@ -419,17 +440,32 @@ export class InboxStore {
      * Sizes are measured off the real files first, so a 25 MB + 1 file is refused before a byte
      * is copied. Then each file is hashed and stored under its hash: identical bytes land once.
      * A path that cannot be read fails the whole send by throwing with that path in the message.
+     *
+     * An AGENT's paths are confined to its workspace first (genie#1347), every one before any is read: one path
+     * outside it fails the send. The bytes are read from the real path; the name is the one the agent gave.
      */
-    async #stageAttachments(paths: readonly string[]): Promise<StoredAttachment[]> {
-        const sized: Array<{ path: string; name: string; size: number }> = [];
+    async #stageAttachments(from: Participant, paths: readonly string[], workspaceRoot: string | undefined): Promise<StoredAttachment[]> {
+        if (paths.length > 0 && from !== HUMAN && !workspaceRoot) {
+            throw new Error('an agent attaches only files inside its own workspace, and none was given; nothing was sent');
+        }
+        const located: Array<{ given: string; read: string; name: string }> = [];
         for (const p of paths) {
+            if (workspaceRoot) {
+                const { path, real } = await confineRead(workspaceRoot, p, SEND_REFUSED);
+                located.push({ given: p, read: real, name: basename(path) });
+            } else {
+                located.push({ given: p, read: p, name: basename(p) });
+            }
+        }
+        const sized: Array<{ path: string; name: string; size: number }> = [];
+        for (const f of located) {
             let size: number;
             try {
-                size = (await stat(p)).size;
+                size = (await stat(f.read)).size;
             } catch (error) {
-                throw new Error(`attachment ${p} could not be read; nothing was sent (${(error as Error).message})`);
+                throw new Error(`attachment ${f.given} could not be read; nothing was sent (${(error as NodeJS.ErrnoException).code ?? 'unreadable'})`);
             }
-            sized.push({ path: p, name: basename(p), size });
+            sized.push({ path: f.read, name: f.name, size });
         }
         const refusal = attachmentRefusal(sized);
         if (refusal !== null) throw new Error(refusal);

@@ -182,8 +182,11 @@ describe('send — an agent attaches only files inside its own workspace', () =>
     });
 
     it('the refusal is the same whether the outside file exists or not — no probing the disk through it', async () => {
-        const there = await store.send({ from: a, to: b, text: 'x', attachments: [resolve(outside, 'secret.txt')], workspaceRoot: ws }).catch((e: Error) => e.message);
-        const absent = await store.send({ from: a, to: b, text: 'x', attachments: [resolve(outside, 'nope.txt')], workspaceRoot: ws }).catch((e: Error) => e.message);
+        const refusal = (file: string) => store.send({ from: a, to: b, text: 'x', attachments: [resolve(outside, file)], workspaceRoot: ws })
+            .then(() => 'sent', (e: Error) => e.message);
+        const there = await refusal('secret.txt');
+        const absent = await refusal('nope.txt');
+        expect(there).toMatch(/outside .*workspace/);
         expect(there.replace('secret.txt', 'F')).toBe(absent.replace('nope.txt', 'F'));
     });
 
