@@ -18,7 +18,8 @@
  * (`wireInboxPush` with main's app policy). Run in the VM only:
  *   scripts/vm-fifo.sh omarchy ../_wt/<tree> 'npm ci && npx tsx test/live/app-inbox.live.ts'
  */
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -167,12 +168,14 @@ setInterval(() => {}, 1 << 30);
 
         // 3. A script outside Genie, with a key the person made.
         const made = await keys.createScriptKey('fancy', 'nightly');
-        execFileSync(process.execPath, [join(fancy, 'poster.mjs'), 'nightly check red', '-', out], { env: { ...process.env, GENIE_INBOX_URL: server.url, GENIE_INBOX_TOKEN: made.token } });
+        // ASYNC: this process hosts the door; a synchronous child would block the very server it posts to.
+        await promisify(execFile)(process.execPath, [join(fancy, 'poster.mjs'), 'nightly check red', '-', out], { env: { ...process.env, GENIE_INBOX_URL: server.url, GENIE_INBOX_TOKEN: made.token } });
         const scriptMail = composed.inbox.all().find((m) => m.from === `app:script:${made.id}`);
         check(scriptMail?.to === clerk.id && scriptMail?.app?.label === 'script:nightly@fancy', '3. the script posted with its key, to the default agent, marked script:nightly@fancy', String(scriptMail?.app?.label));
         // The same script with a made-up key: 404, nothing stored.
         const before = composed.inbox.all().length;
-        execFileSync(process.execPath, [join(fancy, 'poster.mjs'), 'forged', '-', out], { env: { ...process.env, GENIE_INBOX_URL: server.url, GENIE_INBOX_TOKEN: 'gik_forged' } });
+        // ASYNC: this process hosts the door; a synchronous child would block the very server it posts to.
+        await promisify(execFile)(process.execPath, [join(fancy, 'poster.mjs'), 'forged', '-', out], { env: { ...process.env, GENIE_INBOX_URL: server.url, GENIE_INBOX_TOKEN: 'gik_forged' } });
         check(posts().find((x) => x.subject === 'forged')?.status === 404 && composed.inbox.all().length === before, '3b. a made-up key: 404, nothing stored');
 
         // 5. Delivery by mode.
