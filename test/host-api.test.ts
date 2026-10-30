@@ -245,3 +245,75 @@ describe('events', () => {
         expect(f.listeners.record.size).toBe(0);
     });
 });
+
+/*
+ * THE PHONE'S CALLS (2026-10-30): a workspace's files read and uploaded through the SAME confined files host the panel
+ * uses, a prompt that carries files reaching the session host's `promptWith` (the chat's own attach path), and an agent
+ * nobody wants never built.
+ */
+describe('the phone’s files, attachments and wanted agents', () => {
+    const withFiles = () => {
+        const f = fakes();
+        const seen: string[] = [];
+        f.deps.files = {
+            children: async (ws, dir) => { seen.push(`children:${ws}:${dir}`); return [{ id: 'README.md', label: 'README.md', type: 'file' }] as never; },
+            open: async (ws, path) => { seen.push(`open:${ws}:${path}`); return { ok: true, path, text: '# hi', sha: 's' }; },
+            readBytes: async (ws, path) => { seen.push(`media:${ws}:${path}`); return { ok: true, path, base64: 'AA==', sha: 's' }; },
+            upload: async (ws, dir, name, bytes) => { seen.push(`upload:${ws}:${dir}:${name}:${bytes.byteLength}`); return { ok: true, path: dir ? `${dir}/${name}` : name }; },
+        };
+        f.deps.host.promptWith = (id, text, attachments, by) => { seen.push(`promptWith:${id}:${text}:${attachments.map((a) => `${a.name}/${a.type}/${a.bytes.byteLength}`).join(',')}:${by}`); return { ok: true }; };
+        return { f, seen, api: buildHostApi(f.deps) };
+    };
+
+    it('files.children / open / readMedia / upload reach the files host with their arguments', async () => {
+        const { seen, api } = withFiles();
+        expect(await api.invoke('files.children', ['tynn', 'docs'])).toEqual([{ id: 'README.md', label: 'README.md', type: 'file' }]);
+        expect(await api.invoke('files.open', ['tynn', 'README.md'])).toMatchObject({ ok: true, text: '# hi' });
+        expect(await api.invoke('files.readMedia', ['tynn', 'a.png'])).toMatchObject({ ok: true, base64: 'AA==' });
+        expect(await api.invoke('files.upload', ['tynn', 'docs', { name: 'p.jpg', bytes: new Uint8Array(7) }])).toEqual({ ok: true, path: 'docs/p.jpg' });
+        expect(seen).toEqual(['children:tynn:docs', 'open:tynn:README.md', 'media:tynn:a.png', 'upload:tynn:docs:p.jpg:7']);
+    });
+
+    it('an upload that is not a name with bytes is refused, never written', async () => {
+        const { seen, api } = withFiles();
+        expect(await api.invoke('files.upload', ['tynn', '', { name: 'p.jpg', bytes: 'not bytes' }])).toMatchObject({ ok: false });
+        expect(await api.invoke('files.upload', ['tynn', '', null])).toMatchObject({ ok: false });
+        expect(seen).toEqual([]);
+    });
+
+    it('a prompt with files goes to promptWith — by YOU — and may carry no text; without files it is the plain prompt (control)', async () => {
+        const { f, seen, api } = withFiles();
+        expect(await api.invoke('prompt', ['agent_a', 'what is this?', [{ name: 'IMG_1.jpg', type: 'image/jpeg', bytes: new Uint8Array(12) }]])).toEqual({ ok: true });
+        expect(await api.invoke('prompt', ['agent_a', '', [{ name: 'IMG_2.jpg', type: 'image/jpeg', bytes: new Uint8Array(3) }]])).toEqual({ ok: true });
+        expect(seen).toEqual(['promptWith:agent_a:what is this?:IMG_1.jpg/image/jpeg/12:you', 'promptWith:agent_a::IMG_2.jpg/image/jpeg/3:you']);
+        expect(await api.invoke('prompt', ['agent_a', 'hi'])).toEqual({ ok: true });
+        expect(f.calls).toContain('prompt:agent_a:hi');
+    });
+
+    it('promptWith’s refusal (a file the provider cannot take) comes back with its reason', async () => {
+        const { f, api } = withFiles();
+        f.deps.host.promptWith = () => ({ ok: false, reason: 'clip.mov: this agent’s provider takes images and text only' });
+        expect(await api.invoke('prompt', ['agent_a', 'x', [{ name: 'clip.mov', type: 'video/quicktime', bytes: new Uint8Array(2) }]])).toEqual({ ok: false, reason: 'clip.mov: this agent’s provider takes images and text only' });
+    });
+
+    it('an agent no listener wants is never built: detailFor is not called for it', async () => {
+        const f = fakes();
+        let built = 0;
+        const detailFor = f.deps.detailFor;
+        f.deps.detailFor = (id) => { built += 1; return detailFor(id); };
+        const scheduled: Array<() => void> = [];
+        f.deps.schedule = (_ms, fn) => { scheduled.push(fn); return () => {}; };
+        const api = buildHostApi(f.deps);
+        const heard: string[] = [];
+        const off = api.onEvent((channel) => heard.push(channel), { wantsAgent: (id) => id === 'agent_a' });
+        for (const l of f.listeners.agent) { l('agent_b'); }
+        for (const fn of scheduled.splice(0)) fn();
+        expect(built).toBe(0);
+        expect(heard).toEqual([]);
+        for (const l of f.listeners.agent) { l('agent_a'); }
+        for (const fn of scheduled.splice(0)) fn();
+        expect(built).toBe(1);
+        expect(heard).toEqual(['agent:agent_a']);
+        off();
+    });
+});
