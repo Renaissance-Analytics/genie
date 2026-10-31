@@ -163,13 +163,19 @@ export class FlowScheduler {
     /**
      * A file landed (the file source, genie#1204): every ARMED flow with a `genie/file_added` trigger it matches runs
      * once — from that trigger, with the file — recorded as a `file` run naming it. A disarmed flow never does.
+     * Answers whether any flow took it: the file source keeps watching one nothing took (genie#1361), so a file that
+     * settled below a flow's minimum size and then grows past it is offered again.
      */
-    fileAdded(event: FileAddedProps): void {
+    fileAdded(event: FileAddedProps): boolean {
+        let taken = false;
         for (const flow of this.#deps.store.list()) {
             if (!flow.armed) continue;
             const hit = this.#deps.store.fileTriggers(flow.id).find((t) => matchesFileTrigger(t.config as unknown as FileTriggerConfig, event));
-            if (hit) void this.#start(flow, { nodeId: hit.nodeId, file: event }, 'file');
+            if (!hit) continue;
+            taken = true;
+            void this.#start(flow, { nodeId: hit.nodeId, file: event }, 'file');
         }
+        return taken;
     }
 
     #fire(due: Planned): void {

@@ -1072,8 +1072,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // A run Genie quit under resumes now, when the step it reached is safe to run again (genie#1204).
     void flowScheduler.resumeInterrupted().catch((error: unknown) => console.error(`[flows] resume: ${error instanceof Error ? error.message : String(error)}`));
     // THE FILE TRIGGER (genie#1204): only the workspaces an armed file flow names are watched (flow-file-watch.ts); what
-    // lands there becomes an addition (flow-file-source.ts: de-duplicated, its size read once it stops growing) and starts
-    // the armed flows it matches.
+    // lands there becomes an addition (flow-file-source.ts: de-duplicated, reported once it is finished — quiet, never
+    // empty, never at a partial size) and starts the armed flows it matches; one nothing took is watched a while longer.
     const fileListeners = new Set<(event: RawWatchEvent) => void>();
     const fileSource = startFileSource({
         subscribe: (listener) => { fileListeners.add(listener); return () => { fileListeners.delete(listener); }; },

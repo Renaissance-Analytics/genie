@@ -161,7 +161,7 @@ describe('A file is added: a file landing in the workspace starts the armed flow
         save(g, name, [node('t', 'genie/file_added', { workspace: WS, ...trigger }), logStep('l', 'got {{ $json.relPath }} ({{ $json.sizeBytes }} bytes)')], [edge('t', 'l')]);
     /** Arm, and give the recursive watch a moment to be in place. */
     const armWatched = async (g: Genie, id: string) => { await arm(g, id); await new Promise((r) => setTimeout(r, 300)); };
-    /** Long enough for a settle (250 ms per reading) and the de-duplication window (500 ms) to have passed twice. */
+    /** Long enough for a settle to finish (a 1 s quiet window, read every 250 ms) and the de-duplication window (500 ms) to pass. */
     const quiet = () => new Promise((r) => setTimeout(r, 1500));
     const write = async (g: Genie, rel: string, content: string | Buffer) => { await mkdir(join(g.ws, rel, '..'), { recursive: true }); await writeFile(join(g.ws, rel), content); };
     const files = (g: Genie, id: string) => g.services.flows.get(id)!.runs.map((r) => r.file).sort();
