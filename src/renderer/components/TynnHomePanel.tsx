@@ -183,7 +183,7 @@ function Dashboard({ d, onQuery }: { d: HomeDashboard; onQuery: TynnHomePanelPro
                         <ul className="flex flex-col gap-2">
                             {d.activity.map((a) => (
                                 <li key={a.id} className="text-[12px]">
-                                    <span className={`font-medium ${a.agent ? 'text-cyan-500' : 'text-[var(--fg-1)]'}`}>{a.actor}</span>{' '}<span className="text-[var(--fg-2)]">{a.action}</span>
+                                    <span className={`font-medium ${a.agent ? 'text-[var(--blue-500)]' : 'text-[var(--fg-1)]'}`}>{a.actor}</span>{' '}<span className="text-[var(--fg-2)]">{a.action}</span>
                                     {a.subject ? <div className="text-[11px] text-[var(--fg-3)]">{a.subject}</div> : null}
                                     {a.when ? <div className="text-[10px] text-[var(--fg-4,var(--fg-3))]">{a.when}</div> : null}
                                 </li>
