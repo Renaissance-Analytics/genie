@@ -28,7 +28,7 @@ function StartVip({ onStart, busy }: { onStart: TynnVipPanelProps['onStart']; bu
     const [why, setWhy] = useState('');
     if (!open) {
         return (
-            <button type="button" data-vip-start="" onClick={() => setOpen(true)} className="mt-4 inline-flex items-center gap-1 rounded-md bg-rose-600 px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90">
+            <button type="button" data-vip-start="" onClick={() => setOpen(true)} className="mt-4 inline-flex items-center gap-1 rounded-md bg-[var(--rose-600)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90">
                 <Icon name="flame" size="xs" /> Start VIP
             </button>
         );
@@ -40,7 +40,7 @@ function StartVip({ onStart, busy }: { onStart: TynnVipPanelProps['onStart']; bu
             <textarea aria-label="Why it cannot wait" placeholder="Why it cannot wait" rows={3} value={why} onChange={(e) => setWhy(e.target.value)} className={inputClass} disabled={busy} />
             <div className="flex justify-end gap-2">
                 <button type="button" onClick={() => setOpen(false)} className="rounded-md px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Cancel</button>
-                <button type="submit" data-tynn-submit="" disabled={busy || title.trim() === '' || why.trim() === ''} className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-50">
+                <button type="submit" data-tynn-submit="" disabled={busy || title.trim() === '' || why.trim() === ''} className="inline-flex items-center gap-1 rounded-md bg-[var(--rose-600)] px-2.5 py-1 text-[12px] font-medium text-white disabled:opacity-50">
                     <Icon name={busy ? 'loader' : 'flame'} size="xs" className={busy ? 'animate-spin' : ''} />{busy ? 'Starting VIP…' : 'Start VIP'}
                 </button>
             </div>
@@ -107,7 +107,7 @@ export function TynnVipPanel({ state, onAction, onStart, onRetry, live }: TynnVi
                 <div className="flex justify-end"><LiveMark live={live} /></div>
                 {opLine}
                 <div className="mx-auto mt-6 w-full max-w-[520px] rounded-lg border border-[var(--border-1)] px-8 pt-12 pb-10 text-center">
-                    <Icon name="flame" size="xl" className="text-rose-300" />
+                    <Icon name="flame" size="xl" className="text-[var(--rose-300)]" />
                     <h2 className="mt-3 text-[18px] font-semibold text-[var(--fg-1)]">No VIP in flight</h2>
                     <p className="mt-1.5 text-[13px] leading-normal text-[var(--fg-3)]">VIP is the lane for critical, unscoped work — the thing that makes everything else wait. One at a time, patched off the last release.</p>
                     {view.canStart
@@ -121,13 +121,13 @@ export function TynnVipPanel({ state, onAction, onStart, onRetry, live }: TynnVi
     const releaseTitle = view.allDone ? 'Release this VIP version' : 'All stories must be Done to release the VIP';
     return (
         <div data-tynn-page="vip" data-vip-state="in-flight" className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-            <div data-vip-banner="" className="flex flex-wrap items-center gap-2 border-b border-rose-500/30 bg-rose-500/10 px-3 py-2 text-[12px]">
-                <span className="text-rose-500"><Icon name="flame" size="sm" /></span>
+            <div data-vip-banner="" className="flex flex-wrap items-center gap-2 border-b border-[var(--rose-500)]/30 bg-[var(--rose-500)]/10 px-3 py-2 text-[12px]">
+                <span className="text-[var(--rose-500)]"><Icon name="flame" size="sm" /></span>
                 <span className="font-mono text-[var(--fg-2)]">{view.version.number}</span>
-                <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] font-medium text-rose-500">{`VIP ${view.version.number ?? ''}`}</span>
+                <span className="rounded-full bg-[var(--rose-500)]/20 px-2 py-0.5 text-[10px] font-medium text-[var(--rose-500)]">{`VIP ${view.version.number ?? ''}`}</span>
                 <span className="min-w-0 truncate font-medium text-[var(--fg-1)]">{view.version.title}</span>
                 <span className="text-[var(--fg-3)]">Progress</span>
-                <span className="inline-block h-1.5 w-32 overflow-hidden rounded bg-[var(--bg-2)]"><i className="block h-full bg-rose-500" style={{ width: `${view.progress.percent}%` }} /></span>
+                <span className="inline-block h-1.5 w-32 overflow-hidden rounded bg-[var(--bg-2)]"><i className="block h-full bg-[var(--rose-500)]" style={{ width: `${view.progress.percent}%` }} /></span>
                 <span className="text-[var(--fg-3)]">{`${view.progress.done}/${view.progress.total}`}</span>
                 <span className="ml-auto flex items-center gap-1">
                     <LiveMark live={live} />
@@ -138,7 +138,7 @@ export function TynnVipPanel({ state, onAction, onStart, onRetry, live }: TynnVi
                         title={releaseTitle}
                         disabled={!view.allDone}
                         onClick={() => { if (view.version && view.allDone) onAction({ action: 'version.release', ids: { versionId: view.version.id } }); }}
-                        className="inline-flex items-center gap-1 rounded-md bg-rose-600 px-2 py-1 text-[11px] font-medium text-white disabled:opacity-40"
+                        className="inline-flex items-center gap-1 rounded-md bg-[var(--rose-600)] px-2 py-1 text-[11px] font-medium text-white disabled:opacity-40"
                     >
                         <Icon name="rocket" size="xs" />
                     </button>
