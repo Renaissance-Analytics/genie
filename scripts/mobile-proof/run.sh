@@ -20,8 +20,14 @@ if [ "${MOBILE_PROOF:-}" = confirm ]; then
     # an idle session after 300 s (~/.config/omarchy/shell.json: screensaver 150, lock 300) — before the build is even
     # done — and a window under the lock screen paints no frames, so CDP's Page.captureScreenshot waits forever (measured
     # 2026-10-31: the run hung there, dpmsStatus 0, then "Enter Password" on the console). Stay awake, the omarchy way.
-    OTI="$(command -v omarchy-toggle-idle || echo /usr/share/omarchy/bin/omarchy-toggle-idle)"
-    "$OTI" stay-awake && echo "=== idle lock off: $("$OTI" --status)"
+    # omarchy's own commands call each other by name.
+    export PATH="/usr/share/omarchy/bin:$PATH"
+    omarchy-toggle-idle stay-awake && echo "=== idle lock off: $(omarchy-toggle-idle --status)"
+    # The VM's screen is 1024x768 at scale 2: Settings' content column was squeezed to nothing behind the chat (run 6). A
+    # desktop-sized screen, through Hyprland's Lua config (`keyword` is refused by this build: "use eval").
+    export HYPRLAND_INSTANCE_SIGNATURE="${HYPRLAND_INSTANCE_SIGNATURE:-$(ls "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -1)}"
+    hyprctl eval 'hl.monitor({ output = "VGA-1", mode = "1920x1080@60", position = "0x0", scale = 1 })' >/dev/null 2>&1
+    echo "=== screen: $(hyprctl monitors | grep -E 'x[0-9]+@' | head -1 | xargs) $(hyprctl monitors | grep scale | xargs)"
 fi
 
 echo "=== npm ci + build"
@@ -107,7 +113,7 @@ if [ "${MOBILE_PROOF:-}" = confirm ]; then
     export HYPRLAND_INSTANCE_SIGNATURE="${HYPRLAND_INSTANCE_SIGNATURE:-$(ls "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -1)}"
     sleep 8
     # Omarchy's first-login notifications sit over the top of the screen (run 5's shots): out of the way, the omarchy way.
-    for n in "Update System" "Learn Keybindings"; do /usr/share/omarchy/bin/omarchy-notification-dismiss "$n" >/dev/null 2>&1 || true; done
+    for n in "Update System" "Learn Keybindings"; do omarchy-notification-dismiss "$n" 2>&1 | head -2 || true; done
     { hyprctl monitors; hyprctl clients; } > "$EVIDENCE/hypr-state.txt" 2>&1 || true
     grep -E "^Window|class:|title:|mapped:|hidden:|workspace:|dpmsStatus" "$EVIDENCE/hypr-state.txt" | head -20
     # The renewal step dials the socket from node; the VM's fake `tailscale cert` is self-signed.

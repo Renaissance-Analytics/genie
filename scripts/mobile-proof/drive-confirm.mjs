@@ -157,10 +157,12 @@ async function main() {
     await d.page.waitForSelector('[data-mobile-waiting]', { timeout: 30_000 });
     // With a dialog open (What's new — found live in run 5 hiding the prompt under its backdrop), Deny is pressed with a
     // REAL mouse click at the button's place on screen: it lands only if nothing covers the prompt.
-    await g.evaluate(`window.genie.features.act({ kind: 'whatsNew.show' })`).catch(() => {});
-    const modalOpen = await g.evaluate(`(async () => { for (let i = 0; i < 20; i++) { if (document.querySelector('[data-whats-new]')) return true; await new Promise((r) => setTimeout(r, 250)); } return false; })()`);
+    // The dialog is opened the way a person opens one: the rail's + (Add workspace). (Asking main for What's new from here
+    // did not open it — run 7: the window draws What's new from its own state.)
+    await g.evaluate(`document.querySelector('[data-rail-tool="add-workspace"]')?.click()`);
+    const modalOpen = await g.evaluate(`(async () => { for (let i = 0; i < 20; i++) { if (document.querySelector('[role="dialog"]:not([data-pair-prompt])')) return true; await new Promise((r) => setTimeout(r, 250)); } return false; })()`);
     await waitInGenie(g, '[data-pair-prompt]');
-    check('a dialog is open while the prompt is up (What’s new)', modalOpen);
+    check('a dialog is open while the prompt is up (Add workspace)', modalOpen);
     await desktopShot(g, 'c07b-desktop-prompt-over-dialog');
     const deny = await g.evaluate(`(() => { const r = document.querySelector('[data-action="deny-pair"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
     const onTop = await g.evaluate(`document.elementFromPoint(${deny.x}, ${deny.y})?.closest('[data-action="deny-pair"]') !== null`);
