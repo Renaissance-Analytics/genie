@@ -75,6 +75,7 @@ Linux test VM with real servers (genie#1376, `test/live/app-inbox-php.live.ts`):
 | `php artisan serve` (Genie's default for a Laravel repo) | yes | — | yes | yes |
 | `php -S` | yes | — | yes | yes |
 | FrankenPHP `php-server` | yes | yes | yes | yes |
+| Laravel Octane (FrankenPHP) | yes | yes | yes | yes |
 
 Use `getenv()` or Laravel's `env()`, which reads all three.
 
