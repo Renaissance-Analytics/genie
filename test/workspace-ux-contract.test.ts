@@ -14,6 +14,19 @@ import {
     BOARD_STATES,
     BOARD_TRANSITIONS,
 } from '../src/core/tynn-board.js';
+import {
+    WIP_ACTIONS,
+    WIP_ANSWER,
+    WIP_COUNTS,
+    WIP_DATA_API,
+    WIP_FIELDS,
+    WIP_LENSES,
+    WIP_LIVE,
+    WIP_QUERY,
+    WIP_QUICK_ACTIONS,
+    WIP_STATES,
+    WIP_TASK_ORDER,
+} from '../src/core/tynn-pages.js';
 
 /**
  * THE WORKSPACE-UX DRIFT WATCHER, Genie's side (genie#1295).
@@ -122,5 +135,55 @@ describe('the Tynn tab\'s board, against the contract', () => {
         for (const [kind, steps] of Object.entries(BOARD_QUICK_ACTIONS)) {
             for (const step of Object.values(steps)) expect(BOARD_API[`${kind}.${step.verb}`], `${kind}.${step.verb}`).toBeDefined();
         }
+    });
+});
+
+describe('the Tynn tab\'s WIP, against the contract (0.6.0)', () => {
+    type Wip = {
+        data: {
+            api: { method: string; path: string };
+            query: string[];
+            lenses: Record<string, string[]>;
+            answer: string[];
+            counts: string[];
+            fields: Record<string, string[]>;
+            taskOrder: string[];
+            quickActions: Record<string, Record<string, { verb: string; guard?: string }>>;
+            live: Record<string, unknown>;
+        };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const wip = contract.surfaces.find((s) => s.id === 'wip') as unknown as Wip | undefined;
+
+    it('is in the contract', () => {
+        expect(wip).toBeDefined();
+    });
+
+    it('reads WIP where the contract says, with its query, lenses, counts, fields and task order', () => {
+        expect(WIP_DATA_API).toEqual(wip!.data.api);
+        expect(WIP_QUERY).toEqual(wip!.data.query);
+        expect(WIP_LENSES).toEqual(wip!.data.lenses);
+        expect(WIP_ANSWER).toEqual(wip!.data.answer);
+        expect(WIP_COUNTS).toEqual(wip!.data.counts);
+        expect(WIP_FIELDS).toEqual(wip!.data.fields);
+        expect(WIP_TASK_ORDER).toEqual(wip!.data.taskOrder);
+        expect(WIP_QUICK_ACTIONS).toEqual(wip!.data.quickActions);
+    });
+
+    it('offers exactly the contract\'s actions, through the board\'s API, and each one-click step has one', () => {
+        expect([...WIP_ACTIONS].sort()).toEqual(wip!.actions.map((a) => a.id).sort());
+        for (const action of wip!.actions) expect({ id: action.id, ...BOARD_API[action.id] }).toEqual({ id: action.id, ...action.api });
+        for (const step of Object.values(WIP_QUICK_ACTIONS.task)) expect(WIP_ACTIONS).toContain(`task.${step.verb}`);
+    });
+
+    it('goes live as the contract says: the board\'s channel and events, read again on a ring', () => {
+        const { about: _about, web: _web, ...shape } = wip!.data.live;
+        expect(WIP_LIVE).toEqual(shape);
+        expect(WIP_LIVE.channel).toBe(BOARD_LIVE.channel);
+    });
+
+    it('has a view for every state the contract names', () => {
+        expect([...WIP_STATES].sort()).toEqual(wip!.states.map((s) => s.id).sort());
     });
 });
