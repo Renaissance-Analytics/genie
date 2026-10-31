@@ -8,7 +8,7 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import { applyPatch, NOT_CONNECTED, SessionEngineClient, type EngineClientOptions } from '../src/main/session-engine-client.js';
-import { adoptWindowEnv, SessionEngineServer } from '../src/main/session-engine-server.js';
+import { adoptWindowEnv, PATCH_CHUNK_ROWS, SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -187,6 +187,39 @@ describe('the replica reads what the host answers', () => {
         const r = record();
         await started(client, r);
         expect(client.probe(r.id)).toMatchObject({ collaborators: 2, commsAgeSeconds: 5 });
+    });
+});
+
+describe('a long patch is cut into frames (the window never parses megabytes in one block)', () => {
+    it('650 rows arrive in frames of at most PATCH_CHUNK_ROWS, and the replica still equals the host', async () => {
+        const [hostSide, windowSide] = memoryPair();
+        let largest = 0;
+        let agentFrames = 0;
+        const send = hostSide.send.bind(hostSide);
+        hostSide.send = (text: string) => {
+            const f = JSON.parse(text) as { channel?: string; payload?: { rows?: { append: unknown[] }; ledger?: { append: unknown[] } } };
+            if (f.channel === 'engine.agent') {
+                agentFrames += 1;
+                largest = Math.max(largest, f.payload?.rows?.append.length ?? 0, f.payload?.ledger?.append.length ?? 0);
+            }
+            send(text);
+        };
+        server.accept(hostSide);
+        const client = new SessionEngineClient();
+        await client.connect(windowSide, TOKEN);
+        const r = record();
+        const events = await started(client, r);
+        // 650 rows with no push in between: one change for the host to send.
+        for (let i = 0; i < 650; i += 1) events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: `t${i}`, name: 'Bash', title: `step ${i}` });
+        agentFrames = 0;
+        await settle();
+        expect(agentFrames).toBeGreaterThanOrEqual(Math.ceil(650 / PATCH_CHUNK_ROWS));
+        expect(largest).toBeLessThanOrEqual(PATCH_CHUNK_ROWS);
+        expect(client.rowsFor(r.id)).toEqual(host.rowsFor(r.id));
+        client.ledgerFor(r.id);
+        await settle();
+        expect(client.ledgerFor(r.id)).toEqual(host.ledgerFor(r.id));
+        expect(largest).toBeLessThanOrEqual(PATCH_CHUNK_ROWS);
     });
 });
 

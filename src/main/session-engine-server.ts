@@ -1,7 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
 import type { McpServer } from '@particle-academy/prism-acp';
-import { heldRows, rowsPatch, type HeldRows } from '../core/agent-push-wire.js';
+import { heldRows, rowsPatch, type HeldRows, type RowsPatch } from '../core/agent-push-wire.js';
 import {
     DURABLE_CALLBACKS,
     ENGINE_PROTOCOL,
@@ -54,6 +54,9 @@ export interface EngineServerOptions {
     readonly coalesceMs?: number;
     readonly log?: (line: string) => void;
 }
+
+/** The most rows one frame carries: a longer patch is cut into several (see `#updatesFor`). */
+export const PATCH_CHUNK_ROWS = 200;
 
 /** How many store-changing callbacks are kept for a window that is not there (a resume each, at most). */
 const QUEUE_LIMIT = 10_000;
@@ -180,7 +183,7 @@ export class SessionEngineServer {
     /** Everything a window that just connected needs: every running agent in full, the global view, then the queue. */
     #dump(conn: Connection): void {
         const host = this.#host;
-        if (host) for (const id of host.startedIds()) this.#event(conn, 'engine.agent', this.#updateFor(conn, id));
+        if (host) for (const id of host.startedIds()) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
         this.#sendGlobal(conn);
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
@@ -328,43 +331,57 @@ export class SessionEngineServer {
         this.#dirty.clear();
         for (const conn of this.#connections) {
             if (!conn.authed) continue;
-            for (const id of ids) this.#event(conn, 'engine.agent', this.#updateFor(conn, id));
+            for (const id of ids) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
             this.#sendGlobal(conn);
         }
     }
 
-    #updateFor(conn: Connection, agentId: string): EngineAgentUpdate {
+    /**
+     * One agent's change as updates for this connection: usually one. A patch longer than `PATCH_CHUNK_ROWS` rows (a
+     * first full ledger, a long run's rows) is CUT into several frames, each applying to the one before — so the window
+     * never parses megabytes in one block on the thread that routes keystrokes (it drains frames under a time budget).
+     */
+    #updatesFor(conn: Connection, agentId: string): EngineAgentUpdate[] {
         const host = this.#host!;
         const id = agentId as AgentId;
         let held = conn.held.get(agentId);
         if (!held) { held = { seq: 0, rows: null, ledger: null }; conn.held.set(agentId, held); }
-        const seq = ++held.seq;
         const rows = host.rowsFor(id);
         const rowsP = rowsPatch(held.rows, rows);
-        held.rows = heldRows(seq, rows);
-        let ledger: EngineAgentUpdate['ledger'];
-        if (conn.watched.has(agentId)) {
-            const l = host.ledgerFor(id);
-            ledger = rowsPatch(held.ledger, l);
-            held.ledger = heldRows(seq, l);
+        const watched = conn.watched.has(agentId);
+        const ledgerRows = watched ? host.ledgerFor(id) : null;
+        const ledgerP = ledgerRows !== null ? rowsPatch(held.ledger, ledgerRows) : null;
+        const view = this.#viewFor(id);
+        const pieces = Math.max(1, Math.ceil(rowsP.append.length / PATCH_CHUNK_ROWS), ledgerP ? Math.ceil(ledgerP.append.length / PATCH_CHUNK_ROWS) : 0);
+        const cut = (p: RowsPatch<TimedEvent>, k: number, prevSeq: number | null): RowsPatch<TimedEvent> => {
+            if (k === 0) return { base: p.base, keep: p.keep, append: p.append.slice(0, PATCH_CHUNK_ROWS) };
+            const from = Math.min(p.append.length, k * PATCH_CHUNK_ROWS);
+            return { base: prevSeq, keep: p.keep + from, append: p.append.slice(from, from + PATCH_CHUNK_ROWS) };
+        };
+        const updates: EngineAgentUpdate[] = [];
+        for (let k = 0; k < pieces; k += 1) {
+            const prev = k === 0 ? null : held.seq;
+            const seq = ++held.seq;
+            updates.push({ id: agentId, seq, view, rows: cut(rowsP, k, prev), ...(ledgerP ? { ledger: cut(ledgerP, k, prev) } : {}) });
         }
+        held.rows = heldRows(held.seq, rows);
+        if (ledgerRows !== null) held.ledger = heldRows(held.seq, ledgerRows);
+        return updates;
+    }
+
+    #viewFor(id: AgentId): EngineAgentUpdate['view'] {
+        const host = this.#host!;
         return {
-            id: agentId,
-            seq,
-            view: {
-                probe: host.probe(id),
-                runOf: host.runOf(id),
-                promptable: host.promptable(id),
-                lastTurnEnd: host.lastTurnEnd(id),
-                turns: host.turnsFor(id),
-                turnsEndedThisRun: host.turnsEndedThisRun(id),
-                recentStderr: [...host.recentStderrFor(id)],
-                refusal: host.refusals.get(id) ?? null,
-                unusableThreadId: host.unusableThreadIds.get(id) ?? null,
-                models: host.modelCaps(id),
-            },
-            rows: rowsP,
-            ...(ledger ? { ledger } : {}),
+            probe: host.probe(id),
+            runOf: host.runOf(id),
+            promptable: host.promptable(id),
+            lastTurnEnd: host.lastTurnEnd(id),
+            turns: host.turnsFor(id),
+            turnsEndedThisRun: host.turnsEndedThisRun(id),
+            recentStderr: [...host.recentStderrFor(id)],
+            refusal: host.refusals.get(id) ?? null,
+            unusableThreadId: host.unusableThreadIds.get(id) ?? null,
+            models: host.modelCaps(id),
         };
     }
 

@@ -71,6 +71,9 @@ export interface EngineClientOptions {
     readonly log?: (line: string) => void;
 }
 
+/** How long the link may hold the window's thread at a time before yielding to the event loop. */
+export const DRAIN_BUDGET_MS = 8;
+
 /** What a command answers while no host is connected — said, never thrown. */
 export const NOT_CONNECTED = 'Genie\'s agent host is not connected; it is being restarted. Try again in a moment.';
 
@@ -125,7 +128,7 @@ export class SessionEngineClient {
             let settled = false;
             const finish = (r: { ok: true; welcome: EngineWelcome } | { ok: false; reason: string }): void => { if (!settled) { settled = true; resolve(r); } };
             let welcomed: EngineWelcome | null = null;
-            transport.onMessage((text) => {
+            const handle = (text: string): void => {
                 const parsed = parseEngineFrame(text);
                 if (!parsed.ok) { this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`); return; }
                 const m = parsed.message;
@@ -163,8 +166,10 @@ export class SessionEngineClient {
                     return;
                 }
                 if (m.kind === 'call') void this.#answer(m.id, m.method, m.args);
-            });
-            transport.onClose(() => {
+            };
+            // Every frame, and the close after them, in arrival order and under a time budget (#drain).
+            transport.onMessage((text) => this.#enqueue(() => handle(text)));
+            transport.onClose(() => this.#enqueue(() => {
                 finish({ ok: false, reason: 'the host closed the connection' });
                 if (this.#transport !== transport) return;
                 this.#transport = null;
@@ -172,9 +177,37 @@ export class SessionEngineClient {
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
                 this.#options.onDisconnected?.('the host closed the connection');
-            });
+            }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: 'genie window' }));
         });
+    }
+
+    /**
+     * THE WINDOW'S THREAD IS NEVER HELD BY THE LINK: frames are handled in order, but at most `DRAIN_BUDGET_MS` at a time —
+     * then the rest wait for the next turn of the event loop, so a keystroke is routed between them. (A long patch is
+     * already cut into frames by the host, so no single frame is large.)
+     */
+    readonly #inbox: Array<() => void> = [];
+    #inboxHead = 0;
+    #draining = false;
+
+    #enqueue(job: () => void): void {
+        this.#inbox.push(job);
+        if (!this.#draining) this.#drain();
+    }
+
+    #drain(): void {
+        this.#draining = true;
+        const started = performance.now();
+        while (this.#inboxHead < this.#inbox.length) {
+            if (performance.now() - started > DRAIN_BUDGET_MS) { setImmediate(() => this.#drain()); return; }
+            const job = this.#inbox[this.#inboxHead]!;
+            this.#inboxHead += 1;
+            try { job(); } catch (error) { this.#options.log?.(`engine: a frame failed: ${error instanceof Error ? error.message : String(error)}`); }
+        }
+        this.#inbox.length = 0;
+        this.#inboxHead = 0;
+        this.#draining = false;
     }
 
     /** End the link from this side (a quit): no reconnect is asked for. */
