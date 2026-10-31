@@ -16,6 +16,7 @@ import { genieHome, installDir } from './paths.js';
 import { genieWindowIcon } from './app-identity.js';
 import { SessionHost } from './session-host.js';
 import { forwardRendererConsole } from '../core/render-error.js';
+import { onceShowable } from '../core/window-activation.js';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
 
 /**
@@ -130,7 +131,7 @@ export async function runDoctor(): Promise<void> {
         show: false,
         webPreferences: { preload: join(here, 'doctor-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
-    win.once('ready-to-show', () => win.show());
+    onceShowable(win, process.platform, () => win.show());
     // The renderer's composer-focus log (genie#1235) and render errors (parity audit #7): written to main's log, as Genie's window does.
     win.webContents.on('console-message', (details) => forwardRendererConsole(details.message, { out: (l) => console.log(l), err: (l) => console.error(l), log: () => {} }));
     void win.loadFile(join(here, '../renderer/doctor.html'));

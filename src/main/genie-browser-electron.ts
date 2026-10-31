@@ -7,7 +7,7 @@ import { genieWindowIcon } from './app-identity.js';
 import { genCertificateVerifier, type PresentedCertificate } from './browser-trust.js';
 import { GenieBrowser, type TabViewEvents, type TabViewPort } from './genie-browser-window.js';
 import { attachPageNavigation } from './page-navigation-electron.js';
-import { bringUp, showWhenReady, type Activation, type ActivationLedger } from '../core/window-activation.js';
+import { bringUp, onceShowable, showWhenReady, type Activation, type ActivationLedger } from '../core/window-activation.js';
 
 /**
  * THE GENIE BROWSER WINDOW — the Electron half (beta.35 item 36; Genie 1's main/testing-browser/index.ts). Everything
@@ -243,7 +243,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             return { action: 'deny' };
         });
         window.webContents.on('will-navigate', (event) => event.preventDefault());
-        window.once('ready-to-show', () => showWhenReady(window, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) }));
+        onceShowable(window, process.platform, () => showWhenReady(window, { activation, reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) }));
         window.on('closed', () => {
             b.closeAll();
             if (windows.get(key)?.win === window) windows.delete(key);

@@ -57,6 +57,34 @@ export function bringUp(win: ActivatableWindow, request: ActivationRequest): voi
     if (!win.isFocused()) win.flashFrame(true);
 }
 
+/** The slice of a NEW Electron BrowserWindow that `onceShowable` listens on. */
+export interface FirstShowWindow {
+    once(event: 'ready-to-show', listener: () => void): unknown;
+    readonly webContents: { once(event: 'did-finish-load', listener: () => void): unknown };
+}
+
+/**
+ * WHEN A NEW WINDOW IS SHOWN (genie#1370). A window is created hidden and shown on its first paint (`ready-to-show`),
+ * so the person never sees an empty frame. That works on Windows, macOS and X11. It does not work on native Wayland
+ * (Omarchy's Hyprland, Electron's default there): the compositor sends frame callbacks only to a mapped surface, so a
+ * hidden window gets no frames. A page that draws after load (React into an empty root, as every Genie page does)
+ * never makes its first visually non-empty paint, and `ready-to-show` never fires. Measured on omarchy-test: the page
+ * loaded, the window stayed hidden, and a `showInactive()` made it paint at once.
+ *
+ * So on Linux the window is shown at whichever comes first, `ready-to-show` or the page's load. On X11 the two come a
+ * millisecond apart; on Wayland only the load comes. Other platforms keep waiting for the paint. `show` runs once.
+ */
+export function onceShowable(win: FirstShowWindow, platform: NodeJS.Platform, show: () => void): void {
+    let shown = false;
+    const first = (): void => {
+        if (shown) return;
+        shown = true;
+        show();
+    };
+    win.once('ready-to-show', first);
+    if (platform === 'linux') win.webContents.once('did-finish-load', first);
+}
+
 /** A NEW window's first paint (`ready-to-show`): active for the person's gesture, `showInactive()` for anything else. */
 export function showWhenReady(win: ActivatableWindow, request: ActivationRequest): void {
     if (win.isDestroyed()) return;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ActivationLedger, bringUp, showWhenReady, windowLabelOf, type ActivatableWindow } from '../src/core/window-activation.js';
+import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type ActivatableWindow, type FirstShowWindow } from '../src/core/window-activation.js';
 
 /**
  * GENIE NEVER TAKES THE KEYBOARD ON ITS OWN (genie#1235; the owner, 2026-10-26: "the most annoying thing ever").
@@ -85,6 +85,69 @@ describe('showWhenReady — a NEW window\u2019s first paint (ready-to-show)', ()
         showWhenReady(w, { activation: 'background', reason: 'sites open (agent)' });
         expect(w.calls).toEqual(['showInactive']);
         expect(activating(w.calls)).toEqual([]);
+    });
+});
+
+/**
+ * WHEN A NEW WINDOW IS SHOWN (genie#1370). Measured on omarchy-test (Hyprland, Electron 45, native Wayland): a hidden
+ * window gets no frames, because Wayland sends frame callbacks only to a mapped surface. Genie's page is an empty
+ * `<div id="root">` until React renders after load, so its first visually non-empty paint, which `ready-to-show`
+ * waits for, never comes. The window loaded (`did-finish-load`) and stayed hidden. On X11 `ready-to-show` came 1 ms
+ * after `did-finish-load`.
+ */
+function fakeNewWindow(): FirstShowWindow & { emit(event: 'ready-to-show' | 'did-finish-load'): void } {
+    const listeners = new Map<string, Array<() => void>>();
+    const once = (event: string, listener: () => void): void => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+    };
+    return {
+        once,
+        webContents: { once },
+        emit(event) {
+            const fns = listeners.get(event) ?? [];
+            listeners.delete(event);
+            for (const fn of fns) fn();
+        },
+    };
+}
+
+describe('onceShowable — when a NEW window is shown (genie#1370)', () => {
+    it('Linux, native Wayland: the page loads and ready-to-show never comes — the window is shown at the load', () => {
+        const w = fakeNewWindow();
+        let shown = 0;
+        onceShowable(w, 'linux', () => { shown += 1; });
+        w.emit('did-finish-load');
+        expect(shown).toBe(1);
+    });
+
+    it('Linux, X11: both come, a millisecond apart — shown once, not twice', () => {
+        const w = fakeNewWindow();
+        let shown = 0;
+        onceShowable(w, 'linux', () => { shown += 1; });
+        w.emit('did-finish-load');
+        w.emit('ready-to-show');
+        expect(shown).toBe(1);
+    });
+
+    it('Linux: ready-to-show first still shows, and a later load does not show again', () => {
+        const w = fakeNewWindow();
+        let shown = 0;
+        onceShowable(w, 'linux', () => { shown += 1; });
+        w.emit('ready-to-show');
+        w.emit('did-finish-load');
+        expect(shown).toBe(1);
+    });
+
+    it('Windows and macOS keep waiting for the first paint: no empty frame at the load', () => {
+        for (const platform of ['win32', 'darwin'] as const) {
+            const w = fakeNewWindow();
+            let shown = 0;
+            onceShowable(w, platform, () => { shown += 1; });
+            w.emit('did-finish-load');
+            expect(shown).toBe(0);
+            w.emit('ready-to-show');
+            expect(shown).toBe(1);
+        }
     });
 });
 
