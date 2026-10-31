@@ -39,12 +39,17 @@ import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
  * the handler reads both, because a handler that read only `args` would silently miss it.
  */
 
-/** prism-mcp-server 0.4.0's progress reporter: best-effort, never throws, sent only on an SSE response with a token. */
+/**
+ * prism-mcp-server's progress reporter: best-effort, never throws, sent only on an SSE response with a token. Since
+ * 0.5.0 prism repeats the latest message itself every 30 s while the call runs (its keepalive), so a wait says what it
+ * waits for ONCE and never re-sends it on a timer. The numbers, if given, must strictly increase; on the wire they
+ * arrive in `_meta['particle-academy/progress'].nativeWork` — the wire `progress` is prism's activity counter.
+ */
 export type ToolProgress = (message: string, progress?: number, total?: number) => void;
 
 /**
  * THE MCP CALL A WAIT IS FOR (genie#1360). `signal` fires when the client cancels the call or its connection drops
- * (prism-mcp-server 0.4.0, `abortOnDisconnect`); `progress` tells a client still there what it is waiting for. A long
+ * (prism-mcp-server, `abortOnDisconnect`); `progress` tells a client still there what it is waiting for. A long
  * wait — the person's approval, `services exec`, `agentinbox receive wait` — takes this and ends when `signal` fires.
  * Absent (a flow's call, a test) = nobody can go away.
  */
