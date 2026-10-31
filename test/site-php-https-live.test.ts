@@ -33,7 +33,7 @@ async function servePhp(indexPhp: string): Promise<number> {
     writeFileSync(join(repo, 'public', 'index.php'), indexPhp);
     const [sitePort, fcgiPort] = [await freePort(), await freePort()];
     const file = join(repo, 'Caddyfile');
-    writeFileSync(file, serveCaddyfile({ sitePort, repoPath: repo, serve: { mode: 'php', root: 'public', fcgiPort } })!);
+    writeFileSync(file, serveCaddyfile({ sitePort, repoPath: repo, storageDir: join(repo, 'caddy-data'), serve: { mode: 'php', root: 'public', fcgiPort } })!);
     procs.push(spawn(phpCgi!, ['-b', `127.0.0.1:${fcgiPort}`], { stdio: 'ignore' }));
     procs.push(spawn(bin!, ['run', '--config', file, '--adapter', 'caddyfile'], { stdio: 'ignore' }));
     let up = false;
