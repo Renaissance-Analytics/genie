@@ -15,6 +15,17 @@ import {
     BOARD_TRANSITIONS,
 } from '../src/core/tynn-board.js';
 import {
+    PAGE_API,
+    VIP_ACTIONS,
+    VIP_ANSWER,
+    VIP_COLUMNS,
+    VIP_DATA_API,
+    VIP_FIELDS,
+    VIP_FLOW,
+    VIP_LIVE,
+    VIP_RELEASE,
+    VIP_START,
+    VIP_STATES,
     WIP_ACTIONS,
     WIP_ANSWER,
     WIP_COUNTS,
@@ -185,5 +196,42 @@ describe('the Tynn tab\'s WIP, against the contract (0.6.0)', () => {
 
     it('has a view for every state the contract names', () => {
         expect([...WIP_STATES].sort()).toEqual(wip!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s VIP lane, against the contract (0.8.0)', () => {
+    type Vip = {
+        data: Record<string, unknown> & { api: { method: string; path: string }; live: Record<string, unknown> };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const vip = contract.surfaces.find((s) => s.id === 'vip') as unknown as Vip | undefined;
+
+    it('is in the contract', () => {
+        expect(vip).toBeDefined();
+    });
+
+    it('reads the lane where the contract says, with its answer, fields, columns, flow, release and start', () => {
+        expect(VIP_DATA_API).toEqual(vip!.data.api);
+        expect(VIP_ANSWER).toEqual(vip!.data.answer);
+        expect(VIP_FIELDS).toEqual(vip!.data.fields);
+        expect(VIP_COLUMNS).toEqual(vip!.data.columns);
+        expect(VIP_FLOW).toEqual(vip!.data.flow);
+        expect(VIP_RELEASE).toEqual(vip!.data.release);
+        expect(VIP_START).toEqual(vip!.data.start);
+    });
+
+    it('offers exactly the contract\'s actions: its own start at its door, the board\'s move and release at the board\'s', () => {
+        expect([...VIP_ACTIONS].sort()).toEqual(vip!.actions.map((a) => a.id).sort());
+        for (const action of vip!.actions) {
+            const offered = PAGE_API[action.id] ?? BOARD_API[action.id];
+            expect({ id: action.id, ...offered }).toEqual({ id: action.id, ...action.api });
+        }
+    });
+
+    it('goes live as the contract says, and has a view for every state it names', () => {
+        const { about: _about, web: _web, ...shape } = vip!.data.live;
+        expect(VIP_LIVE).toEqual(shape);
+        expect([...VIP_STATES].sort()).toEqual(vip!.states.map((s) => s.id).sort());
     });
 });

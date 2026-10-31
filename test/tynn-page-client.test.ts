@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readTynnPage } from '../src/main/tynn-page-client.js';
+import { readTynnPage, runTynnPageAction } from '../src/main/tynn-page-client.js';
 import type { TynnBoardPorts } from '../src/main/tynn-board-client.js';
 
 /**
@@ -47,6 +47,32 @@ describe('reading a page of the tab', () => {
     it('refuses a page the tab does not have, without asking Tynn', async () => {
         const { p, calls } = ports({ status: 200, body: WIP });
         expect(await readTynnPage(p, 'w1', 'manage' as never, {})).toMatchObject({ ok: false, state: 'error' });
+        expect(calls).toEqual([]);
+    });
+});
+
+describe('the VIP lane (row V1)', () => {
+    const VIP = { project_id: 'p1', vip_version: null, stories: [], past_vips: [], can_start_vip: true };
+
+    it('reads the lane', async () => {
+        const { p, calls } = ports({ status: 200, body: VIP });
+        expect(await readTynnPage(p, 'w1', 'vip', {})).toMatchObject({ ok: true, page: 'vip', view: { canStart: true } });
+        expect(calls).toEqual([{ path: '/api/v1/projects/p1/vip', method: 'GET' }]);
+    });
+
+    it('starts VIP work with a title and why, and says Tynn\'s reason when it refuses', async () => {
+        const ok = ports({ status: 201, body: VIP });
+        expect(await runTynnPageAction(ok.p, 'w1', { action: 'vip.create', body: { title: 'Down', why: 'Nobody can sign in' } })).toEqual({ ok: true });
+        expect(ok.calls).toEqual([{ path: '/api/v1/projects/p1/vip', method: 'POST' }]);
+        const busy = ports({ status: 422, body: { errors: { is_vip: ['Only one VIP version can be active at a time.'] } } });
+        expect(await runTynnPageAction(busy.p, 'w1', { action: 'vip.create', body: { title: 'Down', why: 'x' } }))
+            .toMatchObject({ ok: false, state: 'transition-refused', reason: 'Only one VIP version can be active at a time.' });
+    });
+
+    it('asks Tynn nothing for a start with no why, or an action the tab does not have', async () => {
+        const { p, calls } = ports({ status: 201, body: VIP });
+        expect(await runTynnPageAction(p, 'w1', { action: 'vip.create', body: { title: 'Down' } })).toMatchObject({ ok: false, state: 'error' });
+        expect(await runTynnPageAction(p, 'w1', { action: 'manage.delete', body: {} })).toMatchObject({ ok: false, state: 'error' });
         expect(calls).toEqual([]);
     });
 });
