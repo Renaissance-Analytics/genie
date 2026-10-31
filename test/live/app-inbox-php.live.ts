@@ -225,8 +225,8 @@ async function main(): Promise<void> {
             const dir = join(ws, 'octane');
             cpSync(octaneApp, dir, { recursive: true });
             writeFileSync(join(dir, 'routes', 'web.php'), `${readFileSync(join(dir, 'routes', 'web.php'), 'utf8')}\n${LARAVEL_ROUTE}`);
-            composed.sites.create({ name: 'octane', workspaceId: 'fancy', repoPath: dir, serve: { mode: 'proxy' }, devServer: { stack: 'laravel', command: 'php artisan octane:start --server=frankenphp --host=127.0.0.1 --port={port}' }, env: { PHP_INI_SCAN_DIR: `:${egpcs}` } });
-            const o = await until(() => probe('site_octane', '/genie-probe'), 120_000);
+            composed.sites.create({ name: 'octane', workspaceId: 'fancy', repoPath: dir, serve: { mode: 'proxy' }, devServer: { stack: 'laravel', command: 'php artisan octane:start --server=frankenphp --host=127.0.0.1 --port={port} --admin-port=2119' }, env: { PHP_INI_SCAN_DIR: `:${egpcs}` } });
+            const o =await until(() => probe('site_octane', '/genie-probe'), 120_000);
             results.push(['Octane (FrankenPHP worker)', say(o)]);
             check(o?.laravel === tokenOfSite('site_octane'), 'D3. Octane: a Laravel route reads ITS token', o ? say(o) : logsOf('site_octane'));
         } else notes.push('Octane: not measured (laravel/octane could not be installed in the VM)');
@@ -242,14 +242,16 @@ async function main(): Promise<void> {
 
         // F. A kept process and a scheduled task: their OWN proc: credential, read by a php CLI, used to post.
         console.log('F. a kept process and a scheduled task (php CLI)');
+        // The probe is a FILE: an inline `php -r "…"` goes through the shell, which expanded `$t` to nothing (red run 1).
+        const phpFile = (name: string, code: string) => { const f = join(root, name); writeFileSync(f, `<?php\n${code}`); return f; };
         const kOut = join(root, 'kept.json');
-        const kept = await book.create({ workspaceId: 'fancy', workspacePath: ws, name: 'council tally', command: `php -r ${JSON.stringify(CLI_PROBE(kOut, 'tally done'))}`, restart: 'never' });
+        const kept = await book.create({ workspaceId: 'fancy', workspacePath: ws, name: 'council tally', command: `php ${phpFile('kept.php', CLI_PROBE(kOut, 'tally done'))}`, restart: 'never' });
         const k = await until(() => (existsSync(kOut) ? JSON.parse(readFileSync(kOut, 'utf8')) as { getenv: string | null; status: number } : null), 30_000);
         const keptToken = keys.tokenFor({ kind: 'process', id: kept.id, name: 'council tally', workspaceId: 'fancy' });
         check(!!k?.getenv && k.getenv === keptToken, 'F1. the kept process’s getenv() is ITS OWN proc: token', `${k?.getenv ? 'token' : 'none'}`);
         check(k?.status === 201, 'F2. …and its post was accepted (201)', JSON.stringify(k));
         const sOut = join(root, 'sched.json');
-        const task = await book.create({ workspaceId: 'fancy', workspacePath: ws, name: 'nightly tally', command: `php -r ${JSON.stringify(CLI_PROBE(sOut, 'nightly done'))}`, restart: 'never', schedule: { cron: '0 3 * * *', kind: 'command' } });
+        const task = await book.create({ workspaceId: 'fancy', workspacePath: ws, name: 'nightly tally', command: `php ${phpFile('sched.php', CLI_PROBE(sOut, 'nightly done'))}`, restart: 'never', schedule: { cron: '0 3 * * *', kind: 'command' } });
         const scheduler = new ProcessScheduler({ book, supervisor: composed.supervisor, envFor: (w) => composed.engines.envFor(w), appEnv: (p) => composed.appEnv(p), asleep: () => false, nudge: () => false, now: () => Date.now(), schedule: () => () => {} });
         await scheduler.runNow(task.id);
         const s = await until(() => (existsSync(sOut) ? JSON.parse(readFileSync(sOut, 'utf8')) as { getenv: string | null; status: number } : null), 30_000);
