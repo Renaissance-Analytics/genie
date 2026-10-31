@@ -49,7 +49,7 @@ describe('WIP', () => {
         expect(html).toContain('1 / 4 stories');
         expect(html).toMatch(/data-wip-lens="active"[^>]*aria-pressed="true"|aria-pressed="true"[^>]*data-wip-lens="active"/);
         expect(html).toMatch(/aria-label="Attention"/);
-        expect(html).toMatch(/data-wip-count="done">1</);
+        expect(html).toMatch(/data-wip-count="done"[^>]*>1</);
     });
 
     it('lists the lens\'s stories and the chosen one\'s tasks, in motion first; titles are text, never markup', () => {
