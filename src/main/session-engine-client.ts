@@ -52,6 +52,12 @@ export interface EngineClientOptions {
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
     readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
+    /**
+     * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
+     * toolchain variables in the window's process at run time; the host takes them before it starts a provider, so a
+     * repaired toolchain reaches the next agent with no restart (all config hot-swappable).
+     */
+    readonly env?: () => NodeJS.ProcessEnv;
     readonly comms?: (agentId: AgentId, since: number) => Comms | null;
     /** A stop the host could not verify (the lifecycle's `refused`): main records it on the Deck. */
     readonly onStopUnverified?: (agentId: AgentId, reason: string) => void;
@@ -397,7 +403,8 @@ export class SessionEngineClient {
     }
 
     start(record: AgentRecord, cwd: string): Promise<{ ok: true } | { ok: false; reason: string }> {
-        return this.#value('engine.start', [record, cwd, this.#options.serviceEnvFor?.(record.workspaceId) ?? {}], { ok: false, reason: NOT_CONNECTED });
+        const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        return this.#value('engine.start', [record, cwd, this.#options.serviceEnvFor?.(record.workspaceId) ?? {}, env], { ok: false, reason: NOT_CONNECTED });
     }
 
     stop(agentId: AgentId, options: { graceful?: boolean } = {}): Promise<boolean> {

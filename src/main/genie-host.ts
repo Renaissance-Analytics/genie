@@ -8,7 +8,7 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { genieHome, runtimeDir } from './paths.js';
-import { prepareGenieSupervisor } from './prism-supervisor.js';
+import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
@@ -73,11 +73,19 @@ async function main(): Promise<void> {
     const spawnLedger = SpawnLedger.open(join(runtime, 'children.json'), randomUUID());
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
     // prism-acp's supervisor (a Job Object on Windows) before any agent starts: a provider is never run uncontained.
-    await prepareGenieSupervisor(runtime).catch((error: unknown) => {
+    const supervisor = await prepareGenieSupervisor(runtime).catch((error: unknown) => {
         const why = error instanceof Error ? error.message : String(error);
         lifecycleLog(`containment unready reason=${why}`);
         say(`agents cannot start contained: ${why}`);
+        return null;
     });
+    // What other supervisor sources left beside it is removed off the start path — never what a running process uses.
+    if (supervisor !== null) {
+        void removeStaleSupervisorBuilds(runtime, { current: supervisor, runningImages: supervisorImagesRunning }).then(
+            (sweep) => { for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`); },
+            (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
+        );
+    }
 
     const token = randomBytes(32).toString('hex');
     let shuttingDown = false;

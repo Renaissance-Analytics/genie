@@ -216,6 +216,8 @@ export class SessionEngineServer {
                 this.#records.set(record.id, record);
                 const env = args[2];
                 this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
+                const windowEnv = args[3];
+                if (windowEnv && typeof windowEnv === 'object') adoptWindowEnv(process.env, windowEnv as Record<string, string>);
                 return host.start(record, str(1));
             }
             case 'engine.stop':
@@ -387,6 +389,24 @@ export class SessionEngineServer {
     #event(conn: Connection, channel: string, payload: unknown): void {
         conn.transport.send(JSON.stringify({ kind: 'event', channel, payload }));
     }
+}
+
+/** What is the host's own and never the window's: how it runs, and where its home is. */
+const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST_BUILD', 'GENIE_HOST_IDLE_MS']);
+
+/**
+ * THE WINDOW'S ENVIRONMENT, TAKEN BEFORE A START: a provider is launched from the host's `process.env` (filtered by the
+ * drivers' allow-list), so the host takes the window's — added, changed and removed — except what is the host's own.
+ * Names compare case-insensitively on Windows, as the OS does.
+ */
+export function adoptWindowEnv(target: NodeJS.ProcessEnv, windowEnv: Readonly<Record<string, string>>, platform: NodeJS.Platform = process.platform): void {
+    const norm = (k: string): string => (platform === 'win32' ? k.toUpperCase() : k);
+    const incoming = new Map(Object.entries(windowEnv).filter(([k]) => !HOST_ONLY_ENV.has(norm(k))).map(([k, v]) => [norm(k), [k, v] as const]));
+    for (const key of Object.keys(target)) {
+        if (HOST_ONLY_ENV.has(norm(key))) continue;
+        if (!incoming.has(norm(key))) delete target[key];
+    }
+    for (const [, [k, v]] of incoming) target[k] = v;
 }
 
 function sameToken(given: string, expected: string): boolean {

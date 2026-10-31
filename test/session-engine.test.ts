@@ -8,7 +8,7 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import { applyPatch, NOT_CONNECTED, SessionEngineClient, type EngineClientOptions } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
+import { adoptWindowEnv, SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 
 /**
@@ -269,6 +269,41 @@ describe('the window goes away; the agent does not', () => {
         expect(await kept.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
         expect(kept.runOf(r.id)).toBeNull();
         expect(kept.probe(r.id)).toBeNull();
+    });
+});
+
+describe('the window\'s environment reaches the host before each start (hot-swappable toolchain)', () => {
+    it('adds, changes and removes what the window has, and never touches what is the host\'s own', () => {
+        const target: NodeJS.ProcessEnv = { PATH: '/old', GONE: 'x', ELECTRON_RUN_AS_NODE: '1', GENIE_HOME: '/h' };
+        adoptWindowEnv(target, { PATH: '/repaired', NPM_CONFIG_PREFIX: '/npm', ELECTRON_RUN_AS_NODE: '0' }, 'linux');
+        expect(target).toEqual({ PATH: '/repaired', NPM_CONFIG_PREFIX: '/npm', ELECTRON_RUN_AS_NODE: '1', GENIE_HOME: '/h' });
+    });
+
+    it('compares names as Windows does (Path and PATH are one variable)', () => {
+        const target: NodeJS.ProcessEnv = { Path: 'C:/old' };
+        adoptWindowEnv(target, { PATH: 'C:/new' }, 'win32');
+        expect(Object.values(target)).toEqual(['C:/new']);
+    });
+
+    it('a start carries the window\'s environment of that moment', async () => {
+        const seen: Array<Record<string, string>> = [];
+        const [hostSide, windowSide] = memoryPair();
+        // A host-side spy on the frames: what engine.start carried.
+        const send = windowSide.send.bind(windowSide);
+        windowSide.send = (text: string) => { const f = JSON.parse(text) as { method?: string; args?: unknown[] }; if (f.method === 'engine.start') seen.push(f.args?.[3] as Record<string, string>); send(text); };
+        server.accept(hostSide);
+        let path = '/before';
+        const client = new SessionEngineClient({ env: () => ({ ...process.env, PATH: path }) });
+        await client.connect(windowSide, TOKEN);
+        path = '/after-repair';
+        // The host here is THIS process: its PATH is put back whatever happens.
+        const original = { ...process.env };
+        try {
+            await client.start(record(), join(dir, 'missing'));
+        } finally {
+            adoptWindowEnv(process.env, Object.fromEntries(Object.entries(original).filter((e): e is [string, string] => typeof e[1] === 'string')));
+        }
+        expect(seen[0]?.PATH).toBe('/after-repair');
     });
 });
 
