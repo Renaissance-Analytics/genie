@@ -1298,6 +1298,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 stopLiveness();
                 fileWatches.stop();
                 fileSource.stop();
+                // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
+                flowScheduler.stop();
                 // Nothing more is started (a port probe still in flight) or synced (a pending hosts write) from here.
                 frontDoorCtl.close();
                 // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`
@@ -1312,6 +1314,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 let quitWait: ReturnType<typeof setTimeout> | undefined;
                 await Promise.race([flowScheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
                 clearTimeout(quitWait);
+                // And the flows file's last write has landed (a held record, the run in flight kept as it goes).
+                await flows.flushed();
                 await remoteDevices.flushed();
                 await portAllocator?.settled();
                 knowledge.close();

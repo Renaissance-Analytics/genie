@@ -36,6 +36,27 @@ import type { FileFired, FlowRecord, FlowRun, FlowRunStep, FlowStore, RunOutcome
  *
  * The next due is always computed forward from now. A Genie that was closed at 03:00 does not run
  * the nightly job at launch, as Genie 1 did not: a backlog firing at once is worse than a skipped night.
+ *
+ * ## One slot, one run (genie#1363)
+ *
+ * The timer fires the SLOT it was armed for, and a slot a flow has fired is never planned for that flow again.
+ * Node runs timers on a MONOTONIC clock; "now" here is the WALL clock (`Date.now`), which can be stepped or slewed
+ * against it. A timer can therefore wake while "now" still reads before its slot: the acceptance suite caught it in
+ * 2 of 36 runs on omarchy-test. Re-planned from that "now", the cron's next instant was the slot that had just fired:
+ * it was armed again, fired again, and the flow ran twice (or a `held` record was written beside the first). The cure
+ * does not depend on why the clocks disagree, or by how much. So each flow's next due is
+ * computed from the later of now and the last slot it fired. Late wakes plan forward from now, as above; the wall
+ * clock set back after a fire does not repeat a slot that ran. The guard is per flow and kept in memory: a flow
+ * that has not fired a slot still runs at it, and a relaunch plans from the clock as it reads.
+ *
+ * Genie 1 had the same exposure: its `fire()` re-armed `nextFireAfter(expr, new Date())` (process-scheduler.ts),
+ * which rounds up to the minute after `from` — a guard against a LATE wake re-running the minute, not an early one.
+ *
+ * ## Nothing is written after it has settled (genie#1351)
+ *
+ * `settled()` — what a quit and a test await — waits for every record the scheduler starts, a held one too, not
+ * only the runs in flight. `stop()` cancels the timer for good at a quit. A record that cannot be written is
+ * reported with the flow's name, never left as a rejection nobody holds.
  */
 
 export type RunResult = { readonly outcome: 'ran' } | { readonly outcome: 'failed' | 'held'; readonly reason: string; readonly steps?: readonly FlowRunStep[] };
@@ -75,11 +96,26 @@ export class FlowScheduler {
     #next: Planned | null = null;
     /** The flows with a run in flight, each with that run. */
     readonly #running = new Map<string, Promise<FlowRun | null>>();
+    /** Records being written outside a run (a held one): `settled()` waits for these too (genie#1351). */
+    readonly #records = new Set<Promise<unknown>>();
+    /** Each flow's latest slot the timer fired: never planned for that flow again (genie#1363). */
+    readonly #fired = new Map<string, number>();
+    #stopped = false;
+    readonly #offChange: () => void;
 
     constructor(deps: FlowSchedulerDeps) {
         this.#deps = deps;
         // Every change re-plans — an arm, a disarm, an edit, a removal, a recorded run (which leaves the due where it was).
-        deps.store.onChange(() => this.plan());
+        this.#offChange = deps.store.onChange(() => this.plan());
+    }
+
+    /** A QUIT: the timer is cancelled and nothing plans one again. Runs in flight are left to `settled()`. */
+    stop(): void {
+        this.#stopped = true;
+        this.#offChange();
+        this.#cancel?.();
+        this.#cancel = null;
+        this.#next = null;
     }
 
     /** Compute the nearest due across armed flows — and every flow due at it — and hold exactly one timer for it. */
@@ -87,6 +123,7 @@ export class FlowScheduler {
         this.#cancel?.();
         this.#cancel = null;
         this.#next = null;
+        if (this.#stopped) return;
         const now = this.#deps.now();
         let at: number | null = null;
         let flows: DueFlow[] = [];
@@ -94,8 +131,10 @@ export class FlowScheduler {
             if (!flow.armed) continue;
             // This flow's own nearest due: its first trigger at its earliest instant (one run per flow per instant).
             let mine: { at: number; trigger: Schedule } | null = null;
+            // Strictly after the slot this flow last fired, even when the wall clock still reads before it (genie#1363).
+            const from = Math.max(now, this.#fired.get(flow.id) ?? now);
             for (const trigger of this.#deps.store.schedules(flow.id)) {
-                const t = nextCronAfter(trigger.cron, now, trigger.timezone);
+                const t = nextCronAfter(trigger.cron, from, trigger.timezone);
                 if (t !== null && (mine === null || t < mine.at)) mine = { at: t, trigger };
             }
             if (mine === null) continue;
@@ -145,7 +184,7 @@ export class FlowScheduler {
 
     /** Resolves when no run is in flight — what a host awaits before quitting, and what a test awaits. */
     async settled(): Promise<void> {
-        while (this.#running.size > 0) await Promise.allSettled([...this.#running.values()]);
+        while (this.#running.size > 0 || this.#records.size > 0) await Promise.allSettled([...this.#running.values(), ...this.#records]);
     }
 
     /**
@@ -173,13 +212,16 @@ export class FlowScheduler {
             const hit = this.#deps.store.fileTriggers(flow.id).find((t) => matchesFileTrigger(t.config as unknown as FileTriggerConfig, event));
             if (!hit) continue;
             taken = true;
-            void this.#start(flow, { nodeId: hit.nodeId, file: event }, 'file');
+            this.#startReported(flow, { nodeId: hit.nodeId, file: event }, 'file');
         }
         return taken;
     }
 
     #fire(due: Planned): void {
         this.#cancel = null;
+        // This slot is spent for every flow it fires, BEFORE the re-plan: the timer can wake while the wall clock still
+        // reads before the slot, and planning from that reading would arm the same slot again (genie#1363).
+        for (const d of due.flows) this.#fired.set(d.flowId, Math.max(due.at, this.#fired.get(d.flowId) ?? due.at));
         const flows = due.flows.map((d) => ({ flow: this.#deps.store.get(d.flowId), trigger: d.trigger }));
         // Replan FIRST, so the next due is held whatever the runs do — and so a slow run cannot
         // delay the schedule behind it.
@@ -187,15 +229,26 @@ export class FlowScheduler {
         // Every flow due at this instant, side by side: one's run never waits on, or replaces, another's.
         for (const { flow, trigger } of flows) {
             if (!flow || !flow.armed) continue;
-            void this.#start(flow, trigger, 'schedule');
+            this.#startReported(flow, trigger, 'schedule');
         }
+    }
+
+    /** Start a run nobody awaits (a fire, a file): a record that cannot be written is reported, never an unhandled rejection. */
+    #startReported(flow: FlowRecord, trigger: Schedule | FileFired, kind: FlowRun['trigger']): void {
+        this.#start(flow, trigger, kind).catch((error: unknown) => {
+            console.error(`[flows] "${flow.name}": the run could not be recorded: ${error instanceof Error ? error.message : String(error)}`);
+        });
     }
 
     #start(flow: FlowRecord, trigger: Schedule | FileFired | null, kind: FlowRun['trigger']): Promise<FlowRun | null> {
         const startedAt = this.#deps.now();
         const file = trigger !== null && 'file' in trigger ? { file: trigger.file.relPath } : {};
         if (this.#running.has(flow.id)) {
-            return this.#record(flow.id, { trigger: kind, outcome: 'held', reason: `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
+            const held = this.#record(flow.id, { trigger: kind, outcome: 'held', reason: `the previous run of "${flow.name}" is still going; this one was not started beside it`, startedAt, ...file });
+            this.#records.add(held);
+            const done = (): void => { this.#records.delete(held); };
+            held.then(done, done);
+            return held;
         }
         const run = this.#execute(flow, trigger, kind, startedAt).finally(() => {
             if (this.#running.get(flow.id) === run) this.#running.delete(flow.id);
