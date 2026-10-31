@@ -159,9 +159,18 @@ describe('genieMcpServer — a waiting call keeps reporting progress through pri
             const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'quiet', arguments: {}, _meta: { ...META, progressToken: 'p7' } } }) });
             expect(res.headers.get('content-type')).toMatch(/^text\/event-stream/);
             await reportedOnce;
-            vi.advanceTimersByTime(keepalives * PRISM_KEEPALIVE_MS + 1_000);
+            // Read as a client does, and let each 30 s pass as its own turn of the event loop. prism SKIPS a keepalive
+            // while the response is backed up (`writableNeedDrain`, documented in 0.5.0) — 61 intervals fired in one
+            // synchronous burst filled the write buffer on Windows and 16 keepalives were rightly skipped (main's
+            // unit (windows), ec60e329). A real wait never bursts: one notification per 30 s, flushed long before the next.
+            const body = res.text();
+            for (let i = 0; i < keepalives; i++) {
+                vi.advanceTimersByTime(PRISM_KEEPALIVE_MS);
+                await new Promise((r) => setTimeout(r, 2));
+            }
+            vi.advanceTimersByTime(1_000);
             release();
-            const text = await res.text();
+            const text = await body;
             const messages = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as { method?: string; params?: Progress; result?: unknown });
             return { progress: messages.filter((m) => m.method === 'notifications/progress').map((m) => m.params!), last: messages.at(-1) };
         } finally {
