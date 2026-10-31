@@ -349,12 +349,16 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
  * main process's form state, so the row renders the same on the server, in a test and on screen.
  */
 export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
+    // Starting (parity audit #9): its process runs but its port has not answered — Stop, but nothing to Open yet.
+    const starting = s.state === 'starting';
     const up = s.state === 'running' || s.state === 'restarting' || s.state === 'external';
+    // Its port never answered: the processes still run, and Retry starts it again on fresh ports (a restart).
+    const silent = s.state === 'failed' && s.processIds.length > 0;
     const button = 'text-[13px]';
     return (
         <li data-site={s.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
             <span className="font-mono">{s.host}</span>
-            <Badge variant="soft" size="sm">{s.state}</Badge>
+            <Badge variant="soft" size="sm">{starting ? 'starting…' : s.state}</Badge>
             {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
             {/* Why it is not served — an unservable declaration, or the refusal its last start met. */}
             {s.problem ? <span data-site-problem className="text-sm text-[var(--danger)]">{s.problem}</span> : null}
@@ -366,7 +370,10 @@ export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; edit
                     {up && s.state !== 'external' ? (
                         <button type="button" data-site-action="restart" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Restart</button>
                     ) : null}
-                    {up ? (
+                    {silent ? (
+                        <button type="button" data-site-action="retry" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Retry</button>
+                    ) : null}
+                    {up || starting || silent ? (
                         <button type="button" data-site-action="stop" className={button} onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
                     ) : (
                         <button type="button" data-site-action="start" className={button} onClick={() => onAction({ kind: 'hosting.startSite', siteId: s.id })}>Start</button>

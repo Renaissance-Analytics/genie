@@ -320,7 +320,7 @@ export class EnvelopeSites {
         const existing = sites[t.key];
         const entry = typeof existing === 'object' && existing !== null && !Array.isArray(existing) ? editedSiteEntry(existing as Record<string, unknown>, built.entry) : built.entry;
         await this.#ports.fs.writeTextAtomic(m.path, formatLike(m.text, withSiteEntry(m.manifest, t.key, entry)));
-        const wasUp = before.state === 'running' || before.state === 'restarting' || before.state === 'external';
+        const wasUp = before.state === 'running' || before.state === 'starting' || before.state === 'restarting' || before.state === 'external';
         // Tracked under the new id from here on, with the same key: the remembered Stop and the next launch agree.
         this.#tracked.delete(siteId);
         try {

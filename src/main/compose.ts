@@ -140,6 +140,11 @@ export interface ComposeInput {
     readonly docker?: DockerRunner;
     /** ONE readiness probe of an engine on its loopback port; the engine's own handshake over a real socket by default. */
     readonly engineAnswers?: (instance: ServiceInstance) => Promise<boolean>;
+    /**
+     * A started site's readiness wait (parity audit #9): true once its port answers. main.ts passes the real one
+     * (port-probe.ts `siteAnswers`); absent = no wait, a site is running when its process is (most composition tests).
+     */
+    readonly siteProbe?: (port: number, options: { behindCaddy: boolean }) => Promise<boolean>;
     /** How long an engine started at Genie start is waited for, and how often it is asked. */
     readonly engineReadiness?: ReadinessBound;
     /** Does git ignore a `.env` in a folder (`git check-ignore` by default)? Asked before a service password is written into one. */
@@ -765,6 +770,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         ...(input.preparePhpCgi ? { preparePhpCgi: input.preparePhpCgi } : {}),
         ...(input.phpWorkers !== undefined ? { phpWorkers: input.phpWorkers } : {}),
         serviceEnv: (workspaceId) => engines.envFor(workspaceId),
+        ...(input.siteProbe ? { probeReady: input.siteProbe } : {}),
     });
     // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
     engines.onChange(() => { sites.serviceEnvChanged(); });
@@ -1084,7 +1090,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             const using = new Set([...workspaceIds].filter((ws) => (i.engine === 'custom' && i.scope.kind === 'dedicated' && i.scope.workspaceId === ws) || engines.choices(ws).some((c) => c.chosen?.id === id)));
             return [
                 ...[...using].map((ws) => `workspace ${ws}`),
-                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
+                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'starting', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
                 ...supervisor.list().filter((x) => using.has(x.workspaceId) && ['running', 'restarting'].includes(x.state)).map((x) => `process ${x.name} (workspace ${x.workspaceId})`),
             ];
         },
