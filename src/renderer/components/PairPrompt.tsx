@@ -18,6 +18,8 @@ import { useNow } from '../use-now.js';
 type Outcome = { kind: 'allowed' | 'denied' | 'expired' | 'gone'; label: string; host: string };
 
 const OUTCOME_MS = 8000;
+// Above every modal (react-fancy's backdrop is `fixed inset-0 z-50`): an open dialog must never hide Allow and Deny behind
+// its backdrop for the two minutes the prompt lives (found live on omarchy-test, 2026-10-31, with What's new open).
 
 function outcomeWords(o: Outcome): string {
     switch (o.kind) {
@@ -90,7 +92,7 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
     if (!request) {
         if (!outcome) return null;
         return (
-            <div className="pointer-events-none fixed bottom-4 right-4 z-50">
+            <div className="pointer-events-none fixed bottom-4 right-4 z-[60]">
                 <div data-pair-result="" role="status" className={`${card} flex items-center gap-3 border-[var(--border-1)]`}>
                     <span data-pair-outcome={outcome.kind} className="flex-1">{outcomeWords(outcome)}</span>
                     <button type="button" data-action="dismiss-pair-outcome" onClick={() => setOutcome(null)} className={`${btn} border border-[var(--border-1)]`}>Dismiss</button>
@@ -103,7 +105,7 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
     const failure = failed?.id === request.id ? failed : null;
     const more = requests.length - 1;
     return (
-        <div className="pointer-events-none fixed bottom-4 right-4 z-50">
+        <div className="pointer-events-none fixed bottom-4 right-4 z-[60]">
             <div data-pair-prompt={request.id} role="alertdialog" aria-modal="false" aria-labelledby={`pair-title-${request.id}`} className={`${card} flex flex-col gap-2 border-[var(--warning)]`}>
                 <div className="flex items-baseline gap-2">
                     <h2 id={`pair-title-${request.id}`} className="text-[15px] font-semibold">Pair this device?</h2>

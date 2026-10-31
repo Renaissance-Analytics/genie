@@ -155,7 +155,19 @@ async function main() {
     const d = await phone('/tmp/phone-deny');
     await d.page.goto(`${PAGE}#pin=${remote.pin.code}`);
     await d.page.waitForSelector('[data-mobile-waiting]', { timeout: 30_000 });
-    await answerPairOnDesktop(g, false);
+    // With a dialog open (What's new — found live in run 5 hiding the prompt under its backdrop), Deny is pressed with a
+    // REAL mouse click at the button's place on screen: it lands only if nothing covers the prompt.
+    await g.evaluate(`window.genie.features.act({ kind: 'whatsNew.show' })`).catch(() => {});
+    const modalOpen = await g.evaluate(`(async () => { for (let i = 0; i < 20; i++) { if (document.querySelector('[data-whats-new]')) return true; await new Promise((r) => setTimeout(r, 250)); } return false; })()`);
+    await waitInGenie(g, '[data-pair-prompt]');
+    check('a dialog is open while the prompt is up (What’s new)', modalOpen);
+    await desktopShot(g, 'c07b-desktop-prompt-over-dialog');
+    const deny = await g.evaluate(`(() => { const r = document.querySelector('[data-action="deny-pair"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    const onTop = await g.evaluate(`document.elementFromPoint(${deny.x}, ${deny.y})?.closest('[data-action="deny-pair"]') !== null`);
+    check('Deny is the topmost thing at its own place on screen, over the dialog', onTop);
+    await g.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: deny.x, y: deny.y });
+    await g.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: deny.x, y: deny.y, button: 'left', clickCount: 1 });
+    await g.send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: deny.x, y: deny.y, button: 'left', clickCount: 1 });
     await waitInGenie(g, '[data-pair-outcome="denied"]');
     await desktopShot(g, 'c08-desktop-denied');
     await d.page.waitForSelector('[data-refusal]', { timeout: 30_000 });
