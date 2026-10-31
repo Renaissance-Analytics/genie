@@ -47,6 +47,7 @@ import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
 import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
+import { PairApprovals } from '../core/pair-confirm.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { AttentionStore } from './attention-store.js';
@@ -296,6 +297,8 @@ export interface ComposedServices {
     readonly approvals: ApprovalQueue;
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
     readonly remote: RemoteHost;
+    /** "Pair this device?" — what waits for Allow on this screen (q_8c07b142). */
+    readonly pairing: PairApprovals;
     /**
      * The Deck's signal strip, MEASURED (§4.5): flows and uncollected mail from the stores; the OS agent's turn and whether
      * GitHub blocks features (the GitHub account's reading of GitHub, main/github-account.ts) handed in by main.
@@ -862,6 +865,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
     let plugins = await openPlugins();
     const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+    // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
+    const pairing = new PairApprovals({ host: hostName, now });
     const remote = new RemoteHost({
         api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
         hostName,
@@ -870,6 +875,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         pins: new PairingPins({ now }),
         shares: new ShareLinks({ host: hostName, now, random: () => randomBytes(18).toString('base64url') }),
         devices: remoteDevices,
+        confirm: pairing,
         transport: input.remoteTransport ?? { onConnection: () => () => {} },
         now,
     });
@@ -1148,6 +1154,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         frontDoor,
         approvals,
         remote,
+        pairing,
         frontDoorPort,
         browserTrust: () => {
             const opened = genCa();

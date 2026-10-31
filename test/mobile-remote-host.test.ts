@@ -6,6 +6,7 @@ import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE PHONE ON THE HOST (2026-10-30). A connection that says hello as `profile: 'mobile'` is a phone, and the host
@@ -59,7 +60,7 @@ function client(t: ClientTransport) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
     return {
-        hello: async (auth: unknown, extra: Record<string, unknown> = {}) => { t.send(JSON.stringify({ kind: 'hello', auth, label: 'phone', ...extra })); return next(); },
+        hello: async (auth: unknown, extra: Record<string, unknown> = {}) => { t.send(JSON.stringify({ kind: 'hello', auth, label: 'phone', ...extra })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next(); },
         next,
         /** Everything pushed so far, drained. */
@@ -83,7 +84,7 @@ beforeEach(async () => {
     let n = 0;
     devices = await DeviceStore.open(dir, { now: () => now, random: () => `tok${n++}` });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
-    host = new RemoteHost({
+    host = new RemoteHost({ confirm: allowEveryPairing,
         api: api.api,
         hostName: 'alphar',
         baton: new Baton(),
@@ -259,7 +260,7 @@ describe('bytes cross in chunks, staged per connection, taken only by a call tha
 
     it('a read-only connection cannot stage bytes at all', async () => {
         const conns: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
-        const ro = new RemoteHost({ api: api.api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => now, random: () => 0.5 }), shares, devices, transport: { onConnection: (cb) => { conns.push(cb); return () => {}; } } });
+        const ro = new RemoteHost({ confirm: allowEveryPairing, api: api.api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => now, random: () => 0.5 }), shares, devices, transport: { onConnection: (cb) => { conns.push(cb); return () => {}; } } });
         const pair = inMemoryPair();
         const server = { ...pair.server, preAuth: { label: 'viewer', isOwner: false, workspaceId: 'tynn', readonly: true } };
         for (const cb of conns) cb(server);

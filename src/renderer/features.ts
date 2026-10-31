@@ -23,6 +23,7 @@ import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
 import type { ShareLink } from '../core/remote.js';
+import type { PairRequest } from '../core/pair-confirm.js';
 import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
 import type { GithubView } from '../core/github.js';
 import type { PluginEntry } from '../main/plugin-host.js';
@@ -152,6 +153,8 @@ export interface RemoteSection {
     readonly locked: boolean;
     readonly pin: { code: string; expiresAt: number } | null;
     readonly devices: readonly Device[];
+    /** "Pair this device?" waiting for Allow on this screen (q_8c07b142); always empty for a remote window. */
+    readonly pairRequests?: readonly PairRequest[] | undefined;
     readonly shares: readonly ShareLink[];
     readonly connections: readonly { id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }[];
     readonly servedLink: { id: string; url: string } | null;
@@ -471,7 +474,8 @@ export type FeatureAction =
     | { kind: 'browser.back' }
     | { kind: 'browser.forward' }
     | { kind: 'browser.reload' }
-    | { kind: 'remote.issuePin' }
+    | { kind: 'remote.issuePin'; replaces?: string }
+    | { kind: 'remote.answerPair'; id: string; allow: boolean }
     | { kind: 'remote.revokeDevice'; deviceId: string }
     | { kind: 'remote.lock' }
     | { kind: 'remote.unlock' }

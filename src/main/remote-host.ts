@@ -12,6 +12,8 @@ import {
     type WireMessage,
 } from '../core/remote-protocol.js';
 import type { Device, DeviceStore } from './remote-devices.js';
+import { pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
+import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
 
 /**
@@ -74,6 +76,8 @@ interface Connection {
     auth: { label: string; isOwner: boolean; workspaceId: string | null; readonly: boolean } | null;
     /** The paired device this connection is (PIN or token) — what removing it in Settings closes. */
     deviceId: string | null;
+    /** The "Pair this device?" prompt this connection is waiting on (q_8c07b142); withdrawn if it hangs up. */
+    pendingPair: string | null;
     /** `mobile`: a phone (genie#1346) — the snapshot and its watched agents only, no terminals. */
     profile: 'mobile' | null;
     /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
@@ -91,8 +95,21 @@ function withoutRemoteSecrets(value: unknown): unknown {
     if (typeof value !== 'object' || value === null || !('remote' in value)) return value;
     const remote = (value as { remote: unknown }).remote;
     if (typeof remote !== 'object' || remote === null) return value;
-    return { ...value, remote: { ...remote, pin: null, devices: [], shares: [], connections: [], servedLink: null } };
+    return { ...value, remote: { ...remote, pin: null, devices: [], shares: [], connections: [], servedLink: null, pairRequests: [] } };
 }
+
+/**
+ * A feature snapshot for ANY remote connection: no "Pair this device?" requests. Allow is given on this machine's own
+ * screen only (q_8c07b142) — a device already paired does not get to let another one in.
+ */
+function withoutPairRequests(value: unknown): unknown {
+    if (typeof value !== 'object' || value === null || !('remote' in value)) return value;
+    const remote = (value as { remote: unknown }).remote;
+    if (typeof remote !== 'object' || remote === null) return value;
+    return { ...value, remote: { ...remote, pairRequests: [] } };
+}
+
+const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' && args[0] !== null && (args[0] as { kind?: unknown }).kind === 'remote.answerPair';
 
 export class RemoteHost {
     readonly #api: HostApi;
@@ -101,6 +118,10 @@ export class RemoteHost {
     readonly #pins: PairingPins;
     readonly #shares: ShareLinks;
     readonly #devices: DeviceStore;
+    readonly #confirm: PairConfirm;
+    readonly #changeListeners = new Set<() => void>();
+    /** Re-pair: the device the PIN on screen was issued to replace, if any. */
+    #pinReplaces: string | null = null;
     readonly #connections = new Map<string, Connection>();
     readonly #transport: ServerTransport;
     readonly #now: () => number;
@@ -116,13 +137,18 @@ export class RemoteHost {
      */
     #stopListening: (() => void) | null = null;
 
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; shares: ShareLinks; devices: DeviceStore; transport: ServerTransport; now?: () => number }) {
+    /**
+     * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
+     * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
+     */
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; shares: ShareLinks; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number }) {
         this.#api = deps.api;
         this.#hostName = deps.hostName;
         this.#baton = deps.baton;
         this.#pins = deps.pins;
         this.#shares = deps.shares;
         this.#devices = deps.devices;
+        this.#confirm = deps.confirm;
         this.#transport = deps.transport;
         this.#now = deps.now ?? Date.now;
         this.#staging = new UploadStaging({ now: this.#now });
@@ -145,16 +171,35 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
-        this.#connections.delete(connection.id);
+        if (connection.pendingPair !== null) {
+            this.#confirm.cancel(connection.pendingPair);
+            connection.pendingPair = null;
+        }
+        const was = this.#connections.delete(connection.id);
+        if (was && connection.auth !== null) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
         this.#stopListening = null;
     }
 
-    /** The six digits shown on THIS screen for a device to type. */
-    issuePin(): { code: string; expiresAt: number } {
+    /**
+     * The six digits shown on THIS screen for a device to type. `replaces`: a Re-pair — the device that pairs with this PIN
+     * (and is allowed) takes the place of that one.
+     */
+    issuePin(options: { replaces?: string } = {}): { code: string; expiresAt: number } {
         this.#pin = this.#pins.issue();
+        this.#pinReplaces = options.replaces ?? null;
         return this.#pin;
+    }
+
+    /** Connections, devices or a pairing changed: Settings and the prompt redraw. */
+    onChange(listener: () => void): () => void {
+        this.#changeListeners.add(listener);
+        return () => { this.#changeListeners.delete(listener); };
+    }
+
+    #changed(): void {
+        for (const l of this.#changeListeners) l();
     }
 
     get hostName(): string {
@@ -194,6 +239,7 @@ export class RemoteHost {
             this.#baton.connectionLost(c.id);
             this.#refuse(c, `this device is not paired with ${this.#hostName} any more`, true);
         }
+        this.#changed();
         return true;
     }
 
@@ -232,7 +278,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, profile: null, watching: new Map() };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, watching: new Map() };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -266,27 +312,45 @@ export class RemoteHost {
                 this.#refuse(connection, 'say hello first', false);
                 return;
             }
-            this.#hello(connection, message);
+            await this.#hello(connection, message);
             return;
         }
         if (message.kind !== 'call') return; // A client sends calls; anything else is noise, not an error worth a frame.
         this.#send(connection, await this.#call(connection, message.id, message.method, message.args));
     }
 
-    #hello(connection: Connection, message: Extract<WireMessage, { kind: 'hello' }>): void {
+    async #hello(connection: Connection, message: Extract<WireMessage, { kind: 'hello' }>): Promise<void> {
         const auth = message.auth;
         const label = auth.label ?? message.label ?? 'a device';
         let token: string | undefined;
+        if (connection.pendingPair !== null) return this.#refuse(connection, `this device is already waiting for Allow on ${this.#hostName}`, false);
         if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
+            // THE CONFIRM (q_8c07b142; Genie 1's confirmPair): the right PIN only raises "Pair this device?" on this screen.
+            const replacing = this.#pinReplaces === null ? undefined : this.#devices.list().find((d) => d.id === this.#pinReplaces);
+            this.#pinReplaces = null;
+            const asked = this.#confirm.ask({ label, from: connection.socket.remoteAddress, replaces: replacing ? { id: replacing.id, label: replacing.label } : null });
+            connection.pendingPair = asked.id;
+            this.#send(connection, { kind: 'pairing', host: this.#hostName, expiresAt: asked.expiresAt });
+            const answer = await asked.answer.catch(() => 'deny' as const);
+            connection.pendingPair = null;
+            if (answer === 'gone' || !this.#connections.has(connection.id)) return;
+            if (answer !== 'allow') return this.#refuse(connection, pairRefusal(answer, this.#hostName), true);
             const paired = this.#devices.pair(label);
             token = paired.token;
             connection.deviceId = paired.device.id;
             connection.auth = { label, isOwner: true, workspaceId: null, readonly: false };
+            // A Re-pair: the old pairing goes, and any socket still using it is closed.
+            if (replacing) this.revokeDevice(replacing.id);
         } else if (auth.kind === 'token') {
-            const device = this.#devices.byToken(auth.token);
-            if (!device) return this.#refuse(connection, `this device is not paired with ${this.#hostName}`, true);
+            const checked = this.#devices.check(auth.token);
+            if (!checked.ok) {
+                return this.#refuse(connection, checked.expired
+                    ? `this device is not paired with ${this.#hostName} any more: it had not connected for ${DEVICE_EXPIRY_DAYS} days. Pair it again.`
+                    : `this device is not paired with ${this.#hostName}`, true);
+            }
+            const device = checked.device;
             connection.deviceId = device.id;
             connection.auth = { label: auth.label ?? message.label ?? device.label, isOwner: true, workspaceId: null, readonly: false };
         } else if (auth.kind === 'relay') {
@@ -309,6 +373,7 @@ export class RemoteHost {
             ...(token ? { token } : {}),
         });
         this.#listen();
+        this.#changed();
     }
 
     async #call(connection: Connection, id: number, method: RemoteMethod | ControlMethod, args: unknown[]): Promise<WireMessage> {
@@ -355,6 +420,9 @@ export class RemoteHost {
                 return ok({ aborted: this.#staging.abort(connection.id, String(args[0] ?? '')) });
         }
 
+        // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
+        if (method === 'features.act' && isAnswerPair(args)) return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
+
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
 
@@ -396,6 +464,7 @@ export class RemoteHost {
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices, the share links (their URLs carry the secret) and the connections. Only an owner sees them.
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
+            if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             return ok(value);
         } catch (error) {
             return refuse(error instanceof Error ? error.message : String(error));
@@ -477,7 +546,7 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
-            let out: unknown = payload;
+            let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             if (c.auth.workspaceId !== null) out = this.#forGuest(channel, out, c.auth.workspaceId);
             if (out !== NOT_SENT && c.profile === 'mobile') out = this.#forPhone(c, channel, out);
             if (out !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: out });

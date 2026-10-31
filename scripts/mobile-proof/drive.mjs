@@ -20,6 +20,7 @@ import { homedir } from 'node:os';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
+import { answerPairOnDesktop, genieWindow } from './genie-cdp.mjs';
 
 const OUT = join(process.cwd(), 'mobile-evidence');
 const WS_DIR = process.env.MOBILE_WS ?? '';
@@ -35,33 +36,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** A minimal CDP client into Genie's main window. */
-async function genieWindow() {
-    for (let i = 0; i < 120; i++) {
-        try {
-            const targets = await (await fetch('http://127.0.0.1:9222/json/list')).json();
-            const page = targets.find((t) => t.type === 'page' && /index\.html/.test(t.url) && !/[?&](remote|view)=/.test(t.url));
-            if (page) {
-                const ws = new WebSocket(page.webSocketDebuggerUrl);
-                await new Promise((res, rej) => { ws.onopen = res; ws.onerror = rej; });
-                let id = 0;
-                const waiting = new Map();
-                ws.onmessage = (e) => { const m = JSON.parse(String(e.data)); waiting.get(m.id)?.(m); waiting.delete(m.id); };
-                const evaluate = (expression) => new Promise((resolve, reject) => {
-                    const n = ++id;
-                    waiting.set(n, (m) => (m.result?.exceptionDetails ? reject(new Error(m.result.exceptionDetails.exception?.description ?? 'eval failed')) : resolve(m.result?.result?.value)));
-                    ws.send(JSON.stringify({ id: n, method: 'Runtime.evaluate', params: { expression, awaitPromise: true, returnByValue: true } }));
-                });
-                // Wait until the preload bridge is there.
-                for (let j = 0; j < 60; j++) { if (await evaluate('typeof window.genie?.features?.act === "function"')) return { evaluate, close: () => ws.close() }; await sleep(500); }
-            }
-        } catch { /* not up yet */ }
-        await sleep(1000);
-    }
-    throw new Error('Genie’s window never answered on CDP 9222');
-}
-
-const act = (g, action) => g.evaluate(`window.genie.features.act(${JSON.stringify(action)}).then((d) => d.remote)`);
+const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
 
 /** A photo-like JPEG made in a page: noisy gradients, so it does not compress to nothing. */
 async function makeJpeg(page, width, height, quality) {
@@ -127,6 +102,9 @@ async function main() {
     // A scanned QR opens a FRESH page; a hash-only goto on the open page would not reload it.
     await page.goto("about:blank");
     await page.goto(`${PAGE}#pin=${pin}`);
+    // The PIN alone pairs nothing (q_8c07b142): the owner presses Allow on "Pair this device?" in Genie's window.
+    const asked = await answerPairOnDesktop(g, true);
+    check('the right PIN raised "Pair this device?" on the desktop, naming the phone', /Pair this device\?/.test(asked) && /Pixel 7/.test(asked), asked.slice(0, 160));
     await page.waitForSelector('[data-mobile="shell"] [data-mobile-agent]', { timeout: 30_000 });
     await shot(page, '01-dashboard');
     check('paired: the dashboard shows the agents with their state', await page.locator('[data-mobile-agent]').count() >= 2);

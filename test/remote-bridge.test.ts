@@ -7,6 +7,7 @@ import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — the renderer's GenieBridge over a transport to another machine's
@@ -54,7 +55,7 @@ beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-remote-bridge-'));
     api = fakeApi();
     devices = await DeviceStore.open(dir, { now: () => 1, random: () => 'tok' });
-    host = new RemoteHost({
+    host = new RemoteHost({ confirm: allowEveryPairing,
         api: api.api,
         hostName: 'alphar',
         baton: new Baton(),

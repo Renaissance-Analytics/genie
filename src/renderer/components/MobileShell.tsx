@@ -8,6 +8,9 @@ import { workspaceLabel } from '../../core/workspace-label.js';
 import type { DeckItem } from '../../core/deck.js';
 import { ledgerRow } from '../../core/stream-view.js';
 import type { AgentDetail } from '../bridge.js';
+import { deviceLabelFromUserAgent } from '../../core/mobile.js';
+import { timeLeftWords } from '../../core/pair-confirm.js';
+import { useNow } from '../use-now.js';
 import { ApprovalCard } from './ApprovalCard.js';
 import { ChatProse } from './ChatProse.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -524,9 +527,15 @@ export interface MobilePairProps {
     refusal: string | null;
     connecting: boolean;
     onConnect: (input: { pin: string; label: string }) => void;
+    /** The PIN was right; the host's screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
+    waiting?: { readonly expiresAt: number } | null | undefined;
+    /** The clock, for tests; absent = the real one, ticking while it waits. */
+    now?: number | undefined;
 }
 
-export function MobilePair({ host, refusal, connecting, onConnect }: MobilePairProps) {
+export function MobilePair({ host, refusal, connecting, onConnect, waiting = null, now: fixedNow }: MobilePairProps) {
+    const now = useNow(waiting !== null, fixedNow);
+    const ownName = typeof navigator === 'undefined' ? 'phone' : deviceLabelFromUserAgent(navigator.userAgent);
     const submit = (e: FormEvent<HTMLFormElement>) => {
         e.preventDefault();
         const data = new FormData(e.currentTarget);
@@ -539,9 +548,13 @@ export function MobilePair({ host, refusal, connecting, onConnect }: MobilePairP
             <p className="text-center text-[13px] text-[var(--fg-3)]">Type the PIN that machine shows under Settings → Workstation → Remote access. It is good for two minutes.</p>
             <form onSubmit={submit} className="flex w-full max-w-xs flex-col gap-3">
                 <Input name="pin" inputMode="numeric" autoComplete="one-time-code" placeholder="482913" aria-label="PIN" className="text-center font-mono text-lg tracking-[0.3em]" />
-                <Input name="label" defaultValue="phone" aria-label="This device’s name" />
+                <Input name="label" defaultValue={ownName} aria-label="This device’s name" />
+                {waiting ? (
+                    // Visible progress, never a spinner that says nothing: what it waits for, where, and how long is left.
+                    <p data-mobile-waiting="" role="status" className="text-center text-xs text-[var(--fg-2)]">{`Press Allow on ${host} to finish pairing · ${timeLeftWords(waiting.expiresAt - now)}`}</p>
+                ) : null}
                 {refusal ? <p data-refusal className="text-xs text-[var(--danger)]">{refusal}</p> : null}
-                <button type="submit" disabled={connecting} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{connecting ? 'Connecting…' : 'Connect'}</button>
+                <button type="submit" disabled={connecting || waiting !== null} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{waiting ? 'Waiting for Allow…' : connecting ? 'Connecting…' : 'Connect'}</button>
             </form>
         </div>
     );

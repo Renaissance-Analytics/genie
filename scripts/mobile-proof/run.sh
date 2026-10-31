@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # THE PHONE'S LIVE PROOF (genie#1346) — run INSIDE omarchy-test through the envelope's vm-fifo.sh, never on a desktop:
 #   OMARCHY_FETCH='mobile-evidence=<local dir>' scripts/vm-fifo.sh omarchy <tree> 'bash scripts/mobile-proof/run.sh'
+#   MOBILE_PROOF=confirm … — the pairing confirm and the expiry mark instead (drive-confirm.mjs, genie#1366): a device
+#   last seen 80 days ago is seeded before Genie starts, so its pairing is 10 days from the end of its 90.
 #
 # 1. Build Genie. 2. Give the VM a tailnet address: a CGNAT IPv4 on its loopback, and a `tailscale` on PATH whose
 # `status --json` reports it (what Genie's listener reads — nothing in src/ knows this script exists). 3. Seed a workspace
@@ -12,6 +14,21 @@ EVIDENCE="$TREE/mobile-evidence"
 mkdir -p "$EVIDENCE"
 exec > >(tee "$EVIDENCE/run.log") 2>&1
 IP=100.100.7.7
+
+if [ "${MOBILE_PROOF:-}" = confirm ]; then
+    # The confirm proof screenshots GENIE'S OWN WINDOW (the phone proof only screenshots headless Chromium). Omarchy locks
+    # an idle session after 300 s (~/.config/omarchy/shell.json: screensaver 150, lock 300) — before the build is even
+    # done — and a window under the lock screen paints no frames, so CDP's Page.captureScreenshot waits forever (measured
+    # 2026-10-31: the run hung there, dpmsStatus 0, then "Enter Password" on the console). Stay awake, the omarchy way.
+    # omarchy's own commands call each other by name.
+    export PATH="/usr/share/omarchy/bin:$PATH"
+    omarchy-toggle-idle stay-awake && echo "=== idle lock off: $(omarchy-toggle-idle --status)"
+    # The VM's screen is 1024x768 at scale 2: Settings' content column was squeezed to nothing behind the chat (run 6). A
+    # desktop-sized screen, through Hyprland's Lua config (`keyword` is refused by this build: "use eval").
+    export HYPRLAND_INSTANCE_SIGNATURE="${HYPRLAND_INSTANCE_SIGNATURE:-$(ls "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -1)}"
+    hyprctl eval 'hl.monitor({ output = "VGA-1", mode = "1920x1080@60", position = "0x0", scale = 1 })' >/dev/null 2>&1
+    echo "=== screen: $(hyprctl monitors | grep -E 'x[0-9]+@' | head -1 | xargs) $(hyprctl monitors | grep scale | xargs)"
+fi
 
 echo "=== npm ci + build"
 npm ci --no-audit --no-fund >/tmp/npmci.log 2>&1 || { tail -30 /tmp/npmci.log; exit 1; }
@@ -62,16 +79,48 @@ fs.writeFileSync('$WS/spec.pdf', pdf);
 "
 ( cd "$WS" && node "$TREE/scripts/smoke-seed.mjs" )
 
+if [ "${MOBILE_PROOF:-}" = confirm ]; then
+    echo "=== seed a paired device last seen 80 days ago (10 of its 90 days left): the time near expiry, simulated"
+    export OLD_DEVICE_TOKEN=proof-old-device-token OLD_DEVICE_LABEL='Pixel 6 (old)'
+    mkdir -p "$HOME/.genie/runtime"
+    node -e "
+const { createHash } = require('crypto');
+const day = 86400000, now = Date.now();
+const h = createHash('sha256').update(process.env.OLD_DEVICE_TOKEN).digest('hex');
+const at = (d) => new Date(now - d * day).toISOString();
+require('fs').writeFileSync(process.env.HOME + '/.genie/runtime/remote-devices.json', JSON.stringify({ devices: [{ id: 'dev_' + h.slice(0, 12), label: process.env.OLD_DEVICE_LABEL, pairedAt: at(200), lastSeenAt: at(80), tokenHash: h }] }, null, 2));
+"
+fi
+
 echo "=== launch Genie (claude → the chat stub, codex → the codex stub)"
 export GENIE2_CLAUDE_BINARY="$TREE/scripts/mobile-proof/stub-claude-chat.mjs"
 export GENIE2_CODEX_BINARY="$TREE/scripts/stub-codex.mjs"
 chmod +x "$GENIE2_CLAUDE_BINARY" "$GENIE2_CODEX_BINARY"
 rm -rf /tmp/genie-stub-claude-received
-npx electron . --no-sandbox --ozone-platform=wayland --enable-features=UseOzonePlatform --remote-debugging-port=9222 >/tmp/electron.log 2>&1 &
+if [ "${MOBILE_PROOF:-}" = confirm ]; then
+    # The confirm proof needs Genie's window ON SCREEN (its screenshots and hovers). A Wayland-native Electron window never
+    # appears in this VM's Hyprland — `hyprctl clients` says "no open windows" while the page reports itself visible — and
+    # main does the same (control run 2026-10-31, genie#1366), so it is this VM, not the change. Xwayland maps it.
+    DISPLAY="${DISPLAY:-:0}" npx electron . --no-sandbox --ozone-platform=x11 --remote-debugging-port=9222 >/tmp/electron.log 2>&1 &
+else
+    npx electron . --no-sandbox --ozone-platform=wayland --enable-features=UseOzonePlatform --remote-debugging-port=9222 >/tmp/electron.log 2>&1 &
+fi
 GENIE_PID=$!
 
 echo "=== drive the phone"
-MOBILE_WS="$WS" TAILNET_IP="$IP" node scripts/mobile-proof/drive.mjs
+if [ "${MOBILE_PROOF:-}" = confirm ]; then
+    # What the compositor shows (the desktop screenshots are taken from it, with grim): Genie's window must be mapped.
+    export HYPRLAND_INSTANCE_SIGNATURE="${HYPRLAND_INSTANCE_SIGNATURE:-$(ls "$XDG_RUNTIME_DIR/hypr" 2>/dev/null | head -1)}"
+    sleep 8
+    # Omarchy's first-login notifications sit over the top of the screen (run 5's shots): out of the way, the omarchy way.
+    for n in "Update System" "Learn Keybindings"; do omarchy-notification-dismiss "$n" 2>&1 | head -2 || true; done
+    { hyprctl monitors; hyprctl clients; } > "$EVIDENCE/hypr-state.txt" 2>&1 || true
+    grep -E "^Window|class:|title:|mapped:|hidden:|workspace:|dpmsStatus" "$EVIDENCE/hypr-state.txt" | head -20
+    # The renewal step dials the socket from node; the VM's fake `tailscale cert` is self-signed.
+    NODE_TLS_REJECT_UNAUTHORIZED=0 TAILNET_IP="$IP" node scripts/mobile-proof/drive-confirm.mjs
+else
+    MOBILE_WS="$WS" TAILNET_IP="$IP" node scripts/mobile-proof/drive.mjs
+fi
 DRIVE=$?
 
 echo "=== what the remote socket is bound to (ss -ltn)"

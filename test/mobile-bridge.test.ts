@@ -7,6 +7,7 @@ import { inMemoryPair } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { AgentWindows, connectRemote } from '../src/renderer/remote-bridge.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE PHONE'S BRIDGE (2026-10-30) — `connectRemote(…, { profile: 'mobile', windows })`. The phone reads an agent as a
@@ -48,7 +49,7 @@ beforeEach(async () => {
     calls.length = 0;
     connections = [];
     devices = await DeviceStore.open(dir, { now: () => 1, random: () => 'tok' });
-    host = new RemoteHost({ api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), shares: new ShareLinks({ host: 'x', now: () => 1, random: () => 's' }), devices, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } } });
+    host = new RemoteHost({ confirm: allowEveryPairing, api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), shares: new ShareLinks({ host: 'x', now: () => 1, random: () => 's' }), devices, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } } });
 });
 afterEach(async () => { await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
 

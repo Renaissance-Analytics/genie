@@ -238,6 +238,7 @@ describe('security: the PIN, the bind, and device expiry', () => {
         // Expiry is written down, so a restart does not bring it back.
         const reopened = await DeviceStore.open(dir, { now: () => now, random: () => 'x' });
         expect(reopened.list().map((d) => d.label)).toEqual(['daily phone']);
-        expect(DEVICE_IDLE_MS).toBe(30 * 24 * 60 * 60 * 1000);
+        // 90 days since the owner's 2026-10-31 decision (q_8c07b142); 30 under genie#1349.
+        expect(DEVICE_IDLE_MS).toBe(90 * 24 * 60 * 60 * 1000);
     });
 });

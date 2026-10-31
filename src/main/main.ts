@@ -2503,6 +2503,14 @@ async function boot(): Promise<void> {
     });
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
+    // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a
+    // window not in front asks for attention (taskbar flash / urgency) WITHOUT taking focus (q_8c07b142).
+    composed.remote.onChange(pushFeatures);
+    composed.pairing.onChange(() => {
+        pushFeatures();
+        if (composed.pairing.requests().length === 0) return;
+        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.isVisible() && !w.isFocused()) w.flashFrame(true);
+    });
     // The Services and Hosting tabs redraw when an AGENT acts through its `services` / `sites` tools, not only when the
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);

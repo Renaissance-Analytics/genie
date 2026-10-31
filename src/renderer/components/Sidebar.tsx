@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Icon, Tooltip } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
@@ -79,6 +79,30 @@ export interface SidebarProps {
      * 30% or less left, red at 10% or less (core/headroom.ts `rateLimitAlert`). Absent or `null` = no dot.
      */
     rateLimitAlert?: RateLimitAlert | null | undefined;
+    /**
+     * A PAIRED DEVICE CLOSE TO EXPIRING (the owner, 2026-10-31, q_8c07b142): a yellow ! on the Settings row, its tooltip
+     * naming the device and the date (core/device-expiry.ts `deviceExpiryAlert`). Absent or `null` = no mark.
+     */
+    settingsAlert?: { readonly label: string } | null | undefined;
+}
+
+/**
+ * The yellow ! on the Settings row: a fact with words on hover (Genie's own tooltip, as the title bar's) and for a screen
+ * reader, not a colour alone.
+ */
+export function SettingsAlertMark({ label, compact }: { label: string; compact: boolean }) {
+    return (
+        <Tooltip content={label} placement="right" className="max-w-sm">
+            <span
+                data-settings-alert=""
+                role="img"
+                aria-label={label}
+                className={`${compact ? 'absolute right-1 top-0.5' : 'ml-auto'} shrink-0 px-1 text-[14px] font-bold leading-none text-[var(--warning)]`}
+            >
+                !
+            </span>
+        </Tooltip>
+    );
 }
 
 /** The rate-limit dot: static (nothing to reduce for reduced motion), named for a screen reader and on hover. */
@@ -186,7 +210,7 @@ function readShowAsleep(): boolean {
     try { return typeof window !== 'undefined' && window.localStorage.getItem(SHOW_ASLEEP_KEY) === '1'; } catch { return false; }
 }
 
-export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null }: SidebarProps) {
+export function Sidebar({ route, deckCount, workspaces, available, onNavigate, onAddWorkspace, railStorage, currentWorkspaceId = null, onOpenProcesses, onOpenSites, onOpenBrowser, pulsing, rateLimitAlert = null, settingsAlert = null }: SidebarProps) {
     countRender('Sidebar');
     const has = (s: RailSurface): boolean => available.includes(s);
     const storage = railStorage === undefined ? browserStorage() : railStorage;
@@ -248,7 +272,11 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
-                {has('settings') ? <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact /> : null}
+                {has('settings') ? (
+                    <NavRow route="genie://settings" current={route} icon="settings" label={settingsAlert ? `Settings · ${settingsAlert.label}` : 'Settings'} onNavigate={onNavigate} compact>
+                        {settingsAlert ? <SettingsAlertMark label={settingsAlert.label} compact /> : null}
+                    </NavRow>
+                ) : null}
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
                 {(has('workspace') ? shown : []).map((w) => {
                     const route_ = `genie://workspace/${w.id}`;
@@ -350,7 +378,9 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
 
             {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
             {has('settings') ? (
-                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} />
+                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate}>
+                    {settingsAlert ? <SettingsAlertMark label={settingsAlert.label} compact={false} /> : null}
+                </NavRow>
             ) : null}
 
             {/*

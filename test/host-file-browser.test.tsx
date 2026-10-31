@@ -9,6 +9,7 @@ import { listHostDir } from '../src/main/host-fs.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { fileEntriesOf, HostPathPickerForm } from '../src/renderer/components/HostPathPicker.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * EVERY FILE AND FOLDER INPUT READS THE HOST (Tynn #835; the owner, 2026-10-19: FileBrowser "is what we should be using
@@ -101,7 +102,7 @@ describe('host.listDir over the remote protocol', () => {
     let accept: (c: ReturnType<typeof inMemoryPair>['server']) => void;
     beforeEach(async () => {
         api = fakeApi();
-        new RemoteHost({
+        new RemoteHost({ confirm: allowEveryPairing,
             api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: Date.now, random: Math.random }),
             shares: new ShareLinks({ host: 'alphar.invalid', now: Date.now, random: () => 's' }), devices: await DeviceStore.open(dir, { now: Date.now, random: () => 't' }),
             transport: { onConnection: (cb) => { accept = cb; return () => {}; } },

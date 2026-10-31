@@ -259,6 +259,8 @@ export type WireMessage =
     | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
     | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string }
     | { kind: 'refused'; reason: string }
+    /** The PIN was right; the host's own screen is asking "Pair this device?" until `expiresAt` (q_8c07b142). */
+    | { kind: 'pairing'; host: string; expiresAt: number }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
     | { kind: 'result'; id: number; ok: true; value: unknown }
     | { kind: 'result'; id: number; ok: false; reason: string }
@@ -311,6 +313,9 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             return { ok: true, message: raw as unknown as WireMessage };
         case 'refused':
             return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
+        case 'pairing':
+            if (typeof raw.host !== 'string' || typeof raw.expiresAt !== 'number') return { ok: false, reason: 'a pairing frame needs host and expiresAt' };
+            return { ok: true, message: { kind: 'pairing', host: raw.host, expiresAt: raw.expiresAt } };
         default:
             return { ok: false, reason: `unknown message kind "${String(kind)}"` };
     }

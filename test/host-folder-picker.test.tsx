@@ -10,6 +10,7 @@ import { listHostDir, makeHostDir } from '../src/main/host-fs.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { HostPathPickerForm, newFolderHandler, PickerNav } from '../src/renderer/components/HostPathPicker.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE FOLDER PICKER GOES ANYWHERE AND MAKES A FOLDER (the owner, 2026-10-22: "I am unable to create a folder or navigate
@@ -126,7 +127,7 @@ describe('host.mkdir over the remote protocol — the owner’s, like adding a w
             workspaceOfAgent: () => null,
             workspacePaths: () => ({ tynn: '/w/tynn' }),
         };
-        new RemoteHost({
+        new RemoteHost({ confirm: allowEveryPairing,
             api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: Date.now, random: Math.random }),
             shares: new ShareLinks({ host: 'alphar.invalid', now: Date.now, random: () => 's' }), devices: await DeviceStore.open(dir, { now: Date.now, random: () => 't' }),
             transport: { onConnection: (cb) => { accept = cb; return () => {}; } },
