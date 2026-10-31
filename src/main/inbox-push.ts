@@ -180,7 +180,7 @@ export function appMailPushPorts(input: {
     readonly modeOf: (agentId: AgentId) => AgentRecord['mode'] | undefined;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
-}): Required<Pick<InboxPushPorts, 'appMail' | 'appBudget' | 'schedule' | 'coalesceMs'>> {
+}): { [K in 'appMail' | 'appBudget' | 'schedule' | 'coalesceMs']-?: NonNullable<InboxPushPorts[K]> } {
     const budget = new AppTurnBudget(input.now);
     return {
         appMail: (to, message) => (isAppSender(message.from) ? appDelivery(input.modeOf(to) ?? 'manual', budget.waitMs(to) === 0) : null),
