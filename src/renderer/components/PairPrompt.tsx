@@ -57,12 +57,15 @@ export function PairPrompt({ requests, onAnswer, now: fixedNow }: PairPromptProp
             shown.current.delete(id);
             const allow = answered.current.get(id);
             answered.current.delete(id);
-            const kind: Outcome['kind'] = allow === true ? 'allowed' : allow === false ? 'denied' : now >= r.expiresAt ? 'expired' : 'gone';
+            // The clock read NOW (the countdown's may be up to a tick behind main's timer): within a second and a half of the
+            // deadline, the request lapsed rather than its device leaving.
+            const clock = fixedNow ?? Date.now();
+            const kind: Outcome['kind'] = allow === true ? 'allowed' : allow === false ? 'denied' : clock >= r.expiresAt - 1500 ? 'expired' : 'gone';
             setOutcome({ kind, label: r.label, host: r.host });
             setBusy((b) => (b?.id === id ? null : b));
             setFailed((f) => (f?.id === id ? null : f));
         }
-    }, [requests, now]);
+    }, [requests, fixedNow]);
 
     useEffect(() => {
         if (!outcome || request) return;

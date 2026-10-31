@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # THE PHONE'S LIVE PROOF (genie#1346) — run INSIDE omarchy-test through the envelope's vm-fifo.sh, never on a desktop:
 #   OMARCHY_FETCH='mobile-evidence=<local dir>' scripts/vm-fifo.sh omarchy <tree> 'bash scripts/mobile-proof/run.sh'
+#   MOBILE_PROOF=confirm … — the pairing confirm and the expiry mark instead (drive-confirm.mjs, genie#1366): a device
+#   last seen 80 days ago is seeded before Genie starts, so its pairing is 10 days from the end of its 90.
 #
 # 1. Build Genie. 2. Give the VM a tailnet address: a CGNAT IPv4 on its loopback, and a `tailscale` on PATH whose
 # `status --json` reports it (what Genie's listener reads — nothing in src/ knows this script exists). 3. Seed a workspace
@@ -62,6 +64,19 @@ fs.writeFileSync('$WS/spec.pdf', pdf);
 "
 ( cd "$WS" && node "$TREE/scripts/smoke-seed.mjs" )
 
+if [ "${MOBILE_PROOF:-}" = confirm ]; then
+    echo "=== seed a paired device last seen 80 days ago (10 of its 90 days left): the time near expiry, simulated"
+    export OLD_DEVICE_TOKEN=proof-old-device-token OLD_DEVICE_LABEL='Pixel 6 (old)'
+    mkdir -p "$HOME/.genie/runtime"
+    node -e "
+const { createHash } = require('crypto');
+const day = 86400000, now = Date.now();
+const h = createHash('sha256').update(process.env.OLD_DEVICE_TOKEN).digest('hex');
+const at = (d) => new Date(now - d * day).toISOString();
+require('fs').writeFileSync(process.env.HOME + '/.genie/runtime/remote-devices.json', JSON.stringify({ devices: [{ id: 'dev_' + h.slice(0, 12), label: process.env.OLD_DEVICE_LABEL, pairedAt: at(200), lastSeenAt: at(80), tokenHash: h }] }, null, 2));
+"
+fi
+
 echo "=== launch Genie (claude → the chat stub, codex → the codex stub)"
 export GENIE2_CLAUDE_BINARY="$TREE/scripts/mobile-proof/stub-claude-chat.mjs"
 export GENIE2_CODEX_BINARY="$TREE/scripts/stub-codex.mjs"
@@ -71,7 +86,12 @@ npx electron . --no-sandbox --ozone-platform=wayland --enable-features=UseOzoneP
 GENIE_PID=$!
 
 echo "=== drive the phone"
-MOBILE_WS="$WS" TAILNET_IP="$IP" node scripts/mobile-proof/drive.mjs
+if [ "${MOBILE_PROOF:-}" = confirm ]; then
+    # The renewal step dials the socket from node; the VM's fake `tailscale cert` is self-signed.
+    NODE_TLS_REJECT_UNAUTHORIZED=0 TAILNET_IP="$IP" node scripts/mobile-proof/drive-confirm.mjs
+else
+    MOBILE_WS="$WS" TAILNET_IP="$IP" node scripts/mobile-proof/drive.mjs
+fi
 DRIVE=$?
 
 echo "=== what the remote socket is bound to (ss -ltn)"

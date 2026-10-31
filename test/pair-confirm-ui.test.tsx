@@ -46,6 +46,14 @@ afterEach(() => {
 const NOW = Date.UTC(2026, 9, 31, 12, 0, 0);
 const request = (over: Partial<PairRequest> = {}): PairRequest => ({ id: 'pair_1', label: 'Pixel 7', from: '100.101.7.9', host: 'alphar', replaces: null, raisedAt: NOW, expiresAt: NOW + 120_000, ...over });
 const flush = async () => { await act(async () => { await Promise.resolve(); await Promise.resolve(); }); };
+/** Hover the mark: Genie's tooltip (react-fancy, a DOM element, role=tooltip) shows these exact words; leaving hides it. */
+async function hoverTooltip(mark: Element, words: string): Promise<void> {
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+    await act(async () => { mark.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); mark.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false })); await new Promise((r) => setTimeout(r, 300)); });
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(words);
+    await act(async () => { mark.dispatchEvent(new MouseEvent('mouseout', { bubbles: true })); mark.dispatchEvent(new MouseEvent('mouseleave', { bubbles: false })); });
+    expect(document.querySelector('[role="tooltip"]')).toBeNull();
+}
 const button = (name: string) => [...host.querySelectorAll('button')].find((b) => b.textContent?.trim() === name) as HTMLButtonElement | undefined;
 
 describe('PairPrompt — "Pair this device?" on the desktop', () => {
@@ -159,14 +167,14 @@ describe('the yellow ! on the Settings row', () => {
     const rail = (over: Partial<Parameters<typeof Sidebar>[0]> = {}) =>
         renderToStaticMarkup(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} {...over} />);
 
-    it('shows a yellow ! on the Settings row whose tooltip names the device and the date', () => {
+    it('shows a yellow ! on the Settings row whose tooltip names the device and the date', async () => {
         act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
         const settings = host.querySelector('[data-nav="genie://settings"]')!;
         const mark = settings.querySelector('[data-settings-alert]')!;
         expect(mark.textContent).toBe('!');
-        expect(mark.getAttribute('title')).toBe(label);
         expect(mark.getAttribute('aria-label')).toBe(label);
         expect(mark.className).toContain('var(--warning)');
+        await hoverTooltip(mark, label);
     });
 
     it('no alert, no mark', () => {
@@ -189,13 +197,14 @@ describe('the device’s row in Settings → Remote access', () => {
     const soon = { id: 'dev_soon', label: 'Pixel 7', pairedAt: new Date(NOW - 80 * DAY_MS).toISOString(), lastSeenAt: new Date(NOW - 80 * DAY_MS).toISOString(), expiresAt: new Date(NOW + 10 * DAY_MS).toISOString() };
     const fresh = { id: 'dev_fresh', label: 'iPad', pairedAt: new Date(NOW).toISOString(), lastSeenAt: new Date(NOW).toISOString(), expiresAt: new Date(NOW + 90 * DAY_MS).toISOString() };
 
-    it('a device close to its end carries the same yellow ! and tooltip, and offers Re-pair; one far from it does not', () => {
+    it('a device close to its end carries the same yellow ! and tooltip, and offers Re-pair; one far from it does not', async () => {
         const onAction = vi.fn();
         act(() => root.render(<RemoteAccess remote={remote([soon, fresh])} workspaces={[]} onAction={onAction} now={NOW} />));
         const row = host.querySelector('[data-device="dev_soon"]')!;
         const mark = row.querySelector('[data-device-expiry-alert]')!;
         expect(mark.textContent).toBe('!');
-        expect(mark.getAttribute('title')).toBe(deviceExpiryText('Pixel 7', soon.expiresAt));
+        expect(mark.getAttribute('aria-label')).toBe(deviceExpiryText('Pixel 7', soon.expiresAt));
+        await hoverTooltip(mark, deviceExpiryText('Pixel 7', soon.expiresAt));
         const repair = [...row.querySelectorAll('button')].find((b) => b.textContent === 'Re-pair')!;
         act(() => repair.click());
         expect(onAction).toHaveBeenCalledWith({ kind: 'remote.issuePin', replaces: 'dev_soon' });

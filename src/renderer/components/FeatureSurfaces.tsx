@@ -3,7 +3,7 @@ import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
@@ -2496,8 +2496,12 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                     return (
                                         <li key={d.id} data-device={d.id} className="flex items-center gap-3 py-1.5 text-sm">
                                             <span className="font-medium">{d.label}</span>
-                                            {soon ? <span data-device-expiry-alert="" role="img" aria-label={expiry} title={expiry} className="text-[13px] font-bold leading-none text-[var(--warning)]">!</span> : null}
-                                            <span className="font-mono text-xs text-[var(--fg-4)]" title={expiry}>paired {d.pairedAt} · seen {d.lastSeenAt}</span>
+                                            {soon ? (
+                                                <Tooltip content={expiry} placement="top" className="max-w-sm">
+                                                    <span data-device-expiry-alert="" role="img" aria-label={expiry} className="px-1 text-[14px] font-bold leading-none text-[var(--warning)]">!</span>
+                                                </Tooltip>
+                                            ) : null}
+                                            <span className="font-mono text-xs text-[var(--fg-4)]">paired {d.pairedAt} · seen {d.lastSeenAt}</span>
                                             {soon ? <button type="button" data-action="repair-device" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.issuePin', replaces: d.id })}>Re-pair</button> : null}
                                             <button type="button" className={`${soon ? '' : 'ml-auto '}${button}`} onClick={() => onAction({ kind: 'remote.revokeDevice', deviceId: d.id })}>Revoke</button>
                                         </li>

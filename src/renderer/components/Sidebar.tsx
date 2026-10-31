@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Icon, Tooltip } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
@@ -86,18 +86,22 @@ export interface SidebarProps {
     settingsAlert?: { readonly label: string } | null | undefined;
 }
 
-/** The yellow ! on the Settings row: a fact with words on hover and for a screen reader, not a colour alone. */
-function SettingsAlertMark({ label, compact }: { label: string; compact: boolean }) {
+/**
+ * The yellow ! on the Settings row: a fact with words on hover (Genie's own tooltip, as the title bar's) and for a screen
+ * reader, not a colour alone.
+ */
+export function SettingsAlertMark({ label, compact }: { label: string; compact: boolean }) {
     return (
-        <span
-            data-settings-alert=""
-            role="img"
-            aria-label={label}
-            title={label}
-            className={`${compact ? 'absolute right-1 top-0.5' : 'ml-auto'} shrink-0 text-[13px] font-bold leading-none text-[var(--warning)]`}
-        >
-            !
-        </span>
+        <Tooltip content={label} placement="right" className="max-w-sm">
+            <span
+                data-settings-alert=""
+                role="img"
+                aria-label={label}
+                className={`${compact ? 'absolute right-1 top-0.5' : 'ml-auto'} shrink-0 px-1 text-[14px] font-bold leading-none text-[var(--warning)]`}
+            >
+                !
+            </span>
+        </Tooltip>
     );
 }
 
