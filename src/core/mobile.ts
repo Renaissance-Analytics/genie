@@ -179,6 +179,24 @@ export function mobilePhase(input: { connected: boolean; everConnected: boolean;
     return input.everConnected && input.hasToken ? 'reconnecting' : 'pair';
 }
 
+/**
+ * What a phone calls itself in the desktop's "Pair this device?" (q_8c07b142): its model where the browser says it (an
+ * Android UA carries it: `Android 14; Pixel 7`), else the kind of device — never the bare "phone" a QR scan used to send.
+ * Genie 1's deviceLabel (main/mobile/auth.ts) went as far as the kind.
+ */
+export function deviceLabelFromUserAgent(ua: string): string {
+    if (/iPhone/i.test(ua)) return 'iPhone';
+    if (/iPad/i.test(ua)) return 'iPad';
+    const android = /Android [^;)]*;\s*([^;)]+?)(?:\s+Build\/[^;)]*)?\s*[;)]/i.exec(ua);
+    if (android) {
+        const model = android[1]!.trim();
+        // Chrome's reduced UA says `K` in place of the model; that names nothing.
+        return model.length > 1 && !/^(K|wv|Mobile)$/i.test(model) ? model : 'Android phone';
+    }
+    if (/Android/i.test(ua)) return 'Android phone';
+    return 'phone';
+}
+
 /** How long to wait before redial `attempt` (0-based): quick at first, then backing off to a 15 s ceiling. */
 export function reconnectDelay(attempt: number): number {
     return Math.min(15_000, Math.round(500 * 2 ** Math.max(0, Math.min(attempt, 10))));

@@ -74,7 +74,7 @@ import type { ShareLink } from '../main/tynn-share-links.js';
 import { ConnectRemote } from './components/FeatureSurfaces.js';
 import { upgradeHost as runHostUpgrade, type HostUpgradeStep } from '../core/host-upgrade.js';
 import { webSocketTransport } from './ws-transport.js';
-import { fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
+import { deviceLabelFromUserAgent, fitWithin, mobileEntry, mobileHash, mobilePhase, mobileView, previewKind, previewMime, reconnectDelay, type MobileEntry } from '../core/mobile.js';
 import { MobileAgent, MobileConnecting, MobileFileView, MobileFiles, MobilePair, MobileShell, type MobilePreview } from './components/MobileShell.js';
 import type { ChatThread } from './components/ChatFlyout.js';
 import type { AgentOpsProps } from './components/AgentView.js';
@@ -545,7 +545,8 @@ function useMobileRemote(entry: Extract<MobileEntry, { kind: 'mobile' }>) {
         dialed.current = true;
         const token = tokenNow();
         if (entry.pin !== null) {
-            dial({ kind: 'pin', code: entry.pin, label: 'phone' });
+            // Named for the desktop's "Pair this device?" (q_8c07b142): the phone's model, not "phone".
+            dial({ kind: 'pin', code: entry.pin, label: deviceLabelFromUserAgent(navigator.userAgent) });
             // The PIN is spent once dialed; a reload must not resend it (the token is remembered on welcome).
             window.history.replaceState(null, '', window.location.pathname);
         } else if (token) {
@@ -622,7 +623,7 @@ function MobileApp({ entry }: { entry: Extract<MobileEntry, { kind: 'mobile' }> 
     const [sendRefusal, setSendRefusal] = useState<string | null>(null);
 
     if (remote.phase === 'pair') {
-        return <MobilePair host={window.location.host} refusal={remote.refusal} connecting={remote.connecting} onConnect={({ pin, label }) => remote.pair(pin, label)} />;
+        return <MobilePair host={window.location.host} refusal={remote.refusal} connecting={remote.connecting} waiting={remote.state?.pairing ?? null} onConnect={({ pin, label }) => remote.pair(pin, label)} />;
     }
     // A phone that holds its token — reopened from the home screen, or back from sleep — dials; it is never asked for a PIN.
     if (!bridge) return <MobileConnecting host={window.location.hostname} />;

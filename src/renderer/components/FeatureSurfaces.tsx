@@ -1,3 +1,4 @@
+import { deviceExpiryText, isExpiringSoon } from '../../core/device-expiry.js';
 import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
@@ -2379,7 +2380,7 @@ const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
  * a link is a credential you cannot unsend, so you see who already holds one before minting another.
  * A just-minted URL is shown once, and says so. No transport → the section says devices cannot connect.
  */
-export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined }) {
+export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date.now() }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined; now?: number | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
     // The QR carries the PAGE a phone opens (§6.8), with the PIN in its hash — a socket URL is nothing a phone can scan into.
     const pairUrl = mobilePageUrl(remote?.url ?? null) ?? remote?.url ?? '';
@@ -2487,13 +2488,21 @@ export function RemoteAccess({ remote, workspaces, onAction, connect }: { remote
                         <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Paired devices</h3>
                         {remote.devices.length === 0 ? <p className="text-sm text-[var(--fg-3)]">No device has paired with {remote.host}.</p> : (
                             <ul className="divide-y divide-[var(--border-1)]">
-                                {remote.devices.map((d) => (
-                                    <li key={d.id} data-device={d.id} className="flex items-center gap-3 py-1.5 text-sm">
-                                        <span className="font-medium">{d.label}</span>
-                                        <span className="font-mono text-xs text-[var(--fg-4)]">paired {d.pairedAt} · seen {d.lastSeenAt}</span>
-                                        <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.revokeDevice', deviceId: d.id })}>Revoke</button>
-                                    </li>
-                                ))}
+                                {remote.devices.map((d) => {
+                                    // Close to the end of its 90 days (q_8c07b142): the Settings row's yellow !, here on the device itself,
+                                    // with Re-pair. Connecting from the device renews it on its own.
+                                    const soon = isExpiringSoon(d.expiresAt, now);
+                                    const expiry = deviceExpiryText(d.label, d.expiresAt);
+                                    return (
+                                        <li key={d.id} data-device={d.id} className="flex items-center gap-3 py-1.5 text-sm">
+                                            <span className="font-medium">{d.label}</span>
+                                            {soon ? <span data-device-expiry-alert="" role="img" aria-label={expiry} title={expiry} className="text-[13px] font-bold leading-none text-[var(--warning)]">!</span> : null}
+                                            <span className="font-mono text-xs text-[var(--fg-4)]" title={expiry}>paired {d.pairedAt} · seen {d.lastSeenAt}</span>
+                                            {soon ? <button type="button" data-action="repair-device" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.issuePin', replaces: d.id })}>Re-pair</button> : null}
+                                            <button type="button" className={`${soon ? '' : 'ml-auto '}${button}`} onClick={() => onAction({ kind: 'remote.revokeDevice', deviceId: d.id })}>Revoke</button>
+                                        </li>
+                                    );
+                                })}
                             </ul>
                         )}
                     </div>

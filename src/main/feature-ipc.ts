@@ -506,6 +506,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             locked: services.remote.locked(),
             pin: services.remote.activePin(),
             devices: services.remote.devices(),
+            pairRequests: services.pairing.requests(),
             shares: services.remote.shares(),
             connections: services.remote.connections(),
             servedLink: state.servedLink ?? null,
@@ -1535,8 +1536,15 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.settings.reset(action.key);
             break;
         case 'remote.issuePin':
-            services.remote.issuePin();
+            // `replaces`: Re-pair on a device's row — the device that pairs (and is allowed) takes that one's place.
+            services.remote.issuePin(action.replaces ? { replaces: action.replaces } : {});
             break;
+        case 'remote.answerPair': {
+            // Allow or Deny on "Pair this device?", from this machine's own window (a remote connection is refused upstream).
+            const r = services.pairing.answer(action.id, action.allow);
+            if (!r.ok) throw new Error(r.reason);
+            break;
+        }
         case 'remote.revokeDevice':
             if (!services.remote.revokeDevice(action.deviceId)) throw new Error(`no device ${action.deviceId}`);
             break;

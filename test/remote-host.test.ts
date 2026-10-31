@@ -6,6 +6,7 @@ import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport. The host
@@ -53,7 +54,7 @@ function client(t: ClientTransport) {
     const next = () => (inbox.length > 0 ? Promise.resolve(inbox.shift()!) : new Promise<WireMessage>((r) => waiters.push(r)));
     let id = 0;
     return {
-        hello: async (auth: unknown, label = 'phone') => { t.send(JSON.stringify({ kind: 'hello', auth, label })); return next(); },
+        hello: async (auth: unknown, label = 'phone') => { t.send(JSON.stringify({ kind: 'hello', auth, label })); let m = await next(); while (m.kind === 'pairing') m = await next(); return m; },
         call: async (method: string, ...args: unknown[]) => { t.send(JSON.stringify({ kind: 'call', id: ++id, method, args })); return next(); },
         next,
         close: () => t.close(),
@@ -76,7 +77,7 @@ beforeEach(async () => {
     shares = new ShareLinks({ host: 'alphar.tailnet.invalid:7421', now: () => now, random: () => 'sekrit' });
     devices = await DeviceStore.open(dir, { now: () => now, random: () => 'tok' + (devices?.list().length ?? 0) });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
-    host = new RemoteHost({
+    host = new RemoteHost({ confirm: allowEveryPairing,
         api: api.api,
         hostName: 'alphar',
         baton: new Baton(),

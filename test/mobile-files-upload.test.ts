@@ -12,6 +12,7 @@ import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { fancyWsTransport } from '../src/main/ws-server-transport.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { webSocketTransport } from '../src/renderer/ws-transport.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * UPLOADS INTO A WORKSPACE (2026-10-30: "a mobile friendly file browser and viewer with upload support").
@@ -101,7 +102,7 @@ describe('over a real socket', () => {
             onEvent: (cb) => { listeners.add(cb); return () => listeners.delete(cb); },
             workspaceOfAgent: () => 'tynn',
         };
-        host = new RemoteHost({ api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), shares: new ShareLinks({ host: 'x', now: () => 1, random: () => 's' }), devices, transport: fancyWsTransport({ attach: attachWebSocketServer, server, path: '/genie', address: () => `ws://127.0.0.1:${port}/genie` }) });
+        host = new RemoteHost({ confirm: allowEveryPairing, api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), shares: new ShareLinks({ host: 'x', now: () => 1, random: () => 's' }), devices, transport: fancyWsTransport({ attach: attachWebSocketServer, server, path: '/genie', address: () => `ws://127.0.0.1:${port}/genie` }) });
     });
     afterEach(async () => {
         await devices.flushed();

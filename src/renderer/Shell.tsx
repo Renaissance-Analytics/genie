@@ -1,6 +1,8 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnBoardHost } from '../core/tynn-board.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
+import { deviceExpiryAlert } from '../core/device-expiry.js';
+import { PairPrompt } from './components/PairPrompt.js';
 import type { MailSignal } from '../core/mail-signals.js';
 import { readChatDockWidth } from '../core/chat-width.js';
 import { formatLanes, parseLanes } from '../core/lanes.js';
@@ -550,6 +552,13 @@ export function Shell({
                     onOpenBrowser={onOpenBrowser}
                     // A provider limit running low lights the Dashboard row, from any page (genie#1268).
                     rateLimitAlert={rateLimitAlert(rateLimits ?? {})}
+                    // A paired device close to expiring: a yellow ! on Settings, naming it and the date (q_8c07b142).
+                    settingsAlert={deviceExpiryAlert(features.remote?.devices ?? [], Date.now())}
+                />
+                {/* "Pair this device?" — on every page, never focused (q_8c07b142). A remote window's snapshot carries none. */}
+                <PairPrompt
+                    requests={features.remote?.pairRequests ?? []}
+                    onAnswer={(id, allow) => (featureAsk ? featureAsk({ kind: 'remote.answerPair', id, allow }) : Promise.resolve(onFeature({ kind: 'remote.answerPair', id, allow })))}
                 />
 
                 <main className="min-w-0 flex-1 overflow-auto">

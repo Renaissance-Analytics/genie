@@ -74,7 +74,7 @@ describe('the remote section', () => {
         expect(asking.remote!.pairRequests).toMatchObject([{ label: 'glenn’s phone', host: 'alphar' }]);
         // Allow, on this screen, is a feature action; an unknown request is refused by name.
         await expect(handleFeatureAction(services, { kind: 'remote.answerPair', id: 'pair_nope', allow: true }, state())).rejects.toThrow(/no longer waiting/);
-        const allowed = await handleFeatureAction(services, { kind: 'remote.answerPair', id: asking.remote!.pairRequests[0]!.id, allow: true }, state());
+        const allowed = await handleFeatureAction(services, { kind: 'remote.answerPair', id: asking.remote!.pairRequests![0]!.id, allow: true }, state());
         expect(allowed.remote!.pairRequests).toEqual([]);
         await tick();
         expect(got[1]).toMatchObject({ kind: 'welcome', isOwner: true });

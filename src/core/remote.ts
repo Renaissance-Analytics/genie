@@ -144,7 +144,7 @@ function publicView(r: ShareRecord): ShareLink {
     return { id: r.id, workspaceId: r.workspaceId, grantedTo: r.grantedTo, expiresAt: r.expiresAt, served: r.served, revoked: r.revoked };
 }
 
-const PIN_TTL_MS = 120_000;
+export const PIN_TTL_MS = 120_000;
 const PIN_ATTEMPTS = 5;
 
 /**

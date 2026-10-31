@@ -27,6 +27,8 @@ export interface RemoteState {
     readonly lastRefusal: string | null;
     /** Minted on a PIN pairing — the client keeps it for next time. */
     readonly token: string | null;
+    /** The PIN was right and the host's screen asks "Pair this device?" until `expiresAt` (q_8c07b142); `null` otherwise. */
+    readonly pairing?: { readonly expiresAt: number } | null;
 }
 
 export interface RemoteClient {
@@ -93,7 +95,7 @@ interface PhonePush {
 }
 
 export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
-    let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null };
+    let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null, pairing: null };
     const stateListeners = new Set<(s: RemoteState) => void>();
     const setState = (patch: Partial<RemoteState>) => {
         state = { ...state, ...patch };
@@ -119,10 +121,14 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         const m: WireMessage = parsed.message;
         switch (m.kind) {
             case 'welcome':
-                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null });
+                setState({ connected: true, host: m.host, isOwner: m.isOwner, workspaceId: m.workspaceId, token: m.token ?? null, pairing: null });
                 resolveReady({ ok: true });
                 return;
+            case 'pairing':
+                setState({ pairing: { expiresAt: m.expiresAt } });
+                return;
             case 'refused':
+                if (state.pairing) setState({ pairing: null });
                 if (!state.connected) resolveReady({ ok: false, reason: m.reason });
                 else setState({ lastRefusal: m.reason });
                 return;

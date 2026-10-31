@@ -12,6 +12,7 @@ import { relayHostLink } from '../src/main/relay-host.js';
 import { openRelayMember, PopKeypair } from '../src/main/relay-member.js';
 import { buildTicketHostHello } from '../src/main/relay-wire.js';
 import { fakeRelay, settle } from './relay-fake.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE TYNN NETWORK OVER THE RELAY (Tynn #837 + #838; Genie 1's relay wire, unchanged — the owner, 2026-10-19: "Port
@@ -103,7 +104,7 @@ beforeEach(async () => {
         reconnect: { minMs: 0, maxMs: 0 },
         popTimeoutMs: 1_000,
     });
-    new RemoteHost({
+    new RemoteHost({ confirm: allowEveryPairing,
         api,
         hostName: 'alphar',
         baton: new Baton(),
@@ -277,7 +278,7 @@ describe('a member over the relay', () => {
 describe('the relay hello is the TRANSPORT’s to grant', () => {
     it('a `relay` hello on a connection the relay did not admit is refused (a tailnet socket cannot claim it)', async () => {
         const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
-        new RemoteHost({
+        new RemoteHost({ confirm: allowEveryPairing,
             api,
             hostName: 'alphar',
             baton: new Baton(),

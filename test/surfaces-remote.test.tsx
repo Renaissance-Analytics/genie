@@ -17,7 +17,7 @@ const remote: NonNullable<FeatureData['remote']> = {
     unavailable: null,
     locked: false,
     pin: { code: '482913', expiresAt: 10 },
-    devices: [{ id: 'dev_1', label: 'glenn’s phone', pairedAt: 't', lastSeenAt: 't' }],
+    devices: [{ id: 'dev_1', label: 'glenn’s phone', pairedAt: 't', lastSeenAt: 't', expiresAt: 't' }],
     shares: [{ id: 'share_s', workspaceId: 'tynn', grantedTo: 'wren', expiresAt: 10, served: true, revoked: false }],
     connections: [{ id: 'conn_1', label: 'glenn’s phone', isOwner: true, workspaceId: null, driving: true }],
     servedLink: null,

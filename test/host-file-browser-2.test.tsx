@@ -7,6 +7,7 @@ import { inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type Wi
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { fileEntriesOf } from '../src/renderer/components/HostPathPicker.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * EVERY FILE AND FOLDER INPUT READS THE HOST, PART 2 (Tynn #835). The clone's parent, the Tynn envelope's parent, Locate
@@ -42,7 +43,7 @@ beforeEach(async () => {
         workspaceOfAgent: () => null,
         workspacePaths: () => ({ tynn: '/w/tynn', fancy: '/w/fancy' }),
     };
-    new RemoteHost({
+    new RemoteHost({ confirm: allowEveryPairing,
         api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: Date.now, random: Math.random }),
         shares: new ShareLinks({ host: 'alphar.invalid', now: Date.now, random: () => 's' }), devices: await DeviceStore.open(dir, { now: Date.now, random: () => 't' }),
         transport: { onConnection: (cb) => { accept = cb; return () => {}; } },

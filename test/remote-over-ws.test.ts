@@ -10,6 +10,7 @@ import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { fancyWsTransport } from '../src/main/ws-server-transport.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { webSocketTransport } from '../src/renderer/ws-transport.js';
+import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 /**
  * THE REMOTE PATH OVER A REAL SOCKET (§6.8) — not the in-memory pair: fancy-ws on a real node:http
@@ -41,7 +42,7 @@ beforeEach(async () => {
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     port = (server.address() as { port: number }).port;
     devices = await DeviceStore.open(dir, { now: Date.now, random: () => 'tok-real' });
-    host = new RemoteHost({
+    host = new RemoteHost({ confirm: allowEveryPairing,
         api, hostName: 'alphar', baton: new Baton(),
         pins: new PairingPins({ now: Date.now, random: () => 0.482913 }),
         shares: new ShareLinks({ host: `127.0.0.1:${port}`, now: Date.now, random: () => 's' }),
