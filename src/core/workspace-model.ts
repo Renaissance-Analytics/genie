@@ -129,6 +129,8 @@ export type HibernateStep =
     | { kind: 'stop-agents'; agents: readonly string[] }
     | { kind: 'stop-terminals'; terminals: readonly string[] }
     | { kind: 'stop-processes'; processes: readonly string[] }
+    /** The workspace's service engines a hibernation releases (core/hibernate-engines.ts; parity audit #12). */
+    | { kind: 'stop-engines'; engines: readonly string[] }
     | { kind: 'leave-inbox'; agents: readonly string[] };
 
 export interface HibernatePlan {
@@ -136,13 +138,14 @@ export interface HibernatePlan {
     readonly staysAsleepThrough: readonly ['restart', 'upgrade'];
 }
 
-export function hibernate(input: { workspaceId: string; agents: readonly string[]; terminals: readonly string[]; processes: readonly string[]; handoffWaitMs: number }): HibernatePlan {
+export function hibernate(input: { workspaceId: string; agents: readonly string[]; terminals: readonly string[]; processes: readonly string[]; engines?: readonly string[]; handoffWaitMs: number }): HibernatePlan {
     const steps: HibernateStep[] = [];
     if (input.agents.length > 0) steps.push({ kind: 'ask-handoff', agents: input.agents, waitMs: input.handoffWaitMs });
     steps.push({ kind: 'mark-asleep' });
     if (input.agents.length > 0) steps.push({ kind: 'stop-agents', agents: input.agents });
     if (input.terminals.length > 0) steps.push({ kind: 'stop-terminals', terminals: input.terminals });
     if (input.processes.length > 0) steps.push({ kind: 'stop-processes', processes: input.processes });
+    if ((input.engines ?? []).length > 0) steps.push({ kind: 'stop-engines', engines: input.engines ?? [] });
     if (input.agents.length > 0) steps.push({ kind: 'leave-inbox', agents: input.agents });
     return { steps, staysAsleepThrough: ['restart', 'upgrade'] };
 }
