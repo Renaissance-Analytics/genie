@@ -1839,7 +1839,7 @@ function DesktopApp({ bridge }: AppProps) {
             onPauseAgent={(agent: string, path: string, why?: 'conflict') => tellAgent(agent, why === 'conflict' ? conflictMessage(path) : pauseMessage(path))}
             onResumeAgent={(agent, path) => tellAgent(agent, resumeMessage(path))}
             // Attachments (§6.4) are the HOST's files, picked over its disk (Tynn #835).
-            pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files', initialPath: pickerStart({ workspacePath: workspaceRow?.path ?? null, primaryWorkspace, home: hostHome }) }).then((p) => (Array.isArray(p) ? p : typeof p === 'string' ? [p] : [])) : undefined}
+            pickFiles={pickHostPath ? () => pickHostPath({ mode: 'files', title: 'Attach files', initialPath: pickerStart({ workspacePath: workspaceRow?.path ?? null, primaryWorkspace, home: hostHome }) }).then(async (p) => { const paths = Array.isArray(p) ? p : typeof p === 'string' ? [p] : []; await resolvedBridge?.features?.picked?.(paths); return paths; }) : undefined}
             updates={resolvedBridge?.updates ?? NO_UPDATES}
             windowChrome={resolvedBridge?.windowChrome}
             onTakeOver={(agentId) => { void resolvedBridge?.takeOver(agentId); }}

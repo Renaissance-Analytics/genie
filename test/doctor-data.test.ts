@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -127,5 +127,21 @@ describe('doctor data', () => {
         expect(await fingerprint(home)).toBe(before);
         await writeFile(join(ws, 'AGENTS.md'), '# rules!\n');
         expect(await fingerprint(home)).not.toBe(before);
+    });
+});
+
+/*
+ * genie#1354: the persona path an agent's record carries is read through the SHARED confinement (workspace-confine.ts),
+ * which follows links: a persona folder that is a link out of the workspace is not read.
+ */
+describe('loadAgent — the persona, after links (genie#1354)', () => {
+    it('a persona folder that links OUT of the workspace is not read (CONTROL: the same file inside it is)', async () => {
+        expect((await call('loadAgent', { workspace: 'tynn.ai', agent: 'kai' })).json.persona.text).toContain('Reviews the Laravel app.');
+        const outside = join(home, 'outside-kai');
+        await rename(join(ws, '.agents', 'kai'), outside);
+        await symlink(outside, join(ws, '.agents', 'kai'), 'junction');
+        const r = await call('loadAgent', { workspace: 'tynn.ai', agent: 'kai' });
+        expect(r.isError).toBe(false);
+        expect(r.json.persona).toBeNull();
     });
 });

@@ -35,7 +35,8 @@ export function siteTone(sites: readonly Of[], workspaceId: string): SiteTone | 
     if (mine.length === 0) return null;
     if (mine.some((s) => s.state === 'running')) return 'running';
     // A start in flight: something IS happening, so an idle dot would read as "nothing here".
-    if (mine.some((s) => s.state === 'restarting')) return 'starting';
+    // A site waiting for its port to answer (parity audit #9) is starting too.
+    if (mine.some((s) => s.state === 'restarting' || s.state === 'starting')) return 'starting';
     // A site Genie cannot serve will not come up: failed, not quietly idle.
     if (mine.some((s) => s.state === 'failed' || s.state === 'unservable')) return 'failed';
     return 'idle';

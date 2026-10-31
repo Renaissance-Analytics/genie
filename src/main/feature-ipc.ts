@@ -1,4 +1,5 @@
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import { hostPathRefusal, REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { readFile, stat } from 'node:fs/promises';
 import { classifyNavigation } from '../core/browser-policy.js';
@@ -596,7 +597,7 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
 }
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason — except a toolchain row's, which comes back IN the snapshot, on that row (`toolchain.refusals`). */
-export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}): Promise<FeatureData> {
+export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}, origin: FeatureOrigin = REMOTE_ORIGIN): Promise<FeatureData> {
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
@@ -1453,6 +1454,10 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             if (target.kind === 'none') throw new Error(`nobody at ${action.to}`);
             if (target.kind === 'ambiguous') throw new Error(`${action.to} names more than one agent — use one of: ${target.forms.join(', ')}`);
             if (target.kind === 'human') throw new Error('that is you');
+            // A HOST PATH only from the host's own window, and only what its picker picked (genie#1354): a remote client
+            // attaches bytes it uploads (`inbox.sendFile`). `origin` is main's, never the request's — see host-picks.ts.
+            const refusal = hostPathRefusal(origin, action.attachments ?? []);
+            if (refusal !== null) throw new Error(refusal);
             // One unreadable or executable path fails the whole send; the store says which (§6.4).
             await services.inbox.send({ from: HUMAN, to: target.id, text: action.text, ...(action.attachments && action.attachments.length > 0 ? { attachments: action.attachments } : {}) });
             break;

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -200,5 +200,29 @@ describe('the log under the row (P1)', () => {
         expect(row!.log!.lines).toBe(40);
         expect(row!.log!.text.split('\n')[0]).toBe('line 61');
         expect(row!.log!.text.split('\n').at(-1)).toBe('line 100');
+    });
+});
+
+/*
+ * genie#1354: a background process's folder (which an agent's `processes add` names too) goes through the SHARED
+ * confinement (workspace-confine.ts): a link inside the workspace that points out of it is refused before anything
+ * starts or is kept. The lexical check alone started the process wherever the link led.
+ */
+describe('the folder, after links (genie#1354)', () => {
+    it('a directory link inside the workspace that points OUT is refused; nothing starts or is kept', async () => {
+        const ws = join(dir, 'ws');
+        await mkdir(join(ws, 'repos'), { recursive: true });
+        await mkdir(join(dir, 'outside'), { recursive: true });
+        await symlink(join(dir, 'outside'), join(ws, 'escape'), 'junction');
+        await expect(handleFeatureAction(services, { ...queue, workspacePath: ws, folder: 'escape' }, state(), ports)).rejects.toThrow(/inside the workspace/);
+        expect(opened).toHaveLength(0);
+        expect(await mine()).toHaveLength(0);
+    });
+
+    it('POSITIVE CONTROL: a real folder inside it (one named `..app` included) starts there', async () => {
+        const ws = join(dir, 'ws');
+        await mkdir(join(ws, '..app'), { recursive: true });
+        await handleFeatureAction(services, { ...queue, workspacePath: ws, folder: '..app' }, state(), ports);
+        expect(opened.map((o) => o.cwd)).toEqual([join(ws, '..app')]);
     });
 });

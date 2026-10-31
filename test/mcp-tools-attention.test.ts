@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -53,6 +54,79 @@ describe('openFileForUser', () => {
         expect(await call('openFileForUser', { terminalId: 'term_a', path: '/etc/hosts' })).toMatchObject({ ok: false, isError: true });
         expect(opened).toEqual([]);
         expect(await call('openFileForUser', { terminalId: 'term_zz', path: 'x' })).toMatchObject({ ok: false, isError: true });
+    });
+});
+
+/** Whether this machine lets an unprivileged process make a FILE symlink (Windows needs Developer Mode or admin). */
+const canFileSymlink = (() => {
+    const probe = mkdtempSync(join(tmpdir(), 'genie2-symprobe-'));
+    try {
+        writeFileSync(join(probe, 't'), 'x');
+        symlinkSync(join(probe, 't'), join(probe, 'l'), 'file');
+        return true;
+    } catch {
+        return false;
+    } finally {
+        rmSync(probe, { recursive: true, force: true });
+    }
+})();
+
+/*
+ * genie#1354: the confinement is the SHARED one (workspace-confine.ts), so a link inside the workspace that points out of
+ * it is followed and refused — the old check read the path as written only. And a NAME that starts with two dots
+ * (`..config`) is a file inside the workspace, not a step up: the old check refused it.
+ */
+describe('openFileForUser — after links (genie#1354)', () => {
+    let ws: string;
+    let outside: string;
+    let linked: Map<string, (args: Record<string, unknown>, context: { headers: Record<string, string> }) => Promise<{ text: string; isError: boolean }>>;
+    const callIn = async (args: Record<string, unknown>) => {
+        const r = await linked.get('openFileForUser')!({ terminalId: 'term_l', ...args }, { headers: {} });
+        return { ...JSON.parse(r.text), isError: r.isError } as Record<string, unknown>;
+    };
+    beforeEach(async () => {
+        ws = join(dir, 'ws');
+        outside = join(dir, 'outside');
+        await mkdir(join(ws, 'docs'), { recursive: true });
+        await mkdir(outside, { recursive: true });
+        await writeFile(join(ws, 'docs', 'plan.md'), '# plan');
+        await writeFile(join(outside, 'secret.txt'), 'not the agent’s');
+        const inWs: Caller = { agentId: 'agent_l' as never, agentName: 'lark', workspaceId: 'linked', workspacePath: ws };
+        linked = new Map(attentionTools({ resolveCaller: (id) => (id === 'term_l' ? inWs : null), openFile: async (target) => { opened.push(target); return { ok: true }; } }).map((r) => [r.definition.name, r.handler as never]));
+    });
+
+    it('a directory link (symlink / junction) inside the workspace that points OUT is refused, and nothing opens', async () => {
+        await symlink(outside, join(ws, 'escape'), 'junction');
+        expect(await callIn({ path: 'escape/secret.txt' })).toMatchObject({ ok: false, isError: true, error: expect.stringMatching(/outside lark’s workspace/) });
+        expect(await callIn({ path: join(ws, 'escape', 'secret.txt') })).toMatchObject({ ok: false, isError: true });
+        expect(opened).toEqual([]);
+    });
+
+    it.runIf(canFileSymlink)('a FILE symlink inside the workspace that points out is refused', async () => {
+        await symlink(join(outside, 'secret.txt'), join(ws, 'innocent.md'), 'file');
+        expect(await callIn({ path: 'innocent.md' })).toMatchObject({ ok: false, isError: true });
+        expect(opened).toEqual([]);
+    });
+
+    it('the refusal never says where the link points', async () => {
+        await symlink(outside, join(ws, 'escape'), 'junction');
+        const r = await callIn({ path: 'escape/secret.txt' });
+        expect(String(r.error)).not.toContain(outside);
+    });
+
+    it('POSITIVE CONTROL: a link that stays inside the workspace opens, as the path the agent gave', async () => {
+        await symlink(join(ws, 'docs'), join(ws, 'alias'), 'junction');
+        expect(await callIn({ path: 'alias/plan.md' })).toMatchObject({ ok: true, isError: false });
+        expect(opened).toEqual([{ workspaceId: 'linked', path: 'alias/plan.md', absolutePath: resolve(ws, 'alias/plan.md'), line: null }]);
+    });
+
+    it('a name that only STARTS with two dots is inside the workspace: `..config`, `..notes/x.md`', async () => {
+        await writeFile(join(ws, '..config'), 'k=v');
+        expect(await callIn({ path: '..config' })).toMatchObject({ ok: true, isError: false });
+        expect(await callIn({ path: '..notes/x.md' })).toMatchObject({ ok: true, isError: false });
+        expect(opened.map((o) => o.path)).toEqual(['..config', '..notes/x.md']);
+        // And a real step up is still refused.
+        expect(await callIn({ path: '../outside/secret.txt' })).toMatchObject({ ok: false, isError: true });
     });
 });
 

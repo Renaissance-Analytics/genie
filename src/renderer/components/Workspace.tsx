@@ -3,6 +3,7 @@ import { useMinuteTick } from '../use-activity-feeds.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
+import { ErrorBoundary } from './ErrorBoundary.js';
 import type { TynnBoardHost } from '../../core/tynn-board.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
@@ -862,20 +863,20 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                 and the editor take the whole tab, and nothing else is drawn beside them. */}
             {filesInline && files ? (
                 <div data-workspace-body="files" className="flex min-h-0 min-w-0 flex-1">
-                    <FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} />
+                    <ErrorBoundary surface="Files" resetKeys={[workspace.id]}><FilesPanelContainer workspace={workspace} files={files} pinned={false} onPin={onPinFiles} onClose={() => onTogglePanel?.()} onPopOut={onPopOutFiles} onPause={onPauseAgent} onResume={onResumeAgent} routeFile={filesFile} routeLine={filesLine} routeFilter={filesFilter} onRouteChange={onFilesRoute} /></ErrorBoundary>
                 </div>
             ) : null}
             {/* HOME — the workspace dashboard. */}
             {onScreen === 'home' ? (
                 <div data-workspace-body="home" className="flex min-h-0 flex-1">
-                    <WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} />
+                    <ErrorBoundary surface="Workspace dashboard" resetKeys={[workspace.id]}><WorkspaceDashboard name={label} workspaceId={workspace.id} view={dashboard} onOpenAgent={(id) => onOpenAgent?.(id)} onOpenDeckItem={(id) => onOpenDeckItem?.(id)} onAddAgent={() => onAddAgent?.()} onStartAgent={onStartAgent} /></ErrorBoundary>
                 </div>
             ) : null}
-            {onScreen === 'terminals' ? terminalsBody : null}
+            {onScreen === 'terminals' ? <ErrorBoundary surface="Terminals" resetKeys={[workspace.id]}>{terminalsBody}</ErrorBoundary> : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
-            {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></div> : null}
+            {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="GitHub" resetKeys={[workspace.id]}><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></ErrorBoundary></div> : null}
             {/* THE TYNN TAB (genie#1295): the linked project's board, natively — no user menu, no project picker. */}
-            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><TynnBoardTab workspaceId={workspace.id} host={tynnBoard} /></div> : null}
+            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnBoardTab workspaceId={workspace.id} host={tynnBoard} /></ErrorBoundary></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);
@@ -888,6 +889,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     );
                 }
                 return (
+                    <ErrorBoundary surface={tab.name || 'This tab'} resetKeys={[tab.id]}>
                     <DesignedTab
                         tab={tab}
                         notice={designNotice}
@@ -932,6 +934,7 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                             return <SitePanel host={p.ref} live={live} onPick={(host) => { if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
                         }}
                     />
+                    </ErrorBoundary>
                 );
             })() : null}
         </section>

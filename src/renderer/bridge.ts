@@ -116,6 +116,8 @@ export const FEATURE_CHANNELS = {
     browserBounds: 'genie:features-browser-bounds',
     /** An alert's own sound file, read by main into a data URL — asked by setting KEY, never by path (Tynn #766 B2). */
     soundData: 'genie:features-sound-data',
+    /** The host's own file picker reports what it picked: the only host paths an AgentInbox send may attach (genie#1354). */
+    picked: 'genie:features-picked',
 } as const;
 
 /** The Dashboard lanes' feeds (beta.33 item 10). */
@@ -165,6 +167,11 @@ export interface GenieBridge {
         setBrowserBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
         /** An alert's own sound file as a data URL, by its setting key (`sound_question`); `null` when it cannot be read. */
         soundData(key: string): Promise<string | null>;
+        /**
+         * Tell main what the host's own file picker just picked (genie#1354): an AgentInbox send attaches only such paths.
+         * Only the host's own window has it; a remote window does not, and its sends attach uploaded bytes instead.
+         */
+        picked?(paths: readonly string[]): Promise<void>;
     };
 
     /** The current snapshot. Resolves once; changes arrive through `subscribe`. */

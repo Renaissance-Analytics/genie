@@ -6,6 +6,8 @@ import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
+import { forwardRendererConsole } from '../core/render-error.js';
+import { siteAnswers } from './port-probe.js';
 import { relayWorkstationOf, remoteFromSearch, remoteWindowSearch } from '../core/remote-window.js';
 import { transportHub } from '../core/remote-protocol.js';
 import { chatCommsOf } from '../core/chat-view.js';
@@ -73,6 +75,7 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
+import { featureOrigin, HostPicks } from './host-picks.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -736,6 +739,9 @@ async function reapV1Runtime(includeShells: boolean): Promise<void> {
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
 }
 
+/** Where a window's render errors are written (core/render-error.ts): the lifecycle log, once boot has opened it. */
+let rendererErrorLog: ((line: string) => void) | null = null;
+
 function createWindow(show: boolean, search?: string): BrowserWindow {
     const win = new BrowserWindow({
         // The frame — hidden OS title bar, the native window buttons drawn over our 36 px bar on
@@ -758,8 +764,9 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    // The renderer's composer-focus log (genie#1235, core/composer-focus.ts): its console reaches no file, so main writes it.
-    win.webContents.on('console-message', (details) => { if (details.message.startsWith('[genie] focus:')) console.log(details.message); });
+    // The renderer's console reaches no file, so main writes the lines Genie keeps: the composer-focus log (genie#1235,
+    // core/composer-focus.ts) and a surface's render error (parity audit #7), which also goes to the lifecycle log.
+    win.webContents.on('console-message', (details) => forwardRendererConsole(details.message, { out: (l) => console.log(l), err: (l) => console.error(l), log: (l) => rendererErrorLog?.(l) }));
 
     // Paint when there is something to paint. A visible empty frame that then fills in is the
     // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
@@ -782,6 +789,10 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
  * opened under another account (`closeRelayWindowsOfOtherAccounts`).
  */
 const remoteWindows = new Map<string, BrowserWindow>();
+/** A window driving ANOTHER host: never the host's own window, whatever it asks (genie#1354). */
+const isRemoteWindow = (sender: Electron.WebContents): boolean => [...remoteWindows.values()].some((w) => !w.isDestroyed() && w.webContents === sender);
+/** What the host's own file picker picked: the only host paths the person's AgentInbox may attach (host-picks.ts). */
+const hostPicks = new HostPicks();
 /** The Tynn account each relay window was opened under (accountKeyOf). */
 const remoteWindowAccount = new Map<BrowserWindow, string | null>();
 const tynnAccountKeyNow = (): string | null => { const status = tynnAccount?.status(); return status ? accountKeyOf(status) : null; };
@@ -1126,6 +1137,7 @@ async function boot(): Promise<void> {
      * (pid, start time and name must all match). Every spawn, end, refusal and sweep is a line in lifecycle.log.
      */
     const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
+    rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
@@ -1962,6 +1974,13 @@ async function boot(): Promise<void> {
         attention: { finished: () => services?.attention.finished() ?? [] },
         terminals: { list: () => terminals?.list() ?? [], close: (id) => terminals?.close(id) ?? false },
         supervisor: { list: () => services?.supervisor.list() ?? [], stop: (id) => services?.supervisor.stop(id) ?? false },
+        // Hibernate releases the workspace's engines, wake resumes them (parity audit #12; Genie 1 hibernation.ts step 3).
+        engines: {
+            toRelease: (id) => services?.hibernationEngines.toRelease(id) ?? [],
+            toResume: (id) => services?.hibernationEngines.toResume(id) ?? [],
+            stop: async (id) => { await services?.hibernationEngines.stop(id); },
+            start: async (id) => { await services?.hibernationEngines.start(id); },
+        },
         now: Date.now,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         // TYNN (§6.1 add from Tynn): the host and token from settings, read at call time; the client is one fetch.
@@ -2255,6 +2274,9 @@ async function boot(): Promise<void> {
         },
         // Genie's own Caddy — the per-user copy above (caddy-runtime.ts); null in a dev tree without one.
         caddyBin: caddyCopy?.path ?? null,
+        // A started site is `starting` until its port answers, then running and routed (parity audit #9; Genie 1's
+        // readiness wait, main/port-probe.ts).
+        siteProbe: (port, options) => siteAnswers(port, options),
         // Each site's php-cgi gets Genie's CA ini directory once Check and repair has written one — read at each start.
         phpWorkerEnv: () => phpWorkerEnv(processEnv),
         // The system roots for PHP's trust bundle, beside Genie's own CA (main/php-trust-host.ts).
@@ -2351,8 +2373,8 @@ async function boot(): Promise<void> {
                 onData: (cb) => terminals!.onData(cb),
                 onExit: (cb) => terminals!.onExit(cb),
             },
-            // A phone's upload (§6.8): a temp file under ~/.genie/uploads for exactly as long as the inbox copies it.
-            uploads: uploadSender({ dir: join(genieHome(), 'uploads'), resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
+            // A remote device's upload (§6.8, genie#1354): its bytes go to the inbox as bytes — never a path on this host.
+            uploads: uploadSender({ resolve: (to) => services!.resolveAddress(to), send: (input) => services!.inbox.send(input) }),
             serviceEnvFor: (workspaceId) => services!.engines.envFor(workspaceId),
             workspaceOps: {
                 previewAdd: (path) => previewAddWorkspace(workspaceOps, path),
@@ -3191,9 +3213,18 @@ async function boot(): Promise<void> {
     ipcMain.handle(FEATURE_CHANNELS.snapshot, () => featureSnapshot(composed, featureState, processPorts()));
     // An alert's own sound file, by setting key (feature-ipc customSoundData): never a path from the renderer.
     ipcMain.handle(FEATURE_CHANNELS.soundData, (_event, key: unknown) => (typeof key === 'string' ? customSoundData(composed.settings, key) : null));
-    ipcMain.handle(FEATURE_CHANNELS.act, async (_event, raw: unknown) => {
+    /*
+     * WHO MAY NAME A HOST PATH (genie#1354, host-picks.ts): this window's own IPC, from a window that is NOT a remote window
+     * (one driving another host), is the only local origin; the remote API's `features.act` passes none and is remote.
+     * The picks are the host picker's, reported by such a window — an attachment path it never picked is refused.
+     */
+    ipcMain.handle(FEATURE_CHANNELS.picked, (event, raw: unknown) => {
+        if (isRemoteWindow(event.sender)) return;
+        if (Array.isArray(raw)) hostPicks.record(raw);
+    });
+    ipcMain.handle(FEATURE_CHANNELS.act, async (event, raw: unknown) => {
         const action = raw as FeatureAction;
-        const data = await handleFeatureAction(composed, action, featureState, featurePorts);
+        const data = await handleFeatureAction(composed, action, featureState, featurePorts, featureOrigin({ remoteWindow: isRemoteWindow(event.sender), picks: hostPicks }));
         if (action.kind.startsWith('integrations.tynn')) featureState = { ...featureState, tynnSignInUrl: data.integrations?.tynn.signInUrl ?? null, tynnMessage: data.integrations?.tynn.message ?? null };
         if (action.kind.startsWith('toolchain.')) featureState = { ...featureState, ...toolchainStateFrom(data.toolchain), toolchainBusy: null };
         featureState = { ...featureState, knowledgeQuery: data.knowledge.query, knowledgeAdding: data.knowledge.adding, knowledgeLastAdd: data.knowledge.lastAdd, lastSync: data.integrations?.lastSync ?? featureState.lastSync ?? null };

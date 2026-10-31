@@ -1,5 +1,6 @@
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, isAbsolute, join, relative } from 'node:path';
+import { basename, join, relative } from 'node:path';
+import { insideOrRoot } from './workspace-confine.js';
 import { editedSiteEntry, formatLike, readEnvelopeSites, siteEntryFor, siteKeyFor, withSiteEntry } from '../core/envelope-sites.js';
 import type { CreateSiteInput, SiteInfo, SiteManager } from './site-manager.js';
 
@@ -306,8 +307,11 @@ export class EnvelopeSites {
         if (!before) throw new Error(`no site ${siteId}`);
         this.#sites.assertNameFree(input.name, siteId);
         const m = await this.#manifest(t.workspaceId);
-        const rel = relative(m.workspacePath, input.repoPath).replace(/\\/g, '/');
-        if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`a site serves a folder inside its workspace; ${input.repoPath} is outside it`);
+        // The SHARED lexical check (genie#1354, workspace-confine.ts): `..shop` is a folder inside, `../shop` is not. An agent's
+        // folder was already confined after links where it named it (mcp-tools-hosting.ts `folderIn`).
+        const inside = insideOrRoot(m.workspacePath, input.repoPath);
+        if (inside === null) throw new Error(`a site serves a folder inside its workspace; ${input.repoPath} is outside it`);
+        const rel = relative(m.workspacePath, inside).replace(/\\/g, '/');
         const built = siteEntryFor(m.manifest, {
             name: input.name.toLowerCase(),
             repoDir: rel === '' ? '.' : rel,
@@ -320,7 +324,7 @@ export class EnvelopeSites {
         const existing = sites[t.key];
         const entry = typeof existing === 'object' && existing !== null && !Array.isArray(existing) ? editedSiteEntry(existing as Record<string, unknown>, built.entry) : built.entry;
         await this.#ports.fs.writeTextAtomic(m.path, formatLike(m.text, withSiteEntry(m.manifest, t.key, entry)));
-        const wasUp = before.state === 'running' || before.state === 'restarting' || before.state === 'external';
+        const wasUp = before.state === 'running' || before.state === 'starting' || before.state === 'restarting' || before.state === 'external';
         // Tracked under the new id from here on, with the same key: the remembered Stop and the next launch agree.
         this.#tracked.delete(siteId);
         try {
@@ -353,8 +357,11 @@ export class EnvelopeSites {
      */
     async create(input: CreateSiteInput): Promise<SiteInfo> {
         const m = await this.#manifest(input.workspaceId);
-        const rel = relative(m.workspacePath, input.repoPath).replace(/\\/g, '/');
-        if (rel.startsWith('..') || isAbsolute(rel)) throw new Error(`a site serves a folder inside its workspace; ${input.repoPath} is outside it`);
+        // The SHARED lexical check (genie#1354, workspace-confine.ts): `..shop` is a folder inside, `../shop` is not. An agent's
+        // folder was already confined after links where it named it (mcp-tools-hosting.ts `folderIn`).
+        const inside = insideOrRoot(m.workspacePath, input.repoPath);
+        if (inside === null) throw new Error(`a site serves a folder inside its workspace; ${input.repoPath} is outside it`);
+        const rel = relative(m.workspacePath, inside).replace(/\\/g, '/');
         const entry = siteEntryFor(m.manifest, {
             name: input.name.toLowerCase(),
             repoDir: rel === '' ? '.' : rel,

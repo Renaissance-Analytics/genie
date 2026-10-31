@@ -6,6 +6,7 @@ import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
 import { folderName } from '../core/workspace-name.js';
+import { asleepOnlyEngine, enginesToRelease, enginesToResume } from '../core/hibernate-engines.js';
 import { DEFAULT_READINESS, engineStatuses as engineStatusesOf, readinessHandshake, reconcileEngines, type EngineStatusView, type ReadinessBound, type ReconcileReport } from '../core/engine-reconcile.js';
 import { PortAllocator } from '../core/port-allocator.js';
 import type { ServiceInstance } from '../core/services.js';
@@ -140,6 +141,11 @@ export interface ComposeInput {
     readonly docker?: DockerRunner;
     /** ONE readiness probe of an engine on its loopback port; the engine's own handshake over a real socket by default. */
     readonly engineAnswers?: (instance: ServiceInstance) => Promise<boolean>;
+    /**
+     * A started site's readiness wait (parity audit #9): true once its port answers. main.ts passes the real one
+     * (port-probe.ts `siteAnswers`); absent = no wait, a site is running when its process is (most composition tests).
+     */
+    readonly siteProbe?: (port: number, options: { behindCaddy: boolean }) => Promise<boolean>;
     /** How long an engine started at Genie start is waited for, and how often it is asked. */
     readonly engineReadiness?: ReadinessBound;
     /** Does git ignore a `.env` in a folder (`git check-ignore` by default)? Asked before a service password is written into one. */
@@ -266,6 +272,11 @@ export interface ComposedServices {
     /** The PERSON's start / stop / remove of an engine: recorded (machine-local), so a restart keeps a stopped engine stopped. */
     startEngine(id: string): Promise<void>;
     stopEngine(id: string): Promise<void>;
+    /**
+     * A hibernating or waking workspace's engines (parity audit #12, core/hibernate-engines.ts): which to release and
+     * which to resume, and the registry's own stop and start — NOT the person's Stop, which a wake must respect.
+     */
+    hibernationEngines: { toRelease(workspaceId: string): string[]; toResume(workspaceId: string): string[]; stop(id: string): Promise<void>; start(id: string): Promise<void> };
     /** Workspaces currently receiving this engine's env, plus their running sites and processes. */
     engineDependents(id: string): readonly string[];
     /** `workspaceId` = who a delete-data acts for: refused while any OTHER workspace keeps data in it (core/service-tenancy.ts). */
@@ -709,6 +720,12 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         await readJson<{ stopped?: unknown }>(engineRunState, { stopped: [] }).then((data) => (Array.isArray(data.stopped) ? data.stopped.filter((s): s is string => typeof s === 'string') : [])),
     );
     const saveEngineStopped = () => writeJsonAtomic(engineRunState, { stopped: [...engineStopped] });
+    // WHO USES WHICH ENGINE, and who is asleep (core/hibernate-engines.ts; parity audit #12): the registry's chosen engine
+    // per kind, and the registered workspaces as they are now.
+    const engineUse = {
+        chosen: (ws: string) => new Set(engines.choices(ws).flatMap((c) => (c.chosen ? [c.chosen.id] : []))),
+        workspaces: () => (input.workspaces?.() ?? []).map((w) => ({ id: w.id, asleep: w.asleep === true })),
+    };
     const enginePorts = {
         available: () => driver.available(),
         instances: () => engines.list(),
@@ -720,6 +737,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         {
             ...enginePorts,
             personStopped: () => engineStopped,
+            // A hibernated workspace stays asleep through a restart: an engine only sleeping workspaces use is not started.
+            asleepOnly: (i) => asleepOnlyEngine(i, { chosen: engineUse.chosen, workspaces: engineUse.workspaces() }),
             start: (id) => engines.start(id),
             // Found running: a shared Redis's workspace users are put back (`start` above does it for one it starts).
             restore: (i) => engines.restoreSlices(i.id),
@@ -765,6 +784,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         ...(input.preparePhpCgi ? { preparePhpCgi: input.preparePhpCgi } : {}),
         ...(input.phpWorkers !== undefined ? { phpWorkers: input.phpWorkers } : {}),
         serviceEnv: (workspaceId) => engines.envFor(workspaceId),
+        ...(input.siteProbe ? { probeReady: input.siteProbe } : {}),
     });
     // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
     engines.onChange(() => { sites.serviceEnvChanged(); });
@@ -1085,7 +1105,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             const using = new Set([...workspaceIds].filter((ws) => (i.engine === 'custom' && i.scope.kind === 'dedicated' && i.scope.workspaceId === ws) || engines.choices(ws).some((c) => c.chosen?.id === id)));
             return [
                 ...[...using].map((ws) => `workspace ${ws}`),
-                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
+                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'starting', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
                 ...supervisor.list().filter((x) => using.has(x.workspaceId) && ['running', 'restarting'].includes(x.state)).map((x) => `process ${x.name} (workspace ${x.workspaceId})`),
             ];
         },
@@ -1098,6 +1118,12 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             await engines.stop(id);
             engineStopped.add(id);
             await saveEngineStopped();
+        },
+        hibernationEngines: {
+            toRelease: (workspaceId) => enginesToRelease({ workspaceId, instances: engines.list(), chosen: engineUse.chosen, workspaces: engineUse.workspaces() }),
+            toResume: (workspaceId) => enginesToResume({ workspaceId, instances: engines.list(), chosen: engineUse.chosen, personStopped: engineStopped }),
+            stop: (id) => engines.stop(id),
+            start: (id) => engines.start(id),
         },
         removeEngine: async (id, options) => {
             await engines.remove(id, options);
