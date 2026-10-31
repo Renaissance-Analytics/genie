@@ -34,7 +34,13 @@ fi
 # same name, and the phone's browser is told to trust its key (drive.mjs). Genie's code path is the same.
 if [ "\${1:-}" = cert ]; then
   certf="\$3"; keyf="\$5"; name="\$6"
-  openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "\$keyf" -out "\$certf" -days 30 -subj "/CN=\$name" -addext "subjectAltName=DNS:\$name" 2>/dev/null
+  # Like the real one, it hands back the SAME cert until renewal is due: issued once, cached, copied out on every call.
+  cache="\$HOME/fakebin/cert-cache"
+  if [ ! -f "\$cache/cert.pem" ]; then
+    mkdir -p "\$cache"
+    openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -keyout "\$cache/key.pem" -out "\$cache/cert.pem" -days 30 -subj "/CN=\$name" -addext "subjectAltName=DNS:\$name" 2>/dev/null || exit 1
+  fi
+  cp "\$cache/cert.pem" "\$certf" && cp "\$cache/key.pem" "\$keyf"
   exit \$?
 fi
 echo "fake tailscale: \$*" >&2; exit 1
