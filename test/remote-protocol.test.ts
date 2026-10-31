@@ -81,7 +81,10 @@ describe('the capability table', () => {
         // owner-only on a host (they act as the host's Tynn person), scoped to their workspace.
         // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
         // (a write) — workspace-scoped, through the panel's confined files host.
-        expect(REMOTE_METHODS.length).toBe(85);
+        // 86 since the Tynn tab's other pages (genie#1295 W1): `workspaces.tynnPage` (a read) — owner-only, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(86);
+        expect(capabilityOf('workspaces.tynnPage')).toBe('read');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnPage');
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

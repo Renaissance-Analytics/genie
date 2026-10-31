@@ -1,5 +1,6 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
+import type { TynnPage, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -316,6 +317,8 @@ export interface GenieBridge {
         tynnBoard?(workspaceId: string, scope: BoardScope): ReturnType<TynnBoardHost['read']>;
         /** One action on that board, by the workspace-UX contract's id (`task.start`, `story.move`…). */
         tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
+        /** The tab's other pages (WIP, …), read whole, of the same project. Optional: an older host has none. */
+        tynnPage?(workspaceId: string, page: TynnPage, query: TynnPageQuery): ReturnType<NonNullable<TynnTabHost['page']>>;
         /** Row B4: what changed on that board since a cursor. Optional: an older host (and a remote one) has none. */
         tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
         /** Row B4: follow that board (its live state and rings) until the answer is called. */
@@ -589,16 +592,18 @@ const pageBridges = new WeakMap<PreloadBridge, GenieBridge>();
  * B4; a remote host has neither, and its tab is simply not live). Undefined when the bridge has no Tynn tab. Build it once
  * per bridge (App memoises it): the tab keys its read and its live subscription on this object.
  */
-export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnBoardHost | undefined {
+export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnTabHost | undefined {
     const ws = bridge?.workspaces;
     if (!ws?.tynnBoard || !ws.tynnBoardAction) return undefined;
     const read = ws.tynnBoard;
     const act = ws.tynnBoardAction;
     const changes = ws.tynnBoardChanges;
     const watch = ws.tynnBoardWatch;
+    const page = ws.tynnPage;
     return {
         read: (id, scope) => read(id, scope),
         act: (id, input) => act(id, input),
+        ...(page ? { page: (id: string, p: TynnPage, query: TynnPageQuery) => page(id, p, query) } : {}),
         ...(changes && watch ? {
             changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
             watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),
