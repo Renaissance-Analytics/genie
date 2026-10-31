@@ -43,7 +43,9 @@ const readText = async (file: string) => { try { return await readFile(file, 'ut
 async function window(): Promise<{ client: SessionEngineClient; transport: ClientTransport }> {
     const token = (await readFile(join(home, 'runtime', 'host.token'), 'utf8')).trim();
     const transport = await connectSocket(record.endpoint);
-    const client = new SessionEngineClient();
+    // The window's environment travels with every start and the host adopts it (hot-swappable toolchain), so the
+    // window here must hold what a real window holds: the provider it is configured with.
+    const client = new SessionEngineClient({ env: () => ({ ...process.env, GENIE2_CODEX_BINARY: STUB }) });
     const connected = await client.connect(transport, token);
     expect(connected).toMatchObject({ ok: true });
     return { client, transport };
