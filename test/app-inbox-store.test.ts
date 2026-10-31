@@ -57,6 +57,8 @@ describe('an app message', () => {
         const file = join(dir, 'secret.txt');
         await writeFile(file, 'secret');
         await expect(store.send({ from, to: clerk, text: 'x', app: meta, attachments: [file] })).rejects.toThrow(/attach/);
+        // Uploaded BYTES too (genie#1354's `files`): an app stores nothing beside its text.
+        await expect(store.send({ from, to: clerk, text: 'x', app: meta, files: [{ name: 'note.txt', bytes: new TextEncoder().encode('hi') }] })).rejects.toThrow(/attach/);
         expect(store.all()).toHaveLength(0);
     });
 
