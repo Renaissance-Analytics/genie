@@ -120,3 +120,15 @@ describe('a flow run through the composed services', () => {
         expect(pty.opened).toEqual([]);
     });
 });
+
+describe('a quit leaves no flow timer behind (genie#1351)', () => {
+    it('after shutdown the scheduler holds no timer, and arming a flow does not plan one: nothing fires or writes after the quit', async () => {
+        const f = await services.flows.create({ workspaceId: 'ws-example', name: 'nightly', document: doc({ kind: 'genie/terminal_run', config: { workspace: 'ws-example', command: 'npm run report' } }), by: { kind: 'user' }, armed: true });
+        services.flowScheduler.plan();
+        expect(services.flowScheduler.nextDue()).toMatchObject({ flowId: f.id });
+        await services.shutdown();
+        expect(services.flowScheduler.nextDue()).toBeNull();
+        services.flowScheduler.plan();
+        expect(services.flowScheduler.nextDue()).toBeNull();
+    });
+});

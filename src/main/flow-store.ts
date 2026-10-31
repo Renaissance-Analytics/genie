@@ -180,6 +180,8 @@ export class FlowStore {
     #data: FlowsFile;
     readonly #listeners = new Set<() => void>();
     readonly #runListeners = new Set<(flowId: string, run: FlowRun) => void>();
+    /** The latest write issued; writes to one file land in order (store.ts), so this one lands last. */
+    #writing: Promise<void> = Promise.resolve();
 
     private constructor(file: string, data: FlowsFile, now: () => number) {
         this.#file = file;
@@ -396,8 +398,22 @@ export class FlowStore {
         await this.#flush();
     }
 
+    /**
+     * Resolves once every write issued so far has LANDED (genie#1351) — a write nobody awaited too, such as the run in
+     * flight kept as it goes. What a quit awaits before it lets go, and what a test awaits instead of a fixed wait.
+     */
+    async flushed(): Promise<void> {
+        let tail: Promise<void>;
+        do {
+            tail = this.#writing;
+            await tail;
+        } while (tail !== this.#writing);
+    }
+
     async #flush(): Promise<void> {
-        await writeJsonAtomic(this.#file, this.#data);
+        const write = writeJsonAtomic(this.#file, this.#data);
+        this.#writing = write.catch(() => undefined);
+        await write;
         for (const l of this.#listeners) l();
     }
 }

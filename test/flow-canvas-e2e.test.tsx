@@ -164,7 +164,9 @@ describe('a run Genie quits in the middle of is never lost (acceptance (e))', ()
             });
             void scheduler.runNow(made.id);
             await atCommand;
-            await new Promise((r) => setTimeout(r, 50));
+            // The step's "running" is kept as it goes: written, not awaited by the run. Wait for that write to LAND (genie#1351),
+            // never for a time: a fixed 50 ms read the file before it landed on a loaded runner.
+            await store.flushed();
             expect(store.get(made.id)!.inFlight).toMatchObject({ trigger: 'manual', nodes: { t: 'ran', s: 'running', k: 'not reached' } });
 
             // The next launch: the same file, opened again.
