@@ -106,6 +106,21 @@ describe('the phone’s bridge', () => {
         expect(calls.filter((x) => x.method === 'prompt').at(-1)!.args).toEqual(['agent_a', 'just text']);
     });
 
+    it('a DESKTOP remote window (no phone profile) sends files with a message too — as staged bytes, never a host path (genie#1356)', async () => {
+        const { code } = host.issuePin();
+        const pair = inMemoryPair();
+        for (const cb of connections) cb(pair.server);
+        const desk = connectRemote(pair.client, { kind: 'pin', code, label: 'laptop' }, 'laptop');
+        await desk.ready;
+        await desk.takeBaton();
+        const bytes = new Uint8Array(300_000).fill(7);
+        expect(await desk.bridge.prompt('agent_a', 'see attached', [{ name: 'notes.txt', type: 'text/plain', bytes }])).toEqual({ ok: true });
+        const p = calls.filter((x) => x.method === 'prompt').at(-1)!;
+        const [att] = p.args[2] as Array<{ name: string; bytes: Uint8Array }>;
+        expect(att!.name).toBe('notes.txt');
+        expect(att!.bytes.byteLength).toBe(300_000);
+    });
+
     it('reads a workspace’s folder, a text file and an image’s bytes through the host', async () => {
         const { code } = host.issuePin();
         const c = dial({ kind: 'pin', code, label: 'phone' }, new AgentWindows());
