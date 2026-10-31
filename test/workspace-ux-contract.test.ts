@@ -55,13 +55,17 @@ const pin = JSON.parse(readFileSync(new URL('../contracts/workspace-ux.pin.json'
     repository: string; contract: string; version: string; commit: string; path: string; sha256: string;
 };
 /** 0.1.0–0.5.0 were published in Civicognita/shared-schemas and brought to tynn.ai byte for byte, so their $id names its tags. */
-const LAST_SHARED_SCHEMAS_VERSION = [0, 5, 0];
-const semver = (v: string) => v.split('.').map(Number);
-const publishedInSharedSchemas = (v: string) => {
-    const [a, b, c] = semver(v);
-    const [x, y, z] = LAST_SHARED_SCHEMAS_VERSION;
-    return a !== x ? a < x : b !== y ? b < y : c <= z;
+const LAST_SHARED_SCHEMAS_VERSION = '0.5.0';
+const compareVersions = (v: string, w: string) => {
+    const p = v.split('.').map(Number);
+    const q = w.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+        const d = (p[i] ?? 0) - (q[i] ?? 0);
+        if (d !== 0) return d;
+    }
+    return 0;
 };
+const publishedInSharedSchemas = (v: string) => compareVersions(v, LAST_SHARED_SCHEMAS_VERSION) <= 0;
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
