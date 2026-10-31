@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { genHost, serveCaddyfile, type DevServer, type ServeSpec } from '../core/serve-config.js';
+import { genHost, laravelServeCommand, serveCaddyfile, type DevServer, type ServeSpec } from '../core/serve-config.js';
 import type { ProcessSupervisor } from './process-supervisor.js';
 import { SITE_READY_TIMEOUT_MS } from './port-probe.js';
 
@@ -352,7 +352,8 @@ export class SiteManager {
                 const p = String(port);
                 // `{port}` in the env too: a dev server that reads PORT is told the port Genie allocated.
                 const env = baseEnv ? Object.fromEntries(Object.entries(baseEnv).map(([k, v]) => [k, v.replaceAll('{port}', p)])) : undefined;
-                proc(id, `${host} dev server`, input.devServer.command.replaceAll('{port}', p), env);
+                // `php artisan serve`: its own PHP without $_ENV, so Laravel passes Genie's env to the server it starts (genie#1376).
+                proc(id, `${host} dev server`, laravelServeCommand(input.devServer.command.replaceAll('{port}', p)), env);
                 Object.assign(record, { port, processIds: [id], external: false });
             } else {
                 throw new Error(`a proxy site needs a dev server to run or a hostPort it already listens on; ${input.repoPath} offered neither`);

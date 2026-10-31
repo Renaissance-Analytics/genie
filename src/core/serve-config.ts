@@ -51,9 +51,37 @@ export type ServeSpec =
     | { readonly mode: 'static'; readonly root: string; readonly spa: boolean }
     | { readonly mode: 'php'; readonly root: string; readonly fcgiPort: number; /** Every worker's port, the first being `fcgiPort` (genie#1043). Absent = that one alone. */ readonly fcgiPorts?: readonly number[] };
 
-/** genie#1376 — not yet implemented (the failing tests come first). */
+/**
+ * `php artisan serve` WITH GENIE'S ENV REACHING ITS REQUESTS (genie#1376; fancy, flabs.gen, 2026-10-31).
+ *
+ * `artisan serve` does not answer requests: it starts a `php -S` child. When the app has a `.env`, it gives that child
+ * every key of ITS OWN `$_ENV` set to `false` (removed), except a short passthrough list (`APP_ENV`, `PATH`, `XDEBUG_*`…
+ * Laravel `ServeCommand::startProcess`, `$passthroughVariables`). It does this so the child reads `.env` again and an
+ * edit to it takes effect. Variables that are only in the process env, and not in `$_ENV`, reach the child unchanged
+ * (Symfony Process inherits them).
+ *
+ * Genie's own php.ini says `variables_order = "EGPCS"` (core/php-versions.ts, Genie 1's genie#539), so in the artisan
+ * process `$_ENV` IS the whole process env. Every variable Genie gave the site was removed before the first request:
+ * the site's own `GENIE_INBOX_URL` / `GENIE_INBOX_TOKEN`, and the service env too. The service env only seemed to arrive
+ * because DotEnvSync writes it into `.env`, and the token must never be written there.
+ *
+ * So the ARTISAN process alone runs with `-d variables_order=GPCS`. Its `$_ENV` then holds only what Laravel loaded from
+ * `.env`, which is scrubbed and re-read exactly as Laravel intends. Genie's variables reach the child through the
+ * process env. A `-d` does not pass to the child (Laravel starts it as `PHP_BINARY -S …`), so the server that answers
+ * requests keeps Genie's ini, `E` included. The token travels in process memory only: no file, no Caddyfile, no `.env`.
+ *
+ * Only a command that IS `<php> artisan serve` is changed: any php binary (a path, `php8.4`, `php.exe`, quoted).
+ * Anything else, or a command that already says `variables_order`, is the person's and is returned as written.
+ */
 export function laravelServeCommand(command: string): string {
-    return command;
+    if (/variables_order/i.test(command)) return command;
+    const m = /^(\s*)("[^"]+"|\S+)(\s+artisan\s+serve)(?=\s|$)/.exec(command);
+    if (!m) return command;
+    const lead = m[1]!;
+    const binary = m[2]!;
+    const name = binary.replace(/^"|"$/g, '').split(/[/\\]/).pop() ?? '';
+    if (!/^php[\d.]*(\.exe)?$/i.test(name)) return command;
+    return `${lead}${binary} -d variables_order=GPCS${command.slice(lead.length + binary.length)}`;
 }
 
 const BUILT_DIRS = ['dist', 'build', 'out'];
