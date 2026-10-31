@@ -21,6 +21,7 @@ import {
     type TynnIssuesState,
 } from '../../core/tynn-issues.js';
 import { LiveMark } from './TynnBoardPanel.js';
+import { genieClipboardWriter } from '../clipboard.js';
 
 /**
  * THE TYNN TAB'S ISSUES (genie#1295 row I1) — tynn.ai's Issues page, natively.
@@ -141,7 +142,7 @@ const IssueCard = memo(function IssueCard({ issue, onOpen }: { issue: IssueRow; 
             className="flex min-w-0 flex-col gap-1.5 rounded-md border border-l-4 border-[var(--border-1)] bg-[var(--bg-1)] p-2.5 text-left hover:bg-[var(--bg-2)]"
         >
             <span className="text-[13px] font-medium text-[var(--fg-1)]">{issue.title}</span>
-            {issue.description ? <div className="line-clamp-3 text-[12px] text-[var(--fg-3)]"><ContentRenderer value={issue.description} format="markdown" /></div> : null}
+            {issue.description ? <div className="line-clamp-3 text-[12px] text-[var(--fg-3)]"><ContentRenderer value={issue.description} format="markdown" clipboardWriter={genieClipboardWriter} /></div> : null}
             <span className="flex flex-wrap items-center gap-1.5 text-[11px] text-[var(--fg-3)]">
                 <span className="rounded bg-[var(--bg-2)] px-1.5 py-0.5 font-mono font-semibold text-[var(--fg-2)]">{issue.number}</span>
                 {type ? <span data-issue-type={issue.type ?? ''} role="img" aria-label={type.label} title={type.label} className="inline-flex"><Icon name={type.icon} size="xs" /></span> : null}

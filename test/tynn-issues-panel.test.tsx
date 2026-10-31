@@ -38,6 +38,15 @@ const noop = () => {};
 const render = (props: Partial<Parameters<typeof TynnIssuesPanel>[0]> = {}) =>
     renderToStaticMarkup(<TynnIssuesPanel state={{ state: 'ready', view: QUEUE() }} onFilters={noop} onAction={noop} {...props} />);
 const tag = (html: string, attr: string) => html.match(new RegExp(`<[^>]*${attr}[^>]*>`))?.[0] ?? '';
+/** The element whose opening tag carries `attr`, with what it holds (to the first closing tag of that name). */
+function el(html: string, attr: string): string {
+    const open = tag(html, attr);
+    if (open === '') return '';
+    const name = open.slice(1).split(/[ >]/)[0]!;
+    const start = html.indexOf(open);
+    const end = html.indexOf(`</${name}>`, start);
+    return end < 0 ? open : html.slice(start, end + name.length + 3);
+}
 
 describe('the queue\'s toolbar', () => {
     it('has tynn.ai\'s status tabs in tynn.ai\'s order, Open pressed first', () => {
@@ -69,7 +78,7 @@ describe('the cards', () => {
         expect(html).toContain('Ada');
         expect(tag(html, 'data-issue-type="fix"')).toMatch(/aria-label="Fix"/);
         expect(html).toContain('acme/app#42');
-        expect(tag(html, 'data-issue-status-chip="resolved"')).toMatch(/Resolved/);
+        expect(el(html, 'data-issue-status-chip="resolved"')).toMatch(/Resolved/);
         // An open card says nothing about its status; no submitter is a blank, never an invented name.
         expect(html).not.toMatch(/data-issue-status-chip="open"/);
     });
@@ -127,7 +136,7 @@ describe('a new issue', () => {
         expect(html).toMatch(/<select[^>]*aria-label="Type"[\s\S]*?<option value="enhancement" selected/);
         expect(html).toMatch(/<select[^>]*aria-label="Priority"[\s\S]*?<option value="normal" selected/);
         expect(html).toContain('Theming');
-        expect(tag(html, 'data-issue-action="create"')).toMatch(/Raise issue/);
+        expect(el(html, 'data-issue-action="create"')).toMatch(/Raise issue/);
     });
 });
 
@@ -144,7 +153,7 @@ describe('every action says what it is doing', () => {
 
         const failed = render({ open: 'i1', op: { action: 'issue.convert', phase: 'failed', reason: 'This issue has already been converted.' }, onRetry: noop });
         expect(failed).toContain('This issue has already been converted.');
-        expect(tag(failed, 'data-issue-retry')).toMatch(/Retry/);
+        expect(el(failed, 'data-issue-retry')).toMatch(/Retry/);
         const running = render({ open: 'i1', op: { action: 'issue.convert', phase: 'running' } });
         expect(running).toContain('Converting…');
         expect(tag(running, 'data-issue-action="convert"')).toContain('disabled');
