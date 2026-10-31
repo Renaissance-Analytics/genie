@@ -11,9 +11,9 @@ import { wireInboxPush, type InboxPushPorts } from '../src/main/inbox-push.js';
 import { genieTools, type GenieToolsDeps } from '../src/main/mcp-tools.js';
 
 /**
- * HOW AN APP'S MESSAGE REACHES THE AGENT (genie#1345, the owner's D1): an AUTOMATED agent is told at once — woken if it
- * is stopped, and an app wakes it at most once per window; a MANUAL agent is never woken and never given a turn of its
- * own for app mail — it hears about it on its next turn. What it reads is marked as an app's and fenced as data; it
+ * HOW AN APP'S MESSAGE REACHES THE AGENT (genie#1345; genie#1379 replaced D1 as built): EVERY agent is told without the
+ * person typing — at once when it can take a turn, when its turn ends when busy. An AUTOMATED agent is also started if it
+ * is stopped, while the app wake cap allows; a MANUAL agent is never started by an app — its mail waits. What it reads is marked as an app's and fenced as data; it
  * cannot reply. Mail from people and agents is delivered exactly as before (the other direction, asserted).
  */
 
@@ -106,25 +106,22 @@ describe('an automated agent', () => {
 
 describe('a manual agent', () => {
     it('stopped: NOT woken', async () => {
-        const w = wire(() => 'next-turn');
+        const w = wire(() => 'push-no-wake');
         await inbox.send({ from: APP_FROM, to: manual.id, text: 'b', app: site });
         expect(w.woken).toEqual([]);
         expect(w.prompts).toEqual([]);
     });
 
-    it('running and idle: given no turn of its own; told when its next turn ends', async () => {
-        const w = wire(() => 'next-turn');
+    it('running and idle: told AT ONCE — nobody has to type first (genie#1379, the owner on beta.53)', async () => {
+        const w = wire(() => 'push-no-wake');
         w.start(manual.id);
         await inbox.send({ from: APP_FROM, to: manual.id, text: 'b', app: site });
-        expect(w.prompts).toEqual([]);
-        // The person prompts it; its turn ends: now it hears about the app's message.
-        w.idle.delete(manual.id);
-        w.endTurn(manual.id);
+        expect(w.woken).toEqual([]);
         expect(w.prompts).toEqual([[manual.id, reminderText(1, 1)]]);
     });
 
     it('mail from a PERSON or an AGENT still wakes and tells it as before (the other direction)', async () => {
-        const w = wire(() => 'next-turn');
+        const w = wire(() => 'push-no-wake');
         await inbox.send({ from: auto.id, to: manual.id, text: 'hello' });
         expect(w.woken).toEqual([manual.id]);
         expect(w.prompts).toEqual([[manual.id, reminderText(1)]]);
