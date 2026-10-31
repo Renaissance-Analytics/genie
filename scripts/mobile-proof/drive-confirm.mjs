@@ -17,6 +17,7 @@
  */
 import { X509Certificate, createHash } from 'node:crypto';
 import { homedir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { chromium, devices } from 'playwright-core';
@@ -37,9 +38,29 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const act = (g, action) => g.evaluate(`window.genie.features.act(${JSON.stringify(action)}).then((d) => d.remote)`);
 const snap = (g) => g.evaluate('window.genie.features.snapshot().then((d) => d.remote)');
 
-/** Genie's window, as the owner sees it. */
+/**
+ * Genie's window, as the owner sees it: the SCREEN, from the compositor (grim), tooltips and all. CDP's
+ * Page.captureScreenshot was tried first and never answered in this VM (2026-10-31, run 3: 30 s, idle lock already off)
+ * — it waits for a frame from Chromium's Wayland surface; grim reads what Hyprland is showing.
+ */
 async function desktopShot(g, name) {
-    const { data } = await g.send('Page.captureScreenshot', { format: 'png' });
+    const file = join(OUT, `${name}.png`);
+    try {
+        execFileSync('grim', [file], { timeout: 20_000 });
+        console.log(`  screenshot ${name}.png (grim)`);
+        return;
+    } catch (error) {
+        console.log(`  grim failed for ${name}: ${String(error?.message ?? error).split('\n')[0]}; trying CDP`);
+    }
+    return cdpShot(g, name);
+}
+
+async function cdpShot(g, name) {
+    // A window that paints no frames (a locked or asleep session) never answers a screenshot: fail loud, not forever.
+    const { data } = await Promise.race([
+        g.send('Page.captureScreenshot', { format: 'png' }),
+        sleep(30_000).then(() => { throw new Error(`no screenshot of Genie's window in 30 s (${name}): is the session locked or the display asleep?`); }),
+    ]);
     writeFileSync(join(OUT, `${name}.png`), Buffer.from(data, 'base64'));
     console.log(`  screenshot ${name}.png`);
 }
@@ -70,6 +91,11 @@ async function main() {
     for (let i = 0; i < 40 && !remote.url; i++) { await sleep(500); remote = await snap(g); }
     check('remote access listens on the tailnet name', remote.url === `wss://${DNS}:7421/genie`, `url=${remote.url}`);
 
+    // A first run opens What's new over everything; close it as a person would, so the hovers reach the rail.
+    await g.evaluate(`(async () => { for (let i = 0; i < 20; i++) { const d = document.querySelector('[data-whats-new]'); if (d) { const dlg = d.closest('[role="dialog"]') ?? document; const b = [...dlg.querySelectorAll('button')].find((x) => x.textContent.trim() === 'Close'); if (b) { b.click(); return; } } await new Promise((r) => setTimeout(r, 250)); } })()`);
+    await sleep(800);
+    check('nothing covers Genie’s window (What’s new closed)', await g.evaluate(`!document.querySelector('[data-whats-new]')`));
+
     // 1. THE YELLOW ! ON SETTINGS — the seeded device has 10 of its 90 days left.
     const old = remote.devices.find((d) => d.label === OLD_LABEL);
     check('the seeded device is paired, expiring in about 10 days', old && Math.round((Date.parse(old.expiresAt) - Date.now()) / 86_400_000) === 10, old ? `expires ${old.expiresAt}` : 'not listed');
@@ -87,7 +113,7 @@ async function main() {
     await g.evaluate(`window.location.hash = 'genie://settings/remote'`);
     await waitInGenie(g, `[data-device="${old?.id}"] [data-device-expiry-alert]`);
     const rowTip = await hoverInGenie(g, `[data-device="${old?.id}"] [data-device-expiry-alert]`);
-    check('the device’s row carries the same ! and tooltip', rowTip === tip, rowTip ?? 'no tooltip');
+    check('the device’s row carries the same ! and tooltip', rowTip !== null && rowTip === tip, rowTip ?? 'no tooltip');
     check('the row offers Re-pair', await g.evaluate(`!!document.querySelector('[data-device="${old?.id}"] [data-action="repair-device"]')`));
     await g.evaluate(`document.querySelector('[data-device="${old?.id}"]').scrollIntoView({ block: 'center' })`);
     await sleep(300);

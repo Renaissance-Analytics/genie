@@ -122,6 +122,16 @@ describe('PairPrompt — "Pair this device?" on the desktop', () => {
         expect(host.querySelector('[data-pair-outcome="expired"]')!.textContent).toBe('Nobody answered in time: Pixel 7 was not paired.');
     });
 
+    it('sits ABOVE a modal: an open dialog (z-50, e.g. What’s new) never hides Allow and Deny behind its backdrop', () => {
+        // Found live on omarchy-test (2026-10-31, run 5): What's new was open on first run and the prompt lay under its
+        // dimmed backdrop — on screen, but not reachable. react-fancy's Modal backdrop is `fixed inset-0 z-50`.
+        act(() => root.render(<PairPrompt requests={[request()]} now={NOW} onAnswer={async () => {}} />));
+        const layer = host.querySelector('[data-pair-prompt]')!.parentElement!;
+        expect(layer.className).toMatch(/\bfixed\b/);
+        const z = Number(/\bz-\[(\d+)\]/.exec(layer.className)?.[1] ?? /\bz-(\d+)\b/.exec(layer.className)?.[1] ?? 0);
+        expect(z).toBeGreaterThan(50);
+    });
+
     it('a Re-pair names the device it replaces', () => {
         act(() => root.render(<PairPrompt requests={[request({ replaces: { id: 'dev_old', label: 'Pixel 7 (old)' } })]} now={NOW} onAnswer={async () => {}} />));
         expect(host.querySelector('[data-pair-prompt]')!.textContent).toContain('It replaces Pixel 7 (old)');
