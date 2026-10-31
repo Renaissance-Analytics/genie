@@ -63,6 +63,36 @@ await fetch(`${process.env.GENIE_INBOX_URL}/v1/inbox`, {
 
 A script outside Genie gets the address from Settings, or from `~/.genie/app-inbox-endpoint.json`.
 
+### PHP sites: what a served request can read
+
+Genie hands the two variables to the site's process, in memory. It never writes them to `.env`, a Caddyfile or any
+other file. Each way Genie serves PHP passes them on to a request differently. These results were measured in a
+Linux test VM with real servers (genie#1376, `test/live/app-inbox-php.live.ts`):
+
+| How the site is served | `getenv()` | `$_SERVER` | `$_ENV` | Laravel `env()` |
+|---|---|---|---|---|
+| **php** mode (Genie's Caddy + php-cgi) | yes | yes | yes | yes |
+| `php artisan serve` (Genie's default for a Laravel repo) | yes | — | yes | yes |
+| `php -S` | yes | — | yes | yes |
+| FrankenPHP `php-server` | yes | yes | yes | yes |
+| Laravel Octane (FrankenPHP) | yes | yes | yes | yes |
+
+Use `getenv()` or Laravel's `env()`, which reads all three.
+
+**`php artisan serve` on Genie 2.0.0-beta.53 and earlier.** Laravel's `ServeCommand` passes only a short allow-list of
+variables (`ServeCommand::$passthroughVariables`) to the `php -S` server it starts. Genie's PHP fills `$_ENV` from the
+whole environment, so the two variables were removed before the first request. Later builds start the artisan process
+so that Laravel passes them on, and the app needs no change. On an older build, add one line to `register()` in
+`app/Providers/AppServiceProvider.php`:
+
+```php
+array_push(\Illuminate\Foundation\Console\ServeCommand::$passthroughVariables, 'GENIE_INBOX_URL', 'GENIE_INBOX_TOKEN');
+```
+
+If the app runs `php artisan config:cache`, `env()` returns `null` outside the `config/` files. Read the two variables
+in a config file instead, for example `config/services.php` → `'genie_inbox' => ['url' => env('GENIE_INBOX_URL'),
+'token' => env('GENIE_INBOX_TOKEN')]`.
+
 ## What the agent sees
 
 - An **automated** agent is told straight away. If it is stopped, Genie starts it, but an app can do this at most
