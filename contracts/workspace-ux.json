@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.8.0/contracts/workspace-ux/0.8.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.9.0/contracts/workspace-ux/0.9.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.8.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.8.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.9.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.9.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -357,6 +357,49 @@
         { "id": "vip.create", "web": "POST versions.store", "api": { "method": "POST", "path": "/vip" } },
         { "id": "story.move", "web": "POST stories.move", "api": { "method": "POST", "path": "/stories/{storyId}/move" } },
         { "id": "version.release", "web": "POST versions.release", "api": { "method": "POST", "path": "/versions/{versionId}/release" }, "to": "released" }
+      ]
+    },
+    {
+      "id": "releases",
+      "title": "Releases",
+      "tynn": { "page": "v2/Project/Releases", "route": "releases", "pageAccess": null },
+      "data": {
+        "api": { "method": "GET", "path": "/releases" },
+        "gate": "no page key on the web: whoever may see the project may see its releases",
+        "query": ["product"],
+        "answer": ["project_id", "releases"],
+        "fields": {
+          "release": ["id", "number", "title", "description", "released_at", "pr_id", "repository_id", "story_count", "story_done_count", "top_stories"],
+          "story": ["id", "story_number", "title", "status"]
+        },
+        "order": "newest first",
+        "topStories": 5,
+        "totals": ["releases", "stories"],
+        "live": {
+          "about": "Releases follow Tynn as versions are released and their stories change. An event is a doorbell: the client reads Releases again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's Releases page goes live on project.{projectId}, where the board's events also ring; the app hears them on the board's own channel, signed at the board door (board.data.live.auth) for whoever may open the board",
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "Releases are being read" },
+        { "id": "totals", "what": "how many releases, and how many stories they delivered" },
+        { "id": "release-card", "what": "a release: number, title, Released, its PR, the date, its description, its story count and first stories by number" },
+        { "id": "more-stories", "what": "a release with more stories than its card lists says how many more" },
+        { "id": "empty", "what": "no releases yet, and where they come from" },
+        { "id": "live", "what": "Releases follow Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and Releases are read again once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "releases.list", "web": "GET releases", "api": { "method": "GET", "path": "/releases" } }
       ]
     }
   ]

@@ -16,6 +16,14 @@ import {
 } from '../src/core/tynn-board.js';
 import {
     PAGE_API,
+    RELEASES_ANSWER,
+    RELEASES_DATA_API,
+    RELEASES_FIELDS,
+    RELEASES_LIVE,
+    RELEASES_QUERY,
+    RELEASES_STATES,
+    RELEASES_TOP_STORIES,
+    RELEASES_TOTALS,
     VIP_ACTIONS,
     VIP_ANSWER,
     VIP_COLUMNS,
@@ -233,5 +241,30 @@ describe('the Tynn tab\'s VIP lane, against the contract (0.8.0)', () => {
         const { about: _about, web: _web, ...shape } = vip!.data.live;
         expect(VIP_LIVE).toEqual(shape);
         expect([...VIP_STATES].sort()).toEqual(vip!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s Releases, against the contract (0.9.0)', () => {
+    type Releases = { data: Record<string, unknown> & { api: { method: string; path: string }; live: Record<string, unknown> }; states: Array<{ id: string }>; actions: Action[] };
+    const releases = contract.surfaces.find((s) => s.id === 'releases') as unknown as Releases | undefined;
+
+    it('is in the contract', () => {
+        expect(releases).toBeDefined();
+    });
+
+    it('reads Releases where the contract says, with its answer, fields, order, top stories and totals', () => {
+        expect(RELEASES_DATA_API).toEqual(releases!.data.api);
+        expect(RELEASES_QUERY).toEqual(releases!.data.query);
+        expect(RELEASES_ANSWER).toEqual(releases!.data.answer);
+        expect(RELEASES_FIELDS).toEqual(releases!.data.fields);
+        expect(RELEASES_TOP_STORIES).toBe(releases!.data.topStories);
+        expect(RELEASES_TOTALS).toEqual(releases!.data.totals);
+    });
+
+    it('offers only its read, and goes live as the contract says, with a view for every state', () => {
+        expect(releases!.actions.map((a) => ({ id: a.id, ...a.api }))).toEqual([{ id: 'releases.list', ...RELEASES_DATA_API }]);
+        const { about: _about, web: _web, ...shape } = releases!.data.live;
+        expect(RELEASES_LIVE).toEqual(shape);
+        expect([...RELEASES_STATES].sort()).toEqual(releases!.states.map((s) => s.id).sort());
     });
 });
