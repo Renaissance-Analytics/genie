@@ -66,6 +66,20 @@ describe('the scheduler starts the flows a file matches', () => {
         expect(store.get(pngs.id)!.runs).toEqual([]);
     });
 
+    it('answers whether any flow took the file, so the file source keeps watching one nothing took (genie#1361)', async () => {
+        const store = await FlowStore.open(dir);
+        const big = await store.create({ workspaceId: 'tynn', name: 'big files out', document: doc({ minSizeBytes: 1_000 }), by: user });
+        await store.create({ workspaceId: 'tynn', name: 'off', document: doc({}), by: user });
+        await store.arm(big.id, user);
+        const scheduler = new FlowScheduler({ store, now: Date.now, schedule: () => () => {}, run: async () => {} });
+
+        // Below the armed flow's minimum; the flow that would take anything is not armed.
+        expect(scheduler.fileAdded(fileIn('uploads/grow.bin', 10))).toBe(false);
+        expect(scheduler.fileAdded(fileIn('uploads/grow.bin', 2_000))).toBe(true);
+        await scheduler.settled();
+        expect(store.get(big.id)!.runs.map((r) => r.file)).toEqual(['uploads/grow.bin']);
+    });
+
     it('a flow names its file triggers (CONTROL: a scheduled flow has none)', async () => {
         const store = await FlowStore.open(dir);
         const f = await store.create({ workspaceId: 'tynn', name: 'f', document: doc({ folder: 'uploads' }), by: user });
@@ -153,7 +167,7 @@ describe('the owner\'s case, end to end on a real folder', () => {
         });
         const scheduler = new FlowScheduler({ store, now: Date.now, schedule: () => () => {}, run });
         let deliver: ((e: RawWatchEvent) => void) | null = null;
-        source = startFileSource({ subscribe: (l) => { deliver = l; return () => { deliver = null; }; }, statFile: nodeWatch.statFile, emit: (e) => scheduler.fileAdded(e), settleMs: 50 });
+        source = startFileSource({ subscribe: (l) => { deliver = l; return () => { deliver = null; }; }, statFile: nodeWatch.statFile, emit: (e) => scheduler.fileAdded(e), tickMs: 50, quietMs: 200 });
         const watches = new FileTriggerWatches({ store, workspacePath: () => ws, watch: nodeWatch.watch, onEvent: (e) => deliver?.(e) });
         await store.arm(flow.id, user);
 
