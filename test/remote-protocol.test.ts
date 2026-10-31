@@ -82,9 +82,15 @@ describe('the capability table', () => {
         // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
         // (a write) — workspace-scoped, through the panel's confined files host.
         // 86 since the Tynn tab's other pages (genie#1295 W1): `workspaces.tynnPage` (a read) — owner-only, workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(86);
         expect(capabilityOf('workspaces.tynnPage')).toBe('read');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnPage');
+        // 88 since the Tynn tab's Issues (genie#1295 I1): `workspaces.tynnIssues` (a read) and `workspaces.tynnIssueAction` (a
+        // write) — owner-only on a host, scoped to their workspace, as the board's.
+        expect(REMOTE_METHODS.length).toBe(88);
+        expect(capabilityOf('workspaces.tynnIssues')).toBe('read');
+        expect(capabilityOf('workspaces.tynnIssueAction')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnIssues');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnIssueAction');
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

@@ -1,10 +1,10 @@
 {
   "repository": "Civicognita/shared-schemas",
   "contract": "workspace-ux",
-  "version": "0.6.0",
-  "tag": "workspace-ux/v0.6.0",
+  "version": "0.7.0",
+  "tag": "workspace-ux/v0.7.0",
   "tagObject": null,
-  "commit": "a6080a9bcdf97f011c62b36b748bb60c31403c77",
-  "path": "contracts/workspace-ux/0.6.0/workspace-ux.json",
-  "sha256": "57b6f7968555d9deb4c04033801882b291668d14be0d119bb8584598c0490b56"
+  "commit": "b9623c138cf9828c99bab1b15176ddc113830eec",
+  "path": "contracts/workspace-ux/0.7.0/workspace-ux.json",
+  "sha256": "441a86b5a43b22e2939d36611711bbef95a292729810b0d04adc1cf2954d8b43"
 }
