@@ -1,3 +1,4 @@
+import { lstatSync, realpathSync } from 'node:fs';
 import { lstat, realpath } from 'node:fs/promises';
 import nodePath from 'node:path';
 
@@ -122,4 +123,75 @@ export async function confineWrite(root: string, given: string, consequence: str
         probe = up;
     }
     return abs;
+}
+
+/**
+ * `requested` resolved inside `root`, THE ROOT ITSELF ALLOWED — a folder to run or serve in may be the workspace. `null`
+ * when it leaves it. Lexical, like {@link insideRoot}: a name that only starts with two dots (`..config`) is inside.
+ */
+export function insideOrRoot(root: string, requested: string, api: PlatformPath = nodePath): string | null {
+    if (!root || !api.isAbsolute(root)) return null;
+    const base = api.resolve(root);
+    const abs = api.resolve(base, requested);
+    return within(base, abs, api) ? abs : null;
+}
+
+const realOrNull = (p: string): string | null => {
+    try {
+        return realpathSync.native(p);
+    } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+        throw error;
+    }
+};
+const isLink = (p: string): boolean => {
+    try {
+        return lstatSync(p).isSymbolicLink();
+    } catch {
+        return false;
+    }
+};
+
+/**
+ * THE SHARED CHECK FOR A PATH AN AGENT NAMES (genie#1354): a file to open or read, a folder to run or serve in. The
+ * absolute (lexical) path to use, once it lies inside `root` both as written and after links; otherwise throws
+ * {@link OutsideWorkspaceError}, naming only what was given.
+ *
+ * 1. Lexical: {@link insideRoot} (or {@link insideOrRoot} with `allowRoot`).
+ * 2. After links: the nearest path at or above the target that EXISTS, below the root, must really lie inside the root's
+ *    real path — so a symlink or junction anywhere on the way that leads out is refused, whether the target exists yet or
+ *    not. A link on the way that leads NOWHERE (dangling) is refused too: what it would lead to is not known to be inside.
+ *    When nothing at or below the root exists — the root itself is not there — there is no link to follow, and the
+ *    lexical answer stands (an unregistered or not-yet-made workspace confines by its name alone).
+ *
+ * Synchronous on purpose: callers that validate synchronously (process-book's `prepare`) share it; the syscalls are few.
+ */
+export function confinePathSync(root: string, given: string, consequence: string, options: { allowRoot?: boolean } = {}): string {
+    const abs = options.allowRoot ? insideOrRoot(root, given) : insideRoot(root, given);
+    if (abs === null) throw new OutsideWorkspaceError(given, consequence);
+    const base = nodePath.resolve(root);
+    const realBase = realOrNull(base);
+    if (realBase === null) return abs;
+    let probe = abs;
+    for (;;) {
+        const real = realOrNull(probe);
+        if (real !== null) {
+            // The target itself must not BE the root unless a folder is wanted; an ancestor may be the root.
+            const ok = probe === abs && !options.allowRoot ? below(realBase, real, nodePath) : within(realBase, real, nodePath);
+            if (!ok) throw new OutsideWorkspaceError(given, consequence);
+            return abs;
+        }
+        // Not there: a link that leads nowhere is not known to stay inside.
+        if (isLink(probe)) throw new OutsideWorkspaceError(given, consequence);
+        const up = nodePath.dirname(probe);
+        // Lexically inside, so the walk reaches the root, which exists (realBase), before the top of the disk.
+        if (up === probe || !within(base, up, nodePath)) throw new OutsideWorkspaceError(given, consequence);
+        probe = up;
+    }
+}
+
+/** {@link confinePathSync}, for callers that are already async. */
+export async function confinePath(root: string, given: string, consequence: string, options: { allowRoot?: boolean } = {}): Promise<string> {
+    return confinePathSync(root, given, consequence, options);
 }

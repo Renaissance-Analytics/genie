@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute } from 'node:path';
+import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 
 /**
  * THE FILES A QUESTION NAMES, READ FOR ITS DRAWER (Genie 1's ForceTheQuestion file drawer; the owner, 2026-10-19).
@@ -14,16 +15,20 @@ export const MAX_BYTES = 512 * 1024;
 
 const OUTSIDE = 'that file is not in this workspace';
 
-/** The absolute path inside `root` that `named` means, or `null` when it would leave the workspace. */
+/**
+ * The absolute path inside `root` that `named` means, or `null` when it would leave the workspace — as written OR after
+ * links: the SHARED check (genie#1354, workspace-confine.ts), so a symlink or junction inside the workspace that points
+ * out of it is refused. A step UP is `..` as a whole segment — not a file that merely starts with two dots.
+ */
 function inside(root: string, named: string): string | null {
-    const base = resolve(root);
     // Either separator: a question written on Windows names `..\x`, and a Linux host must refuse that too.
-    const normalised = named.replace(/\\/g, '/');
-    const target = isAbsolute(named) ? resolve(named) : resolve(base, normalised);
-    const rel = relative(base, target);
-    // A step UP is `..` as a whole segment — not a file that merely starts with two dots (`..notes.md` is inside).
-    if (rel === '' || rel === '..' || rel.startsWith('../') || rel.startsWith('..\\') || isAbsolute(rel)) return null;
-    return target;
+    const normalised = isAbsolute(named) ? named : named.replace(/\\/g, '/');
+    try {
+        return confinePathSync(root, normalised, 'it is not shown');
+    } catch (error) {
+        if (error instanceof OutsideWorkspaceError) return null;
+        throw error;
+    }
 }
 
 export type QuestionFile = { ok: true; path: string; text: string } | { ok: false; reason: string };

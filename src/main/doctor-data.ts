@@ -1,5 +1,6 @@
 import { readFile, stat } from 'node:fs/promises';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { join } from 'node:path';
+import { confinePath, OutsideWorkspaceError } from './workspace-confine.js';
 import { ToolDefinition, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { AgentRecord } from '../core/identity.js';
 import { openDurableStore, readHistory } from '../core/thread-store.js';
@@ -121,9 +122,13 @@ export function doctorDataTools(deps: { genieHome: string }): Registration[] {
             // The persona path is the record's — confined to the workspace, like every path an agent's record carries.
             let persona: { path: string; text: string } | null = null;
             if (agent.instructions && root) {
-                const abs = resolve(root, agent.instructions);
-                const rel = relative(resolve(root), abs);
-                const text = !rel.startsWith('..') && !isAbsolute(rel) ? await readText(abs) : null;
+                // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a persona folder that links
+                // out of the workspace is not read.
+                const abs = await confinePath(root, agent.instructions, 'it is not read').catch((error: unknown) => {
+                    if (error instanceof OutsideWorkspaceError) return null;
+                    throw error;
+                });
+                const text = abs !== null ? await readText(abs) : null;
                 if (text !== null) persona = { path: agent.instructions, text: text.length > PERSONA_CHARS ? `${text.slice(0, PERSONA_CHARS)}…` : text };
             }
             const limit = typeof args.rows === 'number' && Number.isFinite(args.rows) ? Math.max(1, Math.min(500, Math.floor(args.rows))) : HISTORY_ROWS;

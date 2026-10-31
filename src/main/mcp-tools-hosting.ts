@@ -1,6 +1,6 @@
 import { OS_WORKSPACE } from './registry.js';
-import { isAbsolute as isAbsolutePath, relative as relativePath, resolve as resolvePath } from 'node:path';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { resolve as resolvePath } from 'node:path';
+import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { validateServiceForm, type ServiceForm, type SiteForm, type SiteMode } from '../core/forms.js';
@@ -286,9 +286,14 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     if (!command) return err('exec needs `command`: the command line to run');
                     if (!deps.exec) return err('this Genie cannot run commands (doctor mode); nothing was run');
                     const root = resolvePath(caller.workspacePath);
-                    const cwd = resolvePath(root, str(args.cwd) ?? '.');
-                    const rel = relativePath(root, cwd);
-                    if (rel.startsWith('..') || isAbsolutePath(rel)) return err(`${cwd} is outside this workspace (${root}); nothing was run`);
+                    // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links; the workspace itself is a folder.
+                    let cwd: string;
+                    try {
+                        cwd = confinePathSync(root, str(args.cwd) ?? '.', 'nothing was run', { allowRoot: true });
+                    } catch (error) {
+                        if (error instanceof OutsideWorkspaceError) return err(`${str(args.cwd) ?? '.'} is outside this workspace (${root}); nothing was run`);
+                        throw error;
+                    }
                     const verdict = await deps.approve(caller, 'services.exec', command);
                     if (verdict !== 'allowed') return err('the person did not allow this command; nothing was run');
                     const env = s.engines.envFor(caller.workspaceId);
@@ -448,10 +453,14 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
     };
     /** A folder the agent named, resolved in ITS workspace — or the refusal, before anything is read there. */
     const folderIn = (caller: Caller, given: string | undefined, fallback: string): string | { refused: string } => {
-        const repoPath = given ? (isAbsolute(given) ? given : resolve(caller.workspacePath, given)) : fallback;
-        const rel = relative(caller.workspacePath, repoPath);
-        if (rel.startsWith('..') || isAbsolute(rel)) return { refused: `${given ?? repoPath} is outside this workspace; a site serves a folder inside it, and nothing was read or done` };
-        return repoPath;
+        // The SHARED check (genie#1354, workspace-confine.ts): lexical, then after links — a link into another workspace
+        // is refused — and the workspace itself is a folder a site may serve.
+        try {
+            return confinePathSync(caller.workspacePath, given || fallback, 'nothing was read or done', { allowRoot: true });
+        } catch (error) {
+            if (error instanceof OutsideWorkspaceError) return { refused: `${given || fallback} is outside this workspace; a site serves a folder inside it, and nothing was read or done` };
+            throw error;
+        }
     };
     /**
      * The form an agent asks for: `base` (the folder's detected defaults for an add, the site as it is for an update),

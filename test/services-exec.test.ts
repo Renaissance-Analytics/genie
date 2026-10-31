@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -107,5 +107,28 @@ describe('services exec', () => {
         expect(r.isError).toBe(true);
         expect(ran).toEqual([]);
         expect(approvals).toEqual([]);
+    });
+});
+
+/*
+ * genie#1354: the folder an agent names for `exec` goes through the SHARED confinement (workspace-confine.ts): a link
+ * inside the workspace that points out of it is refused before anything is asked or run, and a folder whose name only
+ * starts with two dots is inside the workspace (the old check refused `..build`).
+ */
+describe('services exec — the folder, after links (genie#1354)', () => {
+    it('a directory link inside the workspace that points OUT is refused; nothing is asked, nothing runs', async () => {
+        await mkdir(join(dir, 'outside'), { recursive: true });
+        await symlink(join(dir, 'outside'), join(dir, 'example', 'escape'), 'junction');
+        const r = await call({ action: 'exec', command: 'ls', cwd: 'escape' });
+        expect(r.isError).toBe(true);
+        expect(ran).toEqual([]);
+        expect(approvals).toEqual([]);
+    });
+
+    it('a folder named `..build` is inside the workspace, and the command runs there', async () => {
+        await mkdir(join(dir, 'example', '..build'), { recursive: true });
+        const r = await call({ action: 'exec', command: 'ls', cwd: '..build' });
+        expect(r.isError).toBe(false);
+        expect(ran.map((x) => x.cwd)).toEqual([join(dir, 'example', '..build')]);
     });
 });

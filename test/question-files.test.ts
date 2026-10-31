@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -57,5 +57,23 @@ describe('existingFiles', () => {
     it('which of the named paths are there, inside the workspace (COUNTED)', async () => {
         const got = await existingFiles(root, ['.ai/plans/spec.md', 'nope/missing.md', '../escape.md', join(outside, 'secret.txt')]);
         expect([...got]).toEqual(['.ai/plans/spec.md']);
+    });
+});
+
+/*
+ * genie#1354: a question's paths are an agent's words, so they go through the SHARED confinement (workspace-confine.ts),
+ * which follows links: a symlink or junction inside the workspace pointing out of it is refused, never read, and never
+ * gets a chip. The lexical check alone read straight through it.
+ */
+describe('after links (genie#1354)', () => {
+    it('a directory link inside the workspace that points OUT is refused, never read, and gets no chip', async () => {
+        await symlink(outside, join(root, 'escape'), 'junction');
+        expect(await readQuestionFile(root, 'escape/secret.txt')).toEqual({ ok: false, reason: 'that file is not in this workspace' });
+        expect(await existingFiles(root, ['escape/secret.txt', '.ai/plans/spec.md'])).toEqual(new Set(['.ai/plans/spec.md']));
+    });
+
+    it('POSITIVE CONTROL: a link that stays inside the workspace is read', async () => {
+        await symlink(join(root, '.ai'), join(root, 'alias'), 'junction');
+        expect(await readQuestionFile(root, 'alias/plans/spec.md')).toMatchObject({ ok: true, text: expect.stringContaining('§3 holds.') });
     });
 });
