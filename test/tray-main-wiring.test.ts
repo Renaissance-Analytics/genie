@@ -24,7 +24,7 @@ describe('main.ts wiring', () => {
         const src = main();
         expect(src).toMatch(/window = createWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
         // Shown ACTIVE: this is the launch the person made (genie#1235: only a gesture may take focus).
-        expect(src).toMatch(/if \(show\) win\.once\('ready-to-show', \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
+        expect(src).toMatch(/if \(show\) onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
         expect(src).toMatch(/wireCloseToTray\(window, \{[\s\S]*?quitting: \(\) => quit\.quitting,/);
     });
 

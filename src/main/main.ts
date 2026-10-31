@@ -55,7 +55,7 @@ import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
 import { quitPlan, quitSequence } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
-import { ActivationLedger, bringUp, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
+import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { TynnAccount } from './tynn-account.js';
@@ -571,7 +571,7 @@ function openTakeOverWindow(route: string, activation: Activation): void {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    win.once('ready-to-show', () => showWhenReady(win, request));
+    onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => takeOvers?.windowClosed(terminalId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
@@ -593,7 +593,7 @@ function openFilesWindow(route: string, activation: Activation): void {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    win.once('ready-to-show', () => showWhenReady(win, request));
+    onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
@@ -620,7 +620,7 @@ function openFlowEditorWindow(route: string, activation: Activation): void {
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
-    win.once('ready-to-show', () => showWhenReady(win, request));
+    onceShowable(win, process.platform, () => showWhenReady(win, request));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
 
@@ -775,7 +775,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
     // app looking broken for the length of a load. Start minimised (or a `--hidden` sign-in launch)
     // keeps it in the tray: the tray's Open shows it.
     // Shown active: this is the launch the person made (boot) or the remote window they asked for (genie#1235).
-    if (show) win.once('ready-to-show', () => showWhenReady(win, { activation: 'user-gesture', reason: search ? 'remote window' : 'launch', ledger: activationLedger, label: search ? 'remote' : 'main' }));
+    if (show) onceShowable(win, process.platform, () => showWhenReady(win, { activation: 'user-gesture', reason: search ? 'remote window' : 'launch', ledger: activationLedger, label: search ? 'remote' : 'main' }));
 
     // A remote host's window carries the host in its query (core/remote-window.ts); the main window carries none.
     void win.loadFile(join(here, '../renderer/index.html'), search ? { search } : undefined);

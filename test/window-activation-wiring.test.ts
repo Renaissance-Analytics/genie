@@ -27,8 +27,19 @@ describe('no raw activation anywhere in src/main', () => {
 
     it('the question window still opens inactive, and is the only always-on-top window', () => {
         const q = code('../src/main/question-window-electron.ts');
-        expect(q).toMatch(/win\.once\('ready-to-show', \(\) => win\.showInactive\(\)\)/);
+        expect(q).toMatch(/onceShowable\(win, process\.platform, \(\) => win\.showInactive\(\)\)/);
         expect(sources.filter(({ text }) => /setAlwaysOnTop\(/.test(text)).map(({ file }) => file)).toEqual(['question-window-electron.ts']);
+    });
+});
+
+describe('a NEW window is shown when Wayland lets it be (genie#1370)', () => {
+    it('no window in src/main waits on ready-to-show alone — each goes through onceShowable', () => {
+        // On native Wayland a hidden window never paints, so ready-to-show never comes for a page that renders after
+        // load (Genie's: React into an empty root). A bare once('ready-to-show') is a window that never appears there.
+        const bare = sources.flatMap(({ file, text }) => (text.match(/\.once\('ready-to-show'/g) ?? []).map(() => file));
+        expect(bare).toEqual([]);
+        const through = sources.flatMap(({ file, text }) => (text.match(/onceShowable\(\w+, process\.platform, /g) ?? []).map(() => file)).sort();
+        expect(through).toEqual(['doctor.ts', 'genie-browser-electron.ts', 'main.ts', 'main.ts', 'main.ts', 'main.ts', 'question-window-electron.ts']);
     });
 });
 
@@ -61,7 +72,7 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
 
     it('the Genie browser window shows and re-raises through the rule, with the caller’s activation', () => {
         const browser = code('../src/main/genie-browser-electron.ts');
-        expect(browser).toMatch(/window\.once\('ready-to-show', \(\) => showWhenReady\(window, \{ activation, /);
+        expect(browser).toMatch(/onceShowable\(window, process\.platform, \(\) => showWhenReady\(window, \{ activation, /);
         expect(browser).toMatch(/bringUp\(entry!\.win, \{ activation, /);
         // The caller says which: `open(address, activation, remote)` has no default to fall back on.
         expect(browser).toMatch(/open\(address: string \| undefined, activation: Activation, remote\?: RemoteBrowsing\)/);
@@ -76,7 +87,7 @@ describe('every main-process activation names its gesture', () => {
 
     it('take-over, files, flow editor, main and remote windows are shown through showWhenReady, with the opener’s activation', () => {
         // Four `win` windows since genie#1204 added the flow editor's own window.
-        expect(main.match(/win\.once\('ready-to-show', \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(4);
+        expect(main.match(/onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, (request|\{ activation)/g) ?? []).toHaveLength(4);
         expect(main).toMatch(/function openFlowEditorWindow\(route: string, activation: Activation\): void/);
         expect(main).toMatch(/function openTakeOverWindow\(route: string, activation: Activation\): void/);
         expect(main).toMatch(/function openFilesWindow\(route: string, activation: Activation\): void/);

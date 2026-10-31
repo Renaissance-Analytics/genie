@@ -4,6 +4,7 @@ import type { QuestionView, QuestionWindow, QuestionWindowPort } from './questio
 import { genieWindowIcon } from './app-identity.js';
 import { askWindowBounds } from '../core/question-drawer.js';
 import { existingFiles, readQuestionFile } from './question-files.js';
+import { onceShowable } from '../core/window-activation.js';
 
 /**
  * THE FORCETHEQUESTION WINDOW — the Electron half of `question-window.ts`. Genie 1's window, carried over (genie
@@ -109,7 +110,7 @@ export function electronQuestionWindow(input: { here: string; preload: string; c
         // A link in the question never navigates this window: it opens in the machine's browser.
         win.webContents.setWindowOpenHandler(({ url }) => { void shell.openExternal(url).catch(() => {}); return { action: 'deny' }; });
         win.webContents.on('will-navigate', (event, url) => { event.preventDefault(); void shell.openExternal(url).catch(() => {}); });
-        win.once('ready-to-show', () => win.showInactive());
+        onceShowable(win, process.platform, () => win.showInactive());
         current = win;
         win.on('closed', () => { if (current === win) { current = null; baseWidth = null; } onClosed(); });
         void win.loadFile(join(input.here, '../renderer/question.html'));
