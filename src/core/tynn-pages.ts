@@ -376,7 +376,7 @@ export const RELEASES_DATA_API = { method: 'GET', path: '/releases' } as const;
 export const RELEASES_QUERY = ['product'] as const;
 export const RELEASES_ANSWER = ['project_id', 'releases'] as const;
 export const RELEASES_FIELDS = {
-    release: ['id', 'number', 'title', 'description', 'released_at', 'pr_id', 'repository_id', 'story_count', 'story_done_count', 'top_stories'],
+    release: ['id', 'number', 'title', 'description', 'why', 'released_at', 'pr_id', 'repository_id', 'story_count', 'story_done_count', 'top_stories'],
     story: ['id', 'story_number', 'title', 'status'],
 } as const;
 export const RELEASES_TOP_STORIES = 5;

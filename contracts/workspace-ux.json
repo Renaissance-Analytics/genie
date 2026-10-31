@@ -369,7 +369,7 @@
         "query": ["product"],
         "answer": ["project_id", "releases"],
         "fields": {
-          "release": ["id", "number", "title", "description", "released_at", "pr_id", "repository_id", "story_count", "story_done_count", "top_stories"],
+          "release": ["id", "number", "title", "description", "why", "released_at", "pr_id", "repository_id", "story_count", "story_done_count", "top_stories"],
           "story": ["id", "story_number", "title", "status"]
         },
         "order": "newest first",
