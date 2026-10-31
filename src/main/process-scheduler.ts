@@ -33,7 +33,7 @@ export interface ProcessSchedulerDeps {
     readonly appEnv?: (process: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
     readonly asleep: (workspaceId: string) => boolean;
     /** Deliver `text` to the agent at `address`, from the task named `from` — now, or when its turn ends. False = nowhere to deliver. */
-    readonly nudge: (address: string, text: string, from: string) => boolean;
+    readonly nudge: (address: string, text: string, from: string) => boolean | Promise<boolean>;
     readonly now: () => number;
     readonly schedule: (fn: () => void, ms: number) => () => void;
 }
@@ -111,7 +111,7 @@ export class ProcessScheduler {
         }
         if (schedule.kind === 'agent-nudge') {
             let ok = false;
-            try { ok = this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
+            try { ok = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
             await this.#record(p.id, at, ok ? 'ok' : 'failed');
             return ok ? 'ok' : 'failed';
         }

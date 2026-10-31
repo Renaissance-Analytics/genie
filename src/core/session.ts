@@ -1364,6 +1364,18 @@ export class AgentSession {
         return driver.modelState();
     }
 
+    /**
+     * Whether `modelState()` / `switchModel()` would answer rather than `null` — read without asking the provider, so the
+     * agent host can tell a window that is not in its process (the host split, phase 1).
+     */
+    get canSayModels(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.modelState === 'function';
+    }
+
+    get canSwitchModel(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.setModel === 'function';
+    }
+
     /** Ask the running provider to read its rate limits, or `null` when nothing is running or it cannot (`SessionDriver.readRateLimits`). */
     get canReadRateLimits(): boolean {
         return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.readRateLimits === 'function';

@@ -3,6 +3,7 @@ import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoard
 import type { BoardIds, BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
 import { TynnBoardLive } from './tynn-board-live.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
+import type { Headroom } from '../core/headroom.js';
 import { systemRootsPem } from './php-trust-host.js';
 import { runServiceExec } from './service-exec.js';
 import { MainErrorBook, installMainErrorPolicy } from '../core/main-errors.js';
@@ -95,6 +96,8 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { agentHostMode, connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
+import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
@@ -513,7 +516,9 @@ let filesHost: FilesHost | null = null;
 let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
-let host: SessionHost | null = null;
+let host: AgentEngine | null = null;
+/** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
+let agentEngineLink: AgentEngineLink | null = null;
 /** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
 let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
@@ -1142,77 +1147,27 @@ async function boot(): Promise<void> {
     const lifecycleLog = openLifecycleLog(runtimeDir(genieHome()));
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
-    const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
-    spawnLedger.sweep(systemProcessTree, lifecycleLog);
-    // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
-    // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
-    // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
-    // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
-    // never what a running process was started from.
-    const supervisor = await prepareGenieSupervisor(runtimeDir(genieHome())).catch((error: unknown) => {
-        const why = error instanceof Error ? error.message : String(error);
-        lifecycleLog(`containment unready reason=${why}`);
-        console.error(`[genie] agents cannot start contained: ${why}`);
-        mainErrors.record('containment-unready', error);
-        return null;
-    });
-    if (supervisor !== null) {
-        void removeStaleSupervisorBuilds(runtimeDir(genieHome()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
-            (sweep) => {
-                for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
-                for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
-                for (const path of sweep.failed) lifecycleLog(`supervisor stale kept reason=remove-failed path=${path}`);
-                if (sweep.unread) lifecycleLog('supervisor stale kept reason=process-listing-unread');
-            },
-            (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
-        );
-    }
-    host = new SessionHost({
-        userData: genieHome(),
-        // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
-        currentRecord: (id) => registry?.find(id) ?? null,
-        lifecycle: {
-            spawned: (agentId, run, processes) => {
-                spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
-                lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
-            },
-            ended: (agentId, run, verdict) => {
-                if (verdict.verified) {
-                    spawnLedger.forget('agent', agentId, run);
-                    lifecycleLog(`exit kind=agent owner=${agentId} run=${run} verified ended=${verdict.ended}`);
-                    return;
-                }
-                // Kept in the ledger: the next boot ends what is still running. Said on the Deck — never a quiet success.
-                if (verdict.survivors.length > 0) spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes: verdict.survivors });
-                lifecycleLog(`refused kind=agent owner=${agentId} run=${run} survivors=${describeProcesses(verdict.survivors)} reason=${verdict.reason}`);
-                const name = registry?.find(agentId)?.name ?? agentId;
-                mainErrors.record('stop-unverified', new Error(`${name}: ${verdict.reason}`));
-            },
-            straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
-        },
+    /*
+     * WHAT THE AGENT ENGINE TELLS AND ASKS ITS OWNER — the same callbacks wherever the engine runs: in `genie-host` (the
+     * host split, phase 1 — main/genie-host.ts, the default) or, as the fallback, in this process.
+     */
+    const engineCallbacks = {
         // Each turn's number is kept on the agent's record as the turn starts, so its next session numbers on at once.
-        onTurnNumbered: (agentId, n) => { void registry?.setLastTurn(agentId, n); },
+        onTurnNumbered: (agentId: AgentId, n: number) => { void registry?.setLastTurn(agentId, n); },
         // Each plan is kept on the agent's record as it arrives, so its next run (after a relaunch too) shows it at once.
-        onPlan: (agentId, steps) => { void registry?.setPlan(agentId, steps); },
+        onPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => { void registry?.setPlan(agentId, steps); },
         // What an agent did (Tynn #766 C): pushed to every window, which plays the sound chosen for it.
-        onAction: (agentId, kind) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
+        onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
-        onHeadroom: (provider, room) => { if (headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) broadcast('genie:headroom', headroomBoard.view()); },
+        onHeadroom: (provider: string, room: Headroom) => { if (headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) broadcast('genie:headroom', headroomBoard.view()); },
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
-        onMcpServers: (agentId, reports) => recoverMissingMcp(agentId, reports),
+        onMcpServers: (agentId: AgentId, reports: readonly McpServerReport[]) => recoverMissingMcp(agentId, reports),
         // Each agent starts with its workspace's managed-service variables, by allow-list (the owner, 2026-10-16).
-        serviceEnvFor: (workspaceId) => services?.engines.envFor(workspaceId) ?? {},
-        // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
-        heldElsewhere: (record) => {
-            const hold = doctorHoldNow(genieHome());
-            return hold !== null && hold.workspaceId === record.workspaceId
-                ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
-                : null;
-        },
+        serviceEnvFor: (workspaceId: string) => services?.engines.envFor(workspaceId) ?? {},
         /**
          * THE LINE THAT MAKES RESUME REAL.
          *
@@ -1228,29 +1183,130 @@ async function boot(): Promise<void> {
          */
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
-        mcpServersFor: (record) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
         // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
-        prepareMcpServers: async (record, _cwd, signal) => {
+        prepareMcpServers: async (record: AgentRecord, _cwd: string, signal: AbortSignal) => {
             if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
             const privateServers = await services.prepareAgentMcp(record, signal);
             // Without its Tynn server it still starts (genie#1234): the reason is a note in its chat, never Broken.
             const tynnNote = services?.tynnNote(record.id) ?? null;
-            if (tynnNote) host?.notice(record.id, tynnNote);
+            if (tynnNote) void host?.notice(record.id, tynnNote);
             return [...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)), ...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
-        comms: (agentId, since) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
-        onThreadId: (agentId, threadId) => {
+        comms: (agentId: AgentId, since: number) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
+        onThreadId: (agentId: AgentId, threadId: string) => {
             void theRegistry.recordThread(agentId, threadId).then((result) => {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
             });
         },
-    });
+    };
+    /*
+     * THE AGENT ENGINE IN ITS OWN PROCESS (the host split, phase 1; the owner, 2026-10-31: "the actions agents take should
+     * not be routed through my UI … All work should be handled on the host side"). Every session — its provider, its ACP
+     * parsing, its ledger, its thread writes, its containment — runs in `genie-host`; this process keeps a replica it reads
+     * synchronously and sends commands to. A window that freezes, crashes or restarts no longer stops an agent, and an
+     * agent's work no longer runs on the thread that routes the person's keystrokes. `GENIE_AGENT_HOST=in-process` keeps
+     * the engine here (diagnosis only); a host that cannot start falls back to it, said on the Deck.
+     */
+    if (agentHostMode(process.env) === 'process') {
+        agentEngineLink = await connectAgentEngine({
+            callbacks: engineCallbacks,
+            launch: {
+                runtimeDir: runtimeDir(genieHome()),
+                logsDir: join(genieHome(), 'logs'),
+                // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
+                build: hostBuild(app.getVersion(), join(here, 'host.js')),
+                hostScript: join(here, 'host.js'),
+                execPath: process.execPath,
+                genieHome: genieHome(),
+                env: process.env,
+                log: lifecycleLog,
+            },
+            records: () => registry?.listAgents() ?? [],
+            onError: (kind, error) => mainErrors.record(kind, error),
+            agentName: (id) => registry?.find(id)?.name ?? id,
+            log: lifecycleLog,
+        });
+        if (agentEngineLink === null) mainErrors.record('agent-host', new Error('Genie could not start its agent host, so agents run inside the window this time (see logs/genie-host.log).'));
+        host = agentEngineLink?.client ?? null;
+    }
+    if (host === null) {
+        /*
+         * THE SPAWN LEDGER (hosting plan 1.5 / 1.6), when the engine runs HERE. Every agent run's processes are written down
+         * as they start and forgotten when a stop VERIFIES they ended; whatever a previous Genie left running — a crash, a
+         * Task-Manager kill, an installer — is ended here, BEFORE anything is started or restored, from that record only
+         * (pid, start time and name must all match). In `genie-host` the host does this itself, at its own start.
+         */
+        const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
+        spawnLedger.sweep(systemProcessTree, lifecycleLog);
+        // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
+        // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
+        // once, here, on the Deck — its drivers then refuse to start rather than run an agent uncontained. The folder is keyed
+        // by the supervisor's source (genie#1259); what other sources left beside it is removed afterwards, off the boot path,
+        // never what a running process was started from.
+        const supervisor = await prepareGenieSupervisor(runtimeDir(genieHome())).catch((error: unknown) => {
+            const why = error instanceof Error ? error.message : String(error);
+            lifecycleLog(`containment unready reason=${why}`);
+            console.error(`[genie] agents cannot start contained: ${why}`);
+            mainErrors.record('containment-unready', error);
+            return null;
+        });
+        if (supervisor !== null) {
+            void removeStaleSupervisorBuilds(runtimeDir(genieHome()), { current: supervisor, runningImages: supervisorImagesRunning }).then(
+                (sweep) => {
+                    for (const path of sweep.removed) lifecycleLog(`supervisor stale removed path=${path}`);
+                    for (const path of sweep.running) lifecycleLog(`supervisor stale kept reason=running path=${path}`);
+                    for (const path of sweep.failed) lifecycleLog(`supervisor stale kept reason=remove-failed path=${path}`);
+                    if (sweep.unread) lifecycleLog('supervisor stale kept reason=process-listing-unread');
+                },
+                (error: unknown) => lifecycleLog(`supervisor stale sweep failed reason=${error instanceof Error ? error.message : String(error)}`),
+            );
+        }
+        host = new SessionHost({
+            userData: genieHome(),
+            // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
+            currentRecord: (id) => registry?.find(id) ?? null,
+            lifecycle: {
+                spawned: (agentId, run, processes) => {
+                    spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
+                    lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);
+                },
+                ended: (agentId, run, verdict) => {
+                    if (verdict.verified) {
+                        spawnLedger.forget('agent', agentId, run);
+                        lifecycleLog(`exit kind=agent owner=${agentId} run=${run} verified ended=${verdict.ended}`);
+                        return;
+                    }
+                    // Kept in the ledger: the next boot ends what is still running. Said on the Deck — never a quiet success.
+                    if (verdict.survivors.length > 0) spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes: verdict.survivors });
+                    lifecycleLog(`refused kind=agent owner=${agentId} run=${run} survivors=${describeProcesses(verdict.survivors)} reason=${verdict.reason}`);
+                    const name = registry?.find(agentId)?.name ?? agentId;
+                    mainErrors.record('stop-unverified', new Error(`${name}: ${verdict.reason}`));
+                },
+                straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
+            },
+            // Doctor mode beside this Genie holds the workspace it runs an agent in; starting one there meanwhile is refused.
+            heldElsewhere: (record) => {
+                const hold = doctorHoldNow(genieHome());
+                return hold !== null && hold.workspaceId === record.workspaceId
+                    ? `doctor mode is running an agent in this workspace (pid ${hold.pid}); stop it there, or close doctor mode, then start ${record.name}`
+                    : null;
+            },
+            ...engineCallbacks,
+        });
+    }
 
     // Healthy means this process is up and answering, which is the only claim the local
     // workstation chip can honestly make from in here. A real health model belongs with
     // remote workstations, where there is something to be unreachable.
     await registry.load({ name: hostname(), healthy: true });
+    // The agent host reads each agent's record per call (genie#1188): every record now, and each change as it lands.
+    if (agentEngineLink) {
+        const client = agentEngineLink.client;
+        client.recordsChanged();
+        registry.subscribeAgentRecords(() => client.recordsChanged());
+    }
     /*
      * EVERY CHAT'S UNSENT DRAFT (genie#1261, main/chat-draft-store.ts), kept here so it survives a restart and a reload —
      * Genie 1 kept its part-typed answers in main the same way (v0.7.0-beta.342 main/ask/force-question.ts:1118, 1181-1217).
@@ -1391,7 +1447,9 @@ async function boot(): Promise<void> {
             stopAll: recordThenStopAll({
                 markRecorded: () => quit.markRecorded(),
                 record: () => recordShutdownNow(),
-                stopAll: (onLeft) => host?.stopAll(onLeft) ?? Promise.resolve(),
+                // Then the agent host itself, gracefully (the host split): it runs on Genie's binary, so the installer must
+                // not find it running — the orphan scan would end it hard.
+                stopAll: async (onLeft) => { await (host?.stopAll(onLeft) ?? Promise.resolve()); await agentEngineLink?.shutdown(); },
                 onRecordError: (error) => {
                     const why = error instanceof Error ? error.message : String(error);
                     lifecycleLog(`shutdown-record failed reason=${why}`);
@@ -1470,10 +1528,10 @@ async function boot(): Promise<void> {
         return host.start(record, cwdFor(record));
     });
 
-    ipcMain.handle('genie:stop-agent', (_event, raw: unknown) => {
+    ipcMain.handle('genie:stop-agent', async (_event, raw: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false };
-        return { ok: host.stop(record.id) };
+        return { ok: await host.stop(record.id) };
     });
 
     // `Stop this turn` (the chat's context line, the Agent view's header): the current turn ends, the agent keeps
@@ -1492,12 +1550,12 @@ async function boot(): Promise<void> {
         return host.cancel(record.id);
     });
 
-    ipcMain.handle('genie:prompt', (_event, raw: unknown, text: unknown, files: unknown) => {
+    ipcMain.handle('genie:prompt', async (_event, raw: unknown, text: unknown, files: unknown) => {
         const record = agentFromRenderer(raw);
         const attachments = attachmentsFromRenderer(files);
         if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
         // The composer: the turn is started by YOU, and the ledger says so.
-        const sent = host.promptWith(record.id, text, attachments, 'you');
+        const sent = await host.promptWith(record.id, text, attachments, 'you');
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
     });
 
@@ -2876,16 +2934,20 @@ async function boot(): Promise<void> {
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
         // from before the ledger (beta.32 and earlier) left on an agent's thread.
-        sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
+        // NEVER from a window that ADOPTED a running agent host: its providers are the host's live agents, not leftovers.
+        if (agentEngineLink?.how !== 'adopted') sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
         const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {
                 const record = registry?.find(agentId as AgentId);
                 if (!record || !host) return;
-                host.start(record, cwdFor(record));
-                // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
-                // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
-                if (resume && !host.prompt(record.id, RESUME_AFTER_RESTART, 'genie')) void host.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+                const engine = host;
+                void (async () => {
+                    await engine.start(record, cwdFor(record));
+                    // A start that was refused has no session to take the resume prompt: it is KEPT as owed, and the agent's
+                    // Restart delivers it (genie#1238). It used to be dropped, and the interrupted work with it.
+                    if (resume && !(await engine.prompt(record.id, RESUME_AFTER_RESTART, 'genie'))) await engine.recordOwed(record.id, RESUME_AFTER_RESTART, 'genie');
+                })();
             }, at);
         }
     });
@@ -2914,7 +2976,7 @@ async function boot(): Promise<void> {
     composed.approvals.onChange(() => registry?.touch());
     // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the notice waits.
     // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
-    const wakeAgent = (agentId: string): boolean => {
+    const wakeAgent = async (agentId: string): Promise<boolean> => {
         const record = registry?.find(agentId as AgentId);
         if (!record || !host) return false;
         const refused = startRefusal(workspaceOps, record, {
@@ -2922,7 +2984,7 @@ async function boot(): Promise<void> {
             cap: agentCapFrom(composed.settings.snapshotFor(record.workspaceId) ?? {}),
         });
         if (refused) { console.log(`[genie] a notice for ${record.name} waits: ${refused}`); return false; }
-        return host.start(record, cwdFor(record)).ok;
+        return (await host.start(record, cwdFor(record))).ok;
     };
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
     // An app's message (genie#1345, the owner's D1): an automated agent is told now — woken, at most once per window by
@@ -3569,7 +3631,11 @@ const QUIT_WRITES_MS = 5_000;
 /** The shutdown pass's wait (SessionHost.drained), bounded, and then the quit again — which before-quit lets through. */
 function drainWritesThenQuit(): Promise<void> {
     let bound: ReturnType<typeof setTimeout> | undefined;
-    const drained = (host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve()).catch(() => { /* an unwritten row never blocks a quit */ });
+    // With the agent host (the host split, phase 1): its sessions' writes drained, then the host itself ended gracefully —
+    // a quit stops everything, as before (whether the host should outlive a quit is the owner's decision O1).
+    const drained = (host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve())
+        .then(() => agentEngineLink?.shutdown(QUIT_WRITES_MS))
+        .catch(() => { /* an unwritten row never blocks a quit */ });
     return Promise.race([drained, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
         .finally(() => { clearTimeout(bound); app.quit(); });
 }

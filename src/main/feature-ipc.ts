@@ -64,7 +64,7 @@ export interface FeaturePorts {
      * A message that must reach a running agent (SessionHost.deliver): an approval's note, after a Genie approval is
      * answered on the Deck or a toast (beta.33 item 16). Absent = no sessions here, and a note is refused, never dropped.
      */
-    readonly deliverToAgent?: ((agentId: string, text: string) => boolean) | undefined;
+    readonly deliverToAgent?: ((agentId: string, text: string) => boolean | Promise<boolean>) | undefined;
     /** Tailscale on this machine (main/tailscale-cli.ts, Tynn #821): its cached status, up, install. */
     readonly tailscale?: {
         status(): import('./tailscale-cli.js').TailscaleStatus | null;
@@ -1372,7 +1372,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                         : null;
                     if (text !== null && !ports.deliverToAgent) throw new Error('your note cannot reach the agent from here; answer without it, or from its own window');
                     if (!services.approvals.resolve(command.approvalId, command.choice)) throw new Error(`no pending approval ${command.approvalId}`);
-                    if (text !== null && !ports.deliverToAgent!(action.item.agentId!, text)) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
+                    if (text !== null && !(await ports.deliverToAgent!(action.item.agentId!, text))) throw new Error(`answered — but ${action.item.agentName ?? 'the agent'} is not running, so your note was not delivered`);
                     break;
                 }
                 case 'list-done':

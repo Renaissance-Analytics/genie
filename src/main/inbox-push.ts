@@ -34,7 +34,8 @@ export interface InboxPushPorts {
         /** Turns ended in the agent's current run. */
         turnsEndedThisRun(agentId: AgentId): number;
         probe(agentId: AgentId): LiveSession | null;
-        prompt(agentId: AgentId, text: string, by?: string | null, context?: PromptContext): boolean;
+        /** Answers synchronously in-process, or with the agent host's promise (the host split, phase 1). */
+        prompt(agentId: AgentId, text: string, by?: string | null, context?: PromptContext): boolean | Promise<boolean>;
     };
     /**
      * The notices due (compose's `inboxReminders`): decides and marks them sending; never sends. `mail`: the messages a
@@ -48,7 +49,7 @@ export interface InboxPushPorts {
      * Start the session of an agent that has none — main's open-agent path, refusing by name for an asleep workspace or
      * the agent cap. Answers whether it started; its start event then delivers the notice. Absent = mail waits.
      */
-    readonly wake?: ((agentId: AgentId) => boolean) | undefined;
+    readonly wake?: ((agentId: AgentId) => boolean | Promise<boolean>) | undefined;
     /**
      * APP MAIL (genie#1345, the owner's D1): how a message an APP sent reaches its agent — `push` (told now, woken if
      * stopped), `push-no-wake` (told now if it can take a turn, never woken: the app wake allowance is spent) or
@@ -90,17 +91,22 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             const run = host.runOf(id);
             if (run === null) { settled(id, false); continue; }
             // Out BEFORE the prompt: the prompt itself announces a change, and that re-entry must see it in flight.
-            out.set(id, { run, endedBefore: host.turnsEndedThisRun(id) });
-            let taken = false;
+            const sent = { run, endedBefore: host.turnsEndedThisRun(id) };
+            out.set(id, sent);
+            // Not taken: the notice is untold — unless this one is no longer the notice out (settled meanwhile).
+            const untold = (): void => {
+                if (out.get(id) !== sent) return;
+                out.delete(id);
+                settled(id, false);
+            };
+            let taken: boolean | Promise<boolean>;
             try {
                 taken = host.prompt(id, r.text, 'genie', r.mail ? { mail: r.mail } : {});
             } catch {
                 taken = false;
             }
-            if (!taken) {
-                out.delete(id);
-                settled(id, false);
-            }
+            if (taken === false) untold();
+            else if (taken !== true) void taken.then((ok) => { if (!ok) untold(); }, untold);
         }
     };
     // Only an ARRIVAL wakes an agent with no session: on the host's own events (its stop among them) it is not restarted.
@@ -110,12 +116,18 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         // A manual agent is given no turn of its own for an app's message: the next event it has tells it.
         if (app === 'next-turn') return;
         if (host.runOf(to as AgentId) === null && ports.wake && app !== 'push-no-wake') {
-            let started = false;
+            let started: boolean | Promise<boolean> = false;
             try { started = ports.wake(to as AgentId); } catch { started = false; }
-            if (started) {
-                if (app === 'push') ports.appWoke?.(to as AgentId);
-                return; // its start announces itself, and that event delivers the notice
-            }
+            const after = (ok: boolean): void => {
+                if (ok) {
+                    if (app === 'push') ports.appWoke?.(to as AgentId);
+                    return; // its start announces itself, and that event delivers the notice
+                }
+                push(to);
+            };
+            if (typeof started === 'boolean') after(started);
+            else void started.then(after, () => after(false));
+            return;
         }
         push(to);
     });

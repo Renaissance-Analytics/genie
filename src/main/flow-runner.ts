@@ -221,7 +221,7 @@ export interface AgentSessionsPort {
     session(agentId: string): { readonly running: boolean; readonly turnState: string; readonly pendingApproval?: unknown } | null;
     /** This run's ledger rows; their `event` is a stream event. */
     rows(agentId: string): readonly { readonly event: unknown }[];
-    prompt(agentId: string, text: string, by: string): boolean;
+    prompt(agentId: string, text: string, by: string): boolean | Promise<boolean>;
     subscribe(listener: (agentId: string) => void): () => void;
 }
 
@@ -256,7 +256,7 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
             throw new HeldBack(`${name} is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn`);
         }
         const from = deps.sessions.rows(id).length;
-        if (!deps.sessions.prompt(id, text, deps.by)) throw new Error(`${name} stopped before the prompt could be delivered`);
+        if (!(await deps.sessions.prompt(id, text, deps.by))) throw new Error(`${name} stopped before the prompt could be delivered`);
         await new Promise<void>((done, fail) => {
             let off: () => void = () => {};
             const check = (): boolean => {
