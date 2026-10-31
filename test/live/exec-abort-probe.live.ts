@@ -73,7 +73,6 @@ async function waitPids(f: string, n: number, ms = 30_000): Promise<number[]> {
 
 interface Row { scenario: string; round: number; targets: string; survivorsAtResolve: string; chainAfter: string; escaped: string; busyMs: number; busyWho: string }
 const rows: Row[] = [];
-const everyPid = new Set<number>();
 let n = 0;
 
 async function one(scenario: string, round: number, depth: number, ign: boolean, earlyMs: number | null): Promise<void> {
@@ -89,7 +88,6 @@ async function one(scenario: string, round: number, depth: number, ign: boolean,
     const r = await run;
     const targets = [...reaped];
     const chainAtResolve = readPids(out);
-    for (const p of [...targets.map((t) => t.pid), ...chainAtResolve]) everyPid.add(p);
     const survivors = [...targets.map((t) => `${t.pid}(${t.name})`).filter((_, i) => alive(targets[i]!.pid)), ...chainAtResolve.filter((p) => !targets.some((t) => t.pid === p) && alive(p)).map((p) => `${p}(chain)`)];
     // Time to removable.
     const t0 = Date.now();
@@ -110,7 +108,6 @@ async function one(scenario: string, round: number, depth: number, ign: boolean,
     // Did the chain grow after the abort resolved (a process spawned after the stop's reading)?
     await sleep(earlyMs === null ? 300 : 1500);
     const chainAfter = readPids(out);
-    for (const p of chainAfter) everyPid.add(p);
     const escaped = chainAfter.filter(alive);
     rows.push({ scenario, round, targets: targets.map((t) => `${t.pid}(${t.name})`).join(' '), survivorsAtResolve: survivors.join(' '), chainAfter: chainAfter.join(' '), escaped: escaped.join(' '), busyMs, busyWho });
     n += 1;
@@ -140,8 +137,9 @@ for (const r of rows) {
 console.log('=== SUMMARY (survivors = a reaped target or chain pid alive when the abort resolved; escaped = alive 0.3-1.5 s later; busy = rmdir failed at first try; stuck = still busy after 10 s)');
 for (const [k, s] of by) console.log(`${k.padEnd(9)} runs=${s.runs} survivorsAtResolve=${s.survivors} escaped=${s.escaped} busyAtFirst=${s.busy} maxBusyMs=${s.maxBusy} stuck10s=${s.stuck}`);
 
-// Clean up whatever is left: only pids this probe saw, and their descendants.
-const leftovers = wmi().filter((p) => everyPid.has(p.pid) || everyPid.has(p.ppid));
+// Clean up whatever is left — ONLY processes whose command line names this probe's own folder. A match by pid or parent
+// pid alone is not an identity: an earlier version did that and killed svchost/sppsvc on the VM through recycled pids.
+const leftovers = wmi().filter((p) => p.cmd.includes(root));
 console.log(`=== LEFTOVERS at end: ${leftovers.map((p) => `${p.pid}<${p.ppid} ${p.name}`).join(', ') || 'none'}`);
 for (const p of leftovers) spawnSync('taskkill', ['/PID', String(p.pid), '/F'], { windowsHide: true });
 await sleep(1000);
