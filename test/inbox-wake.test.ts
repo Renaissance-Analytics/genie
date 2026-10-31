@@ -268,3 +268,34 @@ describe('a STOPPED or FAILED agent', () => {
         expect(uncollected()).toBe(1);
     });
 });
+
+describe('main wires it', () => {
+    it('main’s policy (appMailPushPorts): a coalescing window, the cap from APP_LIMITS, manual agents never started by an app', async () => {
+        const { appMailPushPorts, INBOX_COALESCE_MS } = await import('../src/main/inbox-push.js');
+        const { APP_LIMITS } = await import('../src/core/app-inbox.js');
+        let now = 0;
+        const ports = appMailPushPorts({ modeOf: (id) => (id === 'auto' ? 'automated' : 'manual'), now: () => now, schedule: time.schedule });
+        expect(ports.coalesceMs).toBe(INBOX_COALESCE_MS);
+        expect(INBOX_COALESCE_MS).toBeGreaterThan(0);
+        expect(INBOX_COALESCE_MS).toBeLessThanOrEqual(5_000);
+        expect(ports.appMail('auto' as AgentId, { from: APP_FROM })).toBe('push');
+        expect(ports.appMail('man' as AgentId, { from: APP_FROM })).toBe('push-no-wake');
+        expect(ports.appMail('auto' as AgentId, { from: 'agt_x' })).toBeNull();
+        for (let i = 0; i < APP_LIMITS.wakeTurns; i++) ports.appBudget.spend('auto' as AgentId);
+        expect(ports.appMail('auto' as AgentId, { from: APP_FROM })).toBe('push-no-wake');
+        now = APP_LIMITS.wakeWindowMs;
+        expect(ports.appMail('auto' as AgentId, { from: APP_FROM })).toBe('push');
+    });
+
+    it('main.ts spreads appMailPushPorts, with a real timer, into the MAIL push (source guard)', async () => {
+        const { readFileSync } = await import('node:fs');
+        const code = readFileSync(join(__dirname, '../src/main/main.ts'), 'utf8')
+            .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+        const start = code.indexOf('wireInboxPush({\n        inbox: composed.inbox');
+        expect(start).toBeGreaterThan(-1);
+        const call = code.slice(start, code.indexOf('\n    });', start));
+        expect(call).toContain('...appMailPushPorts({');
+        expect(call).toContain('setTimeout(fn, ms)');
+        expect(call).not.toContain('appWoke');
+    });
+});
