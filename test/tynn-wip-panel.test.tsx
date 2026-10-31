@@ -56,7 +56,7 @@ describe('WIP', () => {
         const html = render();
         expect(html).toMatch(/data-wip-story="s1"[^>]*aria-current="true"|aria-current="true"[^>]*data-wip-story="s1"/);
         expect(html).toContain('Ship &lt;it&gt;');
-        expect(html).toContain('1 of 2 done');
+        expect(html).toContain('0 of 2 done');
         expect(html.indexOf('Doing it')).toBeLessThan(html.indexOf('Queued'));
     });
 

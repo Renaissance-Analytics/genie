@@ -174,7 +174,8 @@
           "done": ["done"]
         },
         "selection": "story: the story whose slug ?story= names, else the lens's first story; its tasks are shown",
-        "answer": ["project_id", "view", "active_version", "available_versions", "stories", "selected_story", "tasks", "story_counts"],
+        "answer": ["project_id", "view", "active_version", "available_versions", "stories", "selected_story", "tasks", "story_counts", "claims"],
+        "claims": "the board's claim settings for this person (board.data.claims: mode, policy, can_assign), which tynn.ai's page reads from its project; a backlog task's Start follows board.data.claims.start",
         "counts": ["active", "attention", "done", "backlog"],
         "fields": {
           "story": ["id", "slug", "story_number", "title", "status", "description", "task_count", "tasks_done"],

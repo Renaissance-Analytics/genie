@@ -2,9 +2,9 @@ import type { ActivityFeed } from '../../core/activity-feed.js';
 import { useMinuteTick } from '../use-activity-feeds.js';
 import { PathBrowse } from './HostPathPicker.js';
 import { IssueWatchPanel } from './IssueWatchPanel.js';
-import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnTab } from './TynnTab.js';
 import { ErrorBoundary } from './ErrorBoundary.js';
-import type { TynnBoardHost } from '../../core/tynn-board.js';
+import type { TynnTabHost } from '../../core/tynn-pages.js';
 import type { IssueWatchPanelView } from '../../core/issue-watch.js';
 import { useCallback, useEffect, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
 import { DesignedTab } from './DesignedTab.js';
@@ -166,7 +166,7 @@ export interface WorkspaceProps {
     /** The GitHub panel's Refresh (Tynn reads the repos now). Absent = no Refresh. */
     onRefreshIssueWatch?: (() => void) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295): the board of THIS workspace's linked project. Absent = no Tynn tab. */
-    tynnBoard?: TynnBoardHost | undefined;
+    tynnBoard?: TynnTabHost | undefined;
     /** A Watched repos checkbox (Tynn's switch). Absent = the switches are shown, not settable. */
     onSetIssueWatchRepo?: ((owner: string, repo: string, change: { enabled: boolean } | { includeUpstream: boolean }) => void) | undefined;
     panel?: 'files' | null | undefined;
@@ -890,8 +890,8 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
             {onScreen === 'terminals' ? <ErrorBoundary surface="Terminals" resetKeys={[workspace.id]}>{terminalsBody}</ErrorBoundary> : null}
             {/* GITHUB, THROUGH ISSUEWATCH (Tynn #806): what is open and what happened, for a workspace linked to Tynn. */}
             {onScreen === 'github' && issueWatch ? <div className="min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="GitHub" resetKeys={[workspace.id]}><IssueWatchPanel view={issueWatch} {...(onRefreshIssueWatch ? { onRefresh: onRefreshIssueWatch } : {})} {...(onSetIssueWatchRepo ? { onSetRepo: onSetIssueWatchRepo } : {})} /></ErrorBoundary></div> : null}
-            {/* THE TYNN TAB (genie#1295): the linked project's board, natively — no user menu, no project picker. */}
-            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnBoardTab workspaceId={workspace.id} host={tynnBoard} /></ErrorBoundary></div> : null}
+            {/* THE TYNN TAB (genie#1295): the linked project's workspace (its pages, the board among them), natively — no user menu, no project picker. */}
+            {onScreen === 'tynn' && tynnBoard && issueWatch?.linked === true ? <div data-workspace-body="tynn" className="flex min-h-0 flex-1 overflow-auto"><ErrorBoundary surface="Tynn" resetKeys={[workspace.id]}><TynnTab workspaceId={workspace.id} host={tynnBoard} /></ErrorBoundary></div> : null}
             {/* A TAB YOU DESIGNED (Tynn #282): its grid of panels, designed in place. */}
             {onScreen.startsWith('tab:') ? (() => {
                 const tab = designed.tabs.find((t) => `tab:${t.id}` === view);

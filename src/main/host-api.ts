@@ -114,6 +114,8 @@ export interface HostApiDeps {
         /** The Tynn tab (genie#1295): the workspace's Tynn board at a scope, and one action on it. Optional: refused where absent. */
         tynnBoard?(workspaceId: string, scope: unknown): Promise<unknown>;
         tynnBoardAction?(workspaceId: string, input: unknown): Promise<unknown>;
+        /** The tab's other pages (WIP, …), read whole. Optional: refused where absent. */
+        tynnPage?(workspaceId: string, page: unknown, query: unknown): Promise<unknown>;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<unknown>;
         removeRepo(workspaceId: string, slug: string): Promise<unknown>;
         /** Optional: a host without it answers the call with a refusal rather than failing to build its deps. */
@@ -328,6 +330,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.tynnBoard':
                 if (!deps.workspaceOps.tynnBoard) throw new Error('this host has no Tynn tab');
                 return deps.workspaceOps.tynnBoard(str(args[0]), args[1]);
+            case 'workspaces.tynnPage':
+                if (!deps.workspaceOps.tynnPage) throw new Error('this host has no Tynn tab');
+                return deps.workspaceOps.tynnPage(str(args[0]), args[1], args[2]);
             case 'workspaces.tynnBoardAction':
                 if (!deps.workspaceOps.tynnBoardAction) throw new Error('this host has no Tynn tab');
                 return deps.workspaceOps.tynnBoardAction(str(args[0]), args[1]);
