@@ -1,5 +1,5 @@
 import { InMemoryTransport, ToolDefinition, type JsonObject } from '@particle-academy/prism-mcp-server';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Registration } from '../src/main/mcp-tools.js';
 import { genieMcpServer, type GenieMcpServer } from '../src/main/mcp-server.js';
 
@@ -123,32 +123,73 @@ describe('genieMcpServer — long waits (genie#1360)', () => {
 });
 
 /**
- * genie#1360, the SECOND limit (measured on omarchy-test with the real claude -p 2.1.314 after 0.4.0): SSE heartbeat
- * comments keep the 60 s transport timeout away, but Claude Code ALSO aborts a call that "sent no response or progress
- * for 302s" — every approval wait of 330, 660, 960 and 1860 s died at 304 s, while a 15-minute `services exec`, which
- * reports its output size every 10 s, came back at 902 s. So while any call is in flight, Genie's server repeats the
- * handler's latest progress message (with the time waited) on an interval: a wait that is still waiting says so.
+ * genie#1360, the SECOND limit (measured on omarchy-test with the real claude -p 2.1.314): SSE heartbeat comments keep
+ * the 60 s transport timeout away, but Claude Code ALSO aborts a call that "sent no response or progress for 302s" —
+ * on 0.4.0 every approval wait of 330, 660, 960 and 1860 s died at 304 s.
+ *
+ * prism-mcp-server 0.5.0 answers that itself: a streamed tools/call carrying a progressToken gets a keepalive
+ * `notifications/progress` every 30 s (its default `progressKeepaliveMs`) repeating the handler's latest message.
+ * Genie RELIES on it and adds no repeat of its own: a wait says what it waits for ONCE, and prism keeps saying it.
+ * 0.5.0's wire `progress` is an activity counter (strictly increasing); the handler's own report is in
+ * `_meta['particle-academy/progress']`, whose `origin` tells a handler's report from prism's keepalive.
  */
-describe('genieMcpServer — progress while a call waits (genie#1360)', () => {
-    it('repeats the latest progress message while the handler waits, and stops when it answers', async () => {
+describe('genieMcpServer — a waiting call keeps reporting progress through prism’s keepalive (genie#1360)', () => {
+    const PRISM_KEEPALIVE_MS = 30_000;
+    type Progress = { progress: number; total?: number; message?: string; _meta?: { 'particle-academy/progress'?: { origin?: string; nativeWork?: { message?: string; progress?: number; total?: number } } } };
+
+    /** One streamed call to a handler that reports `said` once and then waits while `keepalives` × 30 s pass. */
+    async function waitingCall(said: string, keepalives: number): Promise<{ progress: Progress[]; last: { result?: unknown } | undefined }> {
         let release: () => void = () => {};
+        let reported: () => void = () => {};
+        const reportedOnce = new Promise<void>((r) => { reported = r; });
         const quiet: Registration = {
             definition: new ToolDefinition('quiet', 'Says one thing, then waits until released', { type: 'object', properties: {} }),
             handler: (_args: JsonObject, context) => new Promise((resolve) => {
-                context.progress?.('waiting for the person’s approval');
+                context.progress?.(said);
                 release = () => resolve({ text: 'released', isError: false });
+                reported();
             }),
         };
-        server = genieMcpServer({ registrations: [quiet], port: 0, progressEveryMs: 40 });
-        const { url, token } = await server.start();
-        const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'quiet', arguments: {}, _meta: { ...META, progressToken: 'p7' } } }) });
-        setTimeout(() => release(), 400);
-        const text = await res.text();
-        const messages = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as { method?: string; params?: { message?: string }; result?: unknown });
-        const progress = messages.filter((m) => m.method === 'notifications/progress').map((m) => m.params?.message ?? '');
-        // The handler said it once; the server said it again, several times, before the answer.
-        const repeats = progress.filter((m) => m.startsWith('waiting for the person’s approval') && m !== 'waiting for the person’s approval');
-        expect(repeats.length).toBeGreaterThanOrEqual(3);
-        expect(messages.at(-1)?.result).toBeDefined();
+        // Only the interval clock is faked: the sockets are real, and every repeating timer — prism's, or one Genie might
+        // add — runs on the same clock, so half an hour passes in an instant.
+        vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+        try {
+            server = genieMcpServer({ registrations: [quiet], port: 0 });
+            const { url, token } = await server.start();
+            const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'quiet', arguments: {}, _meta: { ...META, progressToken: 'p7' } } }) });
+            expect(res.headers.get('content-type')).toMatch(/^text\/event-stream/);
+            await reportedOnce;
+            vi.advanceTimersByTime(keepalives * PRISM_KEEPALIVE_MS + 1_000);
+            release();
+            const text = await res.text();
+            const messages = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as { method?: string; params?: Progress; result?: unknown });
+            return { progress: messages.filter((m) => m.method === 'notifications/progress').map((m) => m.params!), last: messages.at(-1) };
+        } finally {
+            vi.useRealTimers();
+        }
+    }
+    const origin = (p: Progress) => p._meta?.['particle-academy/progress']?.origin;
+
+    it('prism repeats the handler’s message every 30 s, verbatim, until the answer; the wire progress only climbs', async () => {
+        const waiting = 'waiting for the person’s approval';
+        const { progress, last } = await waitingCall(waiting, 4);
+        // 4 × 30 s passed: prism said it again four times — its own keepalive, carrying the handler's words unchanged.
+        const keepalives = progress.filter((p) => origin(p) === 'keepalive');
+        expect(keepalives.map((p) => p.message)).toEqual([waiting, waiting, waiting, waiting]);
+        expect(keepalives.map((p) => p._meta?.['particle-academy/progress']?.nativeWork?.message)).toEqual([waiting, waiting, waiting, waiting]);
+        // 0.5.0: the wire `progress` is an activity counter — every notification higher than the one before.
+        const counters = progress.map((p) => p.progress);
+        expect(counters.every((c, i) => i === 0 || c > counters[i - 1]!)).toBe(true);
+        expect(last?.result).toBeDefined();
+    });
+
+    it('Genie adds no repeat of its own: the handler’s one report is the only report not from prism', async () => {
+        const waiting = 'waiting for mail';
+        const { progress } = await waitingCall(waiting, 61);
+        // 30.5 minutes of waiting. A repeat of Genie's own reaches prism as a HANDLER report (it goes through the
+        // handler's progress), so there must be exactly one — the one the handler made — and no words it did not say.
+        expect(progress.filter((p) => origin(p) !== 'start' && p.message !== waiting).map((p) => p.message)).toEqual([]);
+        expect(progress.filter((p) => origin(p) === 'handler').map((p) => p.message)).toEqual([waiting]);
+        expect(progress.filter((p) => origin(p) === 'keepalive')).toHaveLength(61);
     });
 });

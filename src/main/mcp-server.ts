@@ -1,16 +1,23 @@
 import { LoopbackHttpTransport, Server, type ServerTransport } from '@particle-academy/prism-mcp-server';
-import type { Registration, ToolContext, ToolHandler } from './mcp-tools.js';
+import type { Registration } from './mcp-tools.js';
 
 /**
  * GENIE'S OWN MCP SERVER (§6.9): prism-mcp-server on a loopback HTTP transport — a literal 127.0.0.1 address,
  * POST-only, stateless, a 256-bit bearer minted at listen — serving every Genie tool registration.
  *
- * A LONG CALL IS A STREAM (genie#1360, prism-mcp-server 0.4.0): a `tools/call` that accepts `text/event-stream` is
+ * A LONG CALL IS A STREAM (genie#1360, prism-mcp-server 0.4.0+): a `tools/call` that accepts `text/event-stream` is
  * answered as SSE — opened at once, a heartbeat every 10 s, the result as the last event. Claude Code drops any call
  * whose response says nothing for 60 s (measured: every wait past 60 s failed at 61.9 s on one held JSON body), so a
  * 10-minute `agentinbox receive wait` or a 30-minute approval needs the stream. A JSON-only client (Codex) keeps its
- * one JSON body. The URL
- * and the token become `GENIE_MCP_URL` / `GENIE_MCP_TOKEN` in every terminal's environment and the endpoint
+ * one JSON body.
+ *
+ * A WAITING CALL KEEPS SAYING SO — PRISM DOES IT (prism-mcp-server 0.5.0). Claude Code also aborts a call that "sent no
+ * response or progress for 302s" (measured, claude 2.1.314), and heartbeat comments do not count. prism sends a
+ * keepalive `notifications/progress` every 30 s on a streamed call that carries a progressToken, repeating the
+ * handler's latest message. Genie relies on that and repeats nothing itself: a wait reports what it waits for once
+ * (`ToolProgress`). Genie used to wrap every handler in its own 30 s repeat (#1364); a test fails if one comes back.
+ *
+ * The URL and the token become `GENIE_MCP_URL` / `GENIE_MCP_TOKEN` in every terminal's environment and the endpoint
  * config sync writes into a workspace.
  *
  * "Native transport verified at boot" (§6.4): `verify()` is a REAL `server/discover` through the server's
@@ -29,8 +36,6 @@ export interface GenieMcpServerInput {
      * tokens config sync wrote stay valid; written when a new port or token had to be taken. Absent = random each time.
      */
     readonly remember?: { read(): { port: number; token: string } | null; write(value: { port: number; token: string }): void } | undefined;
-    /** How often a waiting call's latest progress is repeated (genie#1360); default `PROGRESS_EVERY_MS`. */
-    readonly progressEveryMs?: number | undefined;
 }
 
 export type Verification = { ok: true; versions: readonly string[] } | { ok: false; reason: string };
@@ -45,45 +50,15 @@ export interface GenieMcpServer {
 
 const NOT_LISTENING = 'the MCP server is not listening';
 
-/**
- * How often a call still in flight repeats its latest progress (genie#1360). Claude Code aborts a call that "sent no
- * response or progress for 302s" (measured, claude 2.1.314) — SSE heartbeat comments do not count — so a wait for the
- * person's approval (up to 30 min), mail (10 min) or a migration (15 min) must keep SAYING it is waiting.
- */
-export const PROGRESS_EVERY_MS = 30_000;
-
-/**
- * The handler, with its progress repeated every `everyMs` while it runs: the latest message it reported (or "working")
- * and how long it has waited. Only where the call has a progress channel (an SSE response with a token); stopped the
- * moment the handler answers. One place for every tool, so no wait can forget to.
- */
-export function withProgressKeepalive(handler: ToolHandler, everyMs: number): ToolHandler {
-    return async (args, context) => {
-        const report = context.progress;
-        if (!report) return handler(args, context);
-        const started = Date.now();
-        let latest = 'working';
-        const progress: ToolContext['progress'] = (message, value, total) => { latest = message; report(message, value, total); };
-        const timer = setInterval(() => report(`${latest} — ${Math.round((Date.now() - started) / 1000)} s`), everyMs);
-        try {
-            return await handler(args, { ...context, progress });
-        } finally {
-            clearInterval(timer);
-        }
-    };
-}
-
 export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
     const build = (options: { port: number; token?: string }): Server => {
         // `abortOnDisconnect` (genie#1360): a client that goes away fires its call's signal, so the wait behind it — an
         // approval, `services exec`, `agentinbox receive wait` — is withdrawn instead of running on for nobody.
         const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport({ ...options, abortOnDisconnect: true }) });
-        const everyMs = input.progressEveryMs ?? PROGRESS_EVERY_MS;
         for (const r of input.registrations) {
             const visible = r.visible;
-            const handler = withProgressKeepalive(r.handler, everyMs);
-            if (visible) s.register(r.definition, handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });
-            else s.register(r.definition, handler as never);
+            if (visible) s.register(r.definition, r.handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });
+            else s.register(r.definition, r.handler as never);
         }
         return s;
     };
