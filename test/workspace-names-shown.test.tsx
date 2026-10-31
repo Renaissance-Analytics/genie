@@ -140,16 +140,18 @@ describe('the phone draws names', () => {
         delivery: null, comms: null, context: null,
     } as unknown as AgentRow;
 
-    it('a question, an agent row and the upload recipient name the workspace; the address sent stays an id', () => {
+    it('a question, an agent row and the workspace selector name the workspace; the id stays in attributes only', () => {
         const html = renderToStaticMarkup(
             <MobileShell host="alphar" locked={false} refusal={null} items={[item]} answering={null} onAnswer={() => {}} onDisconnect={() => {}}
                 workspaces={workspaces}
                 agents={{ rows: [row], onOpen: () => {} }}
-                upload={{ agents: [{ id: 'agent_kai', name: 'kai', provider: 'claude', workspaceId: ID }], sending: false, outcome: null, onSend: () => {} }} />,
+                selectedWorkspace={null}
+                onSelectWorkspace={() => {}} />,
         );
-        expect(html).toContain(`value="${ID}:claude:kai"`);
-        expect(textOf(html)).toMatch(/kai@Tynn/);
-        expect((textOf(html).match(/Tynn/g) ?? []).length).toBeGreaterThanOrEqual(4);
+        expect(html).toContain(`data-mobile-ws="${ID}"`);
+        // The question (named by its workspace, and its workspace), the agent row's, and the selector's chip — the inbox
+        // upload's recipient is gone (genie#1346).
+        expect((textOf(html).match(/Tynn/g) ?? []).length).toBe(4);
         noIdsShown(html);
     });
 });

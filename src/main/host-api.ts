@@ -13,6 +13,9 @@ import type { Finished } from './attention-store.js';
 import type { HostApi } from './remote-host.js';
 import { restartWithHandoff, type RestartPorts } from './restart-with-handoff.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
+import type { Attachment } from '../core/prompt-content.js';
+import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
+import type { TreeNode } from '../core/files-panel.js';
 
 /**
  * THE HOST API (§6.8) — what a remote connection may perform on THIS Genie: one `invoke` over the
@@ -42,6 +45,8 @@ export interface HostApiDeps {
         cancel(agentId: AgentRecord['id']): CancelOutcome;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
         resumeLimit(provider: string): void;
+        /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
+        promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): { ok: true } | { ok: false; reason: string | null };
         subscribe(listener: (agentId: string) => void): () => void;
     };
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
@@ -60,6 +65,16 @@ export interface HostApiDeps {
     /** A phone's upload (§6.8): the bytes land in a temp file for exactly as long as the inbox copies them. */
     uploads: {
         sendFile(to: string, text: string, name: string, bytes: Uint8Array): Promise<{ ok: true; messageId: string } | { ok: false; reason: string }>;
+    };
+    /**
+     * THE PHONE'S FILES (genie#1346): the files host the panel uses (main/files-host.ts) — confined to the workspace, under
+     * its size cap — and an upload into a folder of it. Absent = the phone's file browser is told this host has none.
+     */
+    files?: {
+        children(workspaceId: string, dir: string): Promise<readonly TreeNode[] | null>;
+        open(workspaceId: string, path: string): Promise<OpenResult>;
+        readBytes(workspaceId: string, path: string): Promise<BytesResult>;
+        upload(workspaceId: string, dir: string, name: string, bytes: Uint8Array): Promise<FileOpResult>;
     };
     serviceEnvFor(workspaceId: string): Record<string, string>;
     workspaceOps: {
@@ -186,6 +201,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
+                // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
+                if (Array.isArray(args[2])) {
+                    const attachments = attachmentsOf(args[2]);
+                    if (!r) return { ok: false, reason: 'unknown agent' };
+                    if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
+                    if (!deps.host.promptWith) return { ok: false, reason: 'this host does not take files in a message' };
+                    const sent = deps.host.promptWith(r.id, text, attachments, 'you');
+                    return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
+                }
                 return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text, 'you') };
             }
             case 'resolvePrompt': {
@@ -386,6 +410,17 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.activity?.feeds(str(args[0])) ?? {};
             case 'inbox.sendFile':
                 return deps.uploads.sendFile(str(args[0]), str(args[1]), str(args[2]), Buffer.from(str(args[3]), 'base64'));
+            case 'files.children':
+                return deps.files ? deps.files.children(str(args[0]), str(args[1])) : null;
+            case 'files.open':
+                return deps.files ? deps.files.open(str(args[0]), str(args[1])) : { ok: false, path: str(args[1]), error: NO_FILES_HERE };
+            case 'files.readMedia':
+                return deps.files ? deps.files.readBytes(str(args[0]), str(args[1])) : { ok: false, path: str(args[1]), error: NO_FILES_HERE };
+            case 'files.upload': {
+                const file = args[2] as { name?: unknown; bytes?: unknown } | null;
+                if (!file || typeof file.name !== 'string' || !(file.bytes instanceof Uint8Array)) return { ok: false, reason: 'an upload is a name with bytes' };
+                return deps.files ? deps.files.upload(str(args[0]), str(args[1]), file.name, file.bytes) : { ok: false, reason: NO_FILES_HERE };
+            }
         }
     };
 
@@ -400,13 +435,15 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             return live ?? terminalWorkspaces.get(terminalId) ?? null;
         },
         workspacePaths: () => Object.fromEntries((deps.snapshot().workspaces ?? []).map((w) => [w.id, w.path])),
-        onEvent: (listener) => {
+        onEvent: (listener, options) => {
             /*
              * An agent's detail AT MOST every AGENT_PUSH_INTERVAL_MS, the latest state last (the owner, 2026-10-20: "severe
              * UI lag"): a busy agent changes many times a second and its detail carries its ledger; built and sent per
              * event, it cost main a core. The first change goes at once.
              */
-            const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => listener(`agent:${agentId}`, deps.detailFor(agentId)), schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
+            // An agent NOBODY listening wants is not built at all (genie#1346): a phone watches one agent, not every one.
+            const wants = options?.wantsAgent ?? (() => true);
+            const agents = new Coalescer<string>({ intervalMs: AGENT_PUSH_INTERVAL_MS, flush: (agentId) => { if (wants(agentId)) listener(`agent:${agentId}`, deps.detailFor(agentId)); }, schedule: deps.schedule ?? realSchedule, now: deps.now ?? (() => Date.now()) });
             const offs = [
                 deps.subscribeSnapshot((s) => listener('snapshot', s)),
                 deps.host.subscribe((agentId) => agents.request(agentId)),
@@ -421,4 +458,17 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             return () => { for (const off of offs) off(); };
         },
     };
+}
+
+const NO_FILES_HERE = 'this host does not offer its files remotely';
+
+/** A prompt's files as the host hands them over (staged bytes, remote-host.ts): name, type, bytes — or `null`. */
+function attachmentsOf(list: readonly unknown[]): Attachment[] | null {
+    const out: Attachment[] = [];
+    for (const a of list) {
+        const f = a as { name?: unknown; type?: unknown; bytes?: unknown } | null;
+        if (!f || typeof f.name !== 'string' || !(f.bytes instanceof Uint8Array)) return null;
+        out.push({ name: f.name, type: typeof f.type === 'string' ? f.type : '', bytes: f.bytes });
+    }
+    return out;
 }

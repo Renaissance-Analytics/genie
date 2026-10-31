@@ -91,11 +91,24 @@ export const REMOTE_METHODS = [
     'updates.install',
     /** A phone's upload (§6.8): bytes over the socket → the inbox's byte copy; never a path from the device. */
     'inbox.sendFile',
+    /*
+     * THE PHONE'S FILE BROWSER (genie#1346): one folder, a text file, a media file's bytes — through the files host the panel
+     * uses, confined to the workspace — and an upload into a folder of it, from bytes staged on the connection.
+     */
+    'files.children',
+    'files.open',
+    'files.readMedia',
+    'files.upload',
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
 /** Protocol-level calls that are not bridge methods: the baton and the owner's lock. */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock'] as const;
+/*
+ * `agent.watch` / `agent.unwatch` (genie#1346): a phone's window on ONE agent's ledger, then patches (core/mobile-wire.ts).
+ * `upload.begin` / `upload.chunk` / `upload.abort`: bytes staged on the connection under the 1 MiB frame cap, taken by
+ * `files.upload` or a prompt's attachments.
+ */
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only';
@@ -197,6 +210,11 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'updates.install': 'upgrade',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',
+    // The phone's files (genie#1346): reading a workspace's files is a read; an upload writes into it.
+    'files.children': 'read',
+    'files.open': 'read',
+    'files.readMedia': 'read',
+    'files.upload': 'write',
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.
@@ -211,7 +229,7 @@ export function capabilityOf(method: RemoteMethod): RemoteCapability {
 /** Methods whose FIRST argument is an agent id — what a guest's workspace scope is checked against. */
 export const AGENT_SCOPED_METHODS: readonly RemoteMethod[] = ['agentDetail', 'openAgent', 'stopAgent', 'cancelTurn', 'resumeLimit', 'providerLogin', 'prompt', 'resolvePrompt', 'answerApproval', 'restartWithHandoff', 'takeOver', 'agents.restart', 'agents.previewDelete', 'agents.delete', 'agents.switchDriver', 'agents.setBudget', 'agents.setMode', 'agents.setAccessScope', 'agents.setAutoApprove', 'agents.setManageTabs', 'agents.setDrivePages', 'agents.setIssueWatch', 'agents.setPermissions', 'agents.setModel', 'agents.models', 'agents.diagnose'];
 /** Methods whose FIRST argument is a workspace id. */
-export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction'];
+export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'activity', 'terminals.open', 'terminals.attach', 'terminals.list', 'workspaces.hibernate', 'workspaces.wake', 'workspaces.remove', 'workspaces.listRepos', 'workspaces.addRepo', 'workspaces.removeRepo', 'workspaces.removeRepoLock', 'workspaces.settings', 'workspaces.setSetting', 'workspaces.resetSetting', 'workspaces.setGoverns', 'workspaces.setDefaultAgent', 'workspaces.setColor', 'workspaces.commitsSince', 'workspaces.locateRepo', 'workspaces.tynnBoard', 'workspaces.tynnBoardAction', 'files.children', 'files.open', 'files.readMedia', 'files.upload'];
 
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
@@ -231,8 +249,14 @@ export interface PreAuth {
     readonly readonly: boolean;
 }
 
+/**
+ * What kind of screen says hello (genie#1346). `mobile` is a phone: it receives the snapshot and the agents it watches,
+ * never terminal bytes, and is refused terminals. Absent = another Genie's window, which hears everything, as before.
+ */
+export type ClientProfile = 'mobile';
+
 export type WireMessage =
-    | { kind: 'hello'; auth: AuthRequest; label?: string }
+    | { kind: 'hello'; auth: AuthRequest; label?: string; profile?: ClientProfile }
     | { kind: 'welcome'; connectionId: string; host: string; isOwner: boolean; workspaceId: string | null; token?: string }
     | { kind: 'refused'; reason: string }
     | { kind: 'call'; id: number; method: RemoteMethod | ControlMethod; args: unknown[] }
@@ -264,6 +288,7 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
                 auth.kind === 'relay';
             if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, a share {id, secret} or relay' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
+            if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
             return { ok: true, message: raw as unknown as WireMessage };
         }
         case 'call': {
