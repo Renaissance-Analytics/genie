@@ -1,6 +1,7 @@
 import { initTheme } from '@particle-academy/react-fancy';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import { registerAppIcons } from './icons.js';
 import './styles.css';
 // xterm's stylesheet, via Fancy's kit-named export rather than the third-party package name.
@@ -44,4 +45,5 @@ initTheme();
 const host = document.getElementById('root');
 if (!host) throw new Error('#root is missing from index.html');
 
-createRoot(host).render(<App />);
+// THE LAST NET (parity audit #7; Genie 1 `renderer/pages/_app.tsx:91`): under every surface's own boundary, the whole window's.
+createRoot(host).render(<ErrorBoundary surface="Genie" whole><App /></ErrorBoundary>);

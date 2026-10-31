@@ -53,6 +53,7 @@ import { planStepInsert, type ChatInsert } from '../core/plan-pill.js';
 import { chatRefLists } from '../core/chat-markup.js';
 import { installScreen } from '../core/install-screen.js';
 import { InstallScreen } from './components/InstallScreen.js';
+import { ErrorBoundary } from './components/ErrorBoundary.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { ChatSendOutcome } from '../core/chat-send.js';
 
@@ -586,6 +587,7 @@ export function Shell({
                      * board audit. The skeleton (`workspaces === null`) still belongs to the Dashboard.
                      */}
                     {canServe && parsed.surface === 'dashboard' && (snapshot.workspaces === null || snapshot.workspaces.length > 0) ? (
+                        <ErrorBoundary surface="Dashboard">
                         <Dashboard
                             pulsing={pulsingWorkspaces}
                             rowEmoji={rowEmoji}
@@ -621,15 +623,17 @@ export function Shell({
                             }}
                             onChat={() => onNavigate(formatRoute({ ...parsed, chat: 'genie' }))}
                         />
+                        </ErrorBoundary>
                     ) : null}
 
-                    {canServe && parsed.surface === 'knowledge' ? <KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /> : null}
-                    {canServe && parsed.surface === 'flows' ? <FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /> : null}
-                    {canServe && parsed.surface === 'hosting' ? <HostingSurface tab={parsed.tab} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /> : null}
-                    {canServe && parsed.surface === 'settings' ? <SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} /> : null}
-                    {canServe && parsed.surface === 'browser' ? <BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /> : null}
+                    {canServe && parsed.surface === 'knowledge' ? <ErrorBoundary surface="Knowledge"><KnowledgeSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'flows' ? <ErrorBoundary surface="Flows"><FlowsSurface data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'hosting' ? <ErrorBoundary surface="Hosting" resetKeys={[parsed.tab]}><HostingSurface tab={parsed.tab} data={features} onAction={onFeature} onNavigate={onNavigate} workspaces={snapshot.workspaces ?? []} adding={features.hosting?.adding ? { kind: 'site', ...features.hosting.adding } : features.services?.adding ? { kind: 'service', ...features.services.adding } : undefined} onCloseForm={() => onFeature({ kind: features.hosting?.adding ? 'hosting.cancelForm' : 'services.cancelForm' })} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'settings' ? <ErrorBoundary surface="Settings" resetKeys={[parsed.section]}><SettingsSurface data={features} onAction={onFeature} onNavigate={onNavigate} section={parsed.section} providers={providerStatuses(features, snapshot.agents, onProviderLogin)} workspaces={snapshot.workspaces ?? []} remoteConnect={remoteConnect} update={{ state: updateState, onCheck: () => { void updates.check(); } }} /></ErrorBoundary> : null}
+                    {canServe && parsed.surface === 'browser' ? <ErrorBoundary surface="Browser"><BrowserSurface data={features} onAction={onFeature} onNavigate={onNavigate} onBrowserBounds={onBrowserBounds} /></ErrorBoundary> : null}
 
                     {canServe && parsed.surface === 'deck' ? (
+                        <ErrorBoundary surface="Deck">
                         <Deck
                             items={snapshot.deckItems ?? []}
                             focusId={parsed.item}
@@ -650,6 +654,7 @@ export function Shell({
                                 else if (action === 'update-install') askInstall();
                             }}
                         />
+                        </ErrorBoundary>
                     ) : null}
 
                     {canServe && parsed.surface === 'agent' && agentDetail ? (
@@ -678,6 +683,7 @@ export function Shell({
                                 />
                             ) : null}
                             <div className="min-h-0 flex-1">
+                            <ErrorBoundary surface="Agent view" resetKeys={[parsed.agentId]}>
                             <AgentView
                                 chatRefs={chatRefs}
                                 planOpen={planOpen}
@@ -722,6 +728,7 @@ export function Shell({
                                 onStart={onStartAgent}
                                 terminals={terminals}
                             />
+                            </ErrorBoundary>
                             </div>
                         </div>
                     ) : null}
@@ -732,6 +739,7 @@ export function Shell({
                      * not-found as an unknown agent, below, rather than a blank body.
                      */}
                     {canServe && parsed.surface === 'workspace' && workspaceFor(parsed.workspaceId) ? (
+                        <ErrorBoundary surface="Workspace" resetKeys={[parsed.workspaceId]}>
                         <Workspace
                             key={parsed.workspaceId}
                             // Settings → Hosting opens the same modals as the row's indicators.
@@ -773,6 +781,7 @@ export function Shell({
                             pluginPanels={features.plugins?.panels ?? []}
                             ops={workspaceOps}
                         />
+                        </ErrorBoundary>
                     ) : null}
                     {canServe && parsed.surface === 'workspace' && snapshot.workspaces !== null && !workspaceFor(parsed.workspaceId) ? (
                         <div data-surface="workspace-unknown" className="flex h-full flex-col items-center justify-center gap-3 text-[13px] text-[var(--fg-3)]">
@@ -824,6 +833,7 @@ export function Shell({
                  * reachable to close it — like Genie 1's, which slid in below its title bar over a scrim.
                  */}
                 {featureAsk ? (
+                    <ErrorBoundary surface="AgentInbox" resetKeys={[parsed.inbox ?? null]}>
                     <InboxFlyout
                         value={inboxOpen ? parsed.inbox ?? '' : null}
                         inbox={features.inbox}
@@ -835,6 +845,7 @@ export function Shell({
                         deleteThread={(key) => onFeature({ kind: 'inbox.deleteThread', key })}
                         onNavigate={openInbox}
                     />
+                    </ErrorBoundary>
                 ) : null}
 
                 {/*
@@ -853,6 +864,7 @@ export function Shell({
                 />
                 {/* THE CHAT, always: a column of this row, after the page — never over it, never closed. */}
                 <div data-dock-frame="chat" className="flex min-h-0 shrink-0" style={{ width: chatDockWidth }}>
+                    <ErrorBoundary surface="Chat" resetKeys={[chatThread?.agentId ?? null]}>
                     <ChatFlyout
                         thread={chatThread}
                         drafts={chatDrafts}
@@ -888,6 +900,7 @@ export function Shell({
                         onAccountRetry={chatThread && onAccountRetry && chatSession?.accountPaused ? () => onAccountRetry(chatThread.agentId) : undefined}
                         onDesignLogin={chatThread && onDesignLogin && chatSession?.designLogin ? () => onDesignLogin(chatThread.agentId) : undefined}
                     />
+                    </ErrorBoundary>
                 </div>
             </div>
         </div>
