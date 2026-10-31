@@ -119,6 +119,9 @@ export const ICON_NAMES: readonly string[] = [
     'loader',
     // The Tynn tab's live board (genie#1295 B4): following Tynn, or reconnecting to it.
     'radio', 'wifi-off',
+    // The Tynn tab's Issues (genie#1295 I1): each issue type's icon (named in data, ISSUE_TYPE_LOOK; tynn.ai's `broom` is
+    // `brush-cleaning` in the kit's Lucide).
+    'book', 'shield', 'archive', 'brush-cleaning',
     // The file panel's word-wrap toggle (beta.33 item 15; Genie 1's IconWrap).
     'wrap-text',
     // The Open existing / Import from Git wizard (Add workspace parity item 7): its header and its Next.

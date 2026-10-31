@@ -22,6 +22,21 @@ import type { SocketLike } from './issue-watch-client.js';
  */
 export interface BoardLiveRing { readonly ids: readonly string[]; readonly catchUp: boolean }
 
+/**
+ * WHAT A FOLLOWER LISTENS TO: a project's channel, where its door signs it, the events that ring, and the ids a ring names.
+ * The board's is the default; the Tynn tab's Issues follow the queue's own channel the same way (row I1,
+ * main/tynn-issues-live.ts). One implementation of the socket's life, never two.
+ */
+export interface TynnLiveFeed {
+    readonly channel: (projectId: string) => string;
+    /** The door's signing path under `/api/v1/projects/{id}`. */
+    readonly authPath: string;
+    readonly events: ReadonlySet<string>;
+    readonly ringIds: (event: string, data: unknown) => string[];
+}
+
+export const TYNN_BOARD_FEED: TynnLiveFeed = { channel: liveChannel, authPath: BOARD_LIVE.auth.path, events: new Set(BOARD_LIVE.events), ringIds };
+
 export interface TynnBoardLivePorts {
     /** The signed-in Tynn (requests ride the pairing token); null = signed out. */
     readonly tynn: () => { request(path: string, init: { method: 'GET' | 'POST'; body?: unknown }): Promise<{ ok: boolean; status: number; json(): Promise<unknown> }> } | null;
@@ -30,12 +45,13 @@ export interface TynnBoardLivePorts {
     readonly schedule: (fn: () => void, ms: number) => () => void;
     readonly onRing: (projectId: string, ring: BoardLiveRing) => void;
     readonly onState: (projectId: string, state: LiveState) => void;
+    /** What to follow; the board's when left out. */
+    readonly feed?: TynnLiveFeed;
 }
-
-const EVENTS: ReadonlySet<string> = new Set(BOARD_LIVE.events);
 
 export class TynnBoardLive {
     readonly #ports: TynnBoardLivePorts;
+    readonly #feed: TynnLiveFeed;
     /** Open boards: project → how many tabs follow it. */
     readonly #watchers = new Map<string, number>();
     readonly #states = new Map<string, LiveState>();
@@ -47,6 +63,7 @@ export class TynnBoardLive {
 
     constructor(ports: TynnBoardLivePorts) {
         this.#ports = ports;
+        this.#feed = ports.feed ?? TYNN_BOARD_FEED;
     }
 
     /** Follow a project's board until the answer is called (one call per open tab). */
@@ -135,12 +152,12 @@ export class TynnBoardLive {
             return;
         }
         if (frame.event === 'pusher:subscription_error') { this.#set(projectId, 'off'); return; }
-        if (EVENTS.has(frame.event)) this.#ports.onRing(projectId, { ids: ringIds(frame.event, frame.data), catchUp: false });
+        if (this.#feed.events.has(frame.event)) this.#ports.onRing(projectId, { ids: this.#feed.ringIds(frame.event, frame.data), catchUp: false });
     }
 
     #projectOf(channel: string | undefined): string | null {
         if (channel === undefined) return null;
-        for (const id of this.#watchers.keys()) if (liveChannel(id) === channel) return id;
+        for (const id of this.#watchers.keys()) if (this.#feed.channel(id) === channel) return id;
         return null;
     }
 
@@ -150,9 +167,9 @@ export class TynnBoardLive {
         const tynn = this.#ports.tynn();
         if (socket === null || socketId === null) return;
         if (tynn === null) { this.#set(projectId, 'off'); return; }
-        const channel = liveChannel(projectId);
+        const channel = this.#feed.channel(projectId);
         try {
-            const res = await tynn.request(`/api/v1/projects/${encodeURIComponent(projectId)}${BOARD_LIVE.auth.path}`, { method: 'POST', body: { socket_id: socketId, channel_name: channel } });
+            const res = await tynn.request(`/api/v1/projects/${encodeURIComponent(projectId)}${this.#feed.authPath}`, { method: 'POST', body: { socket_id: socketId, channel_name: channel } });
             const body = res.ok ? ((await res.json()) as { auth?: unknown }) : null;
             if (this.#socket !== socket) return;
             // Tynn will not sign it (404 for every refusal): this board is not live. Not retried in a loop.

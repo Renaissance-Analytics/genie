@@ -1,5 +1,6 @@
 import { useActivityFeeds } from './use-activity-feeds.js';
 import type { TynnTabHost } from '../core/tynn-pages.js';
+import type { TynnIssuesHost } from '../core/tynn-issues.js';
 import { rateLimitAlert, type Headroom } from '../core/headroom.js';
 import { deviceExpiryAlert } from '../core/device-expiry.js';
 import { PairPrompt } from './components/PairPrompt.js';
@@ -194,6 +195,8 @@ export interface ShellProps {
     readCommits?: ((workspaceId: string, sinceMs: number) => Promise<readonly RepoCommit[]>) | undefined;
     /** The Tynn tab's door to Tynn (genie#1295); absent = no Tynn tab in this window. */
     tynnBoard?: TynnTabHost | undefined;
+    /** The Tynn tab's Issues (genie#1295 I1); absent = the tab has no Issues page in this window. */
+    tynnIssues?: TynnIssuesHost | undefined;
     /** NOT DRAWN since 2026-10-19: a workspace's file panel shows inline or pops out. Removed with the pin model. */
     filesWorkspaceId?: string | null | undefined;
     /** Pin or unpin a workspace's file panel into the single dock slot (§4.4). */
@@ -326,6 +329,7 @@ export function Shell({
     filesPopped = [],
     readCommits,
     tynnBoard,
+    tynnIssues,
     onPopOutFiles,
     onBringBackFiles,
     onPauseAgent,
@@ -763,6 +767,7 @@ export function Shell({
                             view={parsed.view}
                             issueWatch={features.issueWatch?.[parsed.workspaceId] ?? null}
                             tynnBoard={tynnBoard}
+                            tynnIssues={tynnIssues}
                             onRefreshIssueWatch={() => onFeature({ kind: 'issueWatch.refresh', workspaceId: parsed.workspaceId })}
                             onSetIssueWatchRepo={(owner, repo, change) => onFeature({ kind: 'issueWatch.setRepo', workspaceId: parsed.workspaceId, owner, repo, ...change })}
                             rows={snapshot.agents}

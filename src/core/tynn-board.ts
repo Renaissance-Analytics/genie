@@ -763,12 +763,13 @@ export function applyBoardChanges(view: BoardView, changes: BoardChanges): { vie
 /** How long a burst of rings is gathered into one ask. */
 export const LIVE_QUIET_MS = 300;
 
-export interface BoardFollowerPorts {
+/** `C`: what an answer is — the board's changes by default; the Tynn tab's Issues follow their queue's (row I1). */
+export interface BoardFollowerPorts<C = BoardChanges> {
     /** The cursor the board is up to: from its read, then each applied answer. Null: this board cannot follow. */
     cursor(): string | null;
-    fetch(cursor: string, ids: readonly string[]): Promise<{ ok: true; changes: BoardChanges } | { ok: false; state: string; reason: string }>;
+    fetch(cursor: string, ids: readonly string[]): Promise<{ ok: true; changes: C } | { ok: false; state: string; reason: string }>;
     /** Apply an answer (and take its cursor); answers the ids it named that the board holds no card for. */
-    apply(changes: BoardChanges): readonly string[];
+    apply(changes: C): readonly string[];
     refused(refusal: { state: string; reason: string }): void;
     schedule(fn: () => void, ms: number): () => void;
 }
@@ -778,8 +779,8 @@ export interface BoardFollowerPorts {
  * catch-up; one ask at a time, so a ring while one is out is asked after it, from the cursor it returned; and one more
  * ask for rows an answer named but did not carry. It never re-reads the board.
  */
-export class BoardFollower {
-    readonly #ports: BoardFollowerPorts;
+export class BoardFollower<C = BoardChanges> {
+    readonly #ports: BoardFollowerPorts<C>;
     readonly #pending = new Set<string>();
     #cancel: (() => void) | null = null;
     #armedMs: number | null = null;
@@ -788,7 +789,7 @@ export class BoardFollower {
     #urgent = false;
     #stopped = false;
 
-    constructor(ports: BoardFollowerPorts) {
+    constructor(ports: BoardFollowerPorts<C>) {
         this.#ports = ports;
     }
 
@@ -822,7 +823,7 @@ export class BoardFollower {
         this.#urgent = false;
         if (cursor === null) return;
         this.#busy = true;
-        let answer: Awaited<ReturnType<BoardFollowerPorts['fetch']>>;
+        let answer: Awaited<ReturnType<BoardFollowerPorts<C>['fetch']>>;
         try {
             answer = await this.#ports.fetch(cursor, ids);
         } catch (error) {

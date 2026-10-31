@@ -501,6 +501,7 @@ function Detail({ detail, op, onClose, onAction, onRetry }: { detail: BoardDetai
 }
 
 /** Live, getting there, or the link dropped — an icon named for a screen reader; nothing when the board is not live. */
+/** The live icon (rows B4 and I1): following Tynn, getting there, or reconnecting; nothing when not live. */
 export function LiveMark({ live }: { live: LiveState | undefined }) {
     if (live === undefined || live === 'off') return null;
     const look = live === 'live'
