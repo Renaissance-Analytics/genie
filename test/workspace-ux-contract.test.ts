@@ -15,6 +15,17 @@ import {
     BOARD_TRANSITIONS,
 } from '../src/core/tynn-board.js';
 import {
+    HOME_ACTIONS,
+    HOME_ANSWER,
+    HOME_DASHBOARD,
+    HOME_DATA_API,
+    HOME_DETAILS,
+    HOME_DETAILS_FIELDS,
+    HOME_LIVE,
+    HOME_QUERY,
+    HOME_RANGES,
+    HOME_SECTIONS,
+    HOME_STATES,
     PAGE_API,
     RELEASES_ANSWER,
     RELEASES_DATA_API,
@@ -266,5 +277,37 @@ describe('the Tynn tab\'s Releases, against the contract (0.9.0)', () => {
         const { about: _about, web: _web, ...shape } = releases!.data.live;
         expect(RELEASES_LIVE).toEqual(shape);
         expect([...RELEASES_STATES].sort()).toEqual(releases!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s Home, against the contract (0.10.0)', () => {
+    type Home = { data: Record<string, unknown> & { api: { method: string; path: string }; write: { action: string; guard: string; fields: string[] }; live: Record<string, unknown> }; states: Array<{ id: string }>; actions: Action[] };
+    const home = contract.surfaces.find((s) => s.id === 'home') as unknown as Home | undefined;
+
+    it('is in the contract', () => {
+        expect(home).toBeDefined();
+    });
+
+    it('reads the Home where the contract says, with its query, sections, ranges and answer', () => {
+        expect(HOME_DATA_API).toEqual(home!.data.api);
+        expect(HOME_QUERY).toEqual(home!.data.query);
+        expect(HOME_SECTIONS).toEqual(home!.data.sections);
+        expect(HOME_RANGES.map(Number)).toEqual(home!.data.ranges);
+        expect(HOME_ANSWER).toEqual(home!.data.answer);
+        expect(HOME_DASHBOARD).toEqual(home!.data.dashboard);
+        expect(HOME_DETAILS).toEqual(home!.data.details);
+    });
+
+    it('saves the Details at the contract\'s door, with exactly the web form\'s fields', () => {
+        expect([...HOME_ACTIONS]).toEqual(home!.actions.map((a) => a.id));
+        for (const action of home!.actions) expect({ id: action.id, ...PAGE_API[action.id] }).toEqual({ id: action.id, ...action.api });
+        expect(home!.data.write.action).toBe('details.update');
+        expect([...HOME_DETAILS_FIELDS]).toEqual(home!.data.write.fields);
+    });
+
+    it('goes live as the contract says, with a view for every state', () => {
+        const { about: _about, web: _web, ...shape } = home!.data.live;
+        expect(HOME_LIVE).toEqual(shape);
+        expect([...HOME_STATES].sort()).toEqual(home!.states.map((s) => s.id).sort());
     });
 });

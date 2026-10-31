@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.9.0/contracts/workspace-ux/0.9.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.10.0/contracts/workspace-ux/0.10.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.9.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.9.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.10.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.10.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -400,6 +400,63 @@
       ],
       "actions": [
         { "id": "releases.list", "web": "GET releases", "api": { "method": "GET", "path": "/releases" } }
+      ]
+    },
+    {
+      "id": "home",
+      "title": "Home",
+      "tynn": { "page": "v2/Project/Show", "route": "show", "pageAccess": "details" },
+      "data": {
+        "api": { "method": "GET", "path": "/home" },
+        "query": ["section", "range", "version"],
+        "sections": ["dashboard", "details"],
+        "ranges": [7, 30, 90],
+        "answer": ["project_id", "section", "dashboard", "details"],
+        "dashboard": ["range", "metrics", "taskBreakdown", "storyBreakdown", "sparkline", "charts", "availableVersions", "version", "versionComparison", "attention", "recentActivity"],
+        "details": ["can_edit", "identity", "vision", "ai_guidance", "knowledge", "repositories", "members", "agents", "workflow", "approvals", "related"],
+        "write": {
+          "action": "details.update",
+          "guard": "can_edit",
+          "fields": [
+            "name", "slug", "vision", "ai_guidance",
+            "personas", "strategic_themes", "constraints", "risk_register", "technologies", "scripts", "integration_catalog", "servers", "design_tokens",
+            "feature_locking", "claim_tasks", "claimant_policy", "auto_version_number", "versioning_pattern", "max_active_versions", "is_ops_project", "is_gapp", "sacred_agent_name", "hitl_policy"
+          ],
+          "answer": "the Home, section details, as it now stands"
+        },
+        "live": {
+          "about": "The Home follows Tynn as the project's work changes. An event is a doorbell: the client reads the open section again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's Home goes live on project.{projectId}: the board's events ring there, and so does project.updated (a Details save). The app hears the board's events on the board's own channel, signed at the board door for whoever may open the board; project.updated rings only on project.{projectId}, which the door does not sign, so another person's Details save shows in the tab on its next read",
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "the Home is being read" },
+        { "id": "section", "what": "Dashboard and Details, and the person switches between them" },
+        { "id": "range", "what": "the dashboard's period: 7, 30 or 90 days" },
+        { "id": "version-picker", "what": "the version the verdict, burndown, progress and scope change are about" },
+        { "id": "verdict", "what": "will the version land: the forecast's label, the date or why there is none, tasks and stories done, forecast, target and scope added, and the burndown" },
+        { "id": "rate-of-work", "what": "velocity with its trend, cycle time, scope change and corrections" },
+        { "id": "versions", "what": "shipped, active and on deck side by side" },
+        { "id": "throughput", "what": "tasks closed per day and agent activity charts, each saying when it has no data yet" },
+        { "id": "attention", "what": "blocked and QA stories, with their open tasks, linked to WIP's attention lens" },
+        { "id": "activity", "what": "the latest activity, and status breakdowns of stories and tasks" },
+        { "id": "details", "what": "identity, vision, AI guidance, knowledge, repositories, members, agents, workflow settings, pending approvals and related counts" },
+        { "id": "edit-in-place", "what": "a person who may manage the project edits vision, AI guidance and the workflow settings where they are shown" },
+        { "id": "save", "what": "a save says it is running, then that it worked, or Tynn's reason with Retry" },
+        { "id": "live", "what": "the Home follows Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and the Home is read again once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "details.update", "web": "POST manage.update", "api": { "method": "PATCH", "path": "/details" } }
       ]
     }
   ]
