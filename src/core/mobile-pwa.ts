@@ -75,7 +75,7 @@ export function mobileHtml(html: string, hostName: string): string {
 /** What the worker does with a path on its own origin: the shell's hashed assets and icons from cache, the page from the network first, everything else not at all. */
 export function shellPolicy(pathname: string): 'cache-first' | 'network-first' | null {
     if (pathname === '/mobile' || pathname === '/mobile/') return 'network-first';
-    if (/^\/(?:mobile\/)?assets\/[A-Za-z0-9][A-Za-z0-9._-]*$/.test(pathname) && !pathname.includes('..')) return 'cache-first';
+    if (/^\/(?:mobile\/)?assets\/[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(pathname) && !pathname.includes('..')) return 'cache-first';
     if (/^\/mobile\/(?:icon-[a-z0-9-]+|apple-touch-icon)\.png$/.test(pathname)) return 'cache-first';
     return null;
 }

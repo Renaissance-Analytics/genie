@@ -76,7 +76,9 @@ const ASSET_TYPES: Readonly<Record<string, string>> = {
     png: 'image/png',
 };
 /** One path segment of safe characters. No slash of either kind, no dot-dot, nothing encoded. */
-const ASSET_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+// A leading underscore is Vite's own chunk (`__vite-browser-external-….js`): refusing it 404'd the module graph and the
+// phone's page was blank (measured on omarchy-test, genie#1346). A leading dot is still refused.
+const ASSET_NAME = /^[A-Za-z0-9_][A-Za-z0-9._-]*$/;
 
 /**
  * Which file a request path maps to — an ALLOW-LIST, not a filesystem walk. The page routes serve
