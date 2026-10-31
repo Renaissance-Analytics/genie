@@ -1,8 +1,9 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnPageView, type TynnSectionId, type TynnTabHost, type VipView, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnVipPanel } from './TynnVipPanel.js';
 import { TynnWipPanel } from './TynnWipPanel.js';
 
 /**
@@ -51,7 +52,8 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
     const read = useCallback(async () => {
         if (!host.page) { setState({ state: 'error', reason: 'This Genie cannot read Tynn\'s WIP page.' }); return; }
         const r = await host.page(workspaceId, 'wip', queryRef.current);
-        if (r.ok) setState((s) => ({ state: 'ready', view: r.view, op: s.state === 'ready' ? s.op ?? null : null }));
+        if (r.ok && r.page === 'wip') { const view = r.view; setState((s) => ({ state: 'ready', view, op: s.state === 'ready' ? s.op ?? null : null })); }
+        else if (r.ok) setState({ state: 'error', reason: 'Tynn answered with a different page.' });
         else setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason });
     }, [host, workspaceId]);
     useEffect(() => { void read(); }, [read, query]);
@@ -90,6 +92,64 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
     );
 }
 
+/**
+ * A page read whole and kept live (`refresh: read`): its state, its read, its live icon, and running an action (a board
+ * verb through `act`, a page write through `pageAct`) with progress, then reading it again. WIP has its own copy with
+ * its lens and story; the pages without a query (VIP, Releases, …) share this one.
+ */
+function usePage<V>(workspaceId: string, host: TynnTabHost, page: TynnPage, query: TynnPageQuery, pick: (v: TynnPageView) => V | null) {
+    const [state, setState] = useState<TynnPageState<V>>({ state: 'loading' });
+    const [op, setOp] = useState<BoardOp | null>(null);
+    const [retry, setRetry] = useState<(() => void) | null>(null);
+    const [live, setLive] = useState<LiveState | undefined>(undefined);
+    const pickRef = useRef(pick);
+    pickRef.current = pick;
+    const queryRef = useRef(query);
+    queryRef.current = query;
+    const read = useCallback(async () => {
+        if (!host.page) { setState({ state: 'error', reason: 'This Genie cannot read this Tynn page.' }); return; }
+        const r = await host.page(workspaceId, page, queryRef.current);
+        if (!r.ok) { setState(r.state === 'not-linked' ? { state: 'not-linked' } : r.state === 'signed-out' ? { state: 'signed-out', reason: r.reason } : { state: 'error', reason: r.reason }); return; }
+        const view = pickRef.current(r);
+        setState(view === null ? { state: 'error', reason: 'Tynn answered with a different page.' } : { state: 'ready', view });
+    }, [host, workspaceId, page]);
+    useEffect(() => { void read(); }, [read]);
+    useEffect(() => {
+        const { watch } = host;
+        if (!watch) return undefined;
+        const follower = new PageFollower({ read, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } });
+        const stop = watch(workspaceId, (signal) => { if ('state' in signal) setLive(signal.state); else follower.ring(); });
+        return () => { stop(); follower.stop(); setLive(undefined); };
+    }, [host, workspaceId, read]);
+    const finish = async (r: { ok: true } | { ok: false; state: string; reason: string }) => {
+        if (!r.ok && (r.state === 'not-linked' || r.state === 'signed-out')) {
+            setState(r.state === 'not-linked' ? { state: 'not-linked' } : { state: 'signed-out', reason: r.reason });
+            return;
+        }
+        await read();
+    };
+    const act = async (input: BoardActionInput) => {
+        setRetry(() => () => { void act(input); });
+        await finish(await performBoardAction(host, workspaceId, input, setOp));
+    };
+    const pageAct = async (input: TynnPageActionInput) => {
+        setRetry(() => () => { void pageAct(input); });
+        const run = host.pageAct;
+        if (!run) { setOp({ action: input.action, phase: 'failed', reason: 'This Genie cannot do that on Tynn.' }); return; }
+        await finish(await performBoardAction({ act: (id) => run(id, input) }, workspaceId, { action: input.action, ids: {} }, setOp));
+    };
+    const shown: TynnPageState<V> = state.state === 'ready' ? { ...state, op } : state;
+    return { state: shown, act, pageAct, retry, live };
+}
+
+/** VIP: the lane, Start VIP, each story's move and the Release — live on the board's rings. */
+export function TynnVipTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
+    const p = usePage<VipView>(workspaceId, host, 'vip', NO_QUERY, (r) => (r.page === 'vip' ? r.view : null));
+    return <TynnVipPanel state={p.state} onAction={(i) => { void p.act(i); }} onStart={(i) => { void p.pageAct(i); }} onRetry={p.retry ?? undefined} live={p.live} />;
+}
+
+const NO_QUERY: TynnPageQuery = {};
+
 /** The tab: the page nav, and the page that is open. */
 export function TynnTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
     const [section, setSection] = useState<TynnSectionId>(TYNN_FIRST_SECTION);
@@ -98,7 +158,9 @@ export function TynnTab({ workspaceId, host }: { workspaceId: string; host: Tynn
         <div data-tynn-tab="" className="flex min-h-0 min-w-0 flex-1 flex-col">
             {host.page ? <TynnSectionNav current={section} onSection={setSection} /> : null}
             <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
-                {section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} /> : <TynnBoardTab workspaceId={workspaceId} host={host} />}
+                {section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
+                    : section === 'vip' && host.page ? <TynnVipTab workspaceId={workspaceId} host={host} />
+                        : <TynnBoardTab workspaceId={workspaceId} host={host} />}
             </div>
         </div>
     );

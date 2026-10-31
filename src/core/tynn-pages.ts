@@ -21,14 +21,15 @@ export interface TynnSection { readonly id: TynnSectionId; readonly icon: string
 export const TYNN_SECTIONS: readonly TynnSection[] = [
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
+    { id: 'vip', icon: 'flame', label: 'VIP' },
 ];
 
 /** The page the tab opens on. */
 export const TYNN_FIRST_SECTION: TynnSectionId = 'board';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip'];
+export type TynnPage = 'wip' | 'vip';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'vip'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -198,7 +199,9 @@ export function parseWip(json: unknown): WipView | null {
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'vip'; readonly view: VipView };
+
+const PAGE_PATH: Readonly<Record<TynnPage, string>> = { wip: WIP_DATA_API.path, vip: '/vip' };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
@@ -209,7 +212,7 @@ export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQ
         if (query.story !== undefined && query.story !== '') q.append('story', query.story);
     }
     const s = q.toString();
-    return `/api/v1/projects/${encodeURIComponent(projectId)}${WIP_DATA_API.path}${s === '' ? '' : `?${s}`}`;
+    return `/api/v1/projects/${encodeURIComponent(projectId)}${PAGE_PATH[page]}${s === '' ? '' : `?${s}`}`;
 }
 
 /** Tynn's answer for a page, as the tab draws it; null when it is not that page. */
@@ -218,12 +221,33 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
         const view = parseWip(json);
         return view ? { page, view } : null;
     }
+    if (page === 'vip') {
+        const view = parseVip(json);
+        return view ? { page, view } : null;
+    }
     return null;
 }
+
+// ── A page's own writes (the ones that are not board verbs) ───────────────────────────────────────────────────────
+
+/** Each page write the tab offers, by the contract's action id, at its door (relative to the project's API base). */
+export const PAGE_API: Readonly<Record<string, { readonly method: 'POST' | 'PATCH'; readonly path: string }>> = {
+    'vip.create': { method: 'POST', path: '/vip' },
+};
+
+export function tynnPageActionRequest(projectId: string, action: string): { method: 'POST' | 'PATCH'; path: string } | null {
+    const api = PAGE_API[action];
+    return api ? { method: api.method, path: `/api/v1/projects/${encodeURIComponent(projectId)}${api.path}` } : null;
+}
+
+/** A page write: the contract's action id and its body. */
+export interface TynnPageActionInput { readonly action: string; readonly body?: Readonly<Record<string, unknown>> }
 
 /** What the tab needs from the host: the board, and the workspace's other pages — all of its own project. */
 export interface TynnTabHost extends TynnBoardHost {
     page?(workspaceId: string, page: TynnPage, query: TynnPageQuery): Promise<({ ok: true } & TynnPageView) | BoardRefusal>;
+    /** One of a page's own writes (`vip.create`, …); the board verbs a page offers go through `act`. */
+    pageAct?(workspaceId: string, input: TynnPageActionInput): Promise<{ ok: true } | BoardRefusal>;
 }
 
 export type TynnPageState<V> =
@@ -275,4 +299,68 @@ export class PageFollower {
         this.#reading = false;
         if (this.#again && !this.#stopped) { this.#again = false; this.ring(); }
     }
+}
+
+// ── VIP (surface `vip`, parity row V1) ───────────────────────────────────────────────────────────────────────────────
+
+export const VIP_DATA_API = { method: 'GET', path: '/vip' } as const;
+export const VIP_ANSWER = ['project_id', 'vip_version', 'stories', 'past_vips', 'can_start_vip'] as const;
+export const VIP_FIELDS = {
+    version: ['id', 'number', 'title', 'status'],
+    story: ['id', 'slug', 'story_number', 'title', 'status', 'description', 'task_count', 'tasks_done'],
+    pastVip: ['id', 'number', 'title', 'status', 'story_count', 'ended_at'],
+} as const;
+export const VIP_COLUMNS = ['backlog', 'blocked', 'in_progress', 'qa', 'done'] as const;
+/** Each column's one-click next column (Vip.jsx FLOW); done has none. */
+export const VIP_FLOW: Readonly<Record<(typeof VIP_COLUMNS)[number], string | null>> = { backlog: 'in_progress', blocked: 'in_progress', in_progress: 'qa', qa: 'done', done: null };
+export const VIP_RELEASE = { action: 'version.release', when: 'every story is done (and there is at least one)' } as const;
+export const VIP_START = { action: 'vip.create', guard: 'can_start_vip', body: ['title', 'why'] } as const;
+export const VIP_ACTIONS = ['vip.create', 'story.move', 'version.release'] as const;
+export const VIP_LIVE = { channel: BOARD_LIVE.channel, events: BOARD_LIVE.events, refresh: 'read' } as const;
+export const VIP_STATES = ['loading', 'idle', 'start-form', 'in-flight', 'advance', 'release-gated', 'past-vips', 'transition-refused', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
+/** The web card's move puts a story at the end of its next column. */
+export const VIP_MOVE_ORDER = 999999;
+
+const VIP_LABEL: Readonly<Record<string, string>> = { backlog: 'Backlog', blocked: 'Blocked', in_progress: 'In Progress', qa: 'QA', done: 'Done' };
+
+export interface VipStory extends WipStory { readonly next: string | null }
+export interface VipPast { readonly id: string; readonly number: string | null; readonly title: string; readonly status: string; readonly storyCount: number; readonly endedAt: string | null }
+export interface VipView {
+    readonly version: { readonly id: string; readonly number: string | null; readonly title: string } | null;
+    /** Tasks done of all the VIP's tasks (the rose banner's bar). */
+    readonly progress: { readonly done: number; readonly total: number; readonly percent: number };
+    readonly columns: ReadonlyArray<{ readonly status: string; readonly label: string; readonly stories: readonly VipStory[] }>;
+    readonly allDone: boolean;
+    readonly canStart: boolean;
+    readonly past: readonly VipPast[];
+}
+
+/** Tynn's VIP answer (GET /vip) as the tab draws it; null when it is not the VIP lane. */
+export function parseVip(json: unknown): VipView | null {
+    if (!isRow(json) || !('vip_version' in json) || !Array.isArray(json.stories) || !Array.isArray(json.past_vips)) return null;
+    const v = isRow(json.vip_version) ? json.vip_version : null;
+    const versionId = v ? str(v.id) : null;
+    const stories = rows(json.stories).map(wipStory).filter((x): x is WipStory => x !== null)
+        .map((x): VipStory => ({ ...x, next: VIP_FLOW[x.status as keyof typeof VIP_FLOW] ?? null }));
+    const total = stories.reduce((n, x) => n + x.taskCount, 0);
+    const done = stories.reduce((n, x) => n + x.tasksDone, 0);
+    return {
+        version: v && versionId !== null ? { id: versionId, number: str(v.number), title: str(v.title) ?? '' } : null,
+        progress: { done, total, percent: total > 0 ? Math.round((done / total) * 100) : 0 },
+        columns: VIP_COLUMNS.map((status) => ({ status, label: VIP_LABEL[status] ?? status, stories: stories.filter((x) => x.status === status) })),
+        allDone: stories.length > 0 && stories.every((x) => x.status === 'done'),
+        canStart: json.can_start_vip === true,
+        past: rows(json.past_vips).map((r): VipPast | null => {
+            const id = str(r.id);
+            return id === null ? null : { id, number: str(r.number), title: str(r.title) ?? '', status: str(r.status) ?? '', storyCount: num(r.story_count), endedAt: str(r.ended_at) };
+        }).filter((x): x is VipPast => x !== null),
+    };
+}
+
+/** Start VIP work: a title and why it cannot wait, both required; nothing else is sent. */
+export function vipCreateBody(raw: unknown): { title: string; why: string } | null {
+    if (!isRow(raw)) return null;
+    const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+    const why = typeof raw.why === 'string' ? raw.why.trim() : '';
+    return title !== '' && why !== '' ? { title, why } : null;
 }

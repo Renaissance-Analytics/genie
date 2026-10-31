@@ -138,6 +138,10 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'task.ready': { running: 'Moving to QA…', done: 'Ready for QA' },
     'task.done': { running: 'Finishing…', done: 'Done' },
     'task.restart': { running: 'Restarting…', done: 'Restarted' },
+    // The VIP lane's (row V1): start VIP work, move a story on, release.
+    'vip.create': { running: 'Starting VIP…', done: 'VIP started' },
+    'story.move': { running: 'Moving…', done: 'Moved' },
+    'version.release': { running: 'Releasing…', done: 'Released' },
 };
 
 /** The claim actions: their progress is said on the board's own line, not in a form. */

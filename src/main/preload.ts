@@ -151,6 +151,7 @@ const bridge: PreloadBridge = {
         tynnBoard: (workspaceId, scope) => ipcRenderer.invoke('genie:workspace-tynn-board', workspaceId, scope) as never,
         tynnBoardAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-board-action', workspaceId, input) as never,
         tynnPage: (workspaceId, page, query) => ipcRenderer.invoke('genie:workspace-tynn-page', workspaceId, page, query) as never,
+        tynnPageAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-page-action', workspaceId, input) as never,
         tynnBoardChanges: (workspaceId, scope, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-board-changes', workspaceId, scope, cursor, [...ids]) as never,
         // Follow a workspace's board: main holds one socket for every open tab; this window hears its workspace's signals.
         tynnBoardWatch: (workspaceId, listener) => {

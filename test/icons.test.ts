@@ -82,14 +82,14 @@ describe('the icons the Tynn tab passes through props', () => {
          * tables. Those were never scanned, and a name missing from ICON_NAMES renders a blank gap: the B2 flyout's
          * 'tag' and 'square-check' list marks did, on a green suite.
          */
-        const sources = import.meta.glob(['../src/renderer/components/TynnBoardPanel.tsx', '../src/core/tynn-board.ts', '../src/renderer/components/TynnWipPanel.tsx', '../src/renderer/components/TynnTab.tsx', '../src/core/tynn-pages.ts'], { query: '?raw', import: 'default', eager: true });
+        const sources = import.meta.glob(['../src/renderer/components/TynnBoardPanel.tsx', '../src/core/tynn-board.ts', '../src/renderer/components/TynnWipPanel.tsx', '../src/renderer/components/TynnTab.tsx', '../src/core/tynn-pages.ts', '../src/renderer/components/TynnVipPanel.tsx'], { query: '?raw', import: 'default', eager: true });
         const used = new Set<string>();
         for (const source of Object.values(sources) as string[]) {
             for (const m of source.matchAll(/\b(?:icon|mark)(?:=\{?|:\s*)["']([a-z0-9-]+)["']/g)) used.add(m[1] as string);
         }
 
         // POSITIVE CONTROL: both files were read and the prop names were found (the steps' 'rocket', a list's 'check').
-        expect(Object.keys(sources)).toHaveLength(5);
+        expect(Object.keys(sources)).toHaveLength(6);
         // The tab's pages (row W1): the nav's 'columns-3', WIP's lens 'circle-play'.
         expect(used).toContain('columns-3');
         expect(used).toContain('circle-play');

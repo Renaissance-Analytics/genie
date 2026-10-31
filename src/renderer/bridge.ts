@@ -1,6 +1,6 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
-import type { TynnPage, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
+import type { TynnPage, TynnPageActionInput, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -319,6 +319,8 @@ export interface GenieBridge {
         tynnBoardAction?(workspaceId: string, input: BoardActionInput): ReturnType<TynnBoardHost['act']>;
         /** The tab's other pages (WIP, …), read whole, of the same project. Optional: an older host has none. */
         tynnPage?(workspaceId: string, page: TynnPage, query: TynnPageQuery): ReturnType<NonNullable<TynnTabHost['page']>>;
+        /** One of a page's own writes (`vip.create`, …). Optional: an older host has none. */
+        tynnPageAction?(workspaceId: string, input: TynnPageActionInput): ReturnType<NonNullable<TynnTabHost['pageAct']>>;
         /** Row B4: what changed on that board since a cursor. Optional: an older host (and a remote one) has none. */
         tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
         /** Row B4: follow that board (its live state and rings) until the answer is called. */
@@ -600,10 +602,12 @@ export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnTabHost | 
     const changes = ws.tynnBoardChanges;
     const watch = ws.tynnBoardWatch;
     const page = ws.tynnPage;
+    const pageAct = ws.tynnPageAction;
     return {
         read: (id, scope) => read(id, scope),
         act: (id, input) => act(id, input),
         ...(page ? { page: (id: string, p: TynnPage, query: TynnPageQuery) => page(id, p, query) } : {}),
+        ...(pageAct ? { pageAct: (id: string, input: TynnPageActionInput) => pageAct(id, input) } : {}),
         ...(changes && watch ? {
             changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
             watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),

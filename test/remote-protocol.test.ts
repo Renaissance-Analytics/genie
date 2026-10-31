@@ -82,7 +82,10 @@ describe('the capability table', () => {
         // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
         // (a write) — workspace-scoped, through the panel's confined files host.
         // 86 since the Tynn tab's other pages (genie#1295 W1): `workspaces.tynnPage` (a read) — owner-only, workspace-scoped.
-        expect(REMOTE_METHODS.length).toBe(86);
+        // 87 since its page writes (row V1): `workspaces.tynnPageAction` (a write: start VIP work, …) — owner-only, workspace-scoped.
+        expect(REMOTE_METHODS.length).toBe(87);
+        expect(capabilityOf('workspaces.tynnPageAction')).toBe('write');
+        expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnPageAction');
         expect(capabilityOf('workspaces.tynnPage')).toBe('read');
         expect(WORKSPACE_SCOPED_METHODS).toContain('workspaces.tynnPage');
         expect(capabilityOf('resolvePrompt')).toBe('write');
