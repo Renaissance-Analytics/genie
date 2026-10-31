@@ -51,6 +51,11 @@ export type ServeSpec =
     | { readonly mode: 'static'; readonly root: string; readonly spa: boolean }
     | { readonly mode: 'php'; readonly root: string; readonly fcgiPort: number; /** Every worker's port, the first being `fcgiPort` (genie#1043). Absent = that one alone. */ readonly fcgiPorts?: readonly number[] };
 
+/** genie#1376 — not yet implemented (the failing tests come first). */
+export function laravelServeCommand(command: string): string {
+    return command;
+}
+
 const BUILT_DIRS = ['dist', 'build', 'out'];
 
 /**
