@@ -1,8 +1,8 @@
-import type { AgentId } from '../core/identity.js';
+import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
 import type { NoticeMail } from '../core/stream-event.js';
-import type { AppDelivery } from '../core/app-inbox.js';
+import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../core/app-inbox.js';
 
 /**
  * §6.4 THE INBOX PUSH — GENIE'S, FOR EVERY PROVIDER. When mail lands for an agent, Genie puts the notice into that
@@ -18,6 +18,13 @@ import type { AppDelivery } from '../core/app-inbox.js';
  * taken, a turn that crashes, a session stopped under it — each leaves the batch untold, and the next moment the
  * agent can take a turn tells it. While a notice is out the book holds it as sending, so two events in one tick never
  * both prompt.
+ *
+ * NOBODY HAS TO TYPE (genie#1379; the owner on beta.53: "Users should not have to drive chat for agents to get
+ * notifications they need"). Every agent with a session is told — app mail, agent mail, replies alike: an idle one after
+ * a short COALESCING window (`coalesceMs`), so a burst is one turn naming them all; a busy one when its turn ends. #1350
+ * gave a manual agent no turn of its own for an app's message, so it heard only after the person's next turn. What
+ * stays mode-shaped is only whether a STOPPED agent is started (`appMail`), and THE APP WAKE CAP (`appBudget`): a turn
+ * for mail that is all from apps is spent from it; past it the mail waits for the window, then one turn.
  *
  * It was inline in main.ts and keyed on `turnState === 'idle'`. A session just started reads `working` until a turn
  * ends, with no turn running, so an agent started and mailed at once (a sidecar, the moment `runAgent` answered) was
@@ -50,20 +57,36 @@ export interface InboxPushPorts {
      */
     readonly wake?: ((agentId: AgentId) => boolean) | undefined;
     /**
-     * APP MAIL (genie#1345, the owner's D1): how a message an APP sent reaches its agent — `push` (told now, woken if
-     * stopped), `push-no-wake` (told now if it can take a turn, never woken: the app wake allowance is spent) or
-     * `next-turn` (a manual agent: no wake and no turn of its own; told at its next session event, its next turn ending).
-     * `null` = not an app's message: delivered exactly as mail always was. Absent = every message as mail.
+     * APP MAIL (genie#1345; genie#1379): whether a STOPPED agent is started for a message an APP sent — `push` (started,
+     * as mail does) or `push-no-wake` (not: a manual agent, or the app wake cap is spent; its mail waits). Either way an
+     * agent with a session is told exactly as for any mail. `null` = not an app's message. Absent = every message as mail.
      */
     readonly appMail?: ((to: AgentId, message: { readonly from: string }) => AppDelivery | null) | undefined;
-    /** An app's message woke `agentId` (what the app wake allowance counts). */
-    readonly appWoke?: ((agentId: AgentId) => void) | undefined;
+    /**
+     * THE APP WAKE CAP (core/app-inbox.ts AppTurnBudget): a notice whose mail is ALL from apps is a turn an app caused —
+     * sent only while `waitMs` is 0, then `spend`; otherwise it waits `waitMs` (needs `schedule`) and is told then. A
+     * notice with any person's or agent's mail in it is never held. Absent = no cap.
+     */
+    readonly appBudget?: { waitMs(agentId: AgentId): number; spend(agentId: AgentId): void } | undefined;
+    /** Genie's timer (main: setTimeout), answering a cancel. Absent = no coalescing and no deferred app turns. */
+    readonly schedule?: ((fn: () => void, ms: number) => () => void) | undefined;
+    /**
+     * THE COALESCING WINDOW: mail arriving for an agent with a session is told this long after the FIRST arrival, so a
+     * burst is one turn naming them all, not one per message. 0 or absent = at once.
+     */
+    readonly coalesceMs?: number | undefined;
 }
 
 export function wireInboxPush(ports: InboxPushPorts): () => void {
     const { inbox, host, reminders, settled } = ports;
     /** The notice out per agent: the run it went to and how many of that run's turns had ended when it was sent. */
     const out = new Map<string, { run: number; endedBefore: number }>();
+    /** An arrival's coalescing window, per agent: while one is open the agent is told when it closes, not before. */
+    const coalescing = new Map<string, () => void>();
+    /** An app-only notice held by the app wake cap, per agent: told when the window allows. */
+    const deferred = new Map<string, () => void>();
+    const { schedule } = ports;
+    const coalesceMs = ports.coalesceMs ?? 0;
 
     /** Settle the agent's notice if its fate is known now. Answers whether one is still out. */
     const settle = (id: AgentId): boolean => {
@@ -85,10 +108,22 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     // Only the agent the event is about is considered: another agent's batch is told on ITS events, not on this one's.
     const push = (only: string): void => {
         if (settle(only as AgentId)) return;
+        // An arrival's window is open: its close tells everything that came in it, once.
+        if (coalescing.has(only)) return;
         for (const r of reminders({ run: (id) => (id === only ? host.promptable(id as AgentId) : null) })) {
             const id = r.agentId as AgentId;
             const run = host.runOf(id);
             if (run === null) { settled(id, false); continue; }
+            // A turn only apps' mail would cause is spent from the app wake cap; past it, told when the window allows.
+            const appCaused = ports.appBudget !== undefined && r.mail !== undefined && r.mail.length > 0 && r.mail.every((m) => isAppSender(m.from));
+            if (appCaused) {
+                const wait = ports.appBudget!.waitMs(id);
+                if (wait > 0) {
+                    settled(id, false);
+                    if (schedule && !deferred.has(id)) deferred.set(id, schedule(() => { deferred.delete(id); push(id); }, wait));
+                    continue;
+                }
+            }
             // Out BEFORE the prompt: the prompt itself announces a change, and that re-entry must see it in flight.
             out.set(id, { run, endedBefore: host.turnsEndedThisRun(id) });
             let taken = false;
@@ -100,25 +135,57 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
             if (!taken) {
                 out.delete(id);
                 settled(id, false);
+            } else if (appCaused) {
+                ports.appBudget!.spend(id);
             }
         }
+    };
+    /** Mail arrived for an agent with a session: told when the coalescing window closes (at once without one). */
+    const arrived = (to: string): void => {
+        if (!schedule || coalesceMs <= 0 || host.runOf(to as AgentId) === null) { push(to); return; }
+        if (coalescing.has(to)) return;
+        coalescing.set(to, schedule(() => { coalescing.delete(to); push(to); }, coalesceMs));
     };
     // Only an ARRIVAL wakes an agent with no session: on the host's own events (its stop among them) it is not restarted.
     const offSend = inbox.onSend((to, message) => {
         if (to === 'human') return;
         const app = message ? ports.appMail?.(to as AgentId, message) ?? null : null;
-        // A manual agent is given no turn of its own for an app's message: the next event it has tells it.
-        if (app === 'next-turn') return;
+        // Only WHETHER a stopped agent is started differs for an app's message; one with a session is told as for any.
         if (host.runOf(to as AgentId) === null && ports.wake && app !== 'push-no-wake') {
             let started = false;
             try { started = ports.wake(to as AgentId); } catch { started = false; }
-            if (started) {
-                if (app === 'push') ports.appWoke?.(to as AgentId);
-                return; // its start announces itself, and that event delivers the notice
-            }
+            if (started) return; // its start announces itself, and that event delivers the notice
         }
-        push(to);
+        arrived(to);
     });
     const offHost = host.subscribe((agentId) => push(agentId));
-    return () => { offSend(); offHost(); };
+    return () => {
+        offSend();
+        offHost();
+        for (const cancel of [...coalescing.values(), ...deferred.values()]) cancel();
+        coalescing.clear();
+        deferred.clear();
+    };
+}
+
+/** THE COALESCING WINDOW main gives the mail push: a burst arriving inside it is one turn (genie#1379). */
+export const INBOX_COALESCE_MS = 1_500;
+
+/**
+ * MAIN'S APP POLICY for the mail push (genie#1379), one place so main and the VM harness cannot drift: whether a stopped
+ * agent is started for an app's message (automated, while the cap allows), THE APP WAKE CAP (AppTurnBudget), Genie's
+ * timer and the coalescing window.
+ */
+export function appMailPushPorts(input: {
+    readonly modeOf: (agentId: AgentId) => AgentRecord['mode'] | undefined;
+    readonly now: () => number;
+    readonly schedule: (fn: () => void, ms: number) => () => void;
+}): Required<Pick<InboxPushPorts, 'appMail' | 'appBudget' | 'schedule' | 'coalesceMs'>> {
+    const budget = new AppTurnBudget(input.now);
+    return {
+        appMail: (to, message) => (isAppSender(message.from) ? appDelivery(input.modeOf(to) ?? 'manual', budget.waitMs(to) === 0) : null),
+        appBudget: budget,
+        schedule: input.schedule,
+        coalesceMs: INBOX_COALESCE_MS,
+    };
 }
