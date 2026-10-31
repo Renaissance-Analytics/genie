@@ -1,4 +1,5 @@
 import { isAbsolute, normalize, posix, sep } from 'node:path';
+import { caddyPath } from './front-door-caddy.js';
 
 /**
  * HOSTED `.gen` SITES (§6.6) — the pure half.
@@ -103,6 +104,8 @@ export interface CaddyfileInput {
     readonly sitePort: number;
     /** Absolute path of the repo. Required for static and php. */
     readonly repoPath?: string;
+    /** This site's OWN Caddy storage folder (absolute). Required for static and php: see serveCaddyfile. */
+    readonly storageDir?: string;
     readonly serve: ServeSpec;
 }
 
@@ -125,13 +128,24 @@ function rootInside(repoPath: string, root: string): string {
  * Host MATCHER: `http://127.0.0.1:<port>` answered only requests whose Host was `127.0.0.1`, and the front door forwards
  * the site's own name (`Host: accepta.gen`, which apps need to build their URLs) — so every static and PHP site answered
  * the front door with Caddy's empty 200 (measured in the Windows test VM, 2026-10-14).
+ *
+ * ITS OWN STORAGE, NEVER CLEANED (the owner's Defender recording, 2026-10-31: `%AppData%\Caddy\locks\storage_clean.lock`
+ * touched 72 times in 120 s). Caddy cleans its storage when a process starts, under a file lock in that storage. With no
+ * storage named, every site's Caddy used Caddy's shared default, and Genie starts them together: on Windows they collided
+ * on the one lock file ("The process cannot access the file because it is being used by another process", a site's log
+ * at boot) and the lock was left behind, refreshed every 5 s for as long as Genie ran. A site's Caddy holds nothing in
+ * storage — `auto_https off`, no `tls` — so it names its own folder and does not clean it (`storage_clean_interval off`
+ * is the tls app's disable_storage_clean), and keeps no autosave (`persist_config off`, as Genie 1's per-site Caddyfile
+ * did: main/dev-server/serve-config.ts at v0.7.0-beta.342).
  */
 export function serveCaddyfile(input: CaddyfileInput): string | null {
     const { serve } = input;
     if (serve.mode === 'proxy') return null;
     if (!input.repoPath) throw new Error('a static or php site needs the repo path');
     const root = rootInside(input.repoPath, serve.root);
-    const lines = ['{', '\tauto_https off', '\tadmin off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${root}`];
+    if (!input.storageDir) throw new Error('a static or php site needs its own Caddy storage folder, never Caddy’s shared default');
+    const storage = caddyPath(input.storageDir, 'storage');
+    const lines = ['{', '\tauto_https off', '\tadmin off', '\tpersist_config off', `\tstorage file_system ${storage}`, '\tstorage_clean_interval off', '}', '', `http://:${input.sitePort} {`, '\tbind 127.0.0.1', `\troot * ${root}`];
     if (serve.mode === 'static') {
         if (serve.spa) lines.push('\ttry_files {path} /index.html');
         lines.push('\tfile_server');
