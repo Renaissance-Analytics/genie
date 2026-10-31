@@ -36,7 +36,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const act = (g, action) => g.evaluate(`window.genie.features.act(${JSON.stringify(action)}).then((d) => d.remote)`);
+const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
 
 /** A photo-like JPEG made in a page: noisy gradients, so it does not compress to nothing. */
 async function makeJpeg(page, width, height, quality) {

@@ -35,7 +35,7 @@ const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: !!ok, detail }); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ` — ${detail}` : ''}`); };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const act = (g, action) => g.evaluate(`window.genie.features.act(${JSON.stringify(action)}).then((d) => d.remote)`);
+const act = (g, action) => g.call((a) => window.genie.features.act(a).then((d) => d.remote), action);
 const snap = (g) => g.evaluate('window.genie.features.snapshot().then((d) => d.remote)');
 
 /**
@@ -67,7 +67,7 @@ async function cdpShot(g, name) {
 
 /** Move the mouse onto an element in Genie's window (a real hover: Genie's tooltip opens on it). */
 async function hoverInGenie(g, selector) {
-    const box = await g.evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
+    const box = await g.call((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; }, selector);
     await g.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: 1 });
     await g.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: box.x, y: box.y });
     await sleep(600);
@@ -114,8 +114,8 @@ async function main() {
     await waitInGenie(g, `[data-device="${old?.id}"] [data-device-expiry-alert]`);
     const rowTip = await hoverInGenie(g, `[data-device="${old?.id}"] [data-device-expiry-alert]`);
     check('the device’s row carries the same ! and tooltip', rowTip !== null && rowTip === tip, rowTip ?? 'no tooltip');
-    check('the row offers Re-pair', await g.evaluate(`!!document.querySelector('[data-device="${old?.id}"] [data-action="repair-device"]')`));
-    await g.evaluate(`document.querySelector('[data-device="${old?.id}"]').scrollIntoView({ block: 'center' })`);
+    check('the row offers Re-pair', await g.call((id) => !!document.querySelector(`[data-device="${id}"] [data-action="repair-device"]`), old?.id));
+    await g.call((id) => document.querySelector(`[data-device="${id}"]`).scrollIntoView({ block: 'center' }), old?.id);
     await sleep(300);
     await hoverInGenie(g, `[data-device="${old?.id}"] [data-device-expiry-alert]`);
     await desktopShot(g, 'c03-device-row-tooltip');
@@ -165,7 +165,7 @@ async function main() {
     check('a dialog is open while the prompt is up (Add workspace)', modalOpen);
     await desktopShot(g, 'c07b-desktop-prompt-over-dialog');
     const deny = await g.evaluate(`(() => { const r = document.querySelector('[data-action="deny-pair"]').getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; })()`);
-    const onTop = await g.evaluate(`document.elementFromPoint(${deny.x}, ${deny.y})?.closest('[data-action="deny-pair"]') !== null`);
+    const onTop = await g.call((x, y) => document.elementFromPoint(x, y)?.closest('[data-action="deny-pair"]') !== null, deny.x, deny.y);
     check('Deny is the topmost thing at its own place on screen, over the dialog', onTop);
     await g.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: deny.x, y: deny.y });
     await g.send('Input.dispatchMouseEvent', { type: 'mousePressed', x: deny.x, y: deny.y, button: 'left', clickCount: 1 });
