@@ -22,14 +22,15 @@ export const TYNN_SECTIONS: readonly TynnSection[] = [
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
     { id: 'vip', icon: 'flame', label: 'VIP' },
+    { id: 'releases', icon: 'rocket', label: 'Releases' },
 ];
 
 /** The page the tab opens on. */
 export const TYNN_FIRST_SECTION: TynnSectionId = 'board';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip' | 'vip';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'vip'];
+export type TynnPage = 'wip' | 'vip' | 'releases';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'vip', 'releases'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -199,9 +200,9 @@ export function parseWip(json: unknown): WipView | null {
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'vip'; readonly view: VipView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'vip'; readonly view: VipView } | { readonly page: 'releases'; readonly view: ReleasesView };
 
-const PAGE_PATH: Readonly<Record<TynnPage, string>> = { wip: WIP_DATA_API.path, vip: '/vip' };
+const PAGE_PATH: Readonly<Record<TynnPage, string>> = { wip: WIP_DATA_API.path, vip: '/vip', releases: '/releases' };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
@@ -223,6 +224,10 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
     }
     if (page === 'vip') {
         const view = parseVip(json);
+        return view ? { page, view } : null;
+    }
+    if (page === 'releases') {
+        const view = parseReleases(json);
         return view ? { page, view } : null;
     }
     return null;
@@ -363,4 +368,63 @@ export function vipCreateBody(raw: unknown): { title: string; why: string } | nu
     const title = typeof raw.title === 'string' ? raw.title.trim() : '';
     const why = typeof raw.why === 'string' ? raw.why.trim() : '';
     return title !== '' && why !== '' ? { title, why } : null;
+}
+
+// ── Releases (surface `releases`, parity row R1) ─────────────────────────────────────────────────────────────────────
+
+export const RELEASES_DATA_API = { method: 'GET', path: '/releases' } as const;
+export const RELEASES_QUERY = ['product'] as const;
+export const RELEASES_ANSWER = ['project_id', 'releases'] as const;
+export const RELEASES_FIELDS = {
+    release: ['id', 'number', 'title', 'description', 'released_at', 'pr_id', 'repository_id', 'story_count', 'story_done_count', 'top_stories'],
+    story: ['id', 'story_number', 'title', 'status'],
+} as const;
+export const RELEASES_TOP_STORIES = 5;
+export const RELEASES_TOTALS = ['releases', 'stories'] as const;
+export const RELEASES_LIVE = { channel: BOARD_LIVE.channel, events: BOARD_LIVE.events, refresh: 'read' } as const;
+export const RELEASES_STATES = ['loading', 'totals', 'release-card', 'more-stories', 'empty', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
+
+export interface Release {
+    readonly id: string;
+    readonly number: string | null;
+    readonly title: string;
+    readonly description: string | null;
+    /** YYYY-MM-DD, as tynn.ai's card shows it. */
+    readonly date: string | null;
+    readonly pr: string | null;
+    readonly storyCount: number;
+    readonly storyDone: number;
+    readonly top: ReadonlyArray<{ readonly id: string; readonly number: string | null; readonly title: string }>;
+    /** How many more stories than the card lists. */
+    readonly more: number;
+}
+export interface ReleasesView { readonly releases: readonly Release[]; readonly totalStories: number }
+
+/** Tynn's Releases answer (GET /releases) as the tab draws it; null when it is not Releases. */
+export function parseReleases(json: unknown): ReleasesView | null {
+    if (!isRow(json) || !Array.isArray(json.releases)) return null;
+    const releases = rows(json.releases).map((r): Release | null => {
+        const id = str(r.id);
+        if (id === null) return null;
+        const top = rows(r.top_stories).slice(0, RELEASES_TOP_STORIES).map((t) => {
+            const sid = str(t.id);
+            const n = str(t.story_number);
+            return sid === null ? null : { id: sid, number: n === null ? null : `#${n}`, title: str(t.title) ?? '' };
+        }).filter((t): t is { id: string; number: string | null; title: string } => t !== null);
+        const storyCount = num(r.story_count);
+        const at = str(r.released_at);
+        return {
+            id,
+            number: str(r.number),
+            title: str(r.title) ?? '',
+            description: str(r.description),
+            date: at === null ? null : at.slice(0, 10),
+            pr: str(r.pr_id),
+            storyCount,
+            storyDone: num(r.story_done_count),
+            top,
+            more: Math.max(0, storyCount - top.length),
+        };
+    }).filter((r): r is Release => r !== null);
+    return { releases, totalStories: releases.reduce((n, r) => n + r.storyCount, 0) };
 }

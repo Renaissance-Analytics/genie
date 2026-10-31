@@ -1,8 +1,9 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnPageView, type TynnSectionId, type TynnTabHost, type VipView, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnPageView, type TynnSectionId, type TynnTabHost, type ReleasesView, type VipView, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnReleasesPanel } from './TynnReleasesPanel.js';
 import { TynnVipPanel } from './TynnVipPanel.js';
 import { TynnWipPanel } from './TynnWipPanel.js';
 
@@ -150,6 +151,12 @@ export function TynnVipTab({ workspaceId, host }: { workspaceId: string; host: T
 
 const NO_QUERY: TynnPageQuery = {};
 
+/** Releases: read only, live on the board's rings. */
+export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
+    const p = usePage<ReleasesView>(workspaceId, host, 'releases', NO_QUERY, (r) => (r.page === 'releases' ? r.view : null));
+    return <TynnReleasesPanel state={p.state} live={p.live} />;
+}
+
 /** The tab: the page nav, and the page that is open. */
 export function TynnTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
     const [section, setSection] = useState<TynnSectionId>(TYNN_FIRST_SECTION);
@@ -160,6 +167,7 @@ export function TynnTab({ workspaceId, host }: { workspaceId: string; host: Tynn
             <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
                 {section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
                     : section === 'vip' && host.page ? <TynnVipTab workspaceId={workspaceId} host={host} />
+                    : section === 'releases' && host.page ? <TynnReleasesTab workspaceId={workspaceId} host={host} />
                         : <TynnBoardTab workspaceId={workspaceId} host={host} />}
             </div>
         </div>
