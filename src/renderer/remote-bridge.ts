@@ -256,7 +256,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // scope) still lands in `lastRefusal` as it did when this was fire-and-forget.
         // Files do not cross to a remote workstation yet: said, never dropped.
         prompt: (agentId, text, attachments) => attachments && attachments.length > 0
-            ? (phone ? promptWithFiles(agentId, text, attachments) : Promise.resolve({ ok: false, reason: 'Files cannot be sent to an agent on another workstation yet' }))
+            // Files cross as staged BYTES from any remote window — a phone's camera or a desktop's picked file — never a path
+            // on the host (genie#1356 refuses those): the host hands them to the composer's own attach path.
+            ? promptWithFiles(agentId, text, attachments)
             : call('prompt', agentId, text).then((r) => {
             if (!r.ok) { setState({ lastRefusal: r.reason }); return { ok: false }; }
             return { ok: (r.value as { ok?: boolean } | null)?.ok === true };
