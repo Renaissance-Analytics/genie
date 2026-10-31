@@ -133,13 +133,22 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'task.unclaim': { running: 'Releasing claim…', done: 'Claim released' },
     'story.assign': { running: 'Assigning…', done: 'Assigned' },
     'task.assign': { running: 'Assigning…', done: 'Assigned' },
+    // WIP's inline steps (row W1): each says it is running, then that it worked.
+    'task.start': { running: 'Starting…', done: 'Started' },
+    'task.ready': { running: 'Moving to QA…', done: 'Ready for QA' },
+    'task.done': { running: 'Finishing…', done: 'Done' },
+    'task.restart': { running: 'Restarting…', done: 'Restarted' },
+    // The VIP lane's (row V1): start VIP work, move a story on, release.
+    'vip.create': { running: 'Starting VIP…', done: 'VIP started' },
+    'story.move': { running: 'Moving…', done: 'Moved' },
+    'version.release': { running: 'Releasing…', done: 'Released' },
 };
 
 /** The claim actions: their progress is said on the board's own line, not in a form. */
 const CLAIM_OP = /\.(claim-start|unclaim|assign)$/;
 
 /** Who holds a card: a person's initials or an agent's mark, the name on hover and for a screen reader. */
-function Avatar({ who }: { who: { type: 'user' | 'agent'; id: string; name: string; initials?: string } }) {
+export function Avatar({ who }: { who: { type: 'user' | 'agent'; id: string; name: string; initials?: string } }) {
     const label = `Claimed by ${who.name}${who.type === 'agent' ? ' (agent)' : ''}`;
     return (
         <span
@@ -225,7 +234,7 @@ function AssignControl({ card, claimants, onLoadClaimants, onAction }: { card: B
 }
 
 /** What the create or edit in flight is doing, or how it ended: running, done, or Tynn's reason with Retry. */
-function OpLine({ op, onRetry }: { op: BoardOp; onRetry?: (() => void) | undefined }) {
+export function OpLine({ op, onRetry }: { op: BoardOp; onRetry?: (() => void) | undefined }) {
     const words = VERB_WORDS[op.action] ?? { running: 'Working…', done: 'Done' };
     if (op.phase === 'running') {
         return <p data-tynn-op="running" aria-live="polite" className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)]"><Icon name="loader" size="xs" className="animate-spin" /> {words.running}</p>;
@@ -496,7 +505,7 @@ function Detail({ detail, op, onClose, onAction, onRetry }: { detail: BoardDetai
 }
 
 /** Live, getting there, or the link dropped — an icon named for a screen reader; nothing when the board is not live. */
-function LiveMark({ live }: { live: LiveState | undefined }) {
+export function LiveMark({ live }: { live: LiveState | undefined }) {
     if (live === undefined || live === 'off') return null;
     const look = live === 'live'
         ? { label: 'Live: following Tynn', className: 'text-[var(--success)]', glyph: <Icon name="radio" size="xs" /> }
