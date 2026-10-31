@@ -1,8 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { rmdirSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runServiceExec } from '../src/main/service-exec.js';
+import { makeServiceExec, runServiceExec } from '../src/main/service-exec.js';
+import { systemProcessTree, type ProcessInfo, type ProcessTree } from '../src/core/process-tree.js';
 
 /**
  * `services exec` STOPS ITS OWN PROCESS TREE, AND ONLY THAT TREE, when its MCP call goes away (genie#1360).
@@ -80,6 +82,74 @@ describe('services exec — an aborted call stops its process tree, and only tha
         expect((await second).aborted).toBe(true);
         expect(await gone(b.parent)).toBe(true);
         expect(await gone(b.worker)).toBe(true);
+    }, 120_000);
+
+    /*
+     * genie#1372, MEASURED on genie-test-windows before this test existed: no process of an aborted command survived
+     * (33 aborts, a WMI reading after each), but in 10 of them the command's folder was still EBUSY the moment the abort
+     * resolved — `process.kill(pid, 0)` already said every reaped pid was dead, and a removal ~2 s later succeeded. On
+     * Windows a terminated process has its exit code before it has finished exiting (its handles, its current
+     * directory). So "stopped" was reported while the tree was still going away, and a caller that reuses or removes
+     * the folder next — main's `unit (windows)` CI, run 41190299126 — hits EBUSY. Stopped has to mean EXITED: once the
+     * abort resolves, the shell and everything under it are gone and the folder is free, at the first try.
+     */
+    it('once an abort resolves, the command has EXITED: its shell is gone and its folder can be removed at once (genie#1372)', async () => {
+        const script = join(dir, 'migrate.cjs');
+        await writeFile(script, [
+            "const { spawn } = require('node:child_process');",
+            "const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+            "require('node:fs').writeFileSync(process.argv[2], `${process.pid} ${worker.pid} ${process.ppid}`);",
+            'setInterval(() => {}, 1000);',
+        ].join('\n'));
+        // Twelve aborts, each command in its OWN empty folder (its pid file lives elsewhere), so the removal measures
+        // exactly the processes whose current directory it is. Before the fix ~30% of single aborts left it busy.
+        const busy: string[] = [];
+        for (let i = 0; i < 12; i += 1) {
+            const cwd = join(dir, `cwd-${i}`);
+            await mkdir(cwd);
+            const pidFile = join(dir, `pids-${i}`);
+            const ac = new AbortController();
+            const run = runServiceExec({ command: `${NODE} ${q(script)} ${q(pidFile)}`, cwd, env: {}, timeoutMs: 600_000, signal: ac.signal });
+            const { parent, worker } = await pidsIn(pidFile);
+            // The shell: the script's parent — unless a POSIX shell exec'd node, when the parent is this very process.
+            const shell = Number((await readFile(pidFile, 'utf8')).trim().split(' ')[2]);
+            expect([parent, worker].map(alive)).toEqual([true, true]);
+            ac.abort();
+            expect((await run).aborted).toBe(true);
+            // No waiting from here on: the abort's resolution is the claim under test.
+            const left = [parent, worker, ...(shell && shell !== process.pid ? [shell] : [])].filter(alive);
+            if (left.length > 0) busy.push(`#${i}: still alive ${left.join(' ')}`);
+            try { rmdirSync(cwd); } catch (e) { busy.push(`#${i}: ${(e as NodeJS.ErrnoException).code} removing its folder`); }
+        }
+        expect(busy).toEqual([]);
+    }, 300_000);
+
+    it('a process of the tree that will not exit is NAMED in the result, and the call still ends (genie#1372)', async () => {
+        // The real machine's readings, plus one member that never leaves them: a phantom child of the command's shell.
+        let phantom: ProcessInfo | null = null;
+        const tree: ProcessTree = {
+            ...systemProcessTree,
+            read: async () => {
+                const now = await systemProcessTree.read!();
+                if (!now) return now;
+                const shell = now.find((p) => p.ppid === process.pid && p.pid === shellPid);
+                if (shell && !phantom) phantom = { pid: 4_000_001, ppid: shell.pid, started: shell.started, name: 'phantom.exe' };
+                return phantom ? [...now, phantom] : now;
+            },
+            reap: (targets, now, limit) => systemProcessTree.reap!(targets.filter((t) => t !== phantom && t.pid !== phantom?.pid), now, limit),
+        };
+        let shellPid = -1;
+        const script = join(dir, 'wait.cjs');
+        await writeFile(script, "require('node:fs').writeFileSync(process.argv[2], `${process.pid} ${process.ppid}`); setInterval(() => {}, 1000);");
+        const ac = new AbortController();
+        const run = makeServiceExec(tree)({ command: `${NODE} ${q(script)} ${q(join(dir, 'p'))}`, cwd: dir, env: {}, timeoutMs: 600_000, signal: ac.signal });
+        const { parent, worker: ppid } = await pidsIn(join(dir, 'p'));
+        shellPid = ppid === process.pid ? parent : ppid;
+        ac.abort();
+        const r = await run;
+        expect(r.aborted).toBe(true);
+        expect(r.output).toContain('still running after the stop: 4000001(phantom.exe)');
+        expect(await gone(parent)).toBe(true);
     }, 120_000);
 
     it('a call already aborted runs nothing', async () => {
