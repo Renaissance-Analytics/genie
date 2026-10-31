@@ -16,3 +16,6 @@ Get-Content perf-out\host-split-proof.json
 Get-Content "$HOME\.genie\logs\genie-host.log" -Tail 30 -ErrorAction SilentlyContinue
 "=== lifecycle.log host lines"
 Get-Content "$HOME\.genie\runtime\lifecycle.log" -ErrorAction SilentlyContinue | Select-String -Pattern 'host|refused' | Select-Object -Last 20
+"=== FULL SUITE on Windows"
+npm test *> full.log; "full suite exit $LASTEXITCODE"
+Get-Content full.log | Select-String -Pattern 'Test Files|Tests |FAIL' | Select-Object -First 40
