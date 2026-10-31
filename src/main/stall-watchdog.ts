@@ -148,12 +148,19 @@ export class StallWatchdog {
  * start to answer. Installed before any handler is registered; `invoke` already answers with a promise, so wrapping a
  * synchronous handler in an async one changes nothing a renderer sees (a throw still rejects its invoke).
  */
-export function timeIpcHandlers(ipc: { handle: (channel: string, listener: (...args: never[]) => unknown) => void }, dog: Pick<StallWatchdog, 'ipc'>): void {
+export interface IpcHandleTarget {
+    // Method syntax on purpose: Electron's `ipcMain.handle` takes `(event, ...args: any[])` listeners.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    handle(channel: string, listener: (...args: any[]) => unknown): void;
+}
+
+export function timeIpcHandlers(ipc: IpcHandleTarget, dog: Pick<StallWatchdog, 'ipc'>): void {
     const original = ipc.handle.bind(ipc);
-    ipc.handle = (channel, listener) => original(channel, async (...args: never[]) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ipc.handle = (channel: string, listener: (...args: any[]) => unknown) => original(channel, async (...args: unknown[]) => {
         const done = dog.ipc(channel);
         try {
-            return await (listener as (...a: never[]) => unknown)(...args);
+            return await listener(...args);
         } finally {
             done();
         }

@@ -131,7 +131,7 @@ describe('a start on the real tree: no synchronous reading; the spawn’s own pr
 
 describe('the system tree’s capture: the children main creates inside the call, and only those', () => {
     it('records a real child spawned inside it, not one spawned outside; ChildProcess is left as it was', async () => {
-        const before = ChildProcess.prototype.spawn;
+        const before = (ChildProcess.prototype as unknown as { spawn: unknown }).spawn;
         const inside: number[] = [];
         let made: ChildProcess | null = null;
         expect(typeof systemProcessTree.capture).toBe('function');
@@ -139,16 +139,16 @@ describe('the system tree’s capture: the children main creates inside the call
         const outside = spawnChild(process.execPath, ['-e', 'setTimeout(()=>{},300)']);
         expect(inside).toEqual([made!.pid]);
         expect(inside).not.toContain(outside.pid);
-        expect(ChildProcess.prototype.spawn).toBe(before);
+        expect((ChildProcess.prototype as unknown as { spawn: unknown }).spawn).toBe(before);
         await Promise.all([made!, outside].map((c) => new Promise((r) => c.once('exit', r))));
     });
 
     it('a spawn that throws still leaves ChildProcess as it was, and what it made before the throw is kept', () => {
-        const before = ChildProcess.prototype.spawn;
+        const before = (ChildProcess.prototype as unknown as { spawn: unknown }).spawn;
         const sink: number[] = [];
         expect(() => systemProcessTree.capture!(() => { spawnChild(process.execPath, ['-e', '']); throw new Error('boom'); }, sink)).toThrow('boom');
         expect(sink).toHaveLength(1);
-        expect(ChildProcess.prototype.spawn).toBe(before);
+        expect((ChildProcess.prototype as unknown as { spawn: unknown }).spawn).toBe(before);
     });
 });
 
