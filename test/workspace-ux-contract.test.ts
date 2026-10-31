@@ -14,6 +14,38 @@ import {
     BOARD_STATES,
     BOARD_TRANSITIONS,
 } from '../src/core/tynn-board.js';
+import {
+    PAGE_API,
+    RELEASES_ANSWER,
+    RELEASES_DATA_API,
+    RELEASES_FIELDS,
+    RELEASES_LIVE,
+    RELEASES_QUERY,
+    RELEASES_STATES,
+    RELEASES_TOP_STORIES,
+    RELEASES_TOTALS,
+    VIP_ACTIONS,
+    VIP_ANSWER,
+    VIP_COLUMNS,
+    VIP_DATA_API,
+    VIP_FIELDS,
+    VIP_FLOW,
+    VIP_LIVE,
+    VIP_RELEASE,
+    VIP_START,
+    VIP_STATES,
+    WIP_ACTIONS,
+    WIP_ANSWER,
+    WIP_COUNTS,
+    WIP_DATA_API,
+    WIP_FIELDS,
+    WIP_LENSES,
+    WIP_LIVE,
+    WIP_QUERY,
+    WIP_QUICK_ACTIONS,
+    WIP_STATES,
+    WIP_TASK_ORDER,
+} from '../src/core/tynn-pages.js';
 
 /**
  * THE WORKSPACE-UX DRIFT WATCHER, Genie's side (genie#1295).
@@ -122,5 +154,117 @@ describe('the Tynn tab\'s board, against the contract', () => {
         for (const [kind, steps] of Object.entries(BOARD_QUICK_ACTIONS)) {
             for (const step of Object.values(steps)) expect(BOARD_API[`${kind}.${step.verb}`], `${kind}.${step.verb}`).toBeDefined();
         }
+    });
+});
+
+describe('the Tynn tab\'s WIP, against the contract (0.6.0)', () => {
+    type Wip = {
+        data: {
+            api: { method: string; path: string };
+            query: string[];
+            lenses: Record<string, string[]>;
+            answer: string[];
+            counts: string[];
+            fields: Record<string, string[]>;
+            taskOrder: string[];
+            quickActions: Record<string, Record<string, { verb: string; guard?: string }>>;
+            live: Record<string, unknown>;
+        };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const wip = contract.surfaces.find((s) => s.id === 'wip') as unknown as Wip | undefined;
+
+    it('is in the contract', () => {
+        expect(wip).toBeDefined();
+    });
+
+    it('reads WIP where the contract says, with its query, lenses, counts, fields and task order', () => {
+        expect(WIP_DATA_API).toEqual(wip!.data.api);
+        expect(WIP_QUERY).toEqual(wip!.data.query);
+        expect(WIP_LENSES).toEqual(wip!.data.lenses);
+        expect(WIP_ANSWER).toEqual(wip!.data.answer);
+        expect(WIP_COUNTS).toEqual(wip!.data.counts);
+        expect(WIP_FIELDS).toEqual(wip!.data.fields);
+        expect(WIP_TASK_ORDER).toEqual(wip!.data.taskOrder);
+        expect(WIP_QUICK_ACTIONS).toEqual(wip!.data.quickActions);
+    });
+
+    it('offers exactly the contract\'s actions, through the board\'s API, and each one-click step has one', () => {
+        expect([...WIP_ACTIONS].sort()).toEqual(wip!.actions.map((a) => a.id).sort());
+        for (const action of wip!.actions) expect({ id: action.id, ...BOARD_API[action.id] }).toEqual({ id: action.id, ...action.api });
+        for (const step of Object.values(WIP_QUICK_ACTIONS.task)) expect(WIP_ACTIONS).toContain(`task.${step.verb}`);
+    });
+
+    it('goes live as the contract says: the board\'s channel and events, read again on a ring', () => {
+        const { about: _about, web: _web, ...shape } = wip!.data.live;
+        expect(WIP_LIVE).toEqual(shape);
+        expect(WIP_LIVE.channel).toBe(BOARD_LIVE.channel);
+    });
+
+    it('has a view for every state the contract names', () => {
+        expect([...WIP_STATES].sort()).toEqual(wip!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s VIP lane, against the contract (0.8.0)', () => {
+    type Vip = {
+        data: Record<string, unknown> & { api: { method: string; path: string }; live: Record<string, unknown> };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const vip = contract.surfaces.find((s) => s.id === 'vip') as unknown as Vip | undefined;
+
+    it('is in the contract', () => {
+        expect(vip).toBeDefined();
+    });
+
+    it('reads the lane where the contract says, with its answer, fields, columns, flow, release and start', () => {
+        expect(VIP_DATA_API).toEqual(vip!.data.api);
+        expect(VIP_ANSWER).toEqual(vip!.data.answer);
+        expect(VIP_FIELDS).toEqual(vip!.data.fields);
+        expect(VIP_COLUMNS).toEqual(vip!.data.columns);
+        expect(VIP_FLOW).toEqual(vip!.data.flow);
+        expect(VIP_RELEASE).toEqual(vip!.data.release);
+        expect(VIP_START).toEqual(vip!.data.start);
+    });
+
+    it('offers exactly the contract\'s actions: its own start at its door, the board\'s move and release at the board\'s', () => {
+        expect([...VIP_ACTIONS].sort()).toEqual(vip!.actions.map((a) => a.id).sort());
+        for (const action of vip!.actions) {
+            const offered = PAGE_API[action.id] ?? BOARD_API[action.id];
+            expect({ id: action.id, ...offered }).toEqual({ id: action.id, ...action.api });
+        }
+    });
+
+    it('goes live as the contract says, and has a view for every state it names', () => {
+        const { about: _about, web: _web, ...shape } = vip!.data.live;
+        expect(VIP_LIVE).toEqual(shape);
+        expect([...VIP_STATES].sort()).toEqual(vip!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s Releases, against the contract (0.9.0)', () => {
+    type Releases = { data: Record<string, unknown> & { api: { method: string; path: string }; live: Record<string, unknown> }; states: Array<{ id: string }>; actions: Action[] };
+    const releases = contract.surfaces.find((s) => s.id === 'releases') as unknown as Releases | undefined;
+
+    it('is in the contract', () => {
+        expect(releases).toBeDefined();
+    });
+
+    it('reads Releases where the contract says, with its answer, fields, order, top stories and totals', () => {
+        expect(RELEASES_DATA_API).toEqual(releases!.data.api);
+        expect(RELEASES_QUERY).toEqual(releases!.data.query);
+        expect(RELEASES_ANSWER).toEqual(releases!.data.answer);
+        expect(RELEASES_FIELDS).toEqual(releases!.data.fields);
+        expect(RELEASES_TOP_STORIES).toBe(releases!.data.topStories);
+        expect(RELEASES_TOTALS).toEqual(releases!.data.totals);
+    });
+
+    it('offers only its read, and goes live as the contract says, with a view for every state', () => {
+        expect(releases!.actions.map((a) => ({ id: a.id, ...a.api }))).toEqual([{ id: 'releases.list', ...RELEASES_DATA_API }]);
+        const { about: _about, web: _web, ...shape } = releases!.data.live;
+        expect(RELEASES_LIVE).toEqual(shape);
+        expect([...RELEASES_STATES].sort()).toEqual(releases!.states.map((s) => s.id).sort());
     });
 });
