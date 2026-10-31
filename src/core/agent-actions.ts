@@ -44,5 +44,6 @@ export function agentActionOf(event: StreamEvent): AgentAction | null {
  * `msg_` item), and mail you send is not an agent's action: neither is one here.
  */
 export function mailAction(message: { readonly from: Participant; readonly to: Participant }): { agentId: string; kind: 'agentmail' } | null {
-    return message.from === HUMAN || message.to === HUMAN ? null : { agentId: message.from, kind: 'agentmail' };
+    // An APP's message (genie#1345) is no agent's action: an app has no row to sound on.
+    return message.from === HUMAN || message.to === HUMAN || message.from.startsWith('app:') ? null : { agentId: message.from, kind: 'agentmail' };
 }

@@ -14,6 +14,15 @@ import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { TynnNetworkBridge } from './relay-transport.js';
+import type { AppInboxCardState } from './components/AppInboxCard.js';
+
+/** The workspace card's door to the host's app keys (main.ts `genie:app-inbox-*`). */
+export interface AppInboxBridge {
+    state(workspaceId: string): Promise<{ ok: true; state: AppInboxCardState } | { ok: false; reason: string }>;
+    createKey(workspaceId: string, name: string): Promise<{ ok: true; id: string; name: string; token: string; state: AppInboxCardState } | { ok: false; reason: string }>;
+    revokeKey(workspaceId: string, keyId: string): Promise<{ ok: true; state: AppInboxCardState } | { ok: false; reason: string }>;
+    source(workspaceId: string, op: 'rotate' | 'revoke' | 'allow', kind: 'site' | 'process', id: string): Promise<{ ok: true; text: string; state: AppInboxCardState } | { ok: false; reason: string }>;
+}
 import type { LiveSession } from '../core/roster.js';
 import type { TakeOverProbe } from '../core/observed.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -154,6 +163,8 @@ export interface GenieBridge {
     host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
     tynnNetwork?: TynnNetworkBridge;
+    /** A workspace's Apps and scripts (genie#1345): keys are this host's, so a remote bridge has none. */
+    appInbox?: AppInboxBridge;
     /**
      * THE FEATURE SURFACES — knowledge, flows, hosting, toolchain, settings, browser (the AgentInbox is a flyout, beta.33 item 19).
      * One snapshot, pushed on change; one `act` that applies a person's action in main and

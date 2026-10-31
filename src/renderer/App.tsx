@@ -89,6 +89,8 @@ import type { RepoEntry } from '../core/repo-registry.js';
 import { workspaceFault, type WorkspaceFault } from '../core/dashboard-view.js';
 import { workspaceLabel } from '../core/workspace-label.js';
 import { useComposerFocusLog } from './composer-focus-log.js';
+import type { AppInboxCardProps, AppInboxCardState } from './components/AppInboxCard.js';
+import type { AppSourceKind } from '../core/app-inbox.js';
 
 /**
  * THE APP — the effects, and nothing else.
@@ -1154,6 +1156,36 @@ function DesktopApp({ bridge }: AppProps) {
     const readShares = (forWorkspace: string) => {
         void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
     };
+    /*
+     * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host (preload `appInbox`) — never from a window
+     * driving another machine. Each action shows itself in flight, then its result; a new script key is shown once.
+     */
+    const appInboxBridge = !remote.state?.connected && typeof window !== 'undefined' ? window.genie?.appInbox : undefined;
+    const [appInboxView, setAppInboxView] = useState<{ workspaceId: string; state: AppInboxCardState | null; busy: AppInboxCardProps['busy']; revealed: AppInboxCardProps['revealed']; outcome: AppInboxCardProps['outcome'] } | null>(null);
+    useEffect(() => {
+        if (!appInboxBridge || !workspaceId) { setAppInboxView(null); return; }
+        let live = true;
+        setAppInboxView({ workspaceId, state: null, busy: null, revealed: null, outcome: null });
+        void appInboxBridge.state(workspaceId).then((r) => {
+            if (live) setAppInboxView((v) => (v && v.workspaceId === workspaceId ? { ...v, state: r.ok ? r.state : null, outcome: r.ok ? v.outcome : { ok: false, text: r.reason } } : v));
+        });
+        return () => { live = false; };
+    }, [appInboxBridge, workspaceId, wsSettings]);
+    const appInboxAct = (busy: NonNullable<AppInboxCardProps['busy']>, run: () => Promise<{ ok: true; state: AppInboxCardState; text?: string; token?: string; name?: string } | { ok: false; reason: string }>, done: string): void => {
+        const forWorkspace = workspaceId;
+        const attempt = (): void => {
+            setAppInboxView((v) => (v && v.workspaceId === forWorkspace ? { ...v, busy, outcome: null } : v));
+            void run().then(
+                (r) => setAppInboxView((v) => (v && v.workspaceId === forWorkspace
+                    ? r.ok
+                        ? { ...v, busy: null, state: r.state, outcome: { ok: true, text: r.text ?? done }, ...(r.token ? { revealed: { name: r.name ?? '', token: r.token } } : {}) }
+                        : { ...v, busy: null, outcome: { ok: false, text: r.reason, retry: attempt } }
+                    : v)),
+                (error: unknown) => setAppInboxView((v) => (v && v.workspaceId === forWorkspace ? { ...v, busy: null, outcome: { ok: false, text: error instanceof Error ? error.message : String(error), retry: attempt } } : v)),
+            );
+        };
+        attempt();
+    };
     const workspaceOps: WorkspaceOpsProps | undefined = resolvedBridge && workspaceId && workspaceRow
         ? {
               asleep: workspaceRow.asleep === true,
@@ -1217,6 +1249,23 @@ function DesktopApp({ bridge }: AppProps) {
               },
               onHibernate: () => { void resolvedBridge.workspaces.hibernate(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? `hibernated; handoffs landed from ${r.handoffs.landed.length === 0 ? 'nobody' : r.handoffs.landed.join(', ')}; ${r.handoffs.missing.length === 0 ? 'none missing' : `missing from ${r.handoffs.missing.join(', ')}`}` : r.reason }))); },
               onWake: () => { void resolvedBridge.workspaces.wake(workspaceId).then((r) => setWsView((v) => ({ ...v, lastOutcome: r.ok ? 'awake' : r.reason }))); },
+              ...(appInboxBridge && appInboxView && appInboxView.workspaceId === workspaceId
+                  ? {
+                        appInbox: {
+                            state: appInboxView.state,
+                            busy: appInboxView.busy,
+                            revealed: appInboxView.revealed,
+                            outcome: appInboxView.outcome,
+                            now: Date.now(),
+                            onCreateKey: (name: string) => appInboxAct({ action: 'create', target: 'create' }, () => appInboxBridge.createKey(workspaceId, name), `Made ${name}: copy it now`),
+                            onRevokeKey: (id: string) => appInboxAct({ action: 'revoke-key', target: `key:${id}` }, () => appInboxBridge.revokeKey(workspaceId, id), 'Key revoked: it stopped working'),
+                            onRotate: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'rotate', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'rotate', kind, id), 'Rotated'); },
+                            onRevoke: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'revoke', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'revoke', kind, id), 'Revoked'); },
+                            onAllow: (kind: AppSourceKind, id: string) => { if (kind !== 'script') appInboxAct({ action: 'allow', target: `${kind}:${id}` }, () => appInboxBridge.source(workspaceId, 'allow', kind, id), 'Allowed'); },
+                            onDismissReveal: () => setAppInboxView((v) => (v ? { ...v, revealed: null } : v)),
+                        },
+                    }
+                  : {}),
               onPreviewRemove: () => setWsView((v) => ({ ...v, removePreview: true })),
               ...(shares ? { onShare: () => { setShare({ workspaceId, name: workspaceLabel(snapshot.workspaces, workspaceId), links: null, minted: null, problem: null, busy: false }); readShares(workspaceId); } } : {}),
               onCancelRemove: () => setWsView((v) => ({ ...v, removePreview: false })),

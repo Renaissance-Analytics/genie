@@ -5,6 +5,23 @@ import { genieClipboardWriter } from '../clipboard.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
 import type { InboxSection, InboxThreadView } from '../features.js';
 import { formatSize, type InboxCompose } from './FeatureSurfaces.js';
+import { readAppSender, type AppSourceKind } from '../../core/app-inbox.js';
+
+/** An app's icon by kind (genie#1345): a site, a background process, a script key. Icons over words. */
+export const APP_KIND_ICON: Readonly<Record<AppSourceKind, string>> = { site: 'globe', process: 'cog', script: 'key-round' };
+const APP_LEVEL_ICON: Readonly<Record<'info' | 'success' | 'failure', string>> = { info: 'info', success: 'circle-check', failure: 'circle-x' };
+const APP_LEVEL_TONE: Readonly<Record<'info' | 'success' | 'failure', string>> = { info: 'text-[var(--fg-3)]', success: 'text-[var(--success)]', failure: 'text-[var(--danger)]' };
+
+/** An app sender's mark: its kind's icon where an agent's workspace swatch would be. */
+function AppMark({ id }: { id: string }) {
+    const app = readAppSender(id);
+    if (!app) return null;
+    return (
+        <span data-app-sender={app.kind} data-app-icon={APP_KIND_ICON[app.kind]} title={`An app (${app.kind}): read-only`} className="inline-flex shrink-0 items-center text-[var(--fg-3)]">
+            <Icon name={APP_KIND_ICON[app.kind]} size="xs" />
+        </span>
+    );
+}
 
 /**
  * THE AGENTINBOX FLYOUT (beta.33 item 19; the owner: "the agentinbox should not be a page and it should be accessible
@@ -136,9 +153,9 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                 >
                                     <span className="flex items-center gap-2 text-[13px]">
                                         {/* Each agent's workspace colour beside its name (genie#1300): whose thread this is. */}
-                                        {(t.withHuman ? [t.a === HUMAN ? t.b : t.a] : [t.a, t.b]).map((id) => <WorkspaceSwatch key={id} color={agentColors[id]} />)}
+                                        {(t.withHuman ? [t.a === HUMAN ? t.b : t.a] : [t.a, t.b]).map((id) => (readAppSender(id) ? <AppMark key={id} id={id} /> : <WorkspaceSwatch key={id} color={agentColors[id]} />))}
                                         <span className={t.unread > 0 ? 'font-semibold text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}>{t.withHuman ? (t.a === HUMAN ? t.bName : t.aName) : `${t.aName} ⇄ ${t.bName}`}</span>
-                                        {t.withHuman ? null : <Icon name="lock" size="xs" className="text-[var(--fg-4)]" />}
+                                        {t.withHuman || readAppSender(t.a) || readAppSender(t.b) ? null : <span data-thread-lock="" className="inline-flex"><Icon name="lock" size="xs" className="text-[var(--fg-4)]" /></span>}
                                         {t.attachments > 0 ? <Icon name="paperclip" size="xs" className="text-[var(--fg-4)]" /> : null}
                                         <span className="ml-auto font-mono text-[11px] text-[var(--fg-4)]">{Number.isNaN(t.lastAt) ? '' : ago(t.lastAt, p.now)}</span>
                                     </span>
@@ -161,7 +178,7 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                         <>
                             <div className="flex items-center gap-2 border-b border-[var(--border-1)] px-4 py-2">
                                 <span className="text-[13px] font-semibold">{withHuman ? nameOf(agentOfThread!) : `${nameOf(a)} ⇄ ${nameOf(b)}`}</span>
-                                <span className="text-[12px] text-[var(--fg-3)]">{withHuman ? 'Your direct thread' : 'Agent-to-agent thread · read-only'}</span>
+                                <span className="text-[12px] text-[var(--fg-3)]">{withHuman ? 'Your direct thread' : readAppSender(a) || readAppSender(b) ? 'An app’s messages · read-only' : 'Agent-to-agent thread · read-only'}</span>
                                 {summary?.waiting ? <span className="font-mono text-[11px] text-[var(--violet-400)]">{`${summary.waiting.count} not collected by ${summary.waiting.agent} · ${ago(summary.waiting.since, p.now)}`}</span> : null}
                                 <span className="ml-auto" />
                                 {summary ? <Button type="button" size="xs" variant="ghost" icon="trash-2" data-action="inbox-delete-thread" onClick={() => p.onDelete(summary.key)}>Delete thread</Button> : null}
@@ -183,7 +200,25 @@ export function InboxFlyoutView(p: InboxFlyoutViewProps) {
                                             {m.to !== HUMAN && m.readAt === null ? <span data-message-waiting="" className="text-[var(--warning)]">not collected yet</span> : null}
                                             {m.to !== HUMAN && m.readAt !== null ? <span className="text-[var(--fg-4)]">{`read ${ago(Date.parse(m.readAt), p.now)} ago`}</span> : null}
                                         </div>
-                                        <ContentRenderer clipboardWriter={genieClipboardWriter} value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+                                        {m.app && readAppSender(m.from) ? (
+                                            /* AN APP'S MESSAGE (genie#1345): its subject and level, its link as a button, and its body as
+                                               PLAIN text — an app cannot draw links or markup in the person's flyout. */
+                                            <div data-app-message={m.app.source.kind} className="flex flex-col gap-1">
+                                                <div className="flex items-center gap-1.5 text-[13px] font-medium text-[var(--fg-1)]">
+                                                    <span data-app-level={m.app.level} className={`inline-flex ${APP_LEVEL_TONE[m.app.level]}`}><Icon name={APP_LEVEL_ICON[m.app.level]} size="xs" /></span>
+                                                    <span className="min-w-0 truncate">{m.app.subject}</span>
+                                                </div>
+                                                <p className="whitespace-pre-wrap break-words text-[13px] text-[var(--fg-2)]">{m.text}</p>
+                                                {m.app.link ? (
+                                                    <a data-app-link={m.app.link} href={m.app.link} target="_blank" rel="noreferrer" className="inline-flex w-fit items-center gap-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] hover:bg-[var(--bg-2)]">
+                                                        <Icon name="external-link" size="xs" />
+                                                        <span>{new URL(m.app.link).host}</span>
+                                                    </a>
+                                                ) : null}
+                                            </div>
+                                        ) : (
+                                            <ContentRenderer clipboardWriter={genieClipboardWriter} value={m.text} format="markdown" lineSpacing={1.5} className="text-[13px] text-[var(--fg-2)]" />
+                                        )}
                                         {m.attachments.length > 0 ? (
                                             <div className="flex flex-wrap gap-1">
                                                 {m.attachments.map((att) => (

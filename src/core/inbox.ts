@@ -10,8 +10,11 @@ import { isOsAgent } from './os-agent.js';
  * a message a terminal could see is a message a prompt could forge.
  */
 
-/** A party to a message: an agent by its one id, or the person. */
-export type Participant = AgentId | typeof HUMAN;
+/**
+ * A party to a message: an agent by its one id, the person, or — as a SENDER only — an app (`app:<kind>:<id>`,
+ * core/app-inbox.ts): a Genie-hosted site, a kept process or a script key. An app is never a recipient.
+ */
+export type Participant = AgentId | typeof HUMAN | `app:${string}`;
 
 /**
  * The human's address. A constant rather than a minted id because there is exactly one person

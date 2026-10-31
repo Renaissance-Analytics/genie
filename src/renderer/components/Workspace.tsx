@@ -43,6 +43,7 @@ import { headerRepos, repoChip } from '../../core/repo-status.js';
 import { WorkspaceDashboard } from './WorkspaceDashboard.js';
 import { AgentRosterView, type AgentRosterViewProps } from './ImportedAgents.js';
 import { WorkspaceColorPicker } from './WorkspaceColorPicker.js';
+import { AppInboxCard, type AppInboxCardProps } from './AppInboxCard.js';
 import { useWorkspaceColor } from '../workspace-colors.js';
 
 /**
@@ -136,6 +137,11 @@ export interface WorkspaceOpsProps {
         readonly results: readonly SyncResult[] | null;
         readonly onSync: () => void;
     } | undefined;
+    /**
+     * APPS AND SCRIPTS (genie#1345): this workspace's sites, processes and script keys that may report to its agents, and
+     * the person's Rotate / Revoke / Make a key. On the host only (a key is never minted for a window driving it). Absent = not offered.
+     */
+    readonly appInbox?: AppInboxCardProps | undefined;
 }
 
 export interface WorkspaceProps {
@@ -743,6 +749,15 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                         <span className="text-[var(--fg-4)]">the agents registered in {workspace.name ?? workspace.id}, and the agent files here Genie has none for</span>
                     </div>
                     <AgentRosterView {...ops.agentRoster} />
+                </section>
+            ) : null}
+            {onScreen === 'settings' && ops?.appInbox ? (
+                <section data-ws-card="app-inbox" className="flex flex-col gap-2 border-b border-[var(--border-1)] px-6 py-4 text-sm">
+                    <div className="flex items-center gap-3">
+                        <h2 className="text-sm font-semibold">Apps and scripts</h2>
+                        <span className="text-[var(--fg-4)]">what may report to the agents of {workspace.name ?? workspace.id}: its sites, background processes and script keys</span>
+                    </div>
+                    <AppInboxCard {...ops.appInbox} />
                 </section>
             ) : null}
             {onScreen === 'settings' && onOpenRuntime ? (

@@ -101,6 +101,11 @@ export interface ProcessBookDeps {
     readonly supervisor: Pick<ProcessSupervisor, 'start' | 'stop' | 'forget' | 'list'>;
     /** The workspace's service env (its engines plus the shared ones), read at every start. */
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
+    /**
+     * THE PROCESS'S OWN APP CREDENTIAL (genie#1345): `GENIE_INBOX_URL` / `GENIE_INBOX_TOKEN` minted for THIS process, laid
+     * over the service env at each start so it can report to an agent of its workspace. Never part of `envFor`. Absent = none.
+     */
+    readonly appEnv?: (process: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
     /** Hibernated (§6.1): nothing may start there. */
     readonly asleep: (workspaceId: string) => boolean;
     /** The workspace's background-process limit (core/shell-limits.ts), read live; absent = no limit. */
@@ -483,7 +488,7 @@ export class ProcessBook {
         const refused = this.#refusal(p.workspaceId, p.id);
         if (refused) throw new Error(refused);
         this.#heldBack.delete(p.id);
-        const env = this.#deps.envFor(p.workspaceId);
+        const env = { ...this.#deps.envFor(p.workspaceId), ...(this.#deps.appEnv?.({ kind: 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) ?? {}) };
         return this.#deps.supervisor.start({
             id: p.id,
             workspaceId: p.workspaceId,

@@ -43,6 +43,9 @@ export const SETTINGS: readonly SettingDef[] = [
     // WHAT'S NEW (Tynn #762; Genie 1's): the version whose What's New the person has closed — shown once per version.
     { key: 'whats_new_seen_version', group: 'general', scope: 'host', label: 'What’s new seen', description: 'The version whose What’s new was last closed.', type: 'string', default: '', hidden: true },
     { key: 'tray_notice_shown', group: 'general', scope: 'host', label: 'Tray notice shown', description: 'The one-time “Genie is still running in the tray” notice has been shown.', type: 'boolean', default: false, hidden: true },
+    // APPS AND SCRIPTS REPORT TO AGENTS (genie#1345; the owner's D2: on by default): this workspace's sites, background
+    // processes and script keys may post into its own agents' AgentInbox. Off: none of them holds a key.
+    { key: 'app_inbox', group: 'agents', scope: 'workspace', label: 'Apps and scripts may message agents here', description: 'This workspace’s sites, background processes and script keys may report to its own agents, marked as an app’s message. Off: none of them gets a key.', type: 'boolean', default: true },
     { key: 'inbox_access', group: 'agents', scope: 'workspace', label: 'Who may message agents here', description: 'The workspace’s half of the two-tier AgentInbox rule: none, only this workspace (self), or any workspace on this workstation (all). The agent’s own scope must allow it too.', type: 'enum', options: ['none', 'self', 'all'], default: 'self' },
     // SAVED PROMPTS (Tynn #758; Genie 1's `saved_prompts`): the Command Window's library and each prompt's hotkey, as JSON
     // (core/prompt-library.ts reads it forgivingly). Hidden: Settings → Agents draws it as a list, not a JSON box.

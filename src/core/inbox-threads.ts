@@ -26,6 +26,8 @@ export interface ThreadMail {
     readonly attachments: readonly { readonly id: string; readonly name: string; readonly size: number }[];
     readonly sentAt: string;
     readonly readAt: string | null;
+    /** An APP sent it (genie#1345): what it reported beside the text, and how it is labelled. Absent otherwise. */
+    readonly app?: { readonly label: string; readonly subject: string; readonly level: 'info' | 'success' | 'failure'; readonly link?: string; readonly source: { readonly kind: 'site' | 'process' | 'script'; readonly name: string } };
 }
 
 export interface ThreadSummary {

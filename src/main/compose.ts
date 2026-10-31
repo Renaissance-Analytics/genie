@@ -30,6 +30,8 @@ import { OS_WORKSPACE } from '../core/os-agent.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
 import type { NoticeMail } from '../core/stream-event.js';
+import { isAppSender } from '../core/app-inbox.js';
+import type { AppEnvSource } from './app-inbox-service.js';
 import { configSync, type SyncResult } from '../core/integrations.js';
 import { AgentFilesHealth, type AgentFilesReport, type AgentFilesStep, type SyncSource } from '../core/agent-files-health.js';
 import { writeAgentGitignore } from './agent-gitignore.js';
@@ -176,6 +178,12 @@ export interface ComposeInput {
     readonly remoteTransport?: ServerTransport;
     /** What a remote connection may perform here; main.ts wires the real one. Refuses everything by default. */
     readonly remoteApi?: HostApi;
+    /**
+     * A site's or a kept process's OWN app credential (genie#1345, main/app-inbox-service.ts): `GENIE_INBOX_URL` and
+     * `GENIE_INBOX_TOKEN`, or nothing. Compose lays it over THAT site's env only — never the service env — and gives none
+     * while the workspace's "Apps and scripts may message agents here" (`app_inbox`) is off. Absent = no app door.
+     */
+    readonly appInboxEnv?: (source: AppEnvSource) => Readonly<Record<string, string>>;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
     /**
@@ -300,6 +308,8 @@ export interface ComposedServices {
     inboxReminders(input: { run: (agentId: string) => number | null }): Array<{ agentId: string; text: string; mail: readonly NoticeMail[] }>;
     /** A notice `inboxReminders` handed out has settled: `delivered` = its turn ended cleanly; otherwise its batch is untold. */
     inboxNoticeSettled(agentId: string, delivered: boolean): void;
+    /** A source's app credential (genie#1345) under the workspace's switch — what sites get, for the process book too. */
+    appEnv(source: AppEnvSource): Readonly<Record<string, string>>;
     /** §6.9: Genie's MCP server and the agent files. Tynn and GitHub are their accounts' (main/tynn-account.ts, main/github-account.ts), added by feature-ipc. */
     integrations(): { mcp: { url: string | null; verified: Verification | null; tools: readonly { name: string; description: string }[] }; agentFiles: readonly AgentFilesReport[] };
     /** Config sync (§6.9): Genie's MCP endpoint into a workspace's four targets, each reported on its own. `source`: Genie's start (default) or you. */
@@ -758,6 +768,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             return { docker: null, engines: [], error: message };
         },
     );
+    /** A source's app credential, while its workspace allows apps (the setting's default is on). */
+    const appEnvOf = (source: AppEnvSource): Readonly<Record<string, string>> =>
+        input.appInboxEnv && settings.snapshotFor(source.workspaceId).app_inbox !== false ? input.appInboxEnv(source) : {};
     const sites = new SiteManager({
         supervisor,
         allocatePort,
@@ -785,9 +798,12 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         ...(input.phpWorkers !== undefined ? { phpWorkers: input.phpWorkers } : {}),
         serviceEnv: (workspaceId) => engines.envFor(workspaceId),
         ...(input.siteProbe ? { probeReady: input.siteProbe } : {}),
+        appEnv: (site) => appEnvOf(site),
     });
     // An engine change reaches the running sites it changed the env of, with no restart asked of anyone.
     engines.onChange(() => { sites.serviceEnvChanged(); });
+    // The app switch moved (genie#1345): that workspace's running sites gain or lose their app credential now.
+    settings.onChange((key, _value, workspaceId) => { if (key === 'app_inbox') sites.serviceEnvChanged(workspaceId); });
     // The sites' routes and the shared WebSockets server's browser-facing ones (core/services.ts websocketRoutes).
     // Mailpit's web inbox at its .gen name (core/mailpit-name.ts): the Genie browser opens .gen sites only.
     const routes = () => [...sites.routes(), ...websocketRoutes(engines.list()), ...mailpitRoutes(engines.list())];
@@ -1178,7 +1194,9 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 const runNow = run(id);
                 if (runNow === null) return [];
                 const unread = inbox.unread(id as never);
-                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: runNow });
+                // How many came from APPS (genie#1345): the notice says so, and nothing of what they say.
+                const fromApps = unread.filter((m) => isAppSender(m.from)).length;
+                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: runNow, fromApps });
                 if (!text) return [];
                 // WHAT THE NOTICE IS ABOUT (beta.33 item 18): each unread message, who from and what it says, carried on
                 // the notice's row so the chat shows the context — the prompt itself stays the short instruction.
@@ -1186,13 +1204,14 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 const mail = unread.map((m): NoticeMail => ({
                     id: m.id,
                     from: m.from,
-                    fromName: m.from === HUMAN ? null : roster.get(m.from)?.name ?? null,
+                    fromName: m.from === HUMAN ? null : m.app ? m.app.label : roster.get(m.from)?.name ?? null,
                     text: m.text.length > NOTICE_MAIL_CHARS ? `${m.text.slice(0, NOTICE_MAIL_CHARS - 1)}…` : m.text,
                     sentAt: m.sentAt,
                 }));
                 return [{ agentId: id, text, mail }];
             }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
+        appEnv: (source) => appEnvOf(source),
         signals: ({ osAgentWorking, githubBlocked }) => ({
             flowsRunning: flowScheduler.inFlightCount(),
             // Mail agents have not collected: unread for every registered agent, the human excluded.

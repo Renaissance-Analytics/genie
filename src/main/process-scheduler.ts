@@ -26,6 +26,11 @@ export interface ProcessSchedulerDeps {
     readonly book: Pick<ProcessBook, 'scheduledTasks' | 'recordScheduledRun' | 'onChange'>;
     readonly supervisor: Pick<ProcessSupervisor, 'start' | 'status' | 'onChange'>;
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
+    /**
+     * THE PROCESS'S OWN APP CREDENTIAL (genie#1345): `GENIE_INBOX_URL` / `GENIE_INBOX_TOKEN` minted for THIS process, laid
+     * over the service env at each start so it can report to an agent of its workspace. Never part of `envFor`. Absent = none.
+     */
+    readonly appEnv?: (process: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
     readonly asleep: (workspaceId: string) => boolean;
     /** Deliver `text` to the agent at `address`, from the task named `from` — now, or when its turn ends. False = nowhere to deliver. */
     readonly nudge: (address: string, text: string, from: string) => boolean;
@@ -114,7 +119,7 @@ export class ProcessScheduler {
         const done = new Promise<void>((r) => { finish = r; });
         this.#inFlight.set(p.id, { at, done, finish });
         try {
-            const env = this.#deps.envFor(p.workspaceId);
+            const env = { ...this.#deps.envFor(p.workspaceId), ...(this.#deps.appEnv?.({ kind: 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) ?? {}) };
             this.#deps.supervisor.start({ id: p.id, workspaceId: p.workspaceId, name: p.name, command: p.command, cwd: p.cwd, restart: 'never', ...(Object.keys(env).length > 0 ? { env: { ...env } } : {}) });
         } catch (error) {
             this.#inFlight.delete(p.id);

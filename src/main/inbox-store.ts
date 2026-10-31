@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants as fsConstants } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
+import { appSenderId, isAppSender, readAppSender, type AppMessageMeta } from '../core/app-inbox.js';
 import { ATTACHMENT_LIMITS, HUMAN, attachmentRefusal, isExecutableName, type Participant } from '../core/inbox.js';
 import { sequenceV1Mail, type V1InboxPlan } from '../core/v1-inbox.js';
 import { runtimeDir } from './paths.js';
@@ -55,6 +56,12 @@ export interface InboxMessage {
     readonly sentAt: string;
     /** When the recipient's acknowledged receive returned it. `null` = unread. */
     readonly readAt: string | null;
+    /**
+     * An APP sent it (genie#1345, core/app-inbox.ts): the site, process or script key, as Genie decided from its
+     * credential, and what it reported beside the text. Absent on every message a person or an agent sent — and only
+     * ever present with a `from` that is that app's own id (`send` holds both directions).
+     */
+    readonly app?: AppMessageMeta;
 }
 
 interface MailFile {
@@ -100,6 +107,8 @@ export interface SendInput {
      * as a path's: no executable, the same caps, counted together with any paths.
      */
     readonly files?: readonly { readonly name: string; readonly bytes: Uint8Array }[];
+    /** An app's facts (genie#1345). Required exactly when `from` is an app id, and it must be that app's. */
+    readonly app?: AppMessageMeta;
 }
 
 /** What a refusal at each end tells the agent will happen instead. */
@@ -233,6 +242,17 @@ export class InboxStore {
     }
 
     async send(input: SendInput): Promise<InboxMessage> {
+        // AN APP'S IDENTITY, BOTH WAYS (genie#1345): only the app door sends as an app — with the facts of the very app
+        // its `from` names — and nothing sends app facts under anyone else's `from`. An app attaches nothing: attachments
+        // are PATHS this store reads, which would let an app make Genie read any file. Nobody writes TO an app.
+        const appFrom = readAppSender(input.from);
+        if (appFrom !== null || input.app !== undefined) {
+            if (appFrom === null || input.app === undefined || appSenderId(input.app.source) !== input.from) {
+                throw new Error('an app message must come from that app’s own id, with its facts; nothing was sent');
+            }
+            if ((input.attachments ?? []).length > 0 || (input.files ?? []).length > 0) throw new Error('an app cannot attach files; nothing was sent');
+        }
+        if (isAppSender(input.to)) throw new Error('nobody can write to an app: apps cannot be replied to; nothing was sent');
         // Everything that can refuse happens BEFORE anything is written: one bad path and the
         // message is not delivered, no blob lands, and the caller is told which path.
         const attachments = await this.#stageAttachments(input.from, input.attachments ?? [], input.workspaceRoot, input.files ?? []);
@@ -247,6 +267,7 @@ export class InboxStore {
             attachments,
             sentAt: this.#now(),
             readAt: null,
+            ...(input.app ? { app: input.app } : {}),
         };
         this.#mail.messages.push(message);
         await this.#flush();

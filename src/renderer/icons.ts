@@ -125,6 +125,9 @@ export const ICON_NAMES: readonly string[] = [
     'arrow-left',
     // The phone (genie#1346): a workspace's Files, the composer's camera and gallery, a folder's Up and Upload.
     'folder-open', 'camera', 'image', 'corner-left-up', 'upload', 'file',
+    // Apps and scripts that report to agents (genie#1345): a site (globe), a process (cog), a script key; a message's level
+    // (circle-check / circle-x / info); a card action in flight. Named in data (`APP_KIND_ICON`), so registered here.
+    'cog', 'key-round', 'circle-x', 'loader-circle',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
 ];

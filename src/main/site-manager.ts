@@ -122,6 +122,13 @@ export interface SiteManagerDeps {
     readonly probeReady?: (port: number, options: { behindCaddy: boolean }) => Promise<boolean>;
     /** The budget `probeReady` is given, for the failure's reason; absent = SITE_READY_TIMEOUT_MS. */
     readonly readyTimeoutMs?: number;
+    /**
+     * THE SITE'S OWN APP CREDENTIAL (genie#1345): `GENIE_INBOX_URL` / `GENIE_INBOX_TOKEN`, minted for THIS site, so its
+     * server can report to an agent of its workspace. Read at every start and compared like the service env (a rotate or a
+     * revoke restarts the site). Laid over everything else: a site's declared env cannot replace the token Genie handed it.
+     * Never part of `serviceEnv` — that env reaches every agent session, terminal and `.env`. Absent = none.
+     */
+    readonly appEnv?: (site: { readonly kind: 'site'; readonly id: string; readonly name: string; readonly workspaceId: string }) => Readonly<Record<string, string>>;
 }
 
 interface SiteRecord {
@@ -316,6 +323,15 @@ export class SiteManager {
         return { input, unservable: null, id, host, port: null, processIds: [], external: false, stopped: true, problem: null };
     }
 
+    /** A site's env NOW: the workspace's service env, its own declared env over it, and its own app credential last. */
+    #envOf(siteId: string, input: CreateSiteInput): Record<string, string> {
+        return {
+            ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}),
+            ...(input.env ?? {}),
+            ...(this.#deps.appEnv?.({ kind: 'site', id: siteId, name: input.name, workspaceId: input.workspaceId }) ?? {}),
+        };
+    }
+
     /** Allocate the ports and start the processes; on a refusal nothing has been started and the record is unchanged. */
     #start(record: SiteRecord): void {
         const input = record.input;
@@ -323,7 +339,7 @@ export class SiteManager {
         const { id, host } = record;
         const proc = (procId: string, name: string, command: string, env: Readonly<Record<string, string>> | undefined, restart: 'on-failure' | 'always' = 'on-failure') =>
             this.#deps.supervisor.start({ id: procId, workspaceId: input.workspaceId, name, command, cwd: input.repoPath, restart, ...(env ? { env } : {}) });
-        const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
+        const merged = this.#envOf(record.id, input);
         const baseEnv = Object.keys(merged).length > 0 ? merged : undefined;
         const startedEnv = canonicalEnv(merged);
         delete record.phpWorker; // set again below for a PHP site only
@@ -420,13 +436,13 @@ export class SiteManager {
             const input = record.input;
             if (!input || record.stopped || record.external || record.processIds.length === 0) continue;
             if (workspaceId !== undefined && input.workspaceId !== workspaceId) continue;
-            const now = canonicalEnv({ ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) });
+            const now = canonicalEnv(this.#envOf(record.id, input));
             if (now === record.startedEnv) continue;
             if (record.phpWorker) {
                 // Only PHP reads the service env: its worker alone is restarted, on the same fcgi port, so the site's
                 // Caddy, its port and the front door's route stay — and Caddy retries the dial while the worker comes
                 // back (serve-config's lb_try_duration). Stopping everything 502'd the site (Tynn #756, moic run 11).
-                const merged: Record<string, string> = { ...(this.#deps.serviceEnv?.(input.workspaceId) ?? {}), ...(input.env ?? {}) };
+                const merged = this.#envOf(record.id, input);
                 for (const workerId of phpWorkerIds(record.id, record.phpWorker.fcgiPorts.length)) this.#deps.supervisor.stop(workerId);
                 this.#startPhpWorker(record, Object.keys(merged).length > 0 ? merged : undefined);
                 record.startedEnv = canonicalEnv(merged);
