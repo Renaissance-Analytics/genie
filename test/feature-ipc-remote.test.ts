@@ -43,7 +43,7 @@ afterEach(async () => {
 describe('the remote section', () => {
     it('is MEASURED at boot: the host name, no URL until a transport listens, unlocked, no PIN, no devices, no links, nobody connected', async () => {
         const snap = await featureSnapshot(services, state());
-        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null });
+        expect(snap.remote).toEqual({ host: 'alphar', url: null, unavailable: 'nothing is listening on alphar', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false, firewallOutcome: null, tailscale: null, tailscaleOutcome: null, tynnWorkstation: null, pairRequests: [] });
     });
 
     it('carries this machine’s Tynn registration as main reads it (Tynn #836)', async () => {
@@ -67,7 +67,17 @@ describe('the remote section', () => {
         pair.client.onMessage((t) => { const r = parseMessage(t); if (r.ok) got.push(r.message); });
         pair.client.send(JSON.stringify({ kind: 'hello', auth: { kind: 'pin', code: pinned.remote!.pin!.code }, label: 'glenn’s phone' }));
         await tick();
-        expect(got[0]).toMatchObject({ kind: 'welcome', isOwner: true });
+        // The PIN alone pairs nothing (q_8c07b142): the desktop's "Pair this device?" is in the snapshot, naming the device.
+        expect(got[0]).toMatchObject({ kind: 'pairing', host: 'alphar' });
+        const asking = await featureSnapshot(services, state());
+        expect(asking.remote!.devices).toEqual([]);
+        expect(asking.remote!.pairRequests).toMatchObject([{ label: 'glenn’s phone', host: 'alphar' }]);
+        // Allow, on this screen, is a feature action; an unknown request is refused by name.
+        await expect(handleFeatureAction(services, { kind: 'remote.answerPair', id: 'pair_nope', allow: true }, state())).rejects.toThrow(/no longer waiting/);
+        const allowed = await handleFeatureAction(services, { kind: 'remote.answerPair', id: asking.remote!.pairRequests[0]!.id, allow: true }, state());
+        expect(allowed.remote!.pairRequests).toEqual([]);
+        await tick();
+        expect(got[1]).toMatchObject({ kind: 'welcome', isOwner: true });
 
         const snap = await featureSnapshot(services, state());
         expect(snap.remote!.devices.map((d) => d.label)).toEqual(['glenn’s phone']);
