@@ -312,7 +312,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
             },
             'AgentInbox',
         ),
-        handler: withCaller(async (caller, args) => {
+        handler: withCaller(async (caller, args, context) => {
             const me = deps.roster().find((r) => r.id === caller.agentId);
             // One verdict for `list` and `send`: the two tiers, or the target wrote to the caller first.
             // A FLOW reaches as the person does (genie#1204; Genie 1's genie#761 — AgentInbox refused a flow caller, so a flow
@@ -362,7 +362,10 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     return ok({ ok: true, delivered: 1, messageId: message.id, attachments: message.attachments });
                 }
                 case 'receive': {
+                    // A wait ends when its MCP call goes away (genie#1360); a client still there hears what it waits for.
+                    if (args.wait === true) context.progress?.('waiting for mail');
                     const page = await deps.inbox.receive({
+                        signal: context.signal,
                         participant: caller.agentId,
                         ...(typeof args.cursor === 'number' ? { cursor: args.cursor } : {}),
                         ...(typeof args.acknowledge === 'boolean' ? { acknowledge: args.acknowledge } : {}),

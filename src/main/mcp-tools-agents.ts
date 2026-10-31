@@ -2,7 +2,7 @@ import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-a
 import { isAcpProvider } from '../core/engine.js';
 import type { AgentRecord } from '../core/identity.js';
 import { callerFrom } from './mcp-callers.js';
-import type { Caller, Registration } from './mcp-tools.js';
+import type { Caller, McpCall, Registration } from './mcp-tools.js';
 
 /**
  * `createAgent` — THE DEFAULT AGENT MAY ASK TO CREATE A WORKSPACE AGENT (the owner, 2026-10-19, FTQ q_09d1f4a0: "an agent
@@ -22,7 +22,7 @@ export interface AgentToolsDeps {
     readonly resolveCaller: (key: string) => Caller | null;
     readonly defaultAgentOf: (workspaceId: string) => string | null;
     readonly roster: () => readonly AgentRecord[];
-    readonly approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     readonly register: (input: { workspaceId: string; provider: AgentRecord['provider']; name: string; instructions?: string | null }) => Promise<AgentRecord>;
     readonly addressOf: (record: AgentRecord) => string;
 }
@@ -67,7 +67,7 @@ export function agentTools(deps: AgentToolsDeps): Registration[] {
             if (!isAcpProvider(provider)) return err('provider is claude or codex');
             if (deps.roster().some((a) => a.workspaceId === found.workspaceId && a.name === name)) return err(`${found.workspaceId} already has an agent named ${name}`);
             const detail = `Create a new agent “${name}” (${provider}) in ${found.workspaceId}${instructions ? ` — instructions: ${instructions}` : ''}`;
-            if ((await deps.approve(found, CREATE_AGENT_ACTION, detail)) !== 'allowed') return err('The person declined: no agent was created.');
+            if ((await deps.approve(found, CREATE_AGENT_ACTION, detail, context)) !== 'allowed') return err('The person declined: no agent was created.');
             const record = await deps.register({ workspaceId: found.workspaceId, provider, name, instructions });
             return ok({ ok: true, id: record.id, name: record.name, address: deps.addressOf(record) });
         },

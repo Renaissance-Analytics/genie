@@ -3,7 +3,13 @@ import type { Registration } from './mcp-tools.js';
 
 /**
  * GENIE'S OWN MCP SERVER (§6.9): prism-mcp-server on a loopback HTTP transport — a literal 127.0.0.1 address,
- * POST-only, stateless, a 256-bit bearer minted at listen — serving every Genie tool registration. The URL
+ * POST-only, stateless, a 256-bit bearer minted at listen — serving every Genie tool registration.
+ *
+ * A LONG CALL IS A STREAM (genie#1360, prism-mcp-server 0.4.0): a `tools/call` that accepts `text/event-stream` is
+ * answered as SSE — opened at once, a heartbeat every 10 s, the result as the last event. Claude Code drops any call
+ * whose response says nothing for 60 s (measured: every wait past 60 s failed at 61.9 s on one held JSON body), so a
+ * 10-minute `agentinbox receive wait` or a 30-minute approval needs the stream. A JSON-only client (Codex) keeps its
+ * one JSON body. The URL
  * and the token become `GENIE_MCP_URL` / `GENIE_MCP_TOKEN` in every terminal's environment and the endpoint
  * config sync writes into a workspace.
  *
@@ -39,7 +45,9 @@ const NOT_LISTENING = 'the MCP server is not listening';
 
 export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
     const build = (options: { port: number; token?: string }): Server => {
-        const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport(options) });
+        // `abortOnDisconnect` (genie#1360): a client that goes away fires its call's signal, so the wait behind it — an
+        // approval, `services exec`, `agentinbox receive wait` — is withdrawn instead of running on for nobody.
+        const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport({ ...options, abortOnDisconnect: true }) });
         for (const r of input.registrations) {
             const visible = r.visible;
             if (visible) s.register(r.definition, r.handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });

@@ -1,7 +1,7 @@
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { AccessDecision, AccessRequest, PluginManifest, PluginTool } from '../core/plugins.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import type { RunResult } from './plugin-runner.js';
 
 /**
@@ -29,7 +29,7 @@ export interface PluginToolsDeps {
         guard(pluginId: string): ((request: AccessRequest) => AccessDecision) | null;
     };
     readonly run: (input: { dir: string; manifest: PluginManifest; tool: PluginTool; args: unknown; caller: Caller; guard: (request: AccessRequest) => AccessDecision; official?: boolean; pluginId?: string }) => Promise<RunResult>;
-    readonly approve: (caller: Caller, action: 'plugin', detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'plugin', detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     readonly resolveCaller: (terminalId: string) => Caller | null;
 }
 
@@ -58,14 +58,14 @@ export function pluginTools(deps: PluginToolsDeps): Registration[] {
             { ...schema, type: 'object', properties } as JsonObject,
             pluginToolTitle(ref.manifest.name, ref.tool.name),
         );
-        const handler = async (args: JsonObject, context: { headers: Record<string, string> }): Promise<McpToolResult> => {
+        const handler = async (args: JsonObject, context: { headers: Record<string, string> } & McpCall): Promise<McpToolResult> => {
             const caller = callerFrom(args, context.headers, deps.resolveCaller);
             if (typeof caller === 'string') return err(caller);
             const guard = deps.plugins.guard(ref.pluginId);
             if (!guard) return err(`plugin ${ref.pluginId} is not enabled`);
             const { terminalId: _omit, ...rest } = args;
             if (ref.tool.gated) {
-                const verdict = await deps.approve(caller, 'plugin', name);
+                const verdict = await deps.approve(caller, 'plugin', name, context);
                 if (verdict !== 'allowed') return err(`${name} was denied by the person; nothing ran`);
             }
             const result = await deps.run({ dir: ref.dir, manifest: ref.manifest, tool: ref.tool, args: rest, caller, guard, official: ref.official === true, pluginId: ref.pluginId });
