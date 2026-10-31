@@ -120,6 +120,8 @@ async function main() {
     check('the page without a PIN shows the pairing form', true);
 
     // 1–2. Pair with the PIN in the QR's hash: the dashboard, then pick a workspace.
+    // A scanned QR opens a FRESH page; a hash-only goto on the open page would not reload it.
+    await page.goto("about:blank");
     await page.goto(`${PAGE}#pin=${pin}`);
     await page.waitForSelector('[data-mobile="shell"] [data-mobile-agent]', { timeout: 30_000 });
     await shot(page, '01-dashboard');
