@@ -98,10 +98,12 @@ async function main() {
     // The phone's browser trusts the tailnet cert the way a real one trusts Let's Encrypt's: here, by its key (the VM's fake
     // `tailscale cert` is self-signed), and resolves the MagicDNS name to the tailnet address as MagicDNS would.
     const spki = createHash('sha256').update(new X509Certificate(readFileSync(CERT)).publicKey.export({ type: 'spki', format: 'der' })).digest('base64');
-    const browser = await chromium.launch({ executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox', `--host-resolver-rules=MAP ${DNS} ${IP}`, `--ignore-certificate-errors-spki-list=${spki}`] });
-    const context = await browser.newContext({ ...devices['Pixel 7'] });
+    // A PERSISTENT profile, as a phone's browser is: an incognito context is never offered an install (Chromium's own
+    // installability check answered `in-incognito` and nothing else on the first run).
+    const context = await chromium.launchPersistentContext('/tmp/phone-profile', { ...devices['Pixel 7'], executablePath: process.env.CHROMIUM ?? '/usr/bin/chromium', headless: true, args: ['--no-sandbox', `--host-resolver-rules=MAP ${DNS} ${IP}`, `--ignore-certificate-errors-spki-list=${spki}`] });
+    const browser = context;
     await context.addInitScript(() => { window.addEventListener('beforeinstallprompt', () => { window.__installPrompt = true; }); });
-    const page = await context.newPage();
+    const page = context.pages()[0] ?? await context.newPage();
     const frames = { sent: [], received: [] };
     page.on('websocket', (ws) => {
         ws.on('framesent', (f) => frames.sent.push(typeof f.payload === 'string' ? f.payload.length : 0));

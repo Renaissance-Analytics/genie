@@ -19,7 +19,8 @@ import { join } from 'node:path';
 
 const OUT = '/tmp/genie-stub-claude-received';
 const MODELS = [{ value: 'default', displayName: 'Default (recommended)', description: 'Use the default model', resolvedModel: 'claude-opus-5-5' }];
-const SESSION = 'stub-chat-session-0001';
+const SESSION = '5f0c2a4e-8b1d-4c3a-9e7f-1a2b3c4d5e6f';
+const CLI_VERSION = '2.1.310';
 let received = 0;
 let turn = 0;
 
@@ -52,7 +53,7 @@ async function answer(message) {
         files.length > 0 ? `I received ${files.length} image file${files.length > 1 ? 's' : ''}: ${files.join('; ')}.` : 'No files came with it.',
         'This reply is streaming to you a few words at a time.',
     ].join(' ');
-    send({ type: 'system', subtype: 'init', session_id: SESSION, model: 'claude-opus-5-5', tools: [], mcp_servers: [], cwd: process.cwd() });
+    send({ type: 'system', subtype: 'init', session_id: SESSION, claude_code_version: CLI_VERSION, model: 'claude-opus-5-5', tools: [], mcp_servers: [], cwd: process.cwd() });
     const id = `msg_stub_${turn}`;
     send({ type: 'stream_event', session_id: SESSION, parent_tool_use_id: null, event: { type: 'message_start', message: { id, usage: { input_tokens: 10, output_tokens: 1 } } } });
     send({ type: 'stream_event', session_id: SESSION, parent_tool_use_id: null, event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } } });
@@ -74,7 +75,7 @@ function handle(frame) {
     if (frame?.type === 'control_request') {
         const id = frame.request_id;
         const subtype = frame.request?.subtype;
-        if (subtype === 'initialize') return send({ type: 'control_response', response: { subtype: 'success', request_id: id, response: { models: MODELS } } });
+        if (subtype === 'initialize') return send({ type: 'control_response', response: { subtype: 'success', request_id: id, response: { models: MODELS, claude_code_version: CLI_VERSION } } });
         return send({ type: 'control_response', response: { subtype: 'success', request_id: id, response: {} } });
     }
     if (frame?.type === 'user') {
