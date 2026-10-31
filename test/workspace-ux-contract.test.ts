@@ -22,8 +22,9 @@ import {
  * ui). tynn and genie and genie cloud (and supporting repos) are tightly connected and need to stay in sync."
  *
  * contracts/workspace-ux.json says, surface by surface, what a person can DO, what they SEE, and the Tynn API each action
- * uses. tynn.ai checks its side of the same file (its routes, its state machines, its web board's own rules); this checks
- * Genie's: the Tynn tab's declared behaviour in src/core/tynn-board.ts must be the contract's, action for action. An
+ * uses. tynn.ai owns the contract (the owner, 2026-10-31, q_cb19b598): every published version is canonical in
+ * Renaissance-Analytics/tynn.ai at contracts/workspace-ux/<version>/workspace-ux.json, and tynn.ai checks its side there
+ * (its routes, its state machines, its web board's own rules) and watches this repo's pin. This checks Genie's: the Tynn tab's declared behaviour in src/core/tynn-board.ts must be the contract's, action for action. An
  * action Genie does not offer yet is named in BOARD_GAPS with the reason — never silently missing.
  */
 type Api = { method: string; path: string } | null;
@@ -45,31 +46,53 @@ type Board = {
 
 const bytes = readFileSync(new URL('../contracts/workspace-ux.json', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
 const contract = JSON.parse(bytes) as { $id: string; contract: string; version: string; surfaces: Array<{ id: string } & Board> };
-/** The pin beside the copy: the published tag of Civicognita/shared-schemas this repo declares against, and its bytes' hash. */
-const pin = JSON.parse(readFileSync(new URL('../contracts/workspace-ux.pin.json', import.meta.url), 'utf8')) as {
-    repository: string; contract: string; version: string; tag: string; commit: string; path: string; sha256: string;
+/**
+ * The pin beside the copy: the tynn.ai commit that published the version this repo declares against, its path there,
+ * and its bytes' hash. tynn.ai is private and this repo's CI is public, so nothing here can fetch it: the pin RECORDS the
+ * published bytes' hash and the copy is held to it offline.
+ */
+const pin = JSON.parse(readFileSync(new URL('../contracts/workspace-ux.pin.json', import.meta.url), 'utf8')) as Record<string, unknown> & {
+    repository: string; contract: string; version: string; commit: string; path: string; sha256: string;
+};
+/** 0.1.0–0.5.0 were published in Civicognita/shared-schemas and brought to tynn.ai byte for byte, so their $id names its tags. */
+const LAST_SHARED_SCHEMAS_VERSION = [0, 5, 0];
+const semver = (v: string) => v.split('.').map(Number);
+const publishedInSharedSchemas = (v: string) => {
+    const [a, b, c] = semver(v);
+    const [x, y, z] = LAST_SHARED_SCHEMAS_VERSION;
+    return a !== x ? a < x : b !== y ? b < y : c <= z;
 };
 const board = contract.surfaces.find((s) => s.id === 'board')!;
 
 describe('the contract file', () => {
-    it('pins a PUBLISHED contract: a tag of Civicognita/shared-schemas, its commit, its path and the sha256 of its bytes', () => {
-        expect(pin.repository).toBe('Civicognita/shared-schemas');
+    it('pins a PUBLISHED contract: a commit of Renaissance-Analytics/tynn.ai, the version\'s path there and the sha256 of its bytes', () => {
+        expect(pin.repository).toBe('Renaissance-Analytics/tynn.ai');
         expect(pin.contract).toBe('workspace-ux');
         expect(pin.version).toMatch(/^\d+\.\d+\.\d+$/);
-        expect(pin.tag).toBe(`workspace-ux/v${pin.version}`);
         expect(pin.path).toBe(`contracts/workspace-ux/${pin.version}/workspace-ux.json`);
         expect(pin.commit).toMatch(/^[0-9a-f]{40}$/);
         expect(pin.sha256).toMatch(/^[0-9a-f]{64}$/);
+        // A version is published by merging it to tynn.ai main; there is no tag to name (the shared-schemas tags are gone).
+        expect(pin).not.toHaveProperty('tag');
+        expect(pin).not.toHaveProperty('tagObject');
     });
 
-    it('is not stale: the copy here is byte for byte the pinned tag\'s contract (it changes in shared-schemas first)', () => {
-        // No network: shared-schemas is private and this repo's CI is public, so the pin RECORDS the published bytes'
-        // hash (LF line ends) and the copy is held to it.
+    it('is not stale: the copy here is byte for byte the pinned version (it changes in tynn.ai first)', () => {
         expect(createHash('sha256').update(bytes).digest('hex')).toBe(pin.sha256);
         expect(contract.contract).toBe(pin.contract);
         expect(contract.version).toBe(pin.version);
-        expect(contract.$id).toBe(`https://raw.githubusercontent.com/${pin.repository}/${pin.tag}/${pin.path}`);
+        expect(contract.$id).toBe(publishedInSharedSchemas(pin.version)
+            ? `https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v${pin.version}/${pin.path}`
+            : `https://raw.githubusercontent.com/${pin.repository}/main/${pin.path}`);
         expect(board).toBeDefined();
+    });
+
+    it('names each version\'s $id by where it was published', () => {
+        expect(publishedInSharedSchemas('0.1.0')).toBe(true);
+        expect(publishedInSharedSchemas('0.5.0')).toBe(true);
+        expect(publishedInSharedSchemas('0.6.0')).toBe(false);
+        expect(publishedInSharedSchemas('0.10.0')).toBe(false);
+        expect(publishedInSharedSchemas('1.0.0')).toBe(false);
     });
 });
 
