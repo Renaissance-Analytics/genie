@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.5.0/contracts/workspace-ux/0.5.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.10.0/contracts/workspace-ux/0.10.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.5.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.5.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.10.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.10.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -11,6 +11,7 @@
     "base": "/api/v1/projects/{projectId}",
     "credential": "the Genie pairing token (gpk_), never an agent's MCP key",
     "scope": "genie:board",
+    "surfaceScope": "a surface that names its own scope uses it instead of this one (issues: genie:issue-queue)",
     "refusal": "404 for every refusal (no scope, no access, wrong project, role may not write)",
     "invalid": "422 naming why: errors.status for a workflow step, errors.claim for a claim or an assignment the project's claim rules refuse, or the field's own key for a body that does not validate"
   },
@@ -159,6 +160,303 @@
         { "id": "task.assign", "web": "POST tasks.assign", "api": { "method": "POST", "path": "/tasks/{taskId}/assign" } },
 
         { "id": "board.claimants", "web": "GET claimants", "api": { "method": "GET", "path": "/claimants" } }
+      ]
+    },
+    {
+      "id": "wip",
+      "title": "WIP",
+      "tynn": { "page": "v2/Project/Wip", "route": "wip", "pageAccess": "wip" },
+      "data": {
+        "api": { "method": "GET", "path": "/wip" },
+        "query": ["view", "story", "product"],
+        "lenses": {
+          "active": ["in_progress", "backlog"],
+          "attention": ["blocked", "qa"],
+          "done": ["done"]
+        },
+        "selection": "story: the story whose slug ?story= names, else the lens's first story; its tasks are shown",
+        "answer": ["project_id", "view", "active_version", "available_versions", "stories", "selected_story", "tasks", "story_counts", "claims"],
+        "claims": "the board's claim settings for this person (board.data.claims: mode, policy, can_assign), which tynn.ai's page reads from its project; a backlog task's Start follows board.data.claims.start",
+        "counts": ["active", "attention", "done", "backlog"],
+        "fields": {
+          "story": ["id", "slug", "story_number", "title", "status", "description", "task_count", "tasks_done"],
+          "task": ["id", "task_number", "title", "status", "claimed_by", "claimed_by_me", "can_start", "version_active", "features"]
+        },
+        "taskOrder": ["doing", "qa", "blocked", "backlog", "done"],
+        "quickActions": {
+          "task": {
+            "backlog": { "verb": "start", "guard": "can_start" },
+            "doing": { "verb": "ready", "guard": "version_active" },
+            "qa": { "verb": "done", "guard": "version_active" },
+            "blocked": { "verb": "restart" }
+          }
+        },
+        "live": {
+          "about": "The WIP page follows Tynn as the version's stories and tasks change. An event is a doorbell: the client reads the WIP page again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's WIP page goes live on project.{projectId} (ProjectShell → useProjectChannel), where the board's events also ring. The app hears them on the board's own channel, signed at the board door (board.data.live.auth) for whoever may open the board; a person with the WIP page but not the board (a client) is not signed for it, and the tab's WIP is then not live",
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "WIP is being read" },
+        { "id": "no-active-version", "what": "there is no active version, and WIP says so" },
+        { "id": "lens", "what": "Active, Attention and Done lenses, each with its count; the person switches between them" },
+        { "id": "empty-lens", "what": "a lens with no stories says so (Attention: nothing needs attention)" },
+        { "id": "story-selected", "what": "the chosen story's title, description and its tasks, the ones in motion first, with how many are done" },
+        { "id": "no-tasks", "what": "a story with no tasks says so" },
+        { "id": "done-summary", "what": "the Done lens lists the stories delivered in the version, with their task counts" },
+        { "id": "claim-start", "what": "a backlog task's Start follows the project's claim mode, as on the board" },
+        { "id": "claimed", "what": "a claimed task shows its claimant" },
+        { "id": "transition-refused", "what": "a refused step shows the reason the state machine gave" },
+        { "id": "live", "what": "WIP follows Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and WIP is read again once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "task.start", "web": "POST tasks.start", "api": { "method": "POST", "path": "/tasks/{taskId}/start" }, "to": "doing" },
+        { "id": "task.ready", "web": "POST tasks.ready", "api": { "method": "POST", "path": "/tasks/{taskId}/ready" }, "to": "qa" },
+        { "id": "task.done", "web": "POST tasks.done", "api": { "method": "POST", "path": "/tasks/{taskId}/done" }, "to": "done" },
+        { "id": "task.restart", "web": "POST tasks.restart", "api": { "method": "POST", "path": "/tasks/{taskId}/restart" }, "to": "backlog" },
+        { "id": "task.claim", "web": "POST tasks.claim", "api": { "method": "POST", "path": "/tasks/{taskId}/claim" } }
+      ]
+    },
+    {
+      "id": "issues",
+      "title": "Issues",
+      "tynn": { "page": "v2/Project/Issues", "route": "issues", "pageAccess": "issues" },
+      "scope": "genie:issue-queue",
+      "data": {
+        "api": { "method": "GET", "path": "/issues" },
+        "about": "The project's one intake queue: ideas, reports and defects before they become work. Its own pairing scope (genie:issue-queue): genie:issues is filing only, which is all an existing pairing consented to. Reads use the Issues page's gate (page issues) and its own builder; writes use the web write routes' gate (the project) and the web page's own actions and form rules.",
+        "query": ["status", "source", "q"],
+        "filters": {
+          "status": ["open", "converted", "resolved", "discarded", "all"],
+          "default": "open",
+          "source": ["feedback", "issue", "wish", "github"],
+          "q": "title or body, case-insensitive",
+          "unknown": "an unknown status or source is the default, never an error"
+        },
+        "limit": 100,
+        "order": "newest first",
+        "answer": ["project_id", "cursor", "issues", "filters", "statuses", "features", "convertible_versions", "can_triage"],
+        "fields": {
+          "issue": ["id", "issue_number", "title", "description", "status", "type", "priority", "source", "context_url", "from", "version_number", "feature_ids", "solutions", "converted_story_id", "converted_story_number", "github", "created_at"]
+        },
+        "types": ["enhancement", "fix", "chore", "docs", "security", "deprecation"],
+        "priorities": ["low", "normal", "high", "critical"],
+        "form": {
+          "fields": ["title", "type", "priority", "description", "feature_ids"],
+          "required": ["title"],
+          "defaults": { "type": "enhancement", "priority": "normal" },
+          "intake": "no search-first gate: a person filing is looking at the queue (tynn.ai IssueController). Anyone who may see the project may file"
+        },
+        "triage": {
+          "guard": "can_triage",
+          "while": "open",
+          "what": "delete, resolve, discard and convert are offered only on an open issue, and only to a person who may triage it (the project's update authority, IssuePolicy)"
+        },
+        "convert": { "versions": "convertible_versions", "statuses": ["active", "accepted"], "to": "a story in the version's backlog; the issue's solutions become its tasks" },
+        "close": { "verdicts": { "resolve": "resolved", "discard": "discarded" }, "reason": "required, recorded on the issue", "github": "an issue that came from GitHub is closed there too, with the reason as a comment (tynn.ai#379)" },
+        "live": {
+          "about": "The queue follows Tynn as issues are filed, edited, converted, closed or deleted, by a person or an agent. An event is a doorbell: the client asks what changed since its cursor and applies only that.",
+          "channel": "private-project-issues.{projectId}",
+          "web": "routes/channels.php project-issues.{projectId}: exactly whoever may open the Issues page (page issues); issue events ring there and on project.{projectId}, where tynn.ai's Issues page goes live (ProjectShell → useProjectChannel). The app is signed for the queue's channel only, through auth below",
+          "push": { "method": "GET", "path": "/api/v1/broadcasting-config", "scope": "genie:discovery" },
+          "auth": { "method": "POST", "path": "/issues/broadcasting-auth", "body": ["socket_id", "channel_name"] },
+          "events": ["issue.created", "issue.updated", "issue.deleted"],
+          "cursor": "cursor",
+          "changes": {
+            "method": "GET",
+            "path": "/issues/changes",
+            "query": ["since", "ids[]", "status", "source", "q"],
+            "answer": ["project_id", "cursor", "filters", "ids", "rows"]
+          },
+          "reconnect": "backoff; on every (re)subscription the client asks for the changes since its last cursor before it shows live"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "the queue is being read" },
+        { "id": "status-tabs", "what": "Open, Converted, Resolved, Discarded and All; Open is chosen first" },
+        { "id": "source-filter", "what": "Any source, or only what came from people (feedback)" },
+        { "id": "search", "what": "a search over titles and bodies narrows the queue" },
+        { "id": "empty", "what": "no issue matches, and the queue says so and offers a new issue" },
+        { "id": "card", "what": "each issue shows its number, title, a short body, its type (with the type's colour), who raised it when anyone is recorded, its GitHub repo and number when it came from GitHub, and its status when it is not open" },
+        { "id": "open-issue", "what": "an issue opens into its form, with who raised it, on which version and from where" },
+        { "id": "not-found", "what": "an issue that is gone says so" },
+        { "id": "create", "what": "a new issue: title (required), type, priority, description and features, with the form's defaults" },
+        { "id": "triage", "what": "delete, resolve, discard and convert on an open issue, for a person who may triage" },
+        { "id": "convert", "what": "convert onto one of the active or accepted versions, chosen from a list" },
+        { "id": "close-reason", "what": "resolve and discard each ask for a reason, which is recorded" },
+        { "id": "refused", "what": "a refused step shows the reason Tynn gave (already converted, already closed, a field the form refuses)" },
+        { "id": "live", "what": "the queue follows Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and the queue catches up once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the issue-queue scope" }
+      ],
+      "actions": [
+        { "id": "issue.list", "web": "GET issues", "api": { "method": "GET", "path": "/issues" } },
+        { "id": "issue.detail", "web": "GET issues", "api": { "method": "GET", "path": "/issues/{issueId}" } },
+        { "id": "issue.create", "web": "POST issues.store", "api": { "method": "POST", "path": "/issues" }, "to": "open" },
+        { "id": "issue.update", "web": "PATCH issues.update", "api": { "method": "PATCH", "path": "/issues/{issueId}" } },
+        { "id": "issue.delete", "web": "DELETE issues.destroy", "api": { "method": "DELETE", "path": "/issues/{issueId}" } },
+        { "id": "issue.convert", "web": "POST issues.convert", "api": { "method": "POST", "path": "/issues/{issueId}/convert" }, "body": ["version_id"], "to": "converted" },
+        { "id": "issue.resolve", "web": "POST issues.close", "api": { "method": "POST", "path": "/issues/{issueId}/close" }, "body": { "verdict": "resolve", "reason": "required" }, "to": "resolved" },
+        { "id": "issue.discard", "web": "POST issues.close", "api": { "method": "POST", "path": "/issues/{issueId}/close" }, "body": { "verdict": "discard", "reason": "required" }, "to": "discarded" }
+      ]
+    },
+    {
+      "id": "vip",
+      "title": "VIP",
+      "tynn": { "page": "v2/Project/Vip", "route": "vip", "pageAccess": "vip" },
+      "data": {
+        "api": { "method": "GET", "path": "/vip" },
+        "answer": ["project_id", "vip_version", "stories", "past_vips", "can_start_vip"],
+        "fields": {
+          "version": ["id", "number", "title", "status"],
+          "story": ["id", "slug", "story_number", "title", "status", "description", "task_count", "tasks_done"],
+          "pastVip": ["id", "number", "title", "status", "story_count", "ended_at"]
+        },
+        "columns": ["backlog", "blocked", "in_progress", "qa", "done"],
+        "flow": { "backlog": "in_progress", "blocked": "in_progress", "in_progress": "qa", "qa": "done", "done": null },
+        "release": { "action": "version.release", "when": "every story is done (and there is at least one)" },
+        "start": { "action": "vip.create", "guard": "can_start_vip", "body": ["title", "why"] },
+        "live": {
+          "about": "The VIP lane follows Tynn as its version and stories change. An event is a doorbell: the client reads the VIP lane again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's VIP page goes live on project.{projectId}, where the board's events also ring; the app hears them on the board's own channel, signed at the board door (board.data.live.auth)",
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "the VIP lane is being read" },
+        { "id": "idle", "what": "no VIP in flight: the lane says what VIP is for" },
+        { "id": "start-form", "what": "a person who may manage the project starts VIP work with a title and why it cannot wait; anyone else is told who can" },
+        { "id": "in-flight", "what": "the VIP banner: its number, title and task progress, and the lane's columns with their stories" },
+        { "id": "advance", "what": "each story's one-click move to its next column" },
+        { "id": "release-gated", "what": "Release is offered only once every story is done, and says why otherwise" },
+        { "id": "past-vips", "what": "VIP versions already dealt with, newest first" },
+        { "id": "transition-refused", "what": "a refused step shows Tynn's reason" },
+        { "id": "live", "what": "the lane follows Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and the lane is read again once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "vip.create", "web": "POST versions.store", "api": { "method": "POST", "path": "/vip" } },
+        { "id": "story.move", "web": "POST stories.move", "api": { "method": "POST", "path": "/stories/{storyId}/move" } },
+        { "id": "version.release", "web": "POST versions.release", "api": { "method": "POST", "path": "/versions/{versionId}/release" }, "to": "released" }
+      ]
+    },
+    {
+      "id": "releases",
+      "title": "Releases",
+      "tynn": { "page": "v2/Project/Releases", "route": "releases", "pageAccess": null },
+      "data": {
+        "api": { "method": "GET", "path": "/releases" },
+        "gate": "no page key on the web: whoever may see the project may see its releases",
+        "query": ["product"],
+        "answer": ["project_id", "releases"],
+        "fields": {
+          "release": ["id", "number", "title", "description", "why", "released_at", "pr_id", "repository_id", "story_count", "story_done_count", "top_stories"],
+          "story": ["id", "story_number", "title", "status"]
+        },
+        "order": "newest first",
+        "topStories": 5,
+        "totals": ["releases", "stories"],
+        "live": {
+          "about": "Releases follow Tynn as versions are released and their stories change. An event is a doorbell: the client reads Releases again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's Releases page goes live on project.{projectId}, where the board's events also ring; the app hears them on the board's own channel, signed at the board door (board.data.live.auth) for whoever may open the board",
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "Releases are being read" },
+        { "id": "totals", "what": "how many releases, and how many stories they delivered" },
+        { "id": "release-card", "what": "a release: number, title, Released, its PR, the date, its description, its story count and first stories by number" },
+        { "id": "more-stories", "what": "a release with more stories than its card lists says how many more" },
+        { "id": "empty", "what": "no releases yet, and where they come from" },
+        { "id": "live", "what": "Releases follow Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and Releases are read again once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "releases.list", "web": "GET releases", "api": { "method": "GET", "path": "/releases" } }
+      ]
+    },
+    {
+      "id": "home",
+      "title": "Home",
+      "tynn": { "page": "v2/Project/Show", "route": "show", "pageAccess": "details" },
+      "data": {
+        "api": { "method": "GET", "path": "/home" },
+        "query": ["section", "range", "version"],
+        "sections": ["dashboard", "details"],
+        "ranges": [7, 30, 90],
+        "answer": ["project_id", "section", "dashboard", "details"],
+        "dashboard": ["range", "metrics", "taskBreakdown", "storyBreakdown", "sparkline", "charts", "availableVersions", "version", "versionComparison", "attention", "recentActivity"],
+        "details": ["can_edit", "identity", "vision", "ai_guidance", "knowledge", "repositories", "members", "agents", "workflow", "approvals", "related"],
+        "write": {
+          "action": "details.update",
+          "guard": "can_edit",
+          "fields": [
+            "name", "slug", "vision", "ai_guidance",
+            "personas", "strategic_themes", "constraints", "risk_register", "technologies", "scripts", "integration_catalog", "servers", "design_tokens",
+            "feature_locking", "claim_tasks", "claimant_policy", "auto_version_number", "versioning_pattern", "max_active_versions", "is_ops_project", "is_gapp", "sacred_agent_name", "hitl_policy"
+          ],
+          "answer": "the Home, section details, as it now stands"
+        },
+        "live": {
+          "about": "The Home follows Tynn as the project's work changes. An event is a doorbell: the client reads the open section again, once per burst and one read at a time, as tynn.ai's page reloads its props.",
+          "channel": "private-project-board.{projectId}",
+          "web": "tynn.ai's Home goes live on project.{projectId}: the board's events ring there, and so does project.updated (a Details save). The app hears the board's events on the board's own channel, signed at the board door for whoever may open the board; project.updated rings only on project.{projectId}, which the door does not sign, so another person's Details save shows in the tab on its next read",
+          "events": [
+            "version.created", "version.updated", "version.deleted",
+            "story.created", "story.updated", "story.deleted",
+            "task.created", "task.updated", "task.deleted"
+          ],
+          "refresh": "read"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "the Home is being read" },
+        { "id": "section", "what": "Dashboard and Details, and the person switches between them" },
+        { "id": "range", "what": "the dashboard's period: 7, 30 or 90 days" },
+        { "id": "version-picker", "what": "the version the verdict, burndown, progress and scope change are about" },
+        { "id": "verdict", "what": "will the version land: the forecast's label, the date or why there is none, tasks and stories done, forecast, target and scope added, and the burndown" },
+        { "id": "rate-of-work", "what": "velocity with its trend, cycle time, scope change and corrections" },
+        { "id": "versions", "what": "shipped, active and on deck side by side" },
+        { "id": "throughput", "what": "tasks closed per day and agent activity charts, each saying when it has no data yet" },
+        { "id": "attention", "what": "blocked and QA stories, with their open tasks, linked to WIP's attention lens" },
+        { "id": "activity", "what": "the latest activity, and status breakdowns of stories and tasks" },
+        { "id": "details", "what": "identity, vision, AI guidance, knowledge, repositories, members, agents, workflow settings, pending approvals and related counts" },
+        { "id": "edit-in-place", "what": "a person who may manage the project edits vision, AI guidance and the workflow settings where they are shown" },
+        { "id": "save", "what": "a save says it is running, then that it worked, or Tynn's reason with Retry" },
+        { "id": "live", "what": "the Home follows Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and the Home is read again once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the board scope" }
+      ],
+      "actions": [
+        { "id": "details.update", "web": "POST manage.update", "api": { "method": "PATCH", "path": "/details" } }
       ]
     }
   ]

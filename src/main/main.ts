@@ -1,5 +1,7 @@
 import { limitOf } from '../core/shell-limits.js';
 import { readTynnBoard, readTynnBoardChanges, runTynnBoardAction, type TynnBoardPorts } from './tynn-board-client.js';
+import { readTynnPage, runTynnPageAction } from './tynn-page-client.js';
+import type { TynnPage, TynnPageActionInput, TynnPageQuery } from '../core/tynn-pages.js';
 import type { BoardIds, BoardLiveSignal, BoardScope } from '../core/tynn-board.js';
 import { TynnBoardLive } from './tynn-board-live.js';
 import { HeadroomBoard, headroomBufferMs } from '../core/headroom-board.js';
@@ -2128,6 +2130,11 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:workspace-tynn-board-unwatch', (_event, rawWatch: unknown) => {
         if (typeof rawWatch === 'number') tynnBoardWatches.get(rawWatch)?.stop();
     });
+    // The tab's other pages (genie#1295: WIP, …), each read whole, as tynn.ai renders it.
+    ipcMain.handle('genie:workspace-tynn-page', (_event, rawId: unknown, rawPage: unknown, rawQuery: unknown) =>
+        (typeof rawId === 'string' && typeof rawPage === 'string' ? readTynnPage(tynnBoardPorts(), rawId, rawPage as TynnPage, (rawQuery ?? {}) as TynnPageQuery) : { ok: false, state: 'error', reason: 'name a workspace and a page' }));
+    ipcMain.handle('genie:workspace-tynn-page-action', (_event, rawId: unknown, rawInput: unknown) =>
+        (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnPageAction(tynnBoardPorts(), rawId, rawInput as TynnPageActionInput) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
     ipcMain.handle('genie:workspace-tynn-board-action', (_event, rawId: unknown, rawInput: unknown) =>
         (typeof rawId === 'string' && typeof rawInput === 'object' && rawInput !== null ? runTynnBoardAction(tynnBoardPorts(), rawId, rawInput as { action: string; ids: BoardIds; body?: unknown }) : { ok: false, state: 'error', reason: 'name a workspace and an action' }));
     // "IT CAME WITH AGENTS" (Add workspace parity item 6; Genie 1's agents:roster / agents:adopt): the `.agents/*` a workspace
@@ -2421,6 +2428,8 @@ async function boot(): Promise<void> {
                 previewAddFromGit: (url, parent) => previewGit(url, parent),
                 tynnProjects: () => listTynnProjects(workspaceOps),
                 tynnBoard: (id, scope) => readTynnBoard(tynnBoardPorts(), id, (scope ?? {}) as BoardScope),
+                tynnPage: (id, page, query) => readTynnPage(tynnBoardPorts(), id, page as TynnPage, (query ?? {}) as TynnPageQuery),
+                tynnPageAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnPageAction(tynnBoardPorts(), id, input as TynnPageActionInput) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
                 tynnBoardAction: (id, input) => (typeof input === 'object' && input !== null ? runTynnBoardAction(tynnBoardPorts(), id, input as { action: string; ids: BoardIds; body?: unknown }) : Promise.resolve({ ok: false, state: 'error', reason: 'name an action' })),
                 tynnOwnerOptions: () => listTynnOwners(workspaceOps),
                 createTynnProject: (raw) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : Promise.resolve({ ok: false, reason: 'give the project a name' }); },

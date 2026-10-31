@@ -38,20 +38,20 @@ export interface TynnBoardPorts {
 
 export type TynnBoardRefusal = { ok: false; state: 'not-linked' | 'signed-out' | 'transition-refused' | 'error'; reason: string };
 
-const NOT_LINKED: TynnBoardRefusal = { ok: false, state: 'not-linked', reason: 'This workspace has no Tynn project.' };
-const SIGNED_OUT: TynnBoardRefusal = { ok: false, state: 'signed-out', reason: 'Genie is not signed in to Tynn. Settings → Accounts → Tynn.' };
+export const NOT_LINKED: TynnBoardRefusal = { ok: false, state: 'not-linked', reason: 'This workspace has no Tynn project.' };
+export const SIGNED_OUT: TynnBoardRefusal = { ok: false, state: 'signed-out', reason: 'Genie is not signed in to Tynn. Settings → Accounts → Tynn.' };
 const REFUSED: TynnBoardRefusal = {
     ok: false,
     state: 'signed-out',
     reason: 'Tynn did not show this board to this Genie. Sign in to Tynn again (Settings → Accounts → Tynn) so the pairing includes the board.',
 };
 
-async function bodyOf(res: { json(): Promise<unknown> }): Promise<unknown> {
+export async function bodyOf(res: { json(): Promise<unknown> }): Promise<unknown> {
     try { return await res.json(); } catch { return null; }
 }
 
 /** Tynn's own words for a refusal: the first `errors.status` message, else `message`, else the status. */
-async function refusal(res: { status: number; json(): Promise<unknown> }): Promise<TynnBoardRefusal> {
+export async function refusal(res: { status: number; json(): Promise<unknown> }): Promise<TynnBoardRefusal> {
     if (res.status === 404 || res.status === 401 || res.status === 403) return REFUSED;
     const body = (await bodyOf(res)) as { message?: unknown; errors?: Record<string, unknown> } | null;
     const firstError = body?.errors ? Object.values(body.errors).flat().find((m): m is string => typeof m === 'string') : undefined;
