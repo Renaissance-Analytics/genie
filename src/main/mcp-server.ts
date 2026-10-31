@@ -1,5 +1,5 @@
 import { LoopbackHttpTransport, Server, type ServerTransport } from '@particle-academy/prism-mcp-server';
-import type { Registration } from './mcp-tools.js';
+import type { Registration, ToolContext, ToolHandler } from './mcp-tools.js';
 
 /**
  * GENIE'S OWN MCP SERVER (§6.9): prism-mcp-server on a loopback HTTP transport — a literal 127.0.0.1 address,
@@ -45,15 +45,45 @@ export interface GenieMcpServer {
 
 const NOT_LISTENING = 'the MCP server is not listening';
 
+/**
+ * How often a call still in flight repeats its latest progress (genie#1360). Claude Code aborts a call that "sent no
+ * response or progress for 302s" (measured, claude 2.1.314) — SSE heartbeat comments do not count — so a wait for the
+ * person's approval (up to 30 min), mail (10 min) or a migration (15 min) must keep SAYING it is waiting.
+ */
+export const PROGRESS_EVERY_MS = 30_000;
+
+/**
+ * The handler, with its progress repeated every `everyMs` while it runs: the latest message it reported (or "working")
+ * and how long it has waited. Only where the call has a progress channel (an SSE response with a token); stopped the
+ * moment the handler answers. One place for every tool, so no wait can forget to.
+ */
+export function withProgressKeepalive(handler: ToolHandler, everyMs: number): ToolHandler {
+    return async (args, context) => {
+        const report = context.progress;
+        if (!report) return handler(args, context);
+        const started = Date.now();
+        let latest = 'working';
+        const progress: ToolContext['progress'] = (message, value, total) => { latest = message; report(message, value, total); };
+        const timer = setInterval(() => report(`${latest} — ${Math.round((Date.now() - started) / 1000)} s`), everyMs);
+        try {
+            return await handler(args, { ...context, progress });
+        } finally {
+            clearInterval(timer);
+        }
+    };
+}
+
 export function genieMcpServer(input: GenieMcpServerInput): GenieMcpServer {
     const build = (options: { port: number; token?: string }): Server => {
         // `abortOnDisconnect` (genie#1360): a client that goes away fires its call's signal, so the wait behind it — an
         // approval, `services exec`, `agentinbox receive wait` — is withdrawn instead of running on for nobody.
         const s = new Server({ server: 'genie', transport: input.transport ?? new LoopbackHttpTransport({ ...options, abortOnDisconnect: true }) });
+        const everyMs = input.progressEveryMs ?? PROGRESS_EVERY_MS;
         for (const r of input.registrations) {
             const visible = r.visible;
-            if (visible) s.register(r.definition, r.handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });
-            else s.register(r.definition, r.handler as never);
+            const handler = withProgressKeepalive(r.handler, everyMs);
+            if (visible) s.register(r.definition, handler as never, { visible: (context: { headers: Record<string, string> }) => visible(context) });
+            else s.register(r.definition, handler as never);
         }
         return s;
     };
