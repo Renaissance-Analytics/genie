@@ -66,3 +66,58 @@ describe('genieMcpServer over the real loopback', () => {
         expect(server.endpoint()).toBeNull();
     });
 });
+
+/**
+ * genie#1360: Claude Code drops a tools/call whose response has said nothing for 60 s (measured: every wait past 60 s
+ * came back "The operation timed out." at 61.9 s). prism-mcp-server 0.4.0 answers a tools/call that accepts
+ * `text/event-stream` as SSE — opened at once, a heartbeat every 10 s, the result as the last event — and Genie builds
+ * its transport with `abortOnDisconnect`, so a client that goes away fires the handler's signal and the wait behind it
+ * (an approval, `services exec`, `agentinbox receive wait`) is withdrawn instead of running on for nobody. A JSON-only
+ * client (Codex) keeps its one JSON body.
+ */
+describe('genieMcpServer — long waits (genie#1360)', () => {
+    const call = (id: number) => JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'hold', arguments: {}, _meta: { ...META, progressToken: `p${id}` } } });
+    let aborted: boolean[] = [];
+    let release: () => void = () => {};
+    const hold: Registration = {
+        definition: new ToolDefinition('hold', 'Waits until released or its call goes away', { type: 'object', properties: {} }),
+        handler: (_args: JsonObject, context) => new Promise((resolve) => {
+            context.progress?.('holding');
+            const done = (text: string) => resolve({ text, isError: false });
+            release = () => done('released');
+            context.signal?.addEventListener('abort', () => { aborted.push(true); done('aborted'); }, { once: true });
+        }),
+    };
+
+    it('a client that drops its connection mid-wait aborts the handler’s signal', async () => {
+        aborted = [];
+        server = genieMcpServer({ registrations: [hold], port: 0 });
+        const { url, token } = await server.start();
+        const client = new AbortController();
+        const res = await fetch(url, { method: 'POST', signal: client.signal, headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body: call(1) });
+        expect(res.headers.get('content-type')).toMatch(/^text\/event-stream/);
+        const reader = res.body!.getReader();
+        // The stream opened at once, before any result: the client hears something long before 60 s.
+        const first = new TextDecoder().decode((await reader.read()).value);
+        expect(first).toContain(': open');
+        client.abort();
+        const until = Date.now() + 5_000;
+        while (aborted.length === 0 && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+        expect(aborted).toEqual([true]);
+    });
+
+    it('a JSON-only client gets its one JSON body, unchanged', async () => {
+        aborted = [];
+        server = genieMcpServer({ registrations: [hold], port: 0 });
+        const { url, token } = await server.start();
+        const pending = fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json', authorization: `Bearer ${token}` }, body: call(2) });
+        await new Promise((r) => setTimeout(r, 100));
+        release();
+        const res = await pending;
+        expect(res.headers.get('content-type')).toMatch(/^application\/json/);
+        const body = (await res.json()) as { id: number; result: { content: Array<{ text: string }> } };
+        expect(body.id).toBe(2);
+        expect(JSON.stringify(body.result)).toContain('released');
+        expect(aborted).toEqual([]);
+    });
+});

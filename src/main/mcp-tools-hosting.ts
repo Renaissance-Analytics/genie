@@ -13,7 +13,7 @@ import {
     type HostingServices, type OpenInBrowser,
 } from './hosting-actions.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration, type ToolContext, type ToolHandler, type ToolProgress } from './mcp-tools.js';
 import type { SiteInfo } from './site-manager.js';
 
 /**
@@ -53,14 +53,24 @@ export type HostingApproval = 'services.add' | 'services.remove' | 'services.use
  * environment, and answers its exit code and its output (the tail, stdout and stderr together). `timedOut` = it was
  * stopped at `timeoutMs`. main/service-exec.ts is the real one; tests give their own.
  */
-export type ServiceExec = (input: { command: string; cwd: string; env: Readonly<Record<string, string>>; timeoutMs: number }) => Promise<{ exitCode: number | null; output: string; timedOut: boolean }>;
+export type ServiceExec = (input: {
+    command: string;
+    cwd: string;
+    env: Readonly<Record<string, string>>;
+    timeoutMs: number;
+    /** The MCP call (genie#1360): when it aborts, the command's process tree — and only it — is stopped. */
+    signal?: AbortSignal | undefined;
+    /** Tells a client still there how much output the command has written. */
+    progress?: ToolProgress | undefined;
+}) => Promise<{ exitCode: number | null; output: string; timedOut: boolean; /** Stopped because its call went away. */ aborted?: boolean }>;
 
 /** How long a `services exec` may run before it is stopped (a migration and seed take minutes, not hours). */
 export const SERVICE_EXEC_TIMEOUT_MS = 15 * 60_000;
 
 export interface HostingToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
-    readonly approve: (caller: Caller, action: HostingApproval, detail: string) => Promise<'allowed' | 'denied'>;
+    /** `call`: the MCP call waiting on the person (genie#1360) — when it goes away, the approval is withdrawn. */
+    readonly approve: (caller: Caller, action: HostingApproval, detail: string, call?: McpCall) => Promise<'allowed' | 'denied'>;
     /** The composed services; `null` where this Genie has none (doctor mode), and every action says so. */
     readonly services: HostingServices | null;
     /** Genie's browser, for `sites open` — the same one the Hosting tab's Open uses. Absent = none here (doctor mode). */

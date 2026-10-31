@@ -124,6 +124,8 @@ export interface ReceiveInput {
     readonly limit?: number;
     readonly wait?: boolean;
     readonly timeoutMs?: number;
+    /** The MCP call this receive answers (genie#1360): when it aborts, the wait ends and nothing is acknowledged. */
+    readonly signal?: AbortSignal | undefined;
 }
 
 export interface ReceivePage {

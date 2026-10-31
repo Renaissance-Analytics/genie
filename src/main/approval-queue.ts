@@ -1,5 +1,5 @@
 import type { DeckItem } from '../core/deck.js';
-import type { Caller } from './mcp-tools.js';
+import type { Caller, McpCall } from './mcp-tools.js';
 
 /**
  * THE APPROVAL QUEUE — the gate behind `manageTerminals create/write` and any other tool that must
@@ -124,7 +124,7 @@ export class ApprovalQueue {
         }
     }
 
-    gate(caller: Caller, action: string, detail: string): Promise<Verdict> {
+    gate(caller: Caller, action: string, detail: string, _call?: McpCall): Promise<Verdict> {
         // NEVER AUTO-APPROVED, whatever the agent's autonomy: creating an agent is the person's decision (the owner, 2026-10-19).
         // A permission switch answers only the actions it names (SWITCH_ANSWERS) — never agents.create.
         const switched = Object.hasOwn(SWITCH_ANSWERS, action) && this.#granted?.(caller, action) === true;

@@ -39,7 +39,21 @@ import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
  * the handler reads both, because a handler that read only `args` would silently miss it.
  */
 
-export interface ToolContext {
+/** prism-mcp-server 0.4.0's progress reporter: best-effort, never throws, sent only on an SSE response with a token. */
+export type ToolProgress = (message: string, progress?: number, total?: number) => void;
+
+/**
+ * THE MCP CALL A WAIT IS FOR (genie#1360). `signal` fires when the client cancels the call or its connection drops
+ * (prism-mcp-server 0.4.0, `abortOnDisconnect`); `progress` tells a client still there what it is waiting for. A long
+ * wait — the person's approval, `services exec`, `agentinbox receive wait` — takes this and ends when `signal` fires.
+ * Absent (a flow's call, a test) = nobody can go away.
+ */
+export interface McpCall {
+    readonly signal?: AbortSignal | undefined;
+    readonly progress?: ToolProgress | undefined;
+}
+
+export interface ToolContext extends McpCall {
     readonly server: string;
     readonly tool: string;
     readonly headers: Record<string, string>;

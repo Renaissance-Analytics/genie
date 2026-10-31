@@ -132,3 +132,42 @@ describe('services exec — the folder, after links (genie#1354)', () => {
         expect(ran.map((x) => x.cwd)).toEqual([join(dir, 'example', '..build')]);
     });
 });
+
+/*
+ * genie#1360: the MCP call's AbortSignal and progress reach both waits `services exec` has — the person's approval and
+ * the command itself — so a client that goes away withdraws the approval or stops the command, and a client still
+ * there hears what it is waiting for.
+ */
+describe('services exec — the MCP call goes away (genie#1360)', () => {
+    it('hands the call’s signal and progress to the approval and to the command', async () => {
+        const gone = new AbortController();
+        const progress = () => {};
+        let approvedWith: unknown;
+        let execWith: Parameters<ServiceExec>[0] | undefined;
+        const own = hostingTools({
+            resolveCaller: (id) => (id === 't-example' ? caller : null),
+            approve: async (_c, _a, _d, call) => { approvedWith = call; return 'allowed'; },
+            services,
+            exec: async (input) => { execWith = input; return { exitCode: 0, output: '', timedOut: false }; },
+        });
+        const reg = own.find((t) => t.definition.name === 'services')!;
+        await reg.handler({ action: 'exec', command: 'php artisan migrate', terminalId: 't-example' } as never, { server: 'genie', tool: 'services', headers: {}, signal: gone.signal, progress });
+        expect((approvedWith as { signal?: AbortSignal }).signal).toBe(gone.signal);
+        expect(execWith?.signal).toBe(gone.signal);
+        expect(execWith?.progress).toBe(progress);
+    });
+
+    it('a command stopped because the client went away says so, and is not reported as a timeout', async () => {
+        const gone = new AbortController();
+        const own = hostingTools({
+            resolveCaller: (id) => (id === 't-example' ? caller : null),
+            approve: async () => 'allowed',
+            services,
+            exec: async (input) => { gone.abort(); return { exitCode: null, output: 'half', timedOut: false, aborted: input.signal?.aborted === true }; },
+        });
+        const reg = own.find((t) => t.definition.name === 'services')!;
+        const r = await reg.handler({ action: 'exec', command: 'php artisan migrate', terminalId: 't-example' } as never, { server: 'genie', tool: 'services', headers: {}, signal: gone.signal });
+        expect(r.isError).toBe(true);
+        expect(JSON.parse(r.text).error).toMatch(/client disconnected/);
+    });
+});
