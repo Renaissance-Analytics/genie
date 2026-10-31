@@ -142,6 +142,8 @@ const VERB_WORDS: Record<string, { running: string; done: string }> = {
     'vip.create': { running: 'Starting VIP…', done: 'VIP started' },
     'story.move': { running: 'Moving…', done: 'Moved' },
     'version.release': { running: 'Releasing…', done: 'Released' },
+    // The Home's Details save (row H1).
+    'details.update': { running: 'Saving…', done: 'Saved' },
 };
 
 /** The claim actions: their progress is said on the board's own line, not in a form. */

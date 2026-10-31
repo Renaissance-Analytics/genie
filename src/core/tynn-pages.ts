@@ -19,18 +19,19 @@ export interface TynnSection { readonly id: TynnSectionId; readonly icon: string
  * Settings) and with its icons. A page is listed once it is built; the rest of tynn.ai's nav joins as its row lands.
  */
 export const TYNN_SECTIONS: readonly TynnSection[] = [
+    { id: 'home', icon: 'home', label: 'Home' },
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
     { id: 'vip', icon: 'flame', label: 'VIP' },
     { id: 'releases', icon: 'rocket', label: 'Releases' },
 ];
 
-/** The page the tab opens on. */
-export const TYNN_FIRST_SECTION: TynnSectionId = 'board';
+/** The page the tab opens on: the project's Home, as tynn.ai's project opens on it (row H1). */
+export const TYNN_FIRST_SECTION: TynnSectionId = 'home';
 
 /** A page of the tab that is read as one answer (the board has its own door and scope query). */
-export type TynnPage = 'wip' | 'vip' | 'releases';
-export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'vip', 'releases'];
+export type TynnPage = 'wip' | 'vip' | 'releases' | 'home';
+export const TYNN_PAGES: readonly TynnPage[] = ['wip', 'vip', 'releases', 'home'];
 
 // ── WIP (workspace-ux 0.6.0, surface `wip`) ──────────────────────────────────────────────────────────────────────────
 
@@ -200,9 +201,9 @@ export function parseWip(json: unknown): WipView | null {
 // ── Reading a page ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export type TynnPageQuery = Readonly<Record<string, string | undefined>>;
-export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'vip'; readonly view: VipView } | { readonly page: 'releases'; readonly view: ReleasesView };
+export type TynnPageView = { readonly page: 'wip'; readonly view: WipView } | { readonly page: 'vip'; readonly view: VipView } | { readonly page: 'releases'; readonly view: ReleasesView } | { readonly page: 'home'; readonly view: HomeView };
 
-const PAGE_PATH: Readonly<Record<TynnPage, string>> = { wip: WIP_DATA_API.path, vip: '/vip', releases: '/releases' };
+const PAGE_PATH: Readonly<Record<TynnPage, string>> = { wip: WIP_DATA_API.path, vip: '/vip', releases: '/releases', home: '/home' };
 
 /** GET a page of the workspace's project: only the query the page's contract declares, and only real values. */
 export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQuery): string {
@@ -211,6 +212,11 @@ export function tynnPagePath(projectId: string, page: TynnPage, query: TynnPageQ
         const view = query.view;
         if (view !== undefined && view in WIP_LENSES) q.append('view', view);
         if (query.story !== undefined && query.story !== '') q.append('story', query.story);
+    }
+    if (page === 'home') {
+        if (query.section !== undefined && (HOME_SECTIONS as readonly string[]).includes(query.section)) q.append('section', query.section);
+        if (query.range !== undefined && (HOME_RANGES as readonly string[]).includes(query.range)) q.append('range', query.range);
+        if (query.version !== undefined && query.version !== '') q.append('version', query.version);
     }
     const s = q.toString();
     return `/api/v1/projects/${encodeURIComponent(projectId)}${PAGE_PATH[page]}${s === '' ? '' : `?${s}`}`;
@@ -230,6 +236,10 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
         const view = parseReleases(json);
         return view ? { page, view } : null;
     }
+    if (page === 'home') {
+        const view = parseHome(json);
+        return view ? { page, view } : null;
+    }
     return null;
 }
 
@@ -238,6 +248,7 @@ export function parseTynnPage(page: TynnPage, json: unknown): TynnPageView | nul
 /** Each page write the tab offers, by the contract's action id, at its door (relative to the project's API base). */
 export const PAGE_API: Readonly<Record<string, { readonly method: 'POST' | 'PATCH'; readonly path: string }>> = {
     'vip.create': { method: 'POST', path: '/vip' },
+    'details.update': { method: 'PATCH', path: '/details' },
 };
 
 export function tynnPageActionRequest(projectId: string, action: string): { method: 'POST' | 'PATCH'; path: string } | null {
@@ -427,4 +438,158 @@ export function parseReleases(json: unknown): ReleasesView | null {
         };
     }).filter((r): r is Release => r !== null);
     return { releases, totalStories: releases.reduce((n, r) => n + r.storyCount, 0) };
+}
+
+// ── Home: Dashboard and Details (surface `home`, parity row H1) ──────────────────────────────────────────────────────
+
+export const HOME_DATA_API = { method: 'GET', path: '/home' } as const;
+export const HOME_QUERY = ['section', 'range', 'version'] as const;
+export const HOME_SECTIONS = ['dashboard', 'details'] as const;
+export const HOME_RANGES = ['7', '30', '90'] as const;
+export const HOME_ANSWER = ['project_id', 'section', 'dashboard', 'details'] as const;
+export const HOME_DASHBOARD = ['range', 'metrics', 'taskBreakdown', 'storyBreakdown', 'sparkline', 'charts', 'availableVersions', 'version', 'versionComparison', 'attention', 'recentActivity'] as const;
+export const HOME_DETAILS = ['can_edit', 'identity', 'vision', 'ai_guidance', 'knowledge', 'repositories', 'members', 'agents', 'workflow', 'approvals', 'related'] as const;
+/** The Details fields the web form saves (`manage/details`), each optional: one group saves at a time. */
+export const HOME_DETAILS_FIELDS = [
+    'name', 'slug', 'vision', 'ai_guidance',
+    'personas', 'strategic_themes', 'constraints', 'risk_register', 'technologies', 'scripts', 'integration_catalog', 'servers', 'design_tokens',
+    'feature_locking', 'claim_tasks', 'claimant_policy', 'auto_version_number', 'versioning_pattern', 'max_active_versions', 'is_ops_project', 'is_gapp', 'sacred_agent_name', 'hitl_policy',
+] as const;
+export const HOME_ACTIONS = ['details.update'] as const;
+export const HOME_LIVE = { channel: BOARD_LIVE.channel, events: BOARD_LIVE.events, refresh: 'read' } as const;
+export const HOME_STATES = ['loading', 'section', 'range', 'version-picker', 'verdict', 'rate-of-work', 'versions', 'throughput', 'attention', 'activity', 'details', 'edit-in-place', 'save', 'live', 'reconnecting', 'not-linked', 'signed-out'] as const;
+
+export type HomeSection = (typeof HOME_SECTIONS)[number];
+export interface ChartData { readonly labels: readonly string[]; readonly series: ReadonlyArray<{ readonly label: string; readonly data: readonly number[] }> }
+export interface HomeForecast { readonly tone: string; readonly label: string; readonly etaDate: string | null; readonly targetDate: string | null; readonly daysDelta: number | null; readonly remaining: number }
+export interface HomeVersion {
+    readonly id: string; readonly number: string | null; readonly title: string;
+    readonly completedTasks: number; readonly totalTasks: number; readonly completedStories: number; readonly totalStories: number;
+    readonly cycleTimeDays: number | null; readonly burndown: ChartData; readonly creep: { readonly atActivation: number; readonly addedAfter: number | null } | null;
+    readonly window: { readonly startsAt: string | null; readonly endsAt: string | null }; readonly forecast: HomeForecast;
+}
+export interface HomeDashboard {
+    readonly range: number;
+    readonly metrics: Readonly<Record<string, number | string | null>>;
+    readonly taskBreakdown: Readonly<Record<string, number>>;
+    readonly storyBreakdown: Readonly<Record<string, number>>;
+    readonly sparkline: readonly number[];
+    readonly charts: { readonly velocity: ChartData; readonly agentActivity: ChartData };
+    readonly versions: ReadonlyArray<{ readonly id: string; readonly number: string | null; readonly title: string }>;
+    readonly version: HomeVersion | null;
+    readonly comparison: ReadonlyArray<Readonly<Record<string, unknown>> & { readonly id: string; readonly status: string }>;
+    readonly attention: ReadonlyArray<{ readonly id: string; readonly slug: string; readonly title: string; readonly status: string; readonly openTasks: number }>;
+    readonly activity: ReadonlyArray<{ readonly id: string; readonly actor: string; readonly agent: boolean; readonly action: string; readonly subject: string | null; readonly when: string | null }>;
+}
+export interface HomeDetails {
+    readonly canEdit: boolean;
+    readonly identity: Readonly<Record<string, unknown>>;
+    readonly vision: string;
+    readonly aiGuidance: string;
+    readonly knowledge: Readonly<Record<string, readonly unknown[]>>;
+    readonly repositories: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    readonly members: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    readonly agents: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    readonly workflow: { readonly versioningPattern: string; readonly patterns: ReadonlyArray<{ readonly key: string; readonly label: string }>; readonly autoVersionNumber: boolean; readonly maxActiveVersions: number; readonly featureLocking: boolean; readonly claimTasks: string; readonly claimantPolicy: string };
+    readonly approvals: ReadonlyArray<Readonly<Record<string, unknown>>>;
+    readonly related: { readonly versions: number; readonly counts: Readonly<Record<string, number>> };
+}
+export interface HomeView { readonly section: HomeSection; readonly dashboard: HomeDashboard | null; readonly details: HomeDetails | null }
+
+const nul = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const counts = (v: unknown): Record<string, number> => {
+    const out: Record<string, number> = {};
+    if (isRow(v)) for (const [k, n] of Object.entries(v)) if (typeof n === 'number') out[k] = n;
+    return out;
+};
+function chart(v: unknown): ChartData {
+    const c = isRow(v) ? v : {};
+    return {
+        labels: Array.isArray(c.labels) ? c.labels.map((l) => String(l)) : [],
+        series: rows(c.series).map((s) => ({ label: str(s.label) ?? '', data: Array.isArray(s.data) ? s.data.map((d) => (typeof d === 'number' ? d : 0)) : [] })),
+    };
+}
+/** The activity list arrives bare from the door, or wrapped in `data` the way Inertia hands a resource collection. */
+const listOf = (v: unknown): Row[] => rows(isRow(v) && Array.isArray(v.data) ? v.data : v);
+
+function homeVersion(v: unknown): HomeVersion | null {
+    if (!isRow(v)) return null;
+    const id = str(v.id);
+    if (id === null) return null;
+    const f = isRow(v.forecast) ? v.forecast : {};
+    const creep = isRow(v.creep) ? v.creep : null;
+    const w = isRow(v.window) ? v.window : {};
+    return {
+        id, number: str(v.number), title: str(v.title) ?? '',
+        completedTasks: num(v.completed_tasks), totalTasks: num(v.total_tasks), completedStories: num(v.completed_stories), totalStories: num(v.total_stories),
+        cycleTimeDays: nul(v.cycle_time_days), burndown: chart(v.burndown),
+        creep: creep ? { atActivation: num(creep.at_activation), addedAfter: nul(creep.added_after) } : null,
+        window: { startsAt: str(w.starts_at), endsAt: str(w.ends_at) },
+        forecast: { tone: str(f.tone) ?? 'unknown', label: str(f.label) ?? 'Unknown', etaDate: str(f.eta_date), targetDate: str(f.target_date), daysDelta: nul(f.days_delta), remaining: num(f.remaining_tasks) },
+    };
+}
+
+function homeDashboard(d: Row): HomeDashboard {
+    const metrics: Record<string, number | string | null> = {};
+    if (isRow(d.metrics)) for (const [k, v] of Object.entries(d.metrics)) metrics[k] = typeof v === 'number' || typeof v === 'string' ? v : null;
+    const charts = isRow(d.charts) ? d.charts : {};
+    return {
+        range: num(d.range) || 30,
+        metrics,
+        taskBreakdown: counts(d.taskBreakdown),
+        storyBreakdown: counts(d.storyBreakdown),
+        sparkline: Array.isArray(d.sparkline) ? d.sparkline.map((n) => (typeof n === 'number' ? n : 0)) : [],
+        charts: { velocity: chart(charts.velocity), agentActivity: chart(charts.agentActivity) },
+        versions: rows(d.availableVersions).map((v) => ({ id: str(v.id) ?? '', number: str(v.number), title: str(v.title) ?? '' })).filter((v) => v.id !== ''),
+        version: homeVersion(d.version),
+        comparison: rows(d.versionComparison).map((r) => ({ ...r, id: str(r.id) ?? '', status: str(r.status) ?? '' })),
+        attention: rows(d.attention).map((a) => ({ id: str(a.id) ?? '', slug: str(a.slug) ?? '', title: str(a.title) ?? '', status: str(a.status) ?? '', openTasks: num(a.open_tasks) })),
+        activity: listOf(d.recentActivity).map((a, i) => ({ id: str(a.id) ?? String(i), actor: str(a.actor) ?? '', agent: typeof a.actor_type === 'string' && a.actor_type !== 'user', action: str(a.action) ?? '', subject: str(a.subject_label), when: str(a.when) })),
+    };
+}
+
+function homeDetails(d: Row): HomeDetails {
+    const wf = isRow(d.workflow) ? d.workflow : {};
+    const rel = isRow(d.related) ? d.related : {};
+    const knowledge: Record<string, readonly unknown[]> = {};
+    if (isRow(d.knowledge)) for (const [k, v] of Object.entries(d.knowledge)) knowledge[k] = Array.isArray(v) ? v : [];
+    return {
+        canEdit: d.can_edit === true,
+        identity: isRow(d.identity) ? d.identity : {},
+        vision: str(d.vision) ?? '',
+        aiGuidance: str(d.ai_guidance) ?? '',
+        knowledge,
+        repositories: rows(d.repositories),
+        members: rows(d.members),
+        agents: rows(d.agents),
+        workflow: {
+            versioningPattern: str(wf.versioning_pattern) ?? 'semantic',
+            patterns: rows(wf.versioning_patterns).map((p) => ({ key: str(p.key) ?? '', label: str(p.label) ?? str(p.key) ?? '' })).filter((p) => p.key !== ''),
+            autoVersionNumber: wf.auto_version_number === true,
+            maxActiveVersions: num(wf.max_active_versions) || 1,
+            featureLocking: wf.feature_locking === true,
+            claimTasks: str(wf.claim_tasks) ?? 'off',
+            claimantPolicy: str(wf.claimant_policy) ?? 'any',
+        },
+        approvals: rows(d.approvals),
+        related: { versions: isRow(rel.versions) ? num(rel.versions.total) : 0, counts: counts(rel.counts) },
+    };
+}
+
+/** Tynn's Home answer (GET /home) as the tab draws it; null when it is not the Home. */
+export function parseHome(json: unknown): HomeView | null {
+    if (!isRow(json) || !(HOME_SECTIONS as readonly unknown[]).includes(json.section)) return null;
+    const section = json.section as HomeSection;
+    const dashboard = isRow(json.dashboard) ? homeDashboard(json.dashboard) : null;
+    const details = isRow(json.details) ? homeDetails(json.details) : null;
+    if ((section === 'dashboard' && dashboard === null) || (section === 'details' && details === null)) return null;
+    return { section, dashboard, details };
+}
+
+/** A Details save: only the fields the web form takes; null when there is nothing to send. */
+export function detailsBody(raw: unknown): Record<string, unknown> | null {
+    if (!isRow(raw)) return null;
+    const out: Record<string, unknown> = {};
+    for (const k of HOME_DETAILS_FIELDS) if (k in raw) out[k] = raw[k];
+    return Object.keys(out).length > 0 ? out : null;
 }

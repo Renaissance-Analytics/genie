@@ -1,4 +1,4 @@
-import { parseTynnPage, tynnPageActionRequest, tynnPagePath, TYNN_PAGES, vipCreateBody, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageView } from '../core/tynn-pages.js';
+import { parseTynnPage, tynnPageActionRequest, tynnPagePath, TYNN_PAGES, vipCreateBody, detailsBody, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageView } from '../core/tynn-pages.js';
 import { bodyOf, NOT_LINKED, refusal, SIGNED_OUT, type TynnBoardPorts, type TynnBoardRefusal } from './tynn-board-client.js';
 
 /**
@@ -30,6 +30,7 @@ export async function readTynnPage(
 /** Each page write's body, as its contract declares it; null = not sent (the tab says why). */
 const BODY: Readonly<Record<string, { build: (raw: unknown) => Record<string, unknown> | null; why: string }>> = {
     'vip.create': { build: vipCreateBody, why: 'VIP work needs a title and why it cannot wait.' },
+    'details.update': { build: detailsBody, why: 'Nothing to save.' },
 };
 
 /**

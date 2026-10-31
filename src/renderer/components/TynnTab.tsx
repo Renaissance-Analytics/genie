@@ -1,8 +1,9 @@
 import { Icon } from '@particle-academy/react-fancy';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { performBoardAction, performClaimThenStart, type BoardActionInput, type BoardOp, type LiveState } from '../../core/tynn-board.js';
-import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnPageView, type TynnSectionId, type TynnTabHost, type ReleasesView, type VipView, type WipLens, type WipView } from '../../core/tynn-pages.js';
+import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPage, type TynnPageActionInput, type TynnPageQuery, type TynnPageState, type TynnPageView, type TynnSectionId, type TynnTabHost, type HomeView, type ReleasesView, type VipView, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
+import { TynnHomePanel } from './TynnHomePanel.js';
 import { TynnReleasesPanel } from './TynnReleasesPanel.js';
 import { TynnVipPanel } from './TynnVipPanel.js';
 import { TynnWipPanel } from './TynnWipPanel.js';
@@ -114,7 +115,9 @@ function usePage<V>(workspaceId: string, host: TynnTabHost, page: TynnPage, quer
         const view = pickRef.current(r);
         setState(view === null ? { state: 'error', reason: 'Tynn answered with a different page.' } : { state: 'ready', view });
     }, [host, workspaceId, page]);
-    useEffect(() => { void read(); }, [read]);
+    // A new query (the Home's section, range or version) is a new read.
+    const queryKey = JSON.stringify(query);
+    useEffect(() => { void read(); }, [read, queryKey]);
     useEffect(() => {
         const { watch } = host;
         if (!watch) return undefined;
@@ -151,6 +154,13 @@ export function TynnVipTab({ workspaceId, host }: { workspaceId: string; host: T
 
 const NO_QUERY: TynnPageQuery = {};
 
+/** Home: Dashboard or Details, the range and the version as its query; Details saves through its own door. */
+export function TynnHomeTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
+    const [query, setQuery] = useState<TynnPageQuery>({});
+    const p = usePage<HomeView>(workspaceId, host, 'home', query, (r) => (r.page === 'home' ? r.view : null));
+    return <TynnHomePanel state={p.state} onQuery={setQuery} onSave={(i) => { void p.pageAct(i); }} onRetry={p.retry ?? undefined} live={p.live} />;
+}
+
 /** Releases: read only, live on the board's rings. */
 export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
     const p = usePage<ReleasesView>(workspaceId, host, 'releases', NO_QUERY, (r) => (r.page === 'releases' ? r.view : null));
@@ -159,13 +169,14 @@ export function TynnReleasesTab({ workspaceId, host }: { workspaceId: string; ho
 
 /** The tab: the page nav, and the page that is open. */
 export function TynnTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
-    const [section, setSection] = useState<TynnSectionId>(TYNN_FIRST_SECTION);
+    const [section, setSection] = useState<TynnSectionId>(host.page ? TYNN_FIRST_SECTION : 'board');
     // A page this host cannot read is not offered; the board always is.
     return (
         <div data-tynn-tab="" className="flex min-h-0 min-w-0 flex-1 flex-col">
             {host.page ? <TynnSectionNav current={section} onSection={setSection} /> : null}
             <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
-                {section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
+                {section === 'home' && host.page ? <TynnHomeTab workspaceId={workspaceId} host={host} />
+                    : section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
                     : section === 'vip' && host.page ? <TynnVipTab workspaceId={workspaceId} host={host} />
                     : section === 'releases' && host.page ? <TynnReleasesTab workspaceId={workspaceId} host={host} />
                         : <TynnBoardTab workspaceId={workspaceId} host={host} />}

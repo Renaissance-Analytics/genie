@@ -40,6 +40,8 @@ export const ICON_NAMES: readonly string[] = [
     'square-check', 'tag', 'package', 'target', 'triangle-alert',
     // The Tynn tab's pages (row W1 on): tynn.ai's nav icons, and WIP's lens chips, story heading and steps.
     'columns-3', 'circle-play', 'book-open', 'flame', 'chevrons-right',
+    // The Tynn tab's Home (row H1).
+    'home', 'trending-up', 'trending-down', 'octagon-alert', 'clipboard-check',
     // Its claims (row B3): Claim + Start and Assign to.
     'hand', 'user-plus',
     'settings', 'folder', 'x', 'square-terminal', 'pin',
