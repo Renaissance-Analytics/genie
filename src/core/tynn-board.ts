@@ -763,13 +763,13 @@ export function applyBoardChanges(view: BoardView, changes: BoardChanges): { vie
 /** How long a burst of rings is gathered into one ask. */
 export const LIVE_QUIET_MS = 300;
 
-/** `C`: what an answer is — the board's changes by default; the Tynn tab's Issues follow their queue's (row I1). */
+/** `C`: what an answer is — the board's changes unless named (never inferred); the Tynn tab's Issues name theirs (row I1). */
 export interface BoardFollowerPorts<C = BoardChanges> {
     /** The cursor the board is up to: from its read, then each applied answer. Null: this board cannot follow. */
     cursor(): string | null;
-    fetch(cursor: string, ids: readonly string[]): Promise<{ ok: true; changes: C } | { ok: false; state: string; reason: string }>;
+    fetch(cursor: string, ids: readonly string[]): Promise<{ ok: true; changes: NoInfer<C> } | { ok: false; state: string; reason: string }>;
     /** Apply an answer (and take its cursor); answers the ids it named that the board holds no card for. */
-    apply(changes: C): readonly string[];
+    apply(changes: NoInfer<C>): readonly string[];
     refused(refusal: { state: string; reason: string }): void;
     schedule(fn: () => void, ms: number): () => void;
 }
