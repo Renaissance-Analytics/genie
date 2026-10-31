@@ -39,7 +39,21 @@ import type { IssueWatchRefreshAnswer } from './issue-watch-client.js';
  * the handler reads both, because a handler that read only `args` would silently miss it.
  */
 
-export interface ToolContext {
+/** prism-mcp-server 0.4.0's progress reporter: best-effort, never throws, sent only on an SSE response with a token. */
+export type ToolProgress = (message: string, progress?: number, total?: number) => void;
+
+/**
+ * THE MCP CALL A WAIT IS FOR (genie#1360). `signal` fires when the client cancels the call or its connection drops
+ * (prism-mcp-server 0.4.0, `abortOnDisconnect`); `progress` tells a client still there what it is waiting for. A long
+ * wait — the person's approval, `services exec`, `agentinbox receive wait` — takes this and ends when `signal` fires.
+ * Absent (a flow's call, a test) = nobody can go away.
+ */
+export interface McpCall {
+    readonly signal?: AbortSignal | undefined;
+    readonly progress?: ToolProgress | undefined;
+}
+
+export interface ToolContext extends McpCall {
     readonly server: string;
     readonly tool: string;
     readonly headers: Record<string, string>;
@@ -298,7 +312,7 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
             },
             'AgentInbox',
         ),
-        handler: withCaller(async (caller, args) => {
+        handler: withCaller(async (caller, args, context) => {
             const me = deps.roster().find((r) => r.id === caller.agentId);
             // One verdict for `list` and `send`: the two tiers, or the target wrote to the caller first.
             // A FLOW reaches as the person does (genie#1204; Genie 1's genie#761 — AgentInbox refused a flow caller, so a flow
@@ -348,7 +362,10 @@ export function genieTools(deps: GenieToolsDeps): Registration[] {
                     return ok({ ok: true, delivered: 1, messageId: message.id, attachments: message.attachments });
                 }
                 case 'receive': {
+                    // A wait ends when its MCP call goes away (genie#1360); a client still there hears what it waits for.
+                    if (args.wait === true) context.progress?.('waiting for mail');
                     const page = await deps.inbox.receive({
+                        signal: context.signal,
                         participant: caller.agentId,
                         ...(typeof args.cursor === 'number' ? { cursor: args.cursor } : {}),
                         ...(typeof args.acknowledge === 'boolean' ? { acknowledge: args.acknowledge } : {}),

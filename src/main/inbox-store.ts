@@ -124,6 +124,8 @@ export interface ReceiveInput {
     readonly limit?: number;
     readonly wait?: boolean;
     readonly timeoutMs?: number;
+    /** The MCP call this receive answers (genie#1360): when it aborts, the wait ends and nothing is acknowledged. */
+    readonly signal?: AbortSignal | undefined;
 }
 
 export interface ReceivePage {
@@ -284,10 +286,13 @@ export class InboxStore {
         const from = input.cursor ?? this.#cursorOf(participant);
         let page = this.#after(participant, from, input.limit);
 
-        if (page.length === 0 && input.wait) {
-            await this.#waitFor(participant, Math.min(input.timeoutMs ?? DEFAULT_WAIT_MS, MAX_WAIT_MS));
+        if (page.length === 0 && input.wait && !input.signal?.aborted) {
+            await this.#waitFor(participant, Math.min(input.timeoutMs ?? DEFAULT_WAIT_MS, MAX_WAIT_MS), input.signal);
             page = this.#after(participant, from, input.limit);
         }
+        // The caller went away (genie#1360): nobody will read this answer, so nothing is marked read — the mail waits
+        // for the next receive instead of being lost to a closed connection.
+        if (input.signal?.aborted) return { messages: [], cursor: this.#cursorOf(participant) };
 
         if (page.length > 0 && input.acknowledge !== false) {
             const last = page.at(-1)!.seq;
@@ -434,18 +439,21 @@ export class InboxStore {
         return limit === undefined ? page : page.slice(0, Math.max(limit, 1));
     }
 
-    #waitFor(participant: Participant, timeoutMs: number): Promise<void> {
+    /** Until mail for `participant`, the timeout, or `signal` aborting — whichever is first. Only this waiter ends. */
+    #waitFor(participant: Participant, timeoutMs: number, signal?: AbortSignal): Promise<void> {
         return new Promise((resolve) => {
             const waiter: Waiter = {
                 participant,
                 wake: () => {
                     clearTimeout(timer);
+                    signal?.removeEventListener('abort', waiter.wake);
                     this.#waiters.delete(waiter);
                     resolve();
                 },
             };
             const timer = setTimeout(waiter.wake, timeoutMs);
             this.#waiters.add(waiter);
+            signal?.addEventListener('abort', waiter.wake, { once: true });
         });
     }
 

@@ -2,7 +2,7 @@ import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-a
 import type { AgentRecord } from '../core/identity.js';
 import { addTab, clearCell, LAYOUTS, PANEL_KINDS, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, type LayoutId, type Panel, type PanelKind, type TabsState, type WorkspaceTab } from '../core/workspace-tabs.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 
 /**
  * `workspaceTabs` — AGENTS MANAGE THE WORKSPACE'S TABS (beta.35 item 36, step 6; genie#1036: civi was asked to "add the
@@ -28,7 +28,7 @@ export interface WorkspaceTabsToolDeps {
     readonly writeTabs: (workspaceId: string, raw: string) => void;
     /** The `.gen` hosts this workspace's sites are served at — what a `site` panel may show. */
     readonly sites: (workspaceId: string) => readonly string[];
-    readonly approve: (caller: Caller, action: typeof WORKSPACE_TABS_ACTION, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: typeof WORKSPACE_TABS_ACTION, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
 }
 
 const ok = (payload: Record<string, unknown>): McpToolResult => ({ text: JSON.stringify({ ok: true, ...payload }), isError: false });
@@ -82,7 +82,7 @@ export function workspaceTabsTools(deps: WorkspaceTabsToolDeps): Registration[] 
 
             const plan = planChange(action, args, state, deps.sites(ws));
             if ('error' in plan) return err(plan.error);
-            if ((await deps.approve(found, WORKSPACE_TABS_ACTION, plan.detail)) !== 'allowed') return err('The person declined: the tabs are as they were.');
+            if ((await deps.approve(found, WORKSPACE_TABS_ACTION, plan.detail, context)) !== 'allowed') return err('The person declined: the tabs are as they were.');
             deps.writeTabs(ws, serializeTabs(plan.next));
             const tab = plan.next.tabs.find((t) => t.id === plan.tabId) ?? null;
             return ok({ ...(tab ? { tab } : {}), ...(plan.dropped.length > 0 ? { dropped: plan.dropped } : {}) });

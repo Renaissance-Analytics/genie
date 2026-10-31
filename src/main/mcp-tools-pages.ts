@@ -3,7 +3,7 @@ import { registerNavigationBridge } from '@particle-academy/agent-integrations/b
 import { createRemoteNavigationAdapter } from '@particle-academy/agent-integrations/dom-navigation';
 import type { AgentRecord } from '../core/identity.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 
 /**
  * `pages` — AGENTS DRIVE GENIE SITE PAGES (browser rebuild step 7; the owner, FTQ q_82269ca5). Fancy's human+ navigation
@@ -51,7 +51,7 @@ export interface PagesToolDeps {
     readonly sites: (workspaceId: string) => readonly string[];
     /** Every page Genie has open now. */
     readonly pages: () => readonly DrivablePage[];
-    readonly approve: (caller: Caller, action: PageAction, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: PageAction, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
 }
 
 const ok = (payload: Record<string, unknown>): McpToolResult => ({ text: JSON.stringify({ ok: true, ...payload }), isError: false });
@@ -97,6 +97,13 @@ export function pagesTools(deps: PagesToolDeps): Registration[] {
 
     // One bridge per (agent, page): its grounding (what the agent last described) is the agent's own.
     const bridges = new Map<string, BridgeHost>();
+    /**
+     * The MCP calls driving each bridge right now (genie#1360). The bridge outlives a call, so its `confirm` cannot close
+     * over one: it takes the call when exactly ONE is active — two at once and it cannot tell whose click asks, so it
+     * passes none, and the approval waits for the person rather than ending on another caller's disconnect.
+     */
+    const active = new Map<string, Set<McpCall>>();
+    const callOf = (key: string): McpCall | undefined => { const calls = active.get(key); return calls?.size === 1 ? [...calls][0] : undefined; };
     const bridgeFor = (caller: Caller, pageId: string): BridgeHost => {
         const key = `${caller.agentId}|${pageId}`;
         const known = bridges.get(key);
@@ -111,7 +118,7 @@ export function pagesTools(deps: PagesToolDeps): Registration[] {
                 const action = req.action === 'submit' ? PAGE_SUBMIT_ACTION : PAGE_CLICK_ACTION;
                 const where = current()?.url ?? pageId;
                 const what = req.action === 'submit' ? `submit the form at “${req.label}”` : `click “${req.label}”`;
-                return (await deps.approve(caller, action, `${what} on ${where}`)) === 'allowed';
+                return (await deps.approve(caller, action, `${what} on ${where}`, callOf(key))) === 'allowed';
             },
         });
         registerNavigationBridge(host as never, { adapter, agent: { id: caller.agentId, name: caller.agentName } });
@@ -157,7 +164,17 @@ export function pagesTools(deps: PagesToolDeps): Registration[] {
             const name = typeof args.tool === 'string' ? args.tool : '';
             if (!/^(page|nav)_[a-z_]+$/.test(name)) return err('tool is a page tool: page_describe, page_read, page_set_field, page_click, page_submit, nav_visit, nav_back, nav_forward, nav_scroll_to, nav_scroll_by');
             const toolArgs = args.args !== null && typeof args.args === 'object' && !Array.isArray(args.args) ? (args.args as JsonObject) : {};
-            const result = await bridgeFor(found, pageId).callTool(name, toolArgs);
+            const key = `${found.agentId}|${pageId}`;
+            const calls = active.get(key) ?? new Set<McpCall>();
+            active.set(key, calls);
+            calls.add(context);
+            let result: Awaited<ReturnType<BridgeHost['callTool']>>;
+            try {
+                result = await bridgeFor(found, pageId).callTool(name, toolArgs);
+            } finally {
+                calls.delete(context);
+                if (calls.size === 0) active.delete(key);
+            }
             const text = result.content.map((c) => c.text ?? '').filter((t) => t !== '').join('\n');
             return { text: text || (result.isError ? 'the page tool failed' : 'done'), isError: result.isError === true };
         },

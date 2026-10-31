@@ -1,7 +1,7 @@
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';
 import type { ProcessLog } from '../core/output-tail.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration } from './mcp-tools.js';
 import { describeSchedule, type ScheduleKind } from '../core/scheduled-task.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
 import type { RunNowResult } from './process-scheduler.js';
@@ -46,7 +46,7 @@ export interface ProcessesPort {
 
 export interface ProcessToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
-    readonly approve: (caller: Caller, action: ProcessApproval, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: ProcessApproval, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     /** `null` where this Genie keeps no processes (doctor mode), and every action says so. */
     readonly processes: ProcessesPort | null;
 }
@@ -178,7 +178,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                             };
                             const ready = port.book.prepare(input);
                             const what = kind === 'agent-nudge' ? `nudges ${str(args.agent)} with “${str(args.prompt)}”` : `runs \`${ready.command}\` in ${ready.cwd}`;
-                            const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: ${describeSchedule(cron)} (${cron}) it ${what}. It will keep running on this schedule, without asking again, until you pause it.`);
+                            const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: ${describeSchedule(cron)} (${cron}) it ${what}. It will keep running on this schedule, without asking again, until you pause it.`, context);
                             if (verdict !== 'allowed') return err(`scheduling ${ready.name} was denied by the person; nothing was kept`);
                             const status = await port.book.create({ ...input, enabled: true });
                             const row = after(status.id);
@@ -197,7 +197,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                         };
                         // The book's own checks, BEFORE anyone is asked: a request Genie would refuse is never put to the person.
                         const ready = port.book.prepare(input);
-                        const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: \`${ready.command}\` in ${ready.cwd}, restart ${ready.restart} — Genie starts it now and brings it back on every launch until it is stopped`);
+                        const verdict = await deps.approve(caller, 'processes.add', `${ready.name}: \`${ready.command}\` in ${ready.cwd}, restart ${ready.restart} — Genie starts it now and brings it back on every launch until it is stopped`, context);
                         if (verdict !== 'allowed') return err(`adding ${ready.name} was denied by the person; nothing was started or kept`);
                         const status = await port.book.create(input);
                         const row = after(status.id);
@@ -234,7 +234,7 @@ export function processTools(deps: ProcessToolsDeps): Registration[] {
                     case 'remove': {
                         const p = kept(str(args.process));
                         if (typeof p === 'string') return err(p);
-                        const verdict = await deps.approve(caller, 'processes.remove', `${p.name}${p.command ? ` (\`${p.command}\`)` : ''} — stopped, and no longer brought back on launch`);
+                        const verdict = await deps.approve(caller, 'processes.remove', `${p.name}${p.command ? ` (\`${p.command}\`)` : ''} — stopped, and no longer brought back on launch`, context);
                         if (verdict !== 'allowed') return err(`removing ${p.name} was denied by the person; nothing was done`);
                         await port.book.remove(p.id);
                         return ok({ ok: true, removed: p.id });

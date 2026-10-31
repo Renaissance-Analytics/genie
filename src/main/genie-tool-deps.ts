@@ -16,7 +16,7 @@ import type { KnowledgeStore } from './knowledge-store.js';
 import type { TerminalsPort } from './mcp-tools-more.js';
 import type { PluginToolsDeps } from './mcp-tools-plugins.js';
 import type { AllToolsDeps } from './mcp-registrations.js';
-import type { Caller } from './mcp-tools.js';
+import type { Caller, McpCall } from './mcp-tools.js';
 import type { SettingsStore } from './settings-store.js';
 
 /**
@@ -32,7 +32,7 @@ export interface GenieToolParts {
     readonly knowledge: KnowledgeStore;
     readonly settings: Pick<SettingsStore, 'snapshot' | 'snapshotFor'>;
     /** The person's approval of a gated action (a terminal created or written, a gated plugin tool, a service added or removed, a site removed, a background process added or removed). */
-    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction, detail: string) => Promise<'allowed' | 'denied'>;
+    readonly approve: (caller: Caller, action: 'create' | 'write' | 'plugin' | HostingApproval | ProcessApproval | typeof CREATE_AGENT_ACTION | typeof WORKSPACE_TABS_ACTION | PageAction, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     /** Every agent Genie knows, now. */
     readonly roster: () => readonly AgentRecord[];
     /** Each workspace's address slug (registry.workspaceSlugs): an agent is `name@slug`. */
@@ -95,20 +95,20 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
         more: {
             knowledge: p.knowledge,
             terminals: p.terminals,
-            approve: (caller, action, detail) => p.approve(caller, action, detail),
+            approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             resolveCaller: p.resolveCaller,
             ...(p.terminalEnv ? { envFor: p.terminalEnv } : {}),
         },
         hosting: {
             resolveCaller: p.resolveCaller,
-            approve: (caller, action, detail) => p.approve(caller, action, detail),
+            approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             services: p.hosting ?? null,
             ...(p.openInBrowser ? { openInBrowser: p.openInBrowser } : {}),
             ...(p.serviceExec ? { exec: p.serviceExec } : {}),
         },
         processes: {
             resolveCaller: p.resolveCaller,
-            approve: (caller, action, detail) => p.approve(caller, action, detail),
+            approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             processes: p.processes ?? null,
         },
         flows: { resolveCaller: p.resolveCaller, flows: p.flows ?? null },
@@ -116,7 +116,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
         plugins: {
             plugins: { tools: () => p.plugins.tools(), guard: (id) => p.plugins.guard(id) },
             run: p.plugins.run,
-            approve: (caller, action, detail) => p.approve(caller, action, detail),
+            approve: (caller, action, detail, call) => p.approve(caller, action, detail, call),
             resolveCaller: p.resolveCaller,
         },
         ...(p.agents ? {
@@ -124,7 +124,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 resolveCaller: p.resolveCaller,
                 defaultAgentOf: (ws: string) => p.agents!.defaultAgentOf(ws),
                 roster: p.roster,
-                approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string) => p.approve(caller, action, detail),
+                approve: (caller: Caller, action: typeof CREATE_AGENT_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
                 register: p.agents.register,
                 addressOf: (record: AgentRecord) => agentAddress(record, p.workspaceSlugs?.() ?? new Map()),
             },
@@ -137,7 +137,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 readTabs: (ws: string) => { const raw = p.settings.snapshotFor(ws)['workspace_tabs']; return typeof raw === 'string' ? raw : '{"tabs":[]}'; },
                 writeTabs: (ws: string, raw: string) => p.workspaceTabs!.write(ws, raw),
                 sites: (ws: string) => p.workspaceTabs!.sites(ws),
-                approve: (caller: Caller, action: typeof WORKSPACE_TABS_ACTION, detail: string) => p.approve(caller, action, detail),
+                approve: (caller: Caller, action: typeof WORKSPACE_TABS_ACTION, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
             },
         } : {}),
         // Agents drive the workspace's open site pages (browser rebuild step 7): its default agent, or one allowed to.
@@ -148,7 +148,7 @@ export function genieToolDeps(p: GenieToolParts): AllToolsDeps {
                 roster: p.roster,
                 sites: (ws: string) => p.workspaceTabs!.sites(ws),
                 pages: () => p.pages!.open(),
-                approve: (caller: Caller, action: PageAction, detail: string) => p.approve(caller, action, detail),
+                approve: (caller: Caller, action: PageAction, detail: string, call: McpCall | undefined) => p.approve(caller, action, detail, call),
             },
         } : {}),
     };

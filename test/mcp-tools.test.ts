@@ -297,3 +297,20 @@ describe('thumbsUp', () => {
         expect(thumbs).toEqual([{ caller: terminals['t-atlas'], reason: 'boot' }]);
     });
 });
+
+describe('agentinbox receive wait — the MCP call goes away (genie#1360)', () => {
+    it('the call’s AbortSignal ends the wait, and the mail that arrives after stays unread', async () => {
+        const reg = tools.find((t) => t.definition.name === 'agentinbox')!;
+        const gone = new AbortController();
+        const said: string[] = [];
+        const started = Date.now();
+        const waiting = reg.handler({ terminalId: 't-kai', action: 'receive', wait: true, timeoutMs: 600_000 }, { ...ctx('agentinbox'), signal: gone.signal, progress: (m) => said.push(m) });
+        setTimeout(() => gone.abort(), 20);
+        const result = await waiting;
+        expect(Date.now() - started).toBeLessThan(5_000);
+        expect(JSON.parse(result.text).messages).toEqual([]);
+        expect(said).toEqual(['waiting for mail']);
+        await call('agentinbox', { terminalId: 't-atlas', action: 'send', to: 'kai', text: 'later' });
+        expect((await inbox.receive({ participant: kai.id })).messages.map((m) => m.text)).toEqual(['later']);
+    });
+});

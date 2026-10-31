@@ -13,7 +13,7 @@ import {
     type HostingServices, type OpenInBrowser,
 } from './hosting-actions.js';
 import { callerFrom } from './mcp-callers.js';
-import { MIRRORED_TERMINAL_ID, type Caller, type Registration, type ToolContext, type ToolHandler } from './mcp-tools.js';
+import { MIRRORED_TERMINAL_ID, type Caller, type McpCall, type Registration, type ToolContext, type ToolHandler, type ToolProgress } from './mcp-tools.js';
 import type { SiteInfo } from './site-manager.js';
 
 /**
@@ -53,14 +53,24 @@ export type HostingApproval = 'services.add' | 'services.remove' | 'services.use
  * environment, and answers its exit code and its output (the tail, stdout and stderr together). `timedOut` = it was
  * stopped at `timeoutMs`. main/service-exec.ts is the real one; tests give their own.
  */
-export type ServiceExec = (input: { command: string; cwd: string; env: Readonly<Record<string, string>>; timeoutMs: number }) => Promise<{ exitCode: number | null; output: string; timedOut: boolean }>;
+export type ServiceExec = (input: {
+    command: string;
+    cwd: string;
+    env: Readonly<Record<string, string>>;
+    timeoutMs: number;
+    /** The MCP call (genie#1360): when it aborts, the command's process tree — and only it — is stopped. */
+    signal?: AbortSignal | undefined;
+    /** Tells a client still there how much output the command has written. */
+    progress?: ToolProgress | undefined;
+}) => Promise<{ exitCode: number | null; output: string; timedOut: boolean; /** Stopped because its call went away. */ aborted?: boolean }>;
 
 /** How long a `services exec` may run before it is stopped (a migration and seed take minutes, not hours). */
 export const SERVICE_EXEC_TIMEOUT_MS = 15 * 60_000;
 
 export interface HostingToolsDeps {
     readonly resolveCaller: (terminalId: string) => Caller | null;
-    readonly approve: (caller: Caller, action: HostingApproval, detail: string) => Promise<'allowed' | 'denied'>;
+    /** `call`: the MCP call waiting on the person (genie#1360) — when it goes away, the approval is withdrawn. */
+    readonly approve: (caller: Caller, action: HostingApproval, detail: string, call: McpCall | undefined) => Promise<'allowed' | 'denied'>;
     /** The composed services; `null` where this Genie has none (doctor mode), and every action says so. */
     readonly services: HostingServices | null;
     /** Genie's browser, for `sites open` — the same one the Hosting tab's Open uses. Absent = none here (doctor mode). */
@@ -195,12 +205,12 @@ const NOT_HERE = 'this Genie has no services or sites to manage (doctor mode run
 const ENV_NOTE = 'Genie hands these to every terminal and every site process in this workspace; never copy them into a file or start an engine yourself. A site that was already running gets a new engine’s variables when it is stopped and started again.';
 
 export function hostingTools(deps: HostingToolsDeps): Registration[] {
-    const withServices = (body: (s: HostingServices, caller: Caller, args: JsonObject) => McpToolResult | Promise<McpToolResult>): ToolHandler => async (args: JsonObject, context: ToolContext) => {
+    const withServices = (body: (s: HostingServices, caller: Caller, args: JsonObject, context: ToolContext) => McpToolResult | Promise<McpToolResult>): ToolHandler => async (args: JsonObject, context: ToolContext) => {
         const caller = callerFrom(args, context.headers, deps.resolveCaller);
         if (typeof caller === 'string') return err(caller);
         if (!deps.services) return err(NOT_HERE);
         try {
-            return await body(deps.services, caller, args);
+            return await body(deps.services, caller, args, context);
         } catch (error) {
             return err((error as Error).message);
         }
@@ -248,7 +258,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
             },
             'Services',
         ),
-        handler: withServices(async (s, caller, args) => {
+        handler: withServices(async (s, caller, args, context) => {
             const action = str(args.action) ?? '';
             const own = (id: string | undefined): ServiceInstance | string => {
                 if (!id) return `${action} needs \`id\`; \`services list\` shows them`;
@@ -294,10 +304,12 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                         if (error instanceof OutsideWorkspaceError) return err(`${str(args.cwd) ?? '.'} is outside this workspace (${root}); nothing was run`);
                         throw error;
                     }
-                    const verdict = await deps.approve(caller, 'services.exec', command);
+                    const verdict = await deps.approve(caller, 'services.exec', command, context);
                     if (verdict !== 'allowed') return err('the person did not allow this command; nothing was run');
                     const env = s.engines.envFor(caller.workspaceId);
-                    const r = await deps.exec({ command, cwd, env, timeoutMs: SERVICE_EXEC_TIMEOUT_MS });
+                    // The call's signal stops the command's process tree if the client goes away (genie#1360).
+                    const r = await deps.exec({ command, cwd, env, timeoutMs: SERVICE_EXEC_TIMEOUT_MS, signal: context.signal, progress: context.progress });
+                    if (r.aborted) return err('client disconnected: the command was stopped');
                     // Every credential the env carries, and every one Genie holds for this workspace's engines: masked in
                     // the output, even one the command printed.
                     const { variables } = maskEnv(env);
@@ -353,7 +365,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const how = existing
                         ? `it is already running (127.0.0.1:${existing.publishedPort}); Genie attaches this workspace to it — nothing is pulled or created`
                         : `Genie pulls the image ${image} if it is not on this machine yet, then creates and starts the container`;
-                    const verdict = await deps.approve(caller, 'services.add', `${what}, ${where} — ${how}`);
+                    const verdict = await deps.approve(caller, 'services.add', `${what}, ${where} — ${how}`, context);
                     if (verdict !== 'allowed') return err(`adding ${form.custom ? `the custom image ${image}` : `${engine} ${version}`} was denied by the person; nothing was pulled or created`);
                     // The person's approval, which named the image, IS the pull's consent.
                     const r = await createService(s, form, true);
@@ -377,7 +389,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const detail = action === 'use'
                         ? `${kind} for this workspace: ${now} → ${labelOf(i)} (127.0.0.1:${i.publishedPort}) — its terminals and sites get ${labelOf(i)}’s connection; nothing is deleted, and the other engine keeps its data`
                         : `stop the shared ${nameOf(i)} (127.0.0.1:${i.publishedPort}) giving this workspace its ${kind} connection — its database and data stay in it, and \`use\` attaches it again`;
-                    const verdict = await deps.approve(caller, 'services.use', detail);
+                    const verdict = await deps.approve(caller, 'services.use', detail, context);
                     if (verdict !== 'allowed') return err(`${action === 'use' ? `using ${labelOf(i)}` : `detaching from ${labelOf(i)}`} was denied by the person; nothing was changed`);
                     const choice = action === 'use' ? await useService(s, caller.workspaceId, i.id) : await detachService(s, caller.workspaceId, i.id);
                     return ok({
@@ -408,7 +420,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const preview = await updateService(s, i.id);
                     if (preview.kind !== 'needs-consent') return err('the engine did not return an update preview; nothing was updated');
                     const affected = preview.dependents.length > 0 ? ` Affected: ${preview.dependents.join('; ')}. Confirm interruption of these dependents.` : '';
-                    const verdict = await deps.approve(caller, 'services.update', `${labelOf(i)} — ${preview.note}${affected}`);
+                    const verdict = await deps.approve(caller, 'services.update', `${labelOf(i)} — ${preview.note}${affected}`, context);
                     if (verdict !== 'allowed') return err('the person did not allow updating this engine; nothing was updated');
                     const r = await updateService(s, i.id, { consent: true, confirmed: true, expectedImage: preview.image, approvedDependents: preview.dependents });
                     if (r.kind === 'needs-consent') return err('the engine image or its dependents changed after approval; ask again so the person can review the new impact');
@@ -422,14 +434,14 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     // A shared WebSockets engine: this workspace's app is its own to drop; the engine is everyone's.
                     if (i.scope.kind === 'shared' && sliceIsDroppable(i.engine)) {
                         if (!i.slices?.[caller.workspaceId]) return err(`${i.engine} ${i.version} has no app for this workspace; nothing was done`);
-                        const appVerdict = await deps.approve(caller, 'services.remove', `this workspace’s app on the shared ${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its credentials stop working; the engine and every other workspace’s app keep running`);
+                        const appVerdict = await deps.approve(caller, 'services.remove', `this workspace’s app on the shared ${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its credentials stop working; the engine and every other workspace’s app keep running`, context);
                         if (appVerdict !== 'allowed') return err(`removing this workspace’s ${i.engine} app was denied by the person; nothing was done`);
                         await s.engines.releaseSlice(i.id, caller.workspaceId);
                         return ok({ ok: true, removed: i.id, appRemoved: true });
                     }
                     const notMine = mineOutright(i);
                     if (notMine) return err(notMine);
-                    const verdict = await deps.approve(caller, 'services.remove', `${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its container is removed; its data volume is KEPT`);
+                    const verdict = await deps.approve(caller, 'services.remove', `${i.engine} ${i.version} (127.0.0.1:${i.publishedPort}) — its container is removed; its data volume is KEPT`, context);
                     if (verdict !== 'allowed') return err(`removing ${i.engine} ${i.version} was denied by the person; nothing was done`);
                     await removeService(s, i.id, { deleteData: false });
                     return ok({ ok: true, removed: i.id, dataKept: true });
@@ -538,7 +550,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
             },
             'Sites',
         ),
-        handler: withServices(async (s, caller, args) => {
+        handler: withServices(async (s, caller, args, context) => {
             const action = str(args.action) ?? '';
             const shape = shapeProblem(args);
             if (shape) return err(shape);
@@ -623,7 +635,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                     const changes = changesOf(target.form, form);
                     if (repoPath !== target.site.repoPath) changes.push(`folder ${target.site.repoPath} → ${repoPath}`);
                     if (changes.length === 0) return ok({ ok: true, site: siteView(site), note: 'nothing to change: the site is already served that way; the person was not asked' });
-                    const verdict = await deps.approve(caller, 'sites.update', `${site.host} — ${changes.join('; ')} — written to this workspace’s project.json and served as changed`);
+                    const verdict = await deps.approve(caller, 'sites.update', `${site.host} — ${changes.join('; ')} — written to this workspace’s project.json and served as changed`, context);
                     if (verdict !== 'allowed') return err(`changing ${site.host} was denied by the person; nothing was done`);
                     const r = await updateSite(s, { siteId: site.id, form, repoPath });
                     if (r.kind === 'problems') return err(r.problems.map((p) => p.message).join(' '), { problems: r.problems, form });
@@ -632,7 +644,7 @@ export function hostingTools(deps: HostingToolsDeps): Registration[] {
                 case 'remove': {
                     const site = own(str(args.site));
                     if (typeof site === 'string') return err(site);
-                    const verdict = await deps.approve(caller, 'sites.remove', `${site.host} (${site.repoPath}) — stopped and removed from this workspace’s project.json; the folder and its files are not touched`);
+                    const verdict = await deps.approve(caller, 'sites.remove', `${site.host} (${site.repoPath}) — stopped and removed from this workspace’s project.json; the folder and its files are not touched`, context);
                     if (verdict !== 'allowed') return err(`removing ${site.host} was denied by the person; nothing was done`);
                     await removeSite(s, site.id);
                     return ok({ ok: true, removed: site.id });

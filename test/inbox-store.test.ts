@@ -247,3 +247,41 @@ describe('attachments are BYTE COPIES, never path references', () => {
         expect((await stat(big)).size).toBe(25 * 1024 * 1024 + 1);
     });
 });
+
+/**
+ * A `receive wait` WHOSE CALLER WENT AWAY (genie#1360): the MCP call's AbortSignal ends the long-poll at once, and the
+ * mail is left UNREAD — marking it read for a client that will never see the answer would lose it. Another wait, even
+ * the same participant's from another call, keeps waiting and still gets its mail.
+ */
+describe('receive wait — the caller goes away (genie#1360)', () => {
+    it('ends when its signal aborts, long before its timeout', async () => {
+        const call = new AbortController();
+        const started = Date.now();
+        const waiting = store.receive({ participant: b, wait: true, timeoutMs: 600_000, signal: call.signal });
+        setTimeout(() => call.abort(), 20);
+        const page = await waiting;
+        expect(Date.now() - started).toBeLessThan(5_000);
+        expect(page.messages).toEqual([]);
+    });
+
+    it('an aborted call acknowledges nothing: mail already there stays unread for the next receive', async () => {
+        await store.send({ from: a, to: b, text: 'keep me' });
+        const call = new AbortController();
+        call.abort();
+        const page = await store.receive({ participant: b, wait: true, signal: call.signal });
+        expect(page.messages).toEqual([]);
+        // CONTROL: the next live receive gets it.
+        const next = await store.receive({ participant: b });
+        expect(next.messages.map((m) => m.text)).toEqual(['keep me']);
+    });
+
+    it('an abort ends only its own wait: another call waiting for the same participant still gets the mail', async () => {
+        const gone = new AbortController();
+        const first = store.receive({ participant: b, wait: true, timeoutMs: 600_000, signal: gone.signal, acknowledge: false });
+        const second = store.receive({ participant: b, wait: true, timeoutMs: 600_000, signal: new AbortController().signal });
+        gone.abort();
+        expect((await first).messages).toEqual([]);
+        await store.send({ from: a, to: b, text: 'for the one still here' });
+        expect((await second).messages.map((m) => m.text)).toEqual(['for the one still here']);
+    });
+});

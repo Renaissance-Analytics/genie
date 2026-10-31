@@ -1,5 +1,5 @@
 import type { DeckItem } from '../core/deck.js';
-import type { Caller } from './mcp-tools.js';
+import type { Caller, McpCall } from './mcp-tools.js';
 
 /**
  * THE APPROVAL QUEUE — the gate behind `manageTerminals create/write` and any other tool that must
@@ -124,7 +124,12 @@ export class ApprovalQueue {
         }
     }
 
-    gate(caller: Caller, action: string, detail: string): Promise<Verdict> {
+    /**
+     * `call` (genie#1360): the MCP call waiting on this verdict. Parked, it is told so (`progress`); when it goes away
+     * (`signal`), ITS wait ends denied — and the item leaves the Deck with the reason "client disconnected" unless
+     * another call joined it, which keeps waiting. A verdict nobody can receive is not asked for.
+     */
+    gate(caller: Caller, action: string, detail: string, call?: McpCall): Promise<Verdict> {
         // NEVER AUTO-APPROVED, whatever the agent's autonomy: creating an agent is the person's decision (the owner, 2026-10-19).
         // A permission switch answers only the actions it names (SWITCH_ANSWERS) — never agents.create.
         const switched = Object.hasOwn(SWITCH_ANSWERS, action) && this.#granted?.(caller, action) === true;
@@ -133,15 +138,38 @@ export class ApprovalQueue {
             this.#changed();
             return Promise.resolve('allowed');
         }
-        return new Promise((resolve) => {
+        const signal = call?.signal;
+        if (signal?.aborted) return Promise.resolve('denied');
+        return new Promise((done) => {
+            let entry: Pending;
+            const resolve = (v: Verdict) => {
+                signal?.removeEventListener('abort', onAbort);
+                done(v);
+            };
+            const onAbort = () => {
+                const at = entry.resolvers.indexOf(resolve);
+                if (at < 0) return;
+                entry.resolvers.splice(at, 1);
+                // The last call waiting on this item: nobody is left to receive a verdict, so nobody is asked for one.
+                if (entry.resolvers.length === 0 && this.#pending.get(entry.id) === entry) {
+                    this.#pending.delete(entry.id);
+                    this.#cancelled = [...this.#cancelled, { action, detail, reason: 'client disconnected' }].slice(-50);
+                    this.#changed();
+                }
+                resolve('denied');
+            };
             const existing = [...this.#pending.values()].find((p) => p.caller.agentId === caller.agentId && p.action === action && p.detail === detail);
             if (existing) {
+                entry = existing;
                 existing.resolvers.push(resolve);
-                return;
+            } else {
+                const id = `appr_${++this.#n}_${this.#now()}`;
+                entry = { id, caller, action, detail, at: this.#now(), resolvers: [resolve] };
+                this.#pending.set(id, entry);
+                this.#changed();
             }
-            const id = `appr_${++this.#n}_${this.#now()}`;
-            this.#pending.set(id, { id, caller, action, detail, at: this.#now(), resolvers: [resolve] });
-            this.#changed();
+            signal?.addEventListener('abort', onAbort, { once: true });
+            call?.progress?.('waiting for the person’s approval');
         });
     }
 

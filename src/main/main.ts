@@ -2732,7 +2732,7 @@ async function boot(): Promise<void> {
             attention: composed.attention,
             knowledge: composed.knowledge,
             settings: composed.settings,
-            approve: (caller, action, detail) => composed.approvals.gate(caller, action, detail),
+            approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             resolveCaller,
