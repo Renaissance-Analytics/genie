@@ -7,13 +7,14 @@ import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src
 import { ReminderBook, reminderText } from '../src/core/inbox-reminders.js';
 import { AttentionStore } from '../src/main/attention-store.js';
 import { InboxStore } from '../src/main/inbox-store.js';
+import type { NoticeMail } from '../src/core/stream-event.js';
 import { wireInboxPush, type InboxPushPorts } from '../src/main/inbox-push.js';
 import { genieTools, type GenieToolsDeps } from '../src/main/mcp-tools.js';
 
 /**
- * HOW AN APP'S MESSAGE REACHES THE AGENT (genie#1345, the owner's D1): an AUTOMATED agent is told at once — woken if it
- * is stopped, and an app wakes it at most once per window; a MANUAL agent is never woken and never given a turn of its
- * own for app mail — it hears about it on its next turn. What it reads is marked as an app's and fenced as data; it
+ * HOW AN APP'S MESSAGE REACHES THE AGENT (genie#1345; genie#1379 replaced D1 as built): EVERY agent is told without the
+ * person typing — at once when it can take a turn, when its turn ends when busy. An AUTOMATED agent is also started if it
+ * is stopped, while the app wake cap allows; a MANUAL agent is never started by an app — its mail waits. What it reads is marked as an app's and fenced as data; it
  * cannot reply. Mail from people and agents is delivered exactly as before (the other direction, asserted).
  */
 
@@ -51,25 +52,26 @@ function wire(policy: (to: string) => AppDelivery) {
     const h = fakeHost();
     const book = new ReminderBook();
     const woken: string[] = [];
+    /** App-caused turns spent from the app wake cap (genie#1379), per agent. */
     const appWakes: string[] = [];
     wireInboxPush({
         inbox,
         host: h.host,
         reminders: ({ run }) => {
-            const out: Array<{ agentId: string; text: string }> = [];
+            const out: Array<{ agentId: string; text: string; mail: NoticeMail[] }> = [];
             for (const id of [auto.id, manual.id]) {
                 const r = run(id);
                 const unread = inbox.unread(id);
                 const fromApps = unread.filter((m) => m.from.startsWith('app:')).length;
                 const text = book.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: r, fromApps });
-                if (text) out.push({ agentId: id, text });
+                if (text) out.push({ agentId: id, text, mail: unread.map((m) => ({ id: m.id, from: m.from, fromName: null, text: m.text, sentAt: m.sentAt })) });
             }
             return out;
         },
         settled: (id, ok) => book.settled(id, ok),
         wake: (id) => { woken.push(id); h.start(id); return true; },
         appMail: (to, message) => (message.from.startsWith('app:') ? policy(to) : null),
-        appWoke: (id) => { appWakes.push(id); },
+        appBudget: { waitMs: () => 0, spend: (id) => { appWakes.push(id); } },
     });
     return { ...h, woken, appWakes };
 }
@@ -106,25 +108,22 @@ describe('an automated agent', () => {
 
 describe('a manual agent', () => {
     it('stopped: NOT woken', async () => {
-        const w = wire(() => 'next-turn');
+        const w = wire(() => 'push-no-wake');
         await inbox.send({ from: APP_FROM, to: manual.id, text: 'b', app: site });
         expect(w.woken).toEqual([]);
         expect(w.prompts).toEqual([]);
     });
 
-    it('running and idle: given no turn of its own; told when its next turn ends', async () => {
-        const w = wire(() => 'next-turn');
+    it('running and idle: told AT ONCE — nobody has to type first (genie#1379, the owner on beta.53)', async () => {
+        const w = wire(() => 'push-no-wake');
         w.start(manual.id);
         await inbox.send({ from: APP_FROM, to: manual.id, text: 'b', app: site });
-        expect(w.prompts).toEqual([]);
-        // The person prompts it; its turn ends: now it hears about the app's message.
-        w.idle.delete(manual.id);
-        w.endTurn(manual.id);
+        expect(w.woken).toEqual([]);
         expect(w.prompts).toEqual([[manual.id, reminderText(1, 1)]]);
     });
 
     it('mail from a PERSON or an AGENT still wakes and tells it as before (the other direction)', async () => {
-        const w = wire(() => 'next-turn');
+        const w = wire(() => 'push-no-wake');
         await inbox.send({ from: auto.id, to: manual.id, text: 'hello' });
         expect(w.woken).toEqual([manual.id]);
         expect(w.prompts).toEqual([[manual.id, reminderText(1)]]);

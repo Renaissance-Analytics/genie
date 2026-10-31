@@ -190,10 +190,10 @@ import { runOfficialTool } from './official-tools.js';
 import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { wireInboxPush } from './inbox-push.js';
+import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
 import { AppInboxKeys } from './app-inbox-keys.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
-import { appDelivery, isAppSender, type AppSourceKind } from '../core/app-inbox.js';
+import { type AppSourceKind } from '../core/app-inbox.js';
 import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
 import { WorkspaceColors } from './workspace-color-host.js';
@@ -2925,14 +2925,17 @@ async function boot(): Promise<void> {
         return host.start(record, cwdFor(record)).ok;
     };
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
-    // An app's message (genie#1345, the owner's D1): an automated agent is told now — woken, at most once per window by
-    // apps; a manual agent hears it on its next turn.
-    const appWakes = new Map<string, number>();
+    // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told — an idle one after the coalescing window, a busy
+    // one when its turn ends. An app's message starts a stopped agent only if it is automated and the app wake cap allows;
+    // a turn only apps' mail causes is spent from that cap, and past it the mail waits for the window.
     wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
         wake: wakeAgent,
-        appMail: (to, message) => (isAppSender(message.from) ? appDelivery(registry?.find(to)?.mode ?? 'manual', appWakes.get(to) ?? null, Date.now()) : null),
-        appWoke: (agentId) => { appWakes.set(agentId, Date.now()); },
+        ...appMailPushPorts({
+            modeOf: (agentId) => registry?.find(agentId)?.mode,
+            now: () => Date.now(),
+            schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        }),
     });
     // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own window only (preload `appInbox`); a key is
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with

@@ -75,10 +75,10 @@ describe('send', () => {
         expect(page.messages[0]).toMatchObject({ id: r.body.messageId, from: 'app:site:site_flabs', text: 'Change #42 approved', app: { label: 'site:flabs@fancy', subject: '3 petitions queued', level: 'info', source: site } });
     });
 
-    it('targets a named agent of its own workspace, and says a manual one hears it next turn', async () => {
+    it('targets a named agent of its own workspace, and says a manual one is told but never started by an app', async () => {
         const r = await service.handle(req({ body: { to: 'scribe', subject: 's', body: 'b' } }));
         expect(r.status).toBe(201);
-        expect(r.body).toMatchObject({ to: 'scribe@fancy', delivery: 'next-turn' });
+        expect(r.body).toMatchObject({ to: 'scribe@fancy', delivery: 'push-no-wake' });
         expect(inbox.unread(scribe.id)).toHaveLength(1);
     });
 

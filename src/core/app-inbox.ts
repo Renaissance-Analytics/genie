@@ -93,8 +93,14 @@ export const APP_LIMITS = {
     requestBytes: 16 * 1024,
     /** A repeated `dedupeKey` inside this window answers the first message's id and stores nothing. */
     dedupeMs: 10 * 60_000,
-    /** At most one wake an app causes, per agent, in this window. */
-    wakeEveryMs: 10 * 60_000,
+    /**
+     * THE APP WAKE CAP (genie#1379): at most `wakeTurns` turns an app's mail causes, per agent, in any `wakeWindowMs` —
+     * a turn Genie gives an agent for mail that is ALL from apps (an idle agent's wake, a busy one's follow-up, a stopped
+     * automated one started). Past it the mail waits for the window, then one turn: a chatty app cannot run up spend, and
+     * nothing waits for the person. Mail from a person or an agent is never held by it.
+     */
+    wakeTurns: 6,
+    wakeWindowMs: 60 * 60_000,
 } as const;
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -220,15 +226,52 @@ export function appTarget(
 }
 
 /**
- * How an app's message reaches its agent (the owner's D1): an AUTOMATED agent is told now — woken if it is stopped, at
- * most once per `wakeEveryMs` for apps; a MANUAL agent is never woken and never given a turn of its own for it — it hears
- * about it at its next turn.
+ * How an app's message reaches its agent (genie#1379; the owner on beta.53: "Users should not have to drive chat for
+ * agents to get notifications they need"). EVERY agent is told without the person typing: at once when it can take a
+ * turn, when its turn ends when busy. What differs is only whether a STOPPED agent is started for it:
+ * - `push`: an automated agent, and the app wake cap allows a turn — started if stopped;
+ * - `push-no-wake`: a manual agent (never started by an app: its mail waits, shown as uncollected), or an automated one
+ *   past the cap.
+ * #1350's D1 as built had a third, `next-turn`: a manual agent was given no turn of its own and heard of the app's
+ * message only after the person's next turn — the bug the owner hit.
  */
-export type AppDelivery = 'push' | 'push-no-wake' | 'next-turn';
+export type AppDelivery = 'push' | 'push-no-wake';
 
-export function appDelivery(mode: AgentRecord['mode'], lastAppWakeAt: number | null, now: number): AppDelivery {
-    if (mode !== 'automated') return 'next-turn';
-    return lastAppWakeAt !== null && now - lastAppWakeAt < APP_LIMITS.wakeEveryMs ? 'push-no-wake' : 'push';
+export function appDelivery(mode: AgentRecord['mode'], wakeAllowed: boolean): AppDelivery {
+    return mode === 'automated' && wakeAllowed ? 'push' : 'push-no-wake';
+}
+
+/**
+ * THE APP WAKE CAP's ledger (APP_LIMITS.wakeTurns per wakeWindowMs), per agent. Pure: the clock is passed in. Memory
+ * only, like the rate limiter: a restart forgets it, which costs at most one window's allowance.
+ */
+export class AppTurnBudget {
+    readonly #now: () => number;
+    readonly #turns = new Map<string, number[]>();
+
+    constructor(now: () => number) {
+        this.#now = now;
+    }
+
+    #recent(agentId: string): number[] {
+        const now = this.#now();
+        const recent = (this.#turns.get(agentId) ?? []).filter((at) => now - at < APP_LIMITS.wakeWindowMs);
+        if (recent.length === 0) this.#turns.delete(agentId);
+        else this.#turns.set(agentId, recent);
+        return recent;
+    }
+
+    /** 0 when an app-caused turn is allowed now; else how long until the oldest in the window ages out. */
+    waitMs(agentId: string): number {
+        const recent = this.#recent(agentId);
+        if (recent.length < APP_LIMITS.wakeTurns) return 0;
+        return Math.max(1, recent[recent.length - APP_LIMITS.wakeTurns]! + APP_LIMITS.wakeWindowMs - this.#now());
+    }
+
+    /** An app-caused turn was given to `agentId` now. */
+    spend(agentId: string): void {
+        this.#turns.set(agentId, [...this.#recent(agentId), this.#now()]);
+    }
 }
 
 /** The fixed note every app message carries to an agent. */
