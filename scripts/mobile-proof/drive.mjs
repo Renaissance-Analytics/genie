@@ -108,6 +108,10 @@ async function main() {
         ws.on('framereceived', (f) => frames.received.push({ size: typeof f.payload === 'string' ? f.payload.length : 0, text: typeof f.payload === 'string' ? f.payload.slice(0, 200) : '' }));
     });
     page.on('console', (m) => { if (m.type() === 'error') console.log(`  [phone console] ${m.text()}`); });
+    page.on('pageerror', (e) => console.log(`  [phone pageerror] ${e.message}`));
+    page.on('response', (r) => { if (r.status() >= 400) console.log(`  [phone ${r.status()}] ${r.url()}`); });
+    page.on('requestfailed', (r) => console.log(`  [phone request failed] ${r.url()} ${r.failure()?.errorText ?? ''}`));
+    globalThis.__phonePage = page;
 
     // 0. Without the PIN the page asks for one — the socket is never open without pairing.
     await page.goto(PAGE);
@@ -276,6 +280,13 @@ try {
     await main();
 } catch (error) {
     check('the drive ran to the end', false, String(error?.stack ?? error));
+    const page = globalThis.__phonePage;
+    if (page) {
+        await page.screenshot({ path: join(OUT, 'zz-failure.png') }).catch(() => {});
+        const dom = await page.evaluate(() => `${location.href}\n${document.documentElement.outerHTML.slice(0, 4000)}`).catch((e) => String(e));
+        writeFileSync(join(OUT, 'zz-failure-dom.txt'), dom);
+        console.log(`  [failure DOM] ${dom.slice(0, 1500)}`);
+    }
 }
 writeFileSync(join(OUT, 'checks.json'), JSON.stringify(checks, null, 2));
 const failed = checks.filter((c) => !c.ok);
