@@ -179,6 +179,15 @@ describe('the phone’s routes, previews and connection phase', () => {
         expect(reconnectDelay(50)).toBeLessThanOrEqual(15_000);
     });
 
+    it('Vite’s own chunks, whose names start with an underscore, are served — one was refused and the phone page was blank', () => {
+        // Measured on omarchy-test (2026-10-30): the built page imports ./assets/__vite-browser-external-TtGlo6oh.js; the
+        // allow-list's first character had to be alphanumeric, so it was a 404 and the whole module graph failed to load.
+        expect(staticFile('/assets/__vite-browser-external-TtGlo6oh.js')).toMatchObject({ relative: 'assets/__vite-browser-external-TtGlo6oh.js', contentType: 'text/javascript; charset=utf-8' });
+        expect(staticFile('/assets/_x.js.map')).not.toBeNull();
+        // Still one plain segment: no dot-names, no traversal, no hidden files.
+        for (const bad of ['/assets/..', '/assets/.env', '/assets/_/../x.js', '/assets/__..js']) expect(staticFile(bad), bad).toBeNull();
+    });
+
     it('the page at /mobile/ (a trailing slash) gets its assets too — relative URLs resolve under it', () => {
         expect(staticFile('/mobile/assets/index-abc.js')).toEqual(staticFile('/assets/index-abc.js'));
         expect(staticFile('/mobile/assets/../secret.txt')).toBeNull();
