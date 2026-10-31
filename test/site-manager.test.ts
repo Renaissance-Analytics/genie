@@ -67,7 +67,7 @@ describe('a proxy site — the repo’s own dev server', () => {
         });
         expect(site).toMatchObject({ id: 'site_tynn', host: 'tynn.gen', port: 4101, state: 'running' });
         expect(pty.opened).toHaveLength(1);
-        expect(pty.opened[0]).toMatchObject({ cwd: '/repos/tynn', command: 'php artisan serve --host=127.0.0.1 --port=4101', env: { DB_HOST: '127.0.0.1', DB_PORT: '54321' } });
+        expect(pty.opened[0]).toMatchObject({ cwd: '/repos/tynn', command: 'php -d variables_order=GPCS artisan serve --host=127.0.0.1 --port=4101', env: { DB_HOST: '127.0.0.1', DB_PORT: '54321' } });
         expect(sites.routes()).toEqual([{ host: 'tynn.gen', target: '127.0.0.1:4101' }]);
     });
 
