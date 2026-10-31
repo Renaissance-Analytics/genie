@@ -88,16 +88,22 @@ export function memoryPair(): [ClientTransport, ClientTransport] {
     type Side = { message: Set<(t: string) => void>; close: Set<() => void>; closed: boolean };
     const a: Side = { message: new Set(), close: new Set(), closed: false };
     const b: Side = { message: new Set(), close: new Set(), closed: false };
+    // A close arrives AFTER what was sent before it, as on a socket (end() flushes first): it is queued behind them.
+    let closing = false;
     const closeBoth = (): void => {
-        for (const side of [a, b]) {
-            if (side.closed) continue;
-            side.closed = true;
-            for (const l of [...side.close]) l();
-        }
+        if (closing) return;
+        closing = true;
+        queueMicrotask(() => {
+            for (const side of [a, b]) {
+                if (side.closed) continue;
+                side.closed = true;
+                for (const l of [...side.close]) l();
+            }
+        });
     };
     const end = (self: Side, peer: Side): ClientTransport => ({
         // Delivered asynchronously, in order, as a socket would.
-        send: (text) => { if (!self.closed) queueMicrotask(() => { if (!peer.closed) for (const l of [...peer.message]) l(text); }); },
+        send: (text) => { if (!self.closed && !closing) queueMicrotask(() => { if (!peer.closed) for (const l of [...peer.message]) l(text); }); },
         onMessage: (l) => { self.message.add(l); return () => self.message.delete(l); },
         onClose: (l) => { self.close.add(l); return () => self.close.delete(l); },
         close: closeBoth,

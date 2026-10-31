@@ -419,11 +419,14 @@ const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST
 export function adoptWindowEnv(target: NodeJS.ProcessEnv, windowEnv: Readonly<Record<string, string>>, platform: NodeJS.Platform = process.platform): void {
     const norm = (k: string): string => (platform === 'win32' ? k.toUpperCase() : k);
     const incoming = new Map(Object.entries(windowEnv).filter(([k]) => !HOST_ONLY_ENV.has(norm(k))).map(([k, v]) => [norm(k), [k, v] as const]));
+    const existing = new Map<string, string>();
     for (const key of Object.keys(target)) {
         if (HOST_ONLY_ENV.has(norm(key))) continue;
         if (!incoming.has(norm(key))) delete target[key];
+        else existing.set(norm(key), key);
     }
-    for (const [, [k, v]] of incoming) target[k] = v;
+    // A name the host already has keeps its own spelling (`Path` stays `Path`): one variable, never two.
+    for (const [n, [k, v]] of incoming) target[existing.get(n) ?? k] = v;
 }
 
 function sameToken(given: string, expected: string): boolean {

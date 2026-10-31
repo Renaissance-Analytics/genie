@@ -110,10 +110,20 @@ export class ProcessScheduler {
             return 'skipped';
         }
         if (schedule.kind === 'agent-nudge') {
-            let ok = false;
-            try { ok = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
-            await this.#record(p.id, at, ok ? 'ok' : 'failed');
-            return ok ? 'ok' : 'failed';
+            // In flight from the moment it fires: the nudge may answer later (the agent host's promise, the host split),
+            // and `settled()` must still cover the run and its write (genie#1250).
+            let finishNudge!: () => void;
+            const nudged = new Promise<void>((r) => { finishNudge = r; });
+            this.#inFlight.set(p.id, { at, done: nudged, finish: finishNudge });
+            try {
+                let ok = false;
+                try { ok = await this.#deps.nudge(schedule.agent ?? '', schedule.prompt ?? '', p.name); } catch { ok = false; }
+                await this.#record(p.id, at, ok ? 'ok' : 'failed');
+                return ok ? 'ok' : 'failed';
+            } finally {
+                this.#inFlight.delete(p.id);
+                finishNudge();
+            }
         }
         let finish!: () => void;
         const done = new Promise<void>((r) => { finish = r; });
