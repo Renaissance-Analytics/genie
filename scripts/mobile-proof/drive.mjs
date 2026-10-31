@@ -107,7 +107,9 @@ async function main() {
     const frames = { sent: [], received: [] };
     page.on('websocket', (ws) => {
         ws.on('framesent', (f) => frames.sent.push(typeof f.payload === 'string' ? f.payload.length : 0));
-        ws.on('framereceived', (f) => frames.received.push({ size: typeof f.payload === 'string' ? f.payload.length : 0, text: typeof f.payload === 'string' ? f.payload.slice(0, 200) : '' }));
+        // The window's `base` is read from the WHOLE frame: in a watch answer it follows the agent's detail, far past any
+        // prefix (the first gauge read 200 characters and could not see it).
+        ws.on('framereceived', (f) => { const t = typeof f.payload === 'string' ? f.payload : ''; frames.received.push({ size: t.length, text: t.slice(0, 200), base: /"rows":\{"base":(null|"resume"|\d+)/.exec(t)?.[1] ?? null }); });
     });
     page.on('console', (m) => { if (m.type() === 'error') console.log(`  [phone console] ${m.text()}`); });
     page.on('pageerror', (e) => console.log(`  [phone pageerror] ${e.message}`));
@@ -264,7 +266,9 @@ async function main() {
     await page.waitForSelector('[data-mobile-reconnecting]', { timeout: 15_000 }).then(() => shot(page, '15-reconnecting')).catch(() => {});
     await page.waitForSelector('[data-mobile-reconnecting]', { state: 'detached', timeout: 60_000 });
     await shot(page, '16-reconnected');
-    const resumed = frames.received.slice(before).filter((f) => f.text.includes('"base":"resume"'));
+    const resumed = frames.received.slice(before).filter((f) => f.base === '"resume"');
+    // POSITIVE CONTROL: the same gauge saw the first watch open on a whole window (`base: null`) earlier in this run.
+    check('control: the gauge reads a window’s base (the first watch was a whole window)', frames.received.slice(0, before).some((f) => f.base === 'null'));
     check('after the drop the phone reconnected on its own, without the PIN', await page.locator('[data-mobile="pair"]').count() === 0);
     check('the chat resumed from its cursor (base "resume"), not a full replay', resumed.length >= 1, `${resumed.length} resume answers`);
 
