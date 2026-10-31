@@ -163,3 +163,30 @@ describe('the states with nothing to show, and live', () => {
         expect(tag(render({ live: 'reconnecting' }), 'data-tynn-live')).toMatch(/aria-label="Reconnecting to Tynn"/);
     });
 });
+
+describe('the tab\'s nav', () => {
+    it('lists Issues in tynn.ai\'s place (before WIP and the board) with tynn.ai\'s icon', async () => {
+        const { TYNN_SECTIONS } = await import('../src/core/tynn-pages.js');
+        const ids = TYNN_SECTIONS.map((s) => s.id);
+        expect(ids.indexOf('issues')).toBeGreaterThanOrEqual(0);
+        expect(ids.indexOf('issues')).toBeLessThan(ids.indexOf('wip'));
+        expect(TYNN_SECTIONS.find((s) => s.id === 'issues')).toMatchObject({ icon: 'sparkles', label: 'Issues' });
+    });
+
+    it('offers Issues only where the window can reach it', async () => {
+        const { TynnSectionNav } = await import('../src/renderer/components/TynnTab.js');
+        expect(renderToStaticMarkup(<TynnSectionNav current="board" onSection={noop} />)).toMatch(/aria-label="Issues"/);
+        const without = renderToStaticMarkup(<TynnSectionNav current="board" onSection={noop} offered={['wip', 'board']} />);
+        expect(without).not.toMatch(/aria-label="Issues"/);
+        expect(without).toMatch(/aria-label="Board"/);
+    });
+
+    it('opens the Issues page from the tab when the window has an Issues host', async () => {
+        const { TynnTab } = await import('../src/renderer/components/TynnTab.js');
+        const board = { read: async () => ({ ok: false as const, state: 'error' as const, reason: 'x' }), act: async () => ({ ok: true as const }), page: async () => ({ ok: false as const, state: 'error' as const, reason: 'x' }) };
+        const issues = { read: async () => ({ ok: false as const, state: 'error' as const, reason: 'x' }), act: async () => ({ ok: true as const, issue: null }) };
+        const html = renderToStaticMarkup(<TynnTab workspaceId="w1" host={board as never} issues={issues} initialSection="issues" />);
+        expect(html).toMatch(/data-tynn-issues-state="loading"/);
+        expect(html).toMatch(/data-tynn-section="issues"[^>]*aria-current="page"|aria-current="page"[^>]*data-tynn-section="issues"/);
+    });
+});
