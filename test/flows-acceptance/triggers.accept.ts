@@ -214,6 +214,20 @@ describe('A file is added: a file landing in the workspace starts the armed flow
         expect(files(g, id)).toEqual(['grow.bin']);
     });
 
+    it('a file CREATED EMPTY and written after a pause is run once, at its full size — never at 0 bytes (genie#1361)', async () => {
+        // `touch` then write: Genie 1's rule (two equal sizes 250 ms apart) read 0 twice and ran the flow on an empty file.
+        const g = genie();
+        const id = await fileFlow(g, 'any size', { extensions: 'csv' });
+        await armWatched(g, id);
+        await write(g, 'export.csv', Buffer.alloc(0));
+        await new Promise((r) => setTimeout(r, 600));
+        await appendFile(join(g.ws, 'export.csv'), Buffer.alloc(1200));
+        const [run] = await runsOf(g, id, 1);
+        expect(run).toMatchObject({ file: 'export.csv', log: ['got export.csv (1200 bytes)'] });
+        await quiet();
+        expect(files(g, id)).toEqual(['export.csv']);
+    });
+
     it('de-duplication: one file that lands several times over (an editor’s atomic saves right after creating it) is ONE run', async () => {
         const g = genie();
         const id = await fileFlow(g, 'once', { extensions: 'md' });
