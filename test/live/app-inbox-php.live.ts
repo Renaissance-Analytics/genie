@@ -196,7 +196,10 @@ async function main(): Promise<void> {
         const bRaw = await until(() => probe('site_lara', '/genie-probe.php'), 30_000);
         const c = await until(() => probe('site_laragpcs', '/genie-probe'), 90_000);
         results.push(['artisan serve, Genie ini (EGPCS) — Laravel route', say(b)], ['artisan serve, Genie ini (EGPCS) — raw public/*.php', say(bRaw)], ['artisan serve, stock ini (GPCS) — Laravel route', say(c)]);
-        check(b?.laravel === tokenOfSite('site_lara') && b.getenv === b.laravel && b.server === b.laravel, 'B1. lara (Genie’s ini): a Laravel route reads ITS token — env(), getenv(), $_SERVER', b ? say(b) : logsOf('site_lara'));
+        // `artisan serve` answers through PHP's built-in server, whose cli-server SAPI never copies the process env into
+        // $_SERVER — the plain `php -S` site (D1) shows the same, with no Laravel in the way. What carries it there is
+        // getenv() and, with Genie's E, $_ENV; Laravel's env() reads both.
+        check(b?.laravel === tokenOfSite('site_lara') && b.getenv === b.laravel && b.env === b.laravel, 'B1. lara (Genie’s ini): a Laravel route reads ITS token — env(), getenv(), $_ENV', b ? say(b) : logsOf('site_lara'));
         check(bRaw?.getenv === tokenOfSite('site_lara'), 'B2. …and a plain public/*.php under artisan serve reads it', say(bRaw));
         check(c?.laravel === tokenOfSite('site_laragpcs'), 'C1. laragpcs (stock ini): reads ITS token', c ? say(c) : logsOf('site_laragpcs'));
         check(!!b && !!c && b.laravel !== c.laravel, 'C2. …and lara’s and laragpcs’ tokens are different');
