@@ -168,6 +168,25 @@ const bridge: PreloadBridge = {
                 if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-board-unwatch', watchId);
             };
         },
+        // Row I1, the Tynn tab's Issues: the queue, its actions, what changed, and following it (one socket in main).
+        tynnIssues: (workspaceId, filters) => ipcRenderer.invoke('genie:workspace-tynn-issues', workspaceId, filters) as never,
+        tynnIssueAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-issue-action', workspaceId, input) as never,
+        tynnIssueChanges: (workspaceId, filters, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-issues-changes', workspaceId, filters, cursor, [...ids]) as never,
+        tynnIssuesWatch: (workspaceId, listener) => {
+            const handler = (_e: unknown, id: string, signal: Parameters<typeof listener>[0]) => { if (id === workspaceId) listener(signal); };
+            ipcRenderer.on('genie:workspace-tynn-issues-live', handler);
+            let watchId: number | null = null;
+            let stopped = false;
+            void (ipcRenderer.invoke('genie:workspace-tynn-issues-watch', workspaceId) as Promise<number | null>).then((id) => {
+                watchId = id;
+                if (stopped && id !== null) void ipcRenderer.invoke('genie:workspace-tynn-issues-unwatch', id);
+            });
+            return () => {
+                stopped = true;
+                ipcRenderer.removeListener('genie:workspace-tynn-issues-live', handler);
+                if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-issues-unwatch', watchId);
+            };
+        },
         addRepo: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-repo-add', workspaceId, input) as never,
         removeRepo: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-remove', workspaceId, slug) as never,
         locateRepo: (workspaceId, slug, path) => ipcRenderer.invoke('genie:workspace-repo-locate', workspaceId, slug, path) as never,

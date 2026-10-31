@@ -4,6 +4,8 @@ import { performBoardAction, performClaimThenStart, type BoardActionInput, type 
 import { PageFollower, TYNN_FIRST_SECTION, TYNN_SECTIONS, type TynnPageState, type TynnSectionId, type TynnTabHost, type WipLens, type WipView } from '../../core/tynn-pages.js';
 import { TynnBoardTab } from './TynnBoardPanel.js';
 import { TynnWipPanel } from './TynnWipPanel.js';
+import { TynnIssuesTab } from './TynnIssuesPanel.js';
+import type { TynnIssuesHost } from '../../core/tynn-issues.js';
 
 /**
  * THE TYNN TAB (genie#1295): tynn.ai's workspace for the workspace's own project — its pages in tynn.ai's order with
@@ -13,10 +15,10 @@ import { TynnWipPanel } from './TynnWipPanel.js';
  */
 
 /** The page nav: an icon per page, named for a screen reader (the owner: icons over words). */
-export function TynnSectionNav({ current, onSection }: { current: TynnSectionId; onSection: (id: TynnSectionId) => void }) {
+export function TynnSectionNav({ current, onSection, offered }: { current: TynnSectionId; onSection: (id: TynnSectionId) => void; offered?: readonly TynnSectionId[] }) {
     return (
         <nav aria-label="Tynn" className="flex items-center gap-0.5 border-b border-[var(--border-1)] px-2 py-1">
-            {TYNN_SECTIONS.map((s) => {
+            {TYNN_SECTIONS.filter((s) => offered === undefined || offered.includes(s.id)).map((s) => {
                 const on = s.id === current;
                 return (
                     <button
@@ -91,14 +93,17 @@ export function TynnWipTab({ workspaceId, host }: { workspaceId: string; host: T
 }
 
 /** The tab: the page nav, and the page that is open. */
-export function TynnTab({ workspaceId, host }: { workspaceId: string; host: TynnTabHost }) {
-    const [section, setSection] = useState<TynnSectionId>(TYNN_FIRST_SECTION);
-    // A page this host cannot read is not offered; the board always is.
+export function TynnTab({ workspaceId, host, issues, initialSection = TYNN_FIRST_SECTION }: { workspaceId: string; host: TynnTabHost; issues?: TynnIssuesHost | undefined; initialSection?: TynnSectionId }) {
+    const [section, setSection] = useState<TynnSectionId>(initialSection);
+    // A page this host cannot read is not offered; the board always is. Issues has its own door (row I1).
+    const offered = TYNN_SECTIONS.map((s) => s.id).filter((id) => id === 'board' || (id === 'issues' ? issues !== undefined : host.page !== undefined));
     return (
         <div data-tynn-tab="" className="flex min-h-0 min-w-0 flex-1 flex-col">
-            {host.page ? <TynnSectionNav current={section} onSection={setSection} /> : null}
+            {offered.length > 1 ? <TynnSectionNav current={section} onSection={setSection} offered={offered} /> : null}
             <div className="flex min-h-0 min-w-0 flex-1 overflow-auto">
-                {section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} /> : <TynnBoardTab workspaceId={workspaceId} host={host} />}
+                {section === 'issues' && issues ? <TynnIssuesTab workspaceId={workspaceId} host={issues} />
+                    : section === 'wip' && host.page ? <TynnWipTab workspaceId={workspaceId} host={host} />
+                        : <TynnBoardTab workspaceId={workspaceId} host={host} />}
             </div>
         </div>
     );

@@ -1,8 +1,8 @@
 {
-  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.6.0/contracts/workspace-ux/0.6.0/workspace-ux.json",
+  "$id": "https://raw.githubusercontent.com/Civicognita/shared-schemas/workspace-ux/v0.7.0/contracts/workspace-ux/0.7.0/workspace-ux.json",
   "contract": "workspace-ux",
-  "version": "0.6.0",
-  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.6.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
+  "version": "0.7.0",
+  "about": "The workspace UX tynn.ai and Genie both offer, surface by surface: what a person can DO there, what STATES they see, and the API each action uses. tynn.ai, Genie and genie-cloud each declare against it, and each repo's checks fail when its code and this file disagree. Canonical in Civicognita/shared-schemas, published under the tag workspace-ux/v0.7.0 and never rewritten (genie#1295). Each consumer carries a byte-identical copy beside a pin that records the tag and the sha256 of these bytes.",
   "placeholders": {
     "{P}": "the web project prefix: /u/{user}/{project} or /o/{organization}/{project}",
     "{projectId}": "the Tynn project's id (the workspace's project.json tynn.projectId)"
@@ -11,6 +11,7 @@
     "base": "/api/v1/projects/{projectId}",
     "credential": "the Genie pairing token (gpk_), never an agent's MCP key",
     "scope": "genie:board",
+    "surfaceScope": "a surface that names its own scope uses it instead of this one (issues: genie:issue-queue)",
     "refusal": "404 for every refusal (no scope, no access, wrong project, role may not write)",
     "invalid": "422 naming why: errors.status for a workflow step, errors.claim for a claim or an assignment the project's claim rules refuse, or the field's own key for a body that does not validate"
   },
@@ -224,6 +225,90 @@
         { "id": "task.done", "web": "POST tasks.done", "api": { "method": "POST", "path": "/tasks/{taskId}/done" }, "to": "done" },
         { "id": "task.restart", "web": "POST tasks.restart", "api": { "method": "POST", "path": "/tasks/{taskId}/restart" }, "to": "backlog" },
         { "id": "task.claim", "web": "POST tasks.claim", "api": { "method": "POST", "path": "/tasks/{taskId}/claim" } }
+      ]
+    },
+    {
+      "id": "issues",
+      "title": "Issues",
+      "tynn": { "page": "v2/Project/Issues", "route": "issues", "pageAccess": "issues" },
+      "scope": "genie:issue-queue",
+      "data": {
+        "api": { "method": "GET", "path": "/issues" },
+        "about": "The project's one intake queue: ideas, reports and defects before they become work. Its own pairing scope (genie:issue-queue): genie:issues is filing only, which is all an existing pairing consented to. Reads use the Issues page's gate (page issues) and its own builder; writes use the web write routes' gate (the project) and the web page's own actions and form rules.",
+        "query": ["status", "source", "q"],
+        "filters": {
+          "status": ["open", "converted", "resolved", "discarded", "all"],
+          "default": "open",
+          "source": ["feedback", "issue", "wish", "github"],
+          "q": "title or body, case-insensitive",
+          "unknown": "an unknown status or source is the default, never an error"
+        },
+        "limit": 100,
+        "order": "newest first",
+        "answer": ["project_id", "cursor", "issues", "filters", "statuses", "features", "convertible_versions", "can_triage"],
+        "fields": {
+          "issue": ["id", "issue_number", "title", "description", "status", "type", "priority", "source", "context_url", "from", "version_number", "feature_ids", "solutions", "converted_story_id", "converted_story_number", "github", "created_at"]
+        },
+        "types": ["enhancement", "fix", "chore", "docs", "security", "deprecation"],
+        "priorities": ["low", "normal", "high", "critical"],
+        "form": {
+          "fields": ["title", "type", "priority", "description", "feature_ids"],
+          "required": ["title"],
+          "defaults": { "type": "enhancement", "priority": "normal" },
+          "intake": "no search-first gate: a person filing is looking at the queue (tynn.ai IssueController). Anyone who may see the project may file"
+        },
+        "triage": {
+          "guard": "can_triage",
+          "while": "open",
+          "what": "delete, resolve, discard and convert are offered only on an open issue, and only to a person who may triage it (the project's update authority, IssuePolicy)"
+        },
+        "convert": { "versions": "convertible_versions", "statuses": ["active", "accepted"], "to": "a story in the version's backlog; the issue's solutions become its tasks" },
+        "close": { "verdicts": { "resolve": "resolved", "discard": "discarded" }, "reason": "required, recorded on the issue", "github": "an issue that came from GitHub is closed there too, with the reason as a comment (tynn.ai#379)" },
+        "live": {
+          "about": "The queue follows Tynn as issues are filed, edited, converted, closed or deleted, by a person or an agent. An event is a doorbell: the client asks what changed since its cursor and applies only that.",
+          "channel": "private-project-issues.{projectId}",
+          "web": "routes/channels.php project-issues.{projectId}: exactly whoever may open the Issues page (page issues); issue events ring there and on project.{projectId}, where tynn.ai's Issues page goes live (ProjectShell → useProjectChannel). The app is signed for the queue's channel only, through auth below",
+          "push": { "method": "GET", "path": "/api/v1/broadcasting-config", "scope": "genie:discovery" },
+          "auth": { "method": "POST", "path": "/issues/broadcasting-auth", "body": ["socket_id", "channel_name"] },
+          "events": ["issue.created", "issue.updated", "issue.deleted"],
+          "cursor": "cursor",
+          "changes": {
+            "method": "GET",
+            "path": "/issues/changes",
+            "query": ["since", "ids[]", "status", "source", "q"],
+            "answer": ["project_id", "cursor", "filters", "ids", "rows"]
+          },
+          "reconnect": "backoff; on every (re)subscription the client asks for the changes since its last cursor before it shows live"
+        }
+      },
+      "states": [
+        { "id": "loading", "what": "the queue is being read" },
+        { "id": "status-tabs", "what": "Open, Converted, Resolved, Discarded and All; Open is chosen first" },
+        { "id": "source-filter", "what": "Any source, or only what came from people (feedback)" },
+        { "id": "search", "what": "a search over titles and bodies narrows the queue" },
+        { "id": "empty", "what": "no issue matches, and the queue says so and offers a new issue" },
+        { "id": "card", "what": "each issue shows its number, title, a short body, its type (with the type's colour), who raised it when anyone is recorded, its GitHub repo and number when it came from GitHub, and its status when it is not open" },
+        { "id": "open-issue", "what": "an issue opens into its form, with who raised it, on which version and from where" },
+        { "id": "not-found", "what": "an issue that is gone says so" },
+        { "id": "create", "what": "a new issue: title (required), type, priority, description and features, with the form's defaults" },
+        { "id": "triage", "what": "delete, resolve, discard and convert on an open issue, for a person who may triage" },
+        { "id": "convert", "what": "convert onto one of the active or accepted versions, chosen from a list" },
+        { "id": "close-reason", "what": "resolve and discard each ask for a reason, which is recorded" },
+        { "id": "refused", "what": "a refused step shows the reason Tynn gave (already converted, already closed, a field the form refuses)" },
+        { "id": "live", "what": "the queue follows Tynn as it changes, without a reload; a small live icon says so" },
+        { "id": "reconnecting", "what": "the link to Tynn dropped: an icon says it is reconnecting, and the queue catches up once it is back" },
+        { "id": "not-linked", "what": "the workspace has no Tynn project" },
+        { "id": "signed-out", "what": "Genie is not paired with Tynn, or the pairing lacks the issue-queue scope" }
+      ],
+      "actions": [
+        { "id": "issue.list", "web": "GET issues", "api": { "method": "GET", "path": "/issues" } },
+        { "id": "issue.detail", "web": "GET issues", "api": { "method": "GET", "path": "/issues/{issueId}" } },
+        { "id": "issue.create", "web": "POST issues.store", "api": { "method": "POST", "path": "/issues" }, "to": "open" },
+        { "id": "issue.update", "web": "PATCH issues.update", "api": { "method": "PATCH", "path": "/issues/{issueId}" } },
+        { "id": "issue.delete", "web": "DELETE issues.destroy", "api": { "method": "DELETE", "path": "/issues/{issueId}" } },
+        { "id": "issue.convert", "web": "POST issues.convert", "api": { "method": "POST", "path": "/issues/{issueId}/convert" }, "body": ["version_id"], "to": "converted" },
+        { "id": "issue.resolve", "web": "POST issues.close", "api": { "method": "POST", "path": "/issues/{issueId}/close" }, "body": { "verdict": "resolve", "reason": "required" }, "to": "resolved" },
+        { "id": "issue.discard", "web": "POST issues.close", "api": { "method": "POST", "path": "/issues/{issueId}/close" }, "body": { "verdict": "discard", "reason": "required" }, "to": "discarded" }
       ]
     }
   ]

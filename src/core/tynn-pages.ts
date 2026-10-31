@@ -19,6 +19,7 @@ export interface TynnSection { readonly id: TynnSectionId; readonly icon: string
  * Settings) and with its icons. A page is listed once it is built; the rest of tynn.ai's nav joins as its row lands.
  */
 export const TYNN_SECTIONS: readonly TynnSection[] = [
+    { id: 'issues', icon: 'sparkles', label: 'Issues' },
     { id: 'wip', icon: 'play', label: 'WIP' },
     { id: 'board', icon: 'columns-3', label: 'Board' },
 ];

@@ -1,6 +1,7 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { TynnPage, TynnPageQuery, TynnTabHost } from '../core/tynn-pages.js';
+import type { IssueActionInput, IssueFilters, TynnIssuesHost } from '../core/tynn-issues.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { ModelChoices } from '../core/provider-models.js';
@@ -323,6 +324,14 @@ export interface GenieBridge {
         tynnBoardChanges?(workspaceId: string, scope: BoardScope, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnBoardHost['changes']>>;
         /** Row B4: follow that board (its live state and rings) until the answer is called. */
         tynnBoardWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
+        /** Row I1, the Tynn tab's Issues: the workspace's OWN project's issue queue under the page's filters. Optional: an older host has none. */
+        tynnIssues?(workspaceId: string, filters: Partial<IssueFilters>): ReturnType<TynnIssuesHost['read']>;
+        /** One action on that queue, by the workspace-UX contract's id (`issue.create`, `issue.resolve`…). */
+        tynnIssueAction?(workspaceId: string, input: IssueActionInput): ReturnType<TynnIssuesHost['act']>;
+        /** What changed in that queue since a cursor. Optional: an older host (and a remote one) has none. */
+        tynnIssueChanges?(workspaceId: string, filters: Partial<IssueFilters>, cursor: string, ids: readonly string[]): ReturnType<NonNullable<TynnIssuesHost['changes']>>;
+        /** Follow that queue (its live state and rings) until the answer is called. */
+        tynnIssuesWatch?(workspaceId: string, listener: (signal: BoardLiveSignal) => void): () => void;
         addRepo(workspaceId: string, input: { name: string; path: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }>;
         removeRepo(workspaceId: string, slug: string): Promise<{ ok: true } | { ok: false; reason: string }>;
         /** "Locate repo" on a Dashboard group fault: the host asks for the folder (inside the envelope) and moves the manifest's path. */
@@ -606,6 +615,27 @@ export function tynnBoardHostOf(bridge: GenieBridge | undefined): TynnTabHost | 
         ...(page ? { page: (id: string, p: TynnPage, query: TynnPageQuery) => page(id, p, query) } : {}),
         ...(changes && watch ? {
             changes: (id: string, scope: BoardScope, cursor: string, ids: readonly string[]) => changes(id, scope, cursor, ids),
+            watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),
+        } : {}),
+    };
+}
+
+/**
+ * The Tynn tab's Issues host over a bridge (genie#1295 I1): its read and actions, and — where the bridge can — its live
+ * queue. Undefined when the bridge has no Issues. Build it once per bridge (App memoises it), as the board's.
+ */
+export function tynnIssuesHostOf(bridge: GenieBridge | undefined): TynnIssuesHost | undefined {
+    const ws = bridge?.workspaces;
+    if (!ws?.tynnIssues || !ws.tynnIssueAction) return undefined;
+    const read = ws.tynnIssues;
+    const act = ws.tynnIssueAction;
+    const changes = ws.tynnIssueChanges;
+    const watch = ws.tynnIssuesWatch;
+    return {
+        read: (id, filters) => read(id, filters),
+        act: (id, input) => act(id, input),
+        ...(changes && watch ? {
+            changes: (id: string, filters: Partial<IssueFilters>, cursor: string, ids: readonly string[]) => changes(id, filters, cursor, ids),
             watch: (id: string, listener: (signal: BoardLiveSignal) => void) => watch(id, listener),
         } : {}),
     };

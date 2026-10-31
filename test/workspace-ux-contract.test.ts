@@ -27,6 +27,25 @@ import {
     WIP_STATES,
     WIP_TASK_ORDER,
 } from '../src/core/tynn-pages.js';
+import {
+    ISSUE_PRIORITIES,
+    ISSUE_TYPE_LOOK,
+    ISSUES_ANSWER,
+    ISSUES_API,
+    ISSUES_CLOSE_VERDICTS,
+    ISSUES_CONVERT_STATUSES,
+    ISSUES_DATA_API,
+    ISSUES_FIELDS,
+    ISSUES_FILTERS,
+    ISSUES_FORM,
+    ISSUES_GAPS,
+    ISSUES_LIMIT,
+    ISSUES_LIVE,
+    ISSUES_QUERY,
+    ISSUES_SCOPE,
+    ISSUES_STATES,
+    ISSUES_TRIAGE,
+} from '../src/core/tynn-issues.js';
 
 /**
  * THE WORKSPACE-UX DRIFT WATCHER, Genie's side (genie#1295).
@@ -185,5 +204,75 @@ describe('the Tynn tab\'s WIP, against the contract (0.6.0)', () => {
 
     it('has a view for every state the contract names', () => {
         expect([...WIP_STATES].sort()).toEqual(wip!.states.map((s) => s.id).sort());
+    });
+});
+
+describe('the Tynn tab\'s Issues, against the contract (0.7.0)', () => {
+    type Issues = {
+        scope: string;
+        data: {
+            api: { method: string; path: string };
+            query: string[];
+            filters: { status: string[]; default: string; source: string[] };
+            limit: number;
+            answer: string[];
+            fields: Record<string, string[]>;
+            types: string[];
+            priorities: string[];
+            form: { fields: string[]; required: string[]; defaults: Record<string, string> };
+            triage: { guard: string; while: string };
+            convert: { versions: string; statuses: string[] };
+            close: { verdicts: Record<string, string> };
+            live: Record<string, unknown>;
+        };
+        states: Array<{ id: string }>;
+        actions: Action[];
+    };
+    const issues = contract.surfaces.find((s) => s.id === 'issues') as unknown as Issues | undefined;
+
+    it('is in the contract, on its own pairing scope', () => {
+        expect(issues).toBeDefined();
+        expect(ISSUES_SCOPE).toBe(issues!.scope);
+    });
+
+    it('reads the queue where the contract says, with its filters, answer, fields, types, priorities and limit', () => {
+        expect(ISSUES_DATA_API).toEqual(issues!.data.api);
+        expect(ISSUES_QUERY).toEqual(issues!.data.query);
+        const { status, default: dflt, source } = issues!.data.filters;
+        expect(ISSUES_FILTERS).toEqual({ status, default: dflt, source });
+        expect(ISSUES_LIMIT).toBe(issues!.data.limit);
+        expect(ISSUES_ANSWER).toEqual(issues!.data.answer);
+        expect(ISSUES_FIELDS).toEqual(issues!.data.fields);
+        expect(Object.keys(ISSUE_TYPE_LOOK)).toEqual(issues!.data.types);
+        expect(ISSUE_PRIORITIES).toEqual(issues!.data.priorities);
+    });
+
+    it('files, triages, converts and closes by the contract\'s rules', () => {
+        const { fields, required, defaults } = issues!.data.form;
+        expect(ISSUES_FORM).toEqual({ fields, required, defaults });
+        const { guard, while: when } = issues!.data.triage;
+        expect(ISSUES_TRIAGE).toEqual({ guard, while: when });
+        expect(ISSUES_CONVERT_STATUSES).toEqual(issues!.data.convert.statuses);
+        expect(ISSUES_CLOSE_VERDICTS).toEqual(issues!.data.close.verdicts);
+    });
+
+    it('calls exactly the contract\'s API for every action it offers, and names every action it does not', () => {
+        const ids = new Set(issues!.actions.map((a) => a.id));
+        for (const action of issues!.actions) {
+            const offered = ISSUES_API[action.id];
+            if (offered) expect({ id: action.id, ...offered }).toEqual({ id: action.id, ...action.api });
+            else expect(ISSUES_GAPS[action.id], `${action.id} is neither offered nor a named gap`).toMatch(/\S/);
+            if (action.api === null) expect(ISSUES_API[action.id]).toBeUndefined();
+        }
+        for (const id of [...Object.keys(ISSUES_API), ...Object.keys(ISSUES_GAPS)]) expect(ids.has(id), `${id} is not in the contract`).toBe(true);
+    });
+
+    it('goes live as the contract says: the queue\'s own channel and events, its auth, cursor and changes', () => {
+        const { about: _about, web: _web, reconnect: _reconnect, ...shape } = issues!.data.live;
+        expect(ISSUES_LIVE).toEqual(shape);
+    });
+
+    it('has a view for every state the contract names', () => {
+        expect([...ISSUES_STATES].sort()).toEqual(issues!.states.map((s) => s.id).sort());
     });
 });
