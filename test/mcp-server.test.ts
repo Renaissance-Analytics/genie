@@ -121,3 +121,34 @@ describe('genieMcpServer — long waits (genie#1360)', () => {
         expect(aborted).toEqual([]);
     });
 });
+
+/**
+ * genie#1360, the SECOND limit (measured on omarchy-test with the real claude -p 2.1.314 after 0.4.0): SSE heartbeat
+ * comments keep the 60 s transport timeout away, but Claude Code ALSO aborts a call that "sent no response or progress
+ * for 302s" — every approval wait of 330, 660, 960 and 1860 s died at 304 s, while a 15-minute `services exec`, which
+ * reports its output size every 10 s, came back at 902 s. So while any call is in flight, Genie's server repeats the
+ * handler's latest progress message (with the time waited) on an interval: a wait that is still waiting says so.
+ */
+describe('genieMcpServer — progress while a call waits (genie#1360)', () => {
+    it('repeats the latest progress message while the handler waits, and stops when it answers', async () => {
+        let release: () => void = () => {};
+        const quiet: Registration = {
+            definition: new ToolDefinition('quiet', 'Says one thing, then waits until released', { type: 'object', properties: {} }),
+            handler: (_args: JsonObject, context) => new Promise((resolve) => {
+                context.progress?.('waiting for the person’s approval');
+                release = () => resolve({ text: 'released', isError: false });
+            }),
+        };
+        server = genieMcpServer({ registrations: [quiet], port: 0, progressEveryMs: 40 });
+        const { url, token } = await server.start();
+        const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'quiet', arguments: {}, _meta: { ...META, progressToken: 'p7' } } }) });
+        setTimeout(() => release(), 400);
+        const text = await res.text();
+        const messages = text.split('\n').filter((l) => l.startsWith('data: ')).map((l) => JSON.parse(l.slice(6)) as { method?: string; params?: { message?: string }; result?: unknown });
+        const progress = messages.filter((m) => m.method === 'notifications/progress').map((m) => m.params?.message ?? '');
+        // The handler said it once; the server said it again, several times, before the answer.
+        const repeats = progress.filter((m) => m.startsWith('waiting for the person’s approval') && m !== 'waiting for the person’s approval');
+        expect(repeats.length).toBeGreaterThanOrEqual(3);
+        expect(messages.at(-1)?.result).toBeDefined();
+    });
+});

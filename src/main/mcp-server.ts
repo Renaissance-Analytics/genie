@@ -29,6 +29,8 @@ export interface GenieMcpServerInput {
      * tokens config sync wrote stay valid; written when a new port or token had to be taken. Absent = random each time.
      */
     readonly remember?: { read(): { port: number; token: string } | null; write(value: { port: number; token: string }): void } | undefined;
+    /** How often a waiting call's latest progress is repeated (genie#1360); default `PROGRESS_EVERY_MS`. */
+    readonly progressEveryMs?: number | undefined;
 }
 
 export type Verification = { ok: true; versions: readonly string[] } | { ok: false; reason: string };
