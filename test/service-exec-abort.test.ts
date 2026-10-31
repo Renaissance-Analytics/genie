@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { makeServiceExec, runServiceExec } from '../src/main/service-exec.js';
-import { systemProcessTree, type ProcessInfo, type ProcessTree } from '../src/core/process-tree.js';
+import { stillRunning, subtreeOf, systemProcessTree, type ProcessInfo, type ProcessTree } from '../src/core/process-tree.js';
 
 /**
  * `services exec` STOPS ITS OWN PROCESS TREE, AND ONLY THAT TREE, when its MCP call goes away (genie#1360).
@@ -113,13 +113,19 @@ describe('services exec — an aborted call stops its process tree, and only tha
             const { parent, worker } = await pidsIn(pidFile);
             // The shell: the script's parent — unless a POSIX shell exec'd node, when the parent is this very process.
             const shell = Number((await readFile(pidFile, 'utf8')).trim().split(' ')[2]);
-            expect([parent, worker].map(alive)).toEqual([true, true]);
+            // The processes by IDENTITY (pid, start time, name), read before the abort: a bare pid freed by the stop can
+            // belong to another process by the time it is checked again.
+            const before = await systemProcessTree.read!();
+            const pids = [parent, worker, ...(shell && shell !== process.pid ? [shell] : [])];
+            const mine = (before ?? []).filter((p) => pids.includes(p.pid));
+            expect(mine.map((p) => p.pid).sort()).toEqual([...pids].sort());
             ac.abort();
             expect((await run).aborted).toBe(true);
-            // No waiting from here on: the abort's resolution is the claim under test.
-            const left = [parent, worker, ...(shell && shell !== process.pid ? [shell] : [])].filter(alive);
-            if (left.length > 0) busy.push(`#${i}: still alive ${left.join(' ')}`);
+            // No waiting from here on: the abort's resolution is the claim under test. The folder first, at once.
             try { rmdirSync(cwd); } catch (e) { busy.push(`#${i}: ${(e as NodeJS.ErrnoException).code} removing its folder`); }
+            const after = await systemProcessTree.read!();
+            const left = after ? stillRunning(mine, after) : mine;
+            if (left.length > 0) busy.push(`#${i}: still running ${left.map((p) => `${p.pid}(${p.name})`).join(' ')}`);
         }
         expect(busy).toEqual([]);
     }, 300_000);
@@ -127,13 +133,17 @@ describe('services exec — an aborted call stops its process tree, and only tha
     it('a process of the tree that will not exit is NAMED in the result, and the call still ends (genie#1372)', async () => {
         // The real machine's readings, plus one member that never leaves them: a phantom child of the command's shell.
         let phantom: ProcessInfo | null = null;
+        let real: ProcessInfo[] = [];
         const tree: ProcessTree = {
             ...systemProcessTree,
             read: async () => {
                 const now = await systemProcessTree.read!();
                 if (!now) return now;
                 const shell = now.find((p) => p.ppid === process.pid && p.pid === shellPid);
-                if (shell && !phantom) phantom = { pid: 4_000_001, ppid: shell.pid, started: shell.started, name: 'phantom.exe' };
+                if (shell && !phantom) {
+                    phantom = { pid: 4_000_001, ppid: shell.pid, started: shell.started, name: 'phantom.exe' };
+                    real = subtreeOf(now, [shell]);
+                }
                 return phantom ? [...now, phantom] : now;
             },
             reap: (targets, now, limit) => systemProcessTree.reap!(targets.filter((t) => t !== phantom && t.pid !== phantom?.pid), now, limit),
@@ -149,7 +159,12 @@ describe('services exec — an aborted call stops its process tree, and only tha
         const r = await run;
         expect(r.aborted).toBe(true);
         expect(r.output).toContain('still running after the stop: 4000001(phantom.exe)');
-        expect(await gone(parent)).toBe(true);
+        // The REAL tree still ended — checked by identity (pid, start time, name), not by pid: after ten readings on a
+        // busy Windows VM a freed pid can already belong to someone else (an `alive(pid)` check here failed that way).
+        expect(real.map((p) => p.pid)).toContain(parent);
+        const after = await systemProcessTree.read!();
+        expect(after).not.toBeNull();
+        expect(stillRunning(real, after!)).toEqual([]);
     }, 120_000);
 
     it('a call already aborted runs nothing', async () => {
