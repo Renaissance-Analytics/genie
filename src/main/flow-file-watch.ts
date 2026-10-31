@@ -84,10 +84,10 @@ export const nodeWatch = {
         watcher.on('error', (error) => console.error(`[flows] watching ${path}: ${error.message}`));
         return () => watcher.close();
     },
-    statFile(absPath: string): { isFile: boolean; size: number } | null {
+    statFile(absPath: string): { isFile: boolean; size: number; mtimeMs: number } | null {
         try {
             const s = statSync(absPath);
-            return { isFile: s.isFile(), size: s.size };
+            return { isFile: s.isFile(), size: s.size, mtimeMs: s.mtimeMs };
         } catch {
             return null;
         }
