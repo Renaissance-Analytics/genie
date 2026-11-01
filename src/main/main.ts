@@ -3006,7 +3006,7 @@ async function boot(): Promise<void> {
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
-    // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the notice waits.
+    // MAIL WAKES THE AGENT: started as Start would be (opening starts nothing since q_04ce323c) — an asleep workspace or the agent cap refuses, and the notice waits.
     // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
     const wakeAgent = (agentId: string): boolean => {
         const record = registry?.find(agentId as AgentId);

@@ -75,7 +75,7 @@ export interface InboxPushPorts {
     readonly settled: (agentId: string, delivered: boolean) => void;
     /**
      * MAIL WAKES THE AGENT (the owner, 2026-10-17: "agents don't wake up from inbox pushes unless I go to their screen").
-     * Start the session of an agent that has none — main's open-agent path, refusing by name for an asleep workspace or
+     * Start the session of an agent that has none — main's `wakeAgent` (opening an agent no longer starts it, q_04ce323c), refusing by name for an asleep workspace or
      * the agent cap. Answers whether it started; its start event then delivers the notice. Absent = mail waits.
      */
     readonly wake?: ((agentId: AgentId) => boolean) | undefined;
