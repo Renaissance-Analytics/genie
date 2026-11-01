@@ -1,7 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import { countRender } from '../render-count.js';
 import { stableView } from '../stable-view.js';
-import { Icon, PromptInput } from '@particle-academy/react-fancy';
+import { Button, Icon, PromptInput } from '@particle-academy/react-fancy';
 import type { Approval } from '../../core/approval.js';
 import { toPromptCmds, type ProviderCommand } from '../../core/provider-commands.js';
 import { chatLinkTarget, type ChatRefs } from '../../core/chat-markup.js';
@@ -10,7 +10,10 @@ import { atThreadEnd, clampChatDockWidth, readChatDockWidth, writeChatDockWidth 
 import { ApprovalCard } from './ApprovalCard.js';
 import type { Fidelity } from '../../core/dashboard-view.js';
 import { CHAT_LIVE_LINES, chatWindowStart } from '../../core/chat-window.js';
-import { chatFollowKey, mailSubject, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { chatFollowKey, mailSubject, waitingStepLabel, type ChatContext, type ChatMessage, type ChatWaitingOn } from '../../core/chat-view.js';
+import { toolIcon } from '../../core/stream-view.js';
+import { ago } from '../../core/inbox-threads.js';
+import { useNow } from '../use-now.js';
 import type { Attachment } from '../../core/prompt-content.js';
 import type { ChatScope } from '../../core/chat-scope.js';
 import { errorWords, submitFromComposer, type ChatSendOutcome } from '../../core/chat-send.js';
@@ -92,25 +95,42 @@ function clock(at: number): string {
     return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
 }
 
+/** A step running longer than this is worth interrupting: past it, the queued message shows how long it has run. */
+export const WAITING_LONG_MS = 30_000;
+
 /**
  * YOUR MESSAGE IS WAITING BEHIND A STEP (beta.33 item 21; the owner: three messages unanswered while moic ran one shell
- * command, "with nothing on screen saying why"). Which step, running since when; and — the owner's choice, FTQ
- * q_91b3cddf — `Interrupt and send`: the current turn ends (the Stop-this-turn path) and what waits runs next, in order.
- * Without a way to stop the turn here, it still says why, with no dead button. Hook-free.
+ * command, "with nothing on screen saying why"). The owner's choice, FTQ q_91b3cddf — `Interrupt and send`: the current
+ * turn ends (the Stop-this-turn path) and what waits runs next, in order.
+ *
+ * ONE COMPACT LINE (the owner, 2026-11-01: "I know the agent is busy, why is it showing me the tool call like that"): a
+ * clock — queued — then the step as the Stream draws its kind (`toolIcon`) with a short label (`waitingStepLabel`: an MCP
+ * call reads as its server, never its raw `mcp__` id), how long it has run only once that is long (`WAITING_LONG_MS`), and
+ * the button. The sentence, the raw step and its start time are in the hover, for debugging. Without a way to stop the
+ * turn here, the message is still marked queued, with no dead button. Hook-free: `now` comes from the caller.
  */
-export function ChatWaiting({ id, agentName, waiting, onInterruptAndSend }: { id: string; agentName: string; waiting: ChatWaitingOn; onInterruptAndSend?: (() => void) | undefined }) {
+export function ChatWaiting({ id, agentName, waiting, now, onInterruptAndSend }: { id: string; agentName: string; waiting: ChatWaitingOn; now?: number | undefined; onInterruptAndSend?: (() => void) | undefined }) {
+    const elapsed = waiting.since !== null && now !== undefined && now - waiting.since > WAITING_LONG_MS ? ago(waiting.since, now) : null;
+    const hover = `Waiting — ${agentName} reads it when this step ends: ${waiting.step}${waiting.since !== null ? ` · running since ${clock(waiting.since)}` : ''}`;
     return (
-        <div data-chat-waiting={id} className="flex max-w-full flex-col items-end gap-1 text-right text-[12px] text-[var(--warning)]">
-            <span>{`Waiting — ${agentName} reads it when this step ends:`}</span>
-            <span className="font-mono text-[11px] text-[var(--fg-2)]">{waiting.step}</span>
-            {waiting.since !== null ? <span className="font-mono text-[11px] text-[var(--fg-4)]">{`running since ${clock(waiting.since)}`}</span> : null}
+        <div data-chat-waiting={id} title={hover} className="flex max-w-full items-center justify-end gap-1.5 text-[12px] text-[var(--fg-3)]">
+            <span data-chat-waiting-icon="" role="img" aria-label="Queued" className="flex shrink-0 text-[var(--warning)]"><Icon name="clock" size="xs" /></span>
+            <span className="flex shrink-0"><Icon name={toolIcon(waiting.kind)} size="xs" /></span>
+            <span className="min-w-0 truncate">{waitingStepLabel(waiting.step)}</span>
+            {elapsed !== null ? <span data-chat-waiting-elapsed="" className="shrink-0 tabular-nums">{elapsed}</span> : null}
             {onInterruptAndSend ? (
-                <button type="button" data-action="interrupt-and-send" data-message={id} title={`Stop ${agentName}'s current turn; what you sent runs next, in order`} onClick={() => onInterruptAndSend()} className="rounded-lg border border-[var(--warning)] bg-[var(--warning)]/10 px-2.5 py-1 text-[12px] font-medium text-[var(--fg-1)] hover:bg-[var(--warning)]/20">
+                <Button type="button" size="xs" color="amber" data-action="interrupt-and-send" data-message={id} title={`Stop ${agentName}'s current turn; what you sent runs next, in order`} onClick={() => onInterruptAndSend()} className="shrink-0">
                     Interrupt and send
-                </button>
+                </Button>
             ) : null}
         </div>
     );
+}
+
+/** `ChatWaiting` with the time kept current, so how long the step has run appears once it is long. */
+function ChatWaitingLive(props: Omit<Parameters<typeof ChatWaiting>[0], 'now'>) {
+    const now = useNow(true);
+    return <ChatWaiting {...props} now={now} />;
 }
 
 /**
@@ -700,7 +720,7 @@ function ChatFlyoutBody({
                              * cannot come.
                              */}
                             {/* Your mail to a Take Over window: whether it has read it — the inbox's own receipt. */}
-                            {m.waiting && m.delivered ? <ChatWaiting id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
+                            {m.waiting && m.delivered ? <ChatWaitingLive id={m.id} agentName={thread?.name ?? 'the agent'} waiting={m.waiting} onInterruptAndSend={onInterruptAndSend} /> : null}
                             {mailOnly && m.read !== undefined ? (
                                 <span data-chat-read={m.id} className="font-mono text-[11px] text-[var(--fg-4)]">{m.read === null ? 'not read yet' : `read ${clock(m.read)}`}</span>
                             ) : null}

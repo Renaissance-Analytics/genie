@@ -1,7 +1,8 @@
-import { isValidElement, type ReactNode } from 'react';
+import { isValidElement, type ReactElement, type ReactNode } from 'react';
+import { Button } from '@particle-academy/react-fancy';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { chatMessages, type ChatDetail } from '../src/core/chat-view.js';
+import { chatMessages, waitingStepLabel, type ChatDetail } from '../src/core/chat-view.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { GENIE_SKILLS } from '../src/main/agent-skills.js';
@@ -37,7 +38,7 @@ describe('which messages wait, and behind what', () => {
             you('m2', 'hello?', T + 90_000),
             you('m3', 'stop and tell me', T + 120_000),
         ];
-        const behind = { step: 'Run the correspondence and account settings tests', since: T };
+        const behind = { step: 'Run the correspondence and account settings tests', since: T, kind: 'execute' };
         expect(waitingOf(rows)).toEqual({ m0: null, m1: behind, m2: behind, m3: behind });
     });
 
@@ -66,24 +67,75 @@ function findAll(node: ReactNode, match: (p: Props) => boolean, out: Props[] = [
 }
 
 describe('on screen', () => {
-    const waiting = { step: 'Run the correspondence and account settings tests', since: T };
+    const waiting = { step: 'Run the correspondence and account settings tests', since: T, kind: 'execute' as const };
+    /** The owner's screenshot (2026-11-01): moic in a Playwright MCP call. */
+    const mcp = { step: 'mcp__plugin_playwright_playwright__browser_run_code_unsafe', since: T, kind: 'other' as const };
+    /** What a person reads: the markup with the hover text (title, aria-label) taken out — those are not on screen. */
+    const visible = (html: string) => html.replace(/ (title|aria-label)="[^"]*"/g, '').replace(/<[^>]+>/g, ' ');
 
-    it('says it is waiting, behind which step, since when — and offers Interrupt and send', () => {
-        const html = renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting, onInterruptAndSend: () => {} }));
+    it('behind an MCP call: no raw mcp__ id on screen — a clock, the step as its server, and Interrupt and send', () => {
+        const html = renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting: mcp, now: T + 5_000, onInterruptAndSend: () => {} }));
         expect(html).toContain('data-chat-waiting="m1"');
-        expect(html).toMatch(/Waiting — moic reads it when this step ends/);
-        expect(html).toContain('Run the correspondence and account settings tests');
-        expect(html).toMatch(/running since \d\d:\d\d/);
-        let pressed = 0;
-        const [b] = findAll(ChatWaiting({ id: 'm1', agentName: 'moic', waiting, onInterruptAndSend: () => { pressed += 1; } }), (p) => p['data-action'] === 'interrupt-and-send');
-        (b!.onClick as () => void)();
-        expect(pressed).toBe(1);
+        expect(html).toContain('data-chat-waiting-icon=""');
+        expect(visible(html)).not.toContain('mcp__');
+        expect(visible(html)).not.toMatch(/browser_run_code_unsafe|plugin_/);
+        expect(visible(html)).toContain('playwright');
+        // The owner already knows the agent is busy: no sentence, no monospace step, no clock time.
+        expect(visible(html)).not.toMatch(/reads it when this step ends|running since/);
+        expect(html).not.toContain('font-mono');
+        expect(html).toContain('data-action="interrupt-and-send"');
+        expect(visible(html)).toContain('Interrupt and send');
+        // The raw id stays reachable for debugging, in the hover.
+        expect(html).toMatch(/title="[^"]*mcp__plugin_playwright_playwright__browser_run_code_unsafe/);
     });
 
-    it('with no way to stop this turn here, it still says why — no dead button', () => {
-        const html = renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting }));
+    it('the elapsed time shows only once the step is long (over 30 s) — when Interrupt matters', () => {
+        const at = (now: number) => renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting: mcp, now, onInterruptAndSend: () => {} }));
+        expect(at(T + 30_000)).not.toContain('data-chat-waiting-elapsed');
+        expect(visible(at(T + 30_000))).not.toMatch(/\b\d+[smh]\b/);
+        expect(at(T + 31_000)).toContain('data-chat-waiting-elapsed');
+        expect(visible(at(T + 3 * 60_000))).toMatch(/\b3m\b/);
+        // Unknown start: nothing to count from, so no elapsed at all.
+        expect(renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting: { ...mcp, since: null }, now: T + 600_000 }))).not.toContain('data-chat-waiting-elapsed');
+    });
+
+    it('behind a shell command: its own description stays (human words), and the button still stops the turn', () => {
+        const html = renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting, now: T + 1_000, onInterruptAndSend: () => {} }));
+        expect(visible(html)).toContain('Run the correspondence and account settings tests');
+        let pressed = 0;
+        const [b] = findAll(ChatWaiting({ id: 'm1', agentName: 'moic', waiting, now: T, onInterruptAndSend: () => { pressed += 1; } }), (p) => p['data-action'] === 'interrupt-and-send');
+        (b!.onClick as () => void)();
+        expect(pressed).toBe(1);
+        // The owner's rule (2026-11-01): every button is react-fancy's Button — never a hand-styled <button>.
+        const element = (node: ReactNode): ReactElement | null => {
+            if (Array.isArray(node)) { for (const n of node) { const f = element(n); if (f) return f; } return null; }
+            if (!isValidElement(node)) return null;
+            const p = node.props as Props;
+            return p['data-action'] === 'interrupt-and-send' ? node : element(p.children);
+        };
+        expect(element(ChatWaiting({ id: 'm1', agentName: 'moic', waiting, now: T, onInterruptAndSend: () => {} }))?.type).toBe(Button);
+    });
+
+    it('with no way to stop this turn here, it still marks the message queued — no dead button', () => {
+        const html = renderToStaticMarkup(ChatWaiting({ id: 'm1', agentName: 'moic', waiting, now: T }));
         expect(html).toContain('data-chat-waiting="m1"');
+        expect(html).toContain('data-chat-waiting-icon=""');
         expect(html).not.toContain('interrupt-and-send');
+    });
+});
+
+describe('the step, in words a person reads', () => {
+    it('an MCP call reads as its server; a plugin server loses its plugin prefix', () => {
+        expect(waitingStepLabel('mcp__plugin_playwright_playwright__browser_run_code_unsafe')).toBe('playwright');
+        expect(waitingStepLabel('mcp__plugin_fancy-ui_fancy-ui__search-components')).toBe('fancy-ui');
+        expect(waitingStepLabel('mcp__tynn__create')).toBe('tynn');
+        expect(waitingStepLabel('mcp__genie__agentinbox')).toBe('genie');
+        expect(waitingStepLabel('mcp__claude_ai_Claude_Docs__batch')).toBe('Claude Docs');
+    });
+
+    it('anything else is kept as the provider titled it', () => {
+        expect(waitingStepLabel('Run the correspondence and account settings tests')).toBe('Run the correspondence and account settings tests');
+        expect(waitingStepLabel('Bash')).toBe('Bash');
     });
 });
 

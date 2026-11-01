@@ -115,6 +115,8 @@ export const ICON_NAMES: readonly string[] = [
     'lock',
     // The Genie browser window: a tab whose page is loading.
     'loader',
+    // A chat message queued behind the agent's current step.
+    'clock',
     // The Tynn tab's live board (genie#1295 B4): following Tynn, or reconnecting to it.
     'radio', 'wifi-off',
     // The file panel's word-wrap toggle (beta.33 item 15; Genie 1's IconWrap).
