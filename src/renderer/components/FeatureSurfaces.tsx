@@ -532,9 +532,9 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                     onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'hosting.addSite', workspaceId: w.id, repoPath: w.path }); }}
                 >
                     <WorkspacePick workspaces={workspaces} name="workspace" />
-                    <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                    <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                         Add a site
-                    </button>
+                    </Button>
                 </form>
             </Header>
             {adding?.kind === 'site' ? (
@@ -614,7 +614,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
             return (
                 <div data-frontdoor-line="blocked" className="flex items-center gap-3 px-5 py-2 text-sm">
                     <span className="flex-1">{frontDoor.reason}</span>
-                    <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.retryFrontDoor' })}>Try again</button>
+                    <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.retryFrontDoor' })}>Try again</Button>
                 </div>
             );
         }
@@ -629,7 +629,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
                         https://&lt;name&gt;.gen in your browser needs Genie’s certificate trusted; your OS will ask for permission once.
                         {frontDoor.trustError ? <span data-trust-error className="block text-[var(--fg-3)]">{frontDoor.trustError}</span> : null}
                     </span>
-                    <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.trustCertificate' })}>Trust certificate</button>
+                    <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.trustCertificate' })}>Trust certificate</Button>
                 </div>
             ) : null}
             {frontDoor.certificateError ? (
@@ -641,7 +641,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
                         <span>
                             Genie could not update the hosts file ({hosts.error}). Paste this block into <span className="font-mono">{frontDoor.hostsPath}</span> yourself, or try again.
                         </span>
-                        <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.syncHosts' })}>Try again</button>
+                        <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.syncHosts' })}>Try again</Button>
                     </div>
                     <pre data-manual-block className="overflow-auto rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{hosts.manualBlock}</pre>
                 </div>
@@ -1598,7 +1598,7 @@ function PrimaryWorkspaceRow({ value, onAction }: { value: string | null; onActi
                 <div className="text-xs text-[var(--fg-3)]">Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint.</div>
             </div>
             <input readOnly value={value ?? ''} placeholder="No primary workspace chosen" className="w-64 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1 font-mono text-xs" />
-            {pickHostPath ? <button type="button" data-action="browse-primary-workspace" onClick={browse} className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]">Browse</button> : null}
+            {pickHostPath ? <Button size="xs" type="button" data-action="browse-primary-workspace" onClick={browse} className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]">Browse</Button> : null}
         </div>
     );
 }

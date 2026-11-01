@@ -1,4 +1,4 @@
-import { Modal } from '@particle-academy/react-fancy';
+import { Button, Modal } from '@particle-academy/react-fancy';
 import type { FeatureAction, FeatureData } from '../features.js';
 import { AddSiteForm } from './AddForms.js';
 import { ProcessesPanel, SiteList } from './FeatureSurfaces.js';
@@ -33,7 +33,7 @@ export function WorkspaceRuntimeModal({ kind, workspace, data, onAction, onClose
                         <>
                             <div className="flex items-center gap-3 px-5 py-2 text-sm">
                                 {sites.length === 0 ? <span className="text-[var(--fg-3)]">No sites in {name} yet.</span> : null}
-                                <button type="button" data-action="add-site" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'hosting.addSite', workspaceId: workspace.id, repoPath: workspace.path })}>Add a site</button>
+                                <Button size="xs" type="button" data-action="add-site" className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'hosting.addSite', workspaceId: workspace.id, repoPath: workspace.path })}>Add a site</Button>
                             </div>
                             {adding ? (
                                 <AddSiteForm

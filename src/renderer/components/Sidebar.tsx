@@ -1,4 +1,4 @@
-import { Icon, Tooltip } from '@particle-academy/react-fancy';
+import { Button, Icon, Tooltip } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
@@ -168,7 +168,7 @@ function NavRow({
     const active = current.split('?')[0] === route;
 
     return (
-        <button
+        <Button variant="ghost" size="xs" labelClassName="contents"
             type="button"
             data-nav={route}
             data-active={active ? 'true' : 'false'}
@@ -180,17 +180,17 @@ function NavRow({
             <Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
             {compact ? null : <span className="truncate">{label}</span>}
             {children}
-        </button>
+        </Button>
     );
 }
 
 /** The Browser row as a door to the Genie browser window: never "current" — the window is elsewhere. */
 function BrowserDoor({ onOpen, compact = false }: { onOpen: () => void; compact?: boolean }) {
     return (
-        <button type="button" data-open-browser-window="" onClick={onOpen} {...(compact ? { 'aria-label': 'Browser', title: 'Browser' } : { title: 'Open the Genie browser window' })} className={compact ? ICON_BUTTON : ROW}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-open-browser-window="" onClick={onOpen} {...(compact ? { 'aria-label': 'Browser', title: 'Browser' } : { title: 'Open the Genie browser window' })} className={compact ? ICON_BUTTON : ROW}>
             <Icon name="globe" size="sm" className="shrink-0 text-[var(--fg-4)]" />
             {compact ? null : <span className="truncate">Browser</span>}
-        </button>
+        </Button>
     );
 }
 
@@ -237,28 +237,28 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
     const asleepLabel = `${showAsleep ? 'Hide' : 'Show'} ${asleepCount} hibernated workspace${asleepCount === 1 ? '' : 's'}`;
     // THE HIBERNATED TOOL (Tynn #282): an eye, no words — its count and action are its name and tooltip.
     const asleepTool = asleepCount > 0 ? (
-        <button type="button" data-rail-tool="hibernated" data-toggle-asleep={showAsleep ? 'hide' : 'show'} aria-label={asleepLabel} title={asleepLabel} aria-pressed={showAsleep} onClick={toggleAsleep} className={ICON_BUTTON}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="hibernated" data-toggle-asleep={showAsleep ? 'hide' : 'show'} aria-label={asleepLabel} title={asleepLabel} aria-pressed={showAsleep} onClick={toggleAsleep} className={ICON_BUTTON}>
             <Icon name={showAsleep ? 'eye' : 'eye-off'} size="sm" />
-        </button>
+        </Button>
     ) : null;
     const addTool = onAddWorkspace ? (
-        <button type="button" data-rail-tool="add-workspace" aria-label="Add workspace" title="Add workspace" onClick={() => onAddWorkspace()} className={ICON_BUTTON}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="add-workspace" aria-label="Add workspace" title="Add workspace" onClick={() => onAddWorkspace()} className={ICON_BUTTON}>
             <Icon name="plus" size="sm" />
-        </button>
+        </Button>
     ) : null;
     // System (Genie 1's monitor-cog): the system agent — Genie's own, never in a workspace.
     const systemTool = has('genie') ? (
-        <button type="button" data-rail-tool="system" aria-label="System" title="System" onClick={() => onNavigate('genie://agent/genie')} className={ICON_BUTTON}>
+        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="system" aria-label="System" title="System" onClick={() => onNavigate('genie://agent/genie')} className={ICON_BUTTON}>
             <Icon name="monitor-cog" size="sm" />
-        </button>
+        </Button>
     ) : null;
 
     if (collapsed) {
         return (
             <nav aria-label="Genie" data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
-                <button type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
                     <Icon name="panel-left-open" size="sm" />
-                </button>
+                </Button>
                 {has('deck') ? (
                     <NavRow route="genie://deck" current={route} icon="inbox" label={badge !== null ? `Deck · ${badge}` : 'Deck'} onNavigate={onNavigate} compact>
                         {badge !== null ? <span data-deck-dot="" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
@@ -285,7 +285,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     const working = (w.working ?? 0) > 0;
                     const pulsed = pulsing?.has(w.id) === true;
                     return (
-                        <button
+                        <Button variant="ghost" size="xs" labelClassName="contents"
                             key={w.id}
                             type="button"
                             data-nav={route_}
@@ -305,7 +305,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             {/* Its colour (genie#1300): a bar under the letters — the letters stay the cue. */}
                             {w.color ? <span aria-hidden="true" data-workspace-color={w.color} style={wsStyle(w.color)} className="absolute inset-x-2 bottom-0.5 h-0.5 rounded-full bg-[var(--ws)]" /> : null}
                             {w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
-                        </button>
+                        </Button>
                     );
                 })}
                 <div className="mt-auto flex flex-col items-center gap-1">
@@ -324,9 +324,9 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
             {/* THE TOOLS, all at the top (Genie 1's rail header; the owner, 2026-10-19: "Move these icons to the top"): collapse,
                 System, hibernated workspaces and add. */}
             <div data-rail-tools="" className="flex items-center gap-0.5">
-                <button type="button" data-rail-tool="collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => setRail(true)} className={ICON_BUTTON}>
+                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="collapse" aria-label="Collapse sidebar" title="Collapse sidebar" onClick={() => setRail(true)} className={ICON_BUTTON}>
                     <Icon name="panel-left" size="sm" />
-                </button>
+                </Button>
                 {systemTool}
                 {has('workspace') ? (
                     <span className="ml-auto flex items-center gap-0.5">
@@ -408,9 +408,10 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 const active = route.split('?')[0] === route_ || w.id === currentWorkspaceId;
                 const pulsed = pulsing?.has(w.id) === true;
 
+                const pills = (w.processes !== undefined ? 1 : 0) + (w.sitesTitle !== undefined ? 1 : 0);
                 return (
-                    <button
-                        key={w.id}
+                    <div key={w.id} className="relative">
+                    <Button variant="ghost" size="xs" labelClassName="contents"
                         type="button"
                         data-nav={route_}
                         data-workspace={w.id}
@@ -448,24 +449,34 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             {w.count !== null ? (
                                 <span className="font-mono text-[11px] tabular-nums text-[var(--fg-4)]">{w.count}</span>
                             ) : null}
-                            {/* GENIE 1'S RUNTIME PILL: background processes and sites, always there (greyed when there is nothing);
-                                each opens this workspace's own config. Spans, not buttons: the row is the button. */}
+                            {/* Room for the runtime pill, which sits OVER this end of the row (below): its own buttons. */}
+                            {pills > 0 ? <span aria-hidden="true" className={pills === 2 ? 'w-[38px]' : 'w-4'} /> : null}
+                        </span>
+                    </Button>
+                    {/*
+                     * GENIE 1'S RUNTIME PILL: background processes and sites, always there (greyed when there is nothing);
+                     * each opens this workspace's own config. REAL buttons beside the row (real buttons, 2026-11-01): they
+                     * used to be spans with role="button" INSIDE the row's button, unreachable by keyboard and nested.
+                     */}
+                    {pills > 0 ? (
+                        <span className="absolute right-2 top-1/2 flex -translate-y-1/2 items-center gap-1.5">
                             {w.processes !== undefined ? (
-                                <span role="button" tabIndex={-1} data-ws-processes={w.id} data-tone={w.processes} title={w.processesTitle} aria-label={w.processesTitle}
-                                    onClick={(e) => { e.stopPropagation(); onOpenProcesses?.(w.id); }}
-                                    className={`inline-flex ${TONE[w.processes] ?? ''}`}>
+                                <Button type="button" variant="ghost" size="xs" data-ws-processes={w.id} data-tone={w.processes} title={w.processesTitle} aria-label={w.processesTitle}
+                                    onClick={() => onOpenProcesses?.(w.id)}
+                                    className={`size-4 p-0 ${TONE[w.processes] ?? ''}`}>
                                     <Icon name="cpu" size="xs" />
-                                </span>
+                                </Button>
                             ) : null}
                             {w.sitesTitle !== undefined ? (
-                                <span role="button" tabIndex={-1} data-ws-sites={w.id} data-tone={w.sites ?? 'none'} title={w.sitesTitle} aria-label={w.sitesTitle}
-                                    onClick={(e) => { e.stopPropagation(); onOpenSites?.(w.id); }}
-                                    className={`inline-flex ${TONE[w.sites ?? 'none'] ?? ''}`}>
+                                <Button type="button" variant="ghost" size="xs" data-ws-sites={w.id} data-tone={w.sites ?? 'none'} title={w.sitesTitle} aria-label={w.sitesTitle}
+                                    onClick={() => onOpenSites?.(w.id)}
+                                    className={`size-4 p-0 ${TONE[w.sites ?? 'none'] ?? ''}`}>
                                     <Icon name="globe" size="xs" />
-                                </span>
+                                </Button>
                             ) : null}
                         </span>
-                    </button>
+                    ) : null}
+                    </div>
                 );
             })}
         </nav>

@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 
 /** What the window offers a live panel: main's view placed over the box, hidden, reloaded, or the site in the browser. */
@@ -27,7 +27,7 @@ export function SitePanel({ host, onPick, live }: { host: string | null; onPick:
                 <label htmlFor="site-host">Which site? A .gen address this workstation serves.</label>
                 <div className="flex gap-1.5">
                     <input id="site-host" value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="moic.gen" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-[var(--fg-1)]" />
-                    <button type="submit" disabled={!valid} className="rounded-md border border-[var(--border-1)] px-2 py-1 disabled:opacity-50">Show</button>
+                    <Button size="xs" type="submit" disabled={!valid} className="rounded-md border border-[var(--border-1)] px-2 py-1 disabled:opacity-50">Show</Button>
                 </div>
             </form>
         );
@@ -64,13 +64,13 @@ function LiveSite({ host, live }: { host: string; live: SitePanelLive }) {
                 <Icon name="lock" size="xs" className="text-[var(--success)]" />
                 <span className="truncate font-mono text-[var(--fg-2)]">{host}</span>
                 <span className="ml-auto flex items-center gap-1">
-                    <button type="button" data-site-panel-action="reload" aria-label={`Reload ${host}`} title="Reload" className={button} onClick={() => live.onReload(panelKey)}>
+                    <Button size="xs" labelClassName="contents" type="button" data-site-panel-action="reload" aria-label={`Reload ${host}`} title="Reload" className={button} onClick={() => live.onReload(panelKey)}>
                         <Icon name="rotate-cw" size="xs" />
-                    </button>
-                    <button type="button" data-site-panel-action="open-window" title={`Open ${host} in the Genie browser`} className={button} onClick={() => live.onOpenInWindow(host)}>
+                    </Button>
+                    <Button size="xs" labelClassName="contents" type="button" data-site-panel-action="open-window" title={`Open ${host} in the Genie browser`} className={button} onClick={() => live.onOpenInWindow(host)}>
                         <Icon name="globe" size="xs" />
                         Open in browser
-                    </button>
+                    </Button>
                 </span>
             </div>
             {/* The live page is placed over this box by main. */}
