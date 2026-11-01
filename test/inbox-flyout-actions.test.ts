@@ -103,3 +103,81 @@ describe('read and delete', () => {
         await expect(handleFeatureAction(services, { kind: 'inbox.deleteThread', key: 'not-a-thread' }, state)).rejects.toThrow('not a thread');
     });
 });
+
+/**
+ * SORT, PAGING AND SEARCH, AND THE FTQ RECORD (the owner, 2026-11-01): the flyout pages a thread by seq (older BEFORE the
+ * oldest it holds; a live refresh FROM the oldest it holds), searches the thread's STORED mail host-side — so history
+ * not loaded yet is found — and reads back the questions an FTQ answer answered, from the attention store.
+ */
+describe('paging by seq', () => {
+    it('`beforeSeq` serves the page older than the window; `fromSeq` the window and everything after; `newer` when cut', async () => {
+        const key = pairKey(HUMAN, 'agent_atlas');
+        for (let i = 0; i < 8; i++) await services.inbox.send({ from: HUMAN, to: 'agent_atlas' as never, text: `#${i}` });
+        const first = (await handleFeatureAction(services, { kind: 'inbox.thread', key, limit: 3 }, state)).inbox!.thread!;
+        expect([first.messages.map((m) => m.text), first.more, first.newer]).toEqual([['#5', '#6', '#7'], true, false]);
+        const older = (await handleFeatureAction(services, { kind: 'inbox.thread', key, limit: 3, beforeSeq: first.messages[0]!.seq }, state)).inbox!.thread!;
+        expect([older.messages.map((m) => m.text), older.more, older.newer]).toEqual([['#2', '#3', '#4'], true, true]);
+        const from = (await handleFeatureAction(services, { kind: 'inbox.thread', key, limit: 4, fromSeq: older.messages[0]!.seq }, state)).inbox!.thread!;
+        expect([from.messages.map((m) => m.text), from.newer]).toEqual([['#2', '#3', '#4', '#5'], true]);
+    });
+});
+
+describe('search, host-side', () => {
+    it('finds a message far older than any loaded page, by text, by sender name, by question id — this thread only', async () => {
+        const key = pairKey(HUMAN, 'agent_atlas');
+        await services.inbox.send({ from: 'agent_atlas' as never, to: HUMAN, text: 'the needle is here' });
+        for (let i = 0; i < 120; i++) await services.inbox.send({ from: HUMAN, to: 'agent_atlas' as never, text: `filler ${i}` });
+        await services.inbox.send({ from: HUMAN, to: 'agent_wren' as never, text: 'another needle, another thread' });
+        // Positive control: the newest page does not hold it.
+        const page = (await handleFeatureAction(services, { kind: 'inbox.thread', key, limit: 50 }, state)).inbox!.thread!;
+        expect(page.messages.some((m) => m.text.includes('needle'))).toBe(false);
+        const found = (await handleFeatureAction(services, { kind: 'inbox.search', key, query: 'NEEDLE' }, state)).inbox!.search!;
+        expect([found.key, found.query, found.total, found.hits.map((m) => m.text)]).toEqual([key, 'NEEDLE', 1, ['the needle is here']]);
+        const byName = (await handleFeatureAction(services, { kind: 'inbox.search', key, query: 'atlas' }, state)).inbox!.search!;
+        expect(byName.hits.map((m) => m.text)).toEqual(['the needle is here']);
+        // An answer, not a push.
+        expect((await featureSnapshot(services, state)).inbox!.search ?? null).toBeNull();
+    });
+});
+
+describe('the questions an FTQ answer answered', () => {
+    const questions = [
+        { header: 'Deploy', question: 'Ship **now**?', options: [{ label: 'Yes', description: 'Deploy at once' }, { label: 'No', description: 'Wait for Monday' }] },
+        { header: 'Notify', question: 'Who hears?', multiSelect: true, options: [{ label: 'Team' }, { label: 'Owner', description: 'Only the owner' }, { label: 'Nobody' }] },
+    ];
+
+    it('after an answer: every question with ALL its options, what was chosen and the notes — read back by the id in the mail', async () => {
+        const asked = await services.attention.ask({ agentId: 'agent_atlas' as never, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
+        await services.attention.answer(asked.questionId, { selections: [['Yes'], ['Team', 'Owner']], notes: ['', 'cc me'], note: 'thanks' });
+        const mail = services.inbox.all().find((m) => m.text.startsWith('Answer to your question'))!;
+        expect(mail.text).toContain(asked.questionId);
+        const served = (await handleFeatureAction(services, { kind: 'inbox.question', questionId: asked.questionId }, state)).inbox!.question!;
+        expect(served.id).toBe(asked.questionId);
+        expect(served.record).toMatchObject({
+            id: asked.questionId, agentName: 'atlas', outcome: 'answered',
+            questions, selections: [['Yes'], ['Team', 'Owner']], notes: ['', 'cc me'], note: 'thanks',
+        });
+        // An answer, not a push.
+        expect((await featureSnapshot(services, state)).inbox!.question ?? null).toBeNull();
+    });
+
+    it('a dismissal is kept the same way, with its notes', async () => {
+        const asked = await services.attention.ask({ agentId: 'agent_atlas' as never, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
+        await services.attention.dismiss(asked.questionId, ['not now']);
+        const served = (await handleFeatureAction(services, { kind: 'inbox.question', questionId: asked.questionId }, state)).inbox!.question!;
+        expect(served.record).toMatchObject({ outcome: 'dismissed', selections: [], notes: ['not now', ''], note: '' });
+    });
+
+    it('an id with no record (answered before records were kept, or never asked) is said plainly: `record: null`', async () => {
+        const served = (await handleFeatureAction(services, { kind: 'inbox.question', questionId: 'q_00000000-0000-4000-8000-000000000000' }, state)).inbox!.question!;
+        expect(served).toEqual({ id: 'q_00000000-0000-4000-8000-000000000000', record: null });
+    });
+
+    it('the record survives a restart (it is in the attention store’s file)', async () => {
+        const asked = await services.attention.ask({ agentId: 'agent_atlas' as never, agentName: 'atlas', workspaceId: 'tynn', questions }, { userActive: true });
+        await services.attention.answer(asked.questionId, { selections: [['No'], ['Nobody']], note: '' });
+        const { AttentionStore } = await import('../src/main/attention-store.js');
+        const reopened = await AttentionStore.open(dir, services.inbox);
+        expect(reopened.asked(asked.questionId)).toMatchObject({ outcome: 'answered', selections: [['No'], ['Nobody']] });
+    });
+});
