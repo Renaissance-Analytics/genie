@@ -185,7 +185,7 @@ export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpe
                     return (
                         <li key={ref.id} data-delivery-mail={ref.id}>
                             {onOpenMail ? (
-                                <Button size="xs" type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)]">{body}</Button>
+                                <Button size="xs" type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)] justify-start">{body}</Button>
                             ) : (
                                 <div className="flex min-w-0 items-baseline gap-2 px-1">{body}</div>
                             )}

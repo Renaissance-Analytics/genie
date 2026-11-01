@@ -39,7 +39,7 @@ export function TurnCards({ cards, rows, agentName, selectedId, onSelect }: Turn
                 const time = clock(card.at);
                 return (
                     <section key={card.n} data-turn-card={card.n} data-open={open ? 'true' : 'false'} className="overflow-hidden rounded-[10px] border border-[var(--border-1)] bg-[var(--surface)]">
-                        <Button size="xs" labelClassName="contents" type="button" onClick={() => toggle(card.n)} className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] hover:bg-[var(--bg-1)]">
+                        <Button size="xs" labelClassName="contents" type="button" onClick={() => toggle(card.n)} className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-[13px] hover:bg-[var(--bg-1)] justify-start">
                             <Icon name={open ? 'chevron-down' : 'chevron-right'} size="sm" className="text-[var(--fg-3)]" />
                             <span className="font-semibold">{card.title}</span>
                             <span className="font-mono text-[11px] text-[var(--fg-4)]">{time ? `${time} · ${card.meta}` : card.meta}</span>

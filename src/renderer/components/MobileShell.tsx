@@ -219,7 +219,7 @@ function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[]
                             const status = statusOf(r);
                             return (
                                 <li key={r.id}>
-                                    <Button size="xs" labelClassName="contents" type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)]">
+                                    <Button size="xs" labelClassName="contents" type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)] justify-start items-stretch">
                                         <span className="flex items-center gap-2 text-[13px]">
                                             <span className="font-medium">{r.name}</span>
                                             <ProviderLogo provider={r.provider} />
@@ -451,7 +451,7 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
                     <ul className="flex flex-col">
                         {entries.map((e) => (
                             <li key={e.id}>
-                                <Button size="xs" labelClassName="contents" type="button" data-file-entry={e.id} data-kind={e.type} onClick={() => onOpen(e)} className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-left text-[14px] active:bg-[var(--bg-2)]">
+                                <Button size="xs" labelClassName="contents" type="button" data-file-entry={e.id} data-kind={e.type} onClick={() => onOpen(e)} className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-left text-[14px] active:bg-[var(--bg-2)] justify-start">
                                     <Icon name={e.type === 'folder' ? 'folder' : 'file'} size="sm" className={e.type === 'folder' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'} />
                                     <span className="min-w-0 flex-1 truncate">{e.label}</span>
                                     {e.type === 'folder' ? <Icon name="chevron-right" size="xs" className="text-[var(--fg-4)]" /> : null}

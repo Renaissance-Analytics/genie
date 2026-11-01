@@ -319,7 +319,7 @@ function DeckRow({ item, answering, onAnswer, onOpenItem, onAnswerForm, formRefu
                     return (
                         <span data-deck-title={item.id} className="flex min-w-0 flex-1 items-baseline gap-2">
                             {expanded ? null : (
-                                <Button size="xs" type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left text-[var(--fg-2)] hover:text-[var(--fg-1)]">{preview}</Button>
+                                <Button size="xs" type="button" data-deck-preview={item.id} onClick={() => setExpanded(true)} className="min-w-0 truncate text-left text-[var(--fg-2)] hover:text-[var(--fg-1)] justify-start">{preview}</Button>
                             )}
                             <Button size="xs" type="button" data-action="deck-expand" aria-expanded={expanded} onClick={() => setExpanded((e) => !e)} className="shrink-0 text-[12px] text-[var(--accent)]">{expanded ? 'Show less' : 'Show all'}</Button>
                         </span>
