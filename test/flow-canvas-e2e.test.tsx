@@ -56,7 +56,8 @@ const prompted: string[] = [];
 const sessions: AgentSessionsPort = {
     session: (id) => (id === 'agent_atlas' ? { running: true, turnState: 'idle', pendingApproval: null } : null),
     rows: () => ledger,
-    prompt: (_id, text) => { prompted.push(text); ledger.push({ event: { kind: 'message', speaker: 'agent', text: `done: ${text}` } }); return true; },
+    // As the host's ledger has it: the prompt's turn marker, then the reply (the turn ran and ended before anyone looked).
+    prompt: (_id, text, by) => { prompted.push(text); ledger.push({ event: { kind: 'turn', n: prompted.length, by } }, { event: { kind: 'message', speaker: 'agent', text: `done: ${text}` } }); return true; },
     subscribe: () => () => {},
 };
 

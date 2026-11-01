@@ -259,11 +259,16 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
         if (!deps.sessions.prompt(id, text, deps.by)) throw new Error(`${name} stopped before the prompt could be delivered`);
         await new Promise<void>((done, fail) => {
             let off: () => void = () => {};
+            // THIS PROMPT'S TURN, not the state at the moment it was taken: a prompt sent while the session is still
+            // starting waits for its `ready` (a session only started reads idle, not working), so idle before its turn
+            // began is not its end. Begun = seen working, or its turn marker is in the ledger.
+            let began = false;
             const check = (): boolean => {
                 const s = deps.sessions.session(id);
+                if (s?.turnState === 'working' || deps.sessions.rows(id).slice(from).some((r) => (r.event as { kind?: unknown }).kind === 'turn')) began = true;
                 if (s === null || !s.running) fail(new Error(`${name} stopped before its turn finished`));
                 else if (s.turnState === 'failed') fail(new Error(`${name}'s turn failed`));
-                else if (s.turnState !== 'working') done();
+                else if (began && s.turnState !== 'working') done();
                 else return false;
                 return true;
             };

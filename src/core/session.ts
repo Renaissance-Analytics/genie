@@ -541,8 +541,8 @@ export class AgentSession {
 
     /**
      * A TURN IN FLIGHT, by Genie's own record (a prompt went in and its end has not come) — not `turnState: 'working'`,
-     * which a session that is still STARTING reads as too. What a Restart asks before it tells the agent its turn was
-     * cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
+     * which provider activity before any turn of this run reads as too. What a Restart asks before it tells the agent
+     * its turn was cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
      */
     get inTurn(): boolean {
         return this.#inTurn;
@@ -553,8 +553,10 @@ export class AgentSession {
      * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
      * from output), nothing parked on a person, and not broken or stopped. What the plan keep-alive waits for.
      *
-     * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
-     * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
+     * Deliberately not `turnState === 'idle'`. A session just started USED to read `working` until a turn of its own
+     * ended — with no turn running — so a notice for an agent started and mailed at once waited for somebody else to
+     * prompt it (B26). It reads idle now (2026-11-01), but idle is still not enough: a session still STARTING is idle too,
+     * and cannot take a turn until its `ready`.
      */
     get promptable(): boolean {
         return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
@@ -1132,7 +1134,14 @@ export class AgentSession {
                 this.#starting = false;
                 this.#changed();
             };
-            ready.then(() => { done(); this.#flushAfterTurn(); }, done);
+            ready.then(() => {
+                done();
+                // A prompt queued while it started opens its turn here: announced, so a listener (the board, a flow
+                // waiting for that turn) learns it began — `done` announced the session idle a moment before.
+                const before = this.#inTurn;
+                this.#flushAfterTurn();
+                if (!before && this.#inTurn) this.#changed();
+            }, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
         // turns it already had.
@@ -1144,7 +1153,11 @@ export class AgentSession {
                 .then((h) => { const recorded = h.lastTurn; this.#turns += recorded; this.#marked += recorded; })
                 .catch(() => { /* no record yet: turns start at 1 */ });
         }
-        this.#turnState = 'working';
+        // STARTED IS NOT WORKING (the owner, 2026-11-01, on beta.55: "an agent should not show as working when I haven't
+        // started it yet"). This read `working` until a turn of its own ended, with no turn running, so an agent opened
+        // and never prompted showed `Turn 0 · running`, a `Stop this turn`, `Working` in the rail, and a setting change
+        // waited for a turn that never came. It is idle until a prompt opens a turn or the provider starts working.
+        this.#turnState = 'idle';
     }
 
     /**
@@ -1694,7 +1707,14 @@ export class AgentSession {
         // turn: a marker (nobody prompted it, so `by: null`) and `working` until it ends. Without this it ran under
         // "Idle", and a quit, which cancels only the turns it believes are running, killed it mid-flight. What trails a
         // turn's end (usage, debug notices) is not activity and opens nothing.
-        if (this.#turnState === 'idle' && (event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent'))) {
+        //
+        // BEFORE ANY TURN OF THIS RUN has ended (a session only started reads idle now, not working), activity is shown as
+        // working and opens no marker — what a started session always did: no turn is numbered that Genie cannot place.
+        const activity = event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent');
+        if (this.#turnState === 'idle' && activity && this.#lastTurnEnd === null) {
+            this.#turnState = 'working';
+            this.#changed();
+        } else if (this.#turnState === 'idle' && activity) {
             // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
             this.#inTurn = true;

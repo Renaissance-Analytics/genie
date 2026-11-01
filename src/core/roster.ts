@@ -51,8 +51,8 @@ export interface LiveSession {
     running: boolean;
     turnState: TurnState;
     /**
-     * A turn in flight by Genie's own record (`AgentSession.inTurn`) — not `working`, which a starting session reads as
-     * too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
+     * A turn in flight by Genie's own record (`AgentSession.inTurn`) — not `working`, which provider activity before any
+     * turn of the run reads as too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
      */
     inTurn?: boolean | undefined;
     /** Epoch ms. `null` when the session never recorded a start. */

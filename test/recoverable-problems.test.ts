@@ -38,6 +38,8 @@ function open() {
 describe('a RECOVERABLE problem', () => {
     it('is a warning row in the stream; the turn goes on and nothing reads failed', async () => {
         const { session, store, id, events } = open();
+        // A turn in flight (a session only started reads idle — test/fresh-session-not-working.test.ts).
+        session.prompt('go', 'you');
         expect(session.turnState).toBe('working');
 
         events().onProtocolError?.('NDJSON frame exceeds 64000000 bytes (64000001 bytes; content withheld)', { recoverable: true });
