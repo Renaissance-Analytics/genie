@@ -128,6 +128,9 @@ export const ICON_NAMES: readonly string[] = [
     // Apps and scripts that report to agents (genie#1345): a site (globe), a process (cog), a script key; a message's level
     // (circle-check / circle-x / info); a card action in flight. Named in data (`APP_KIND_ICON`), so registered here.
     'cog', 'key-round', 'circle-x', 'loader-circle',
+    // A hosted site's row (genie#1393): stopped is an empty circle. Open, Restart, Retry, Stop, Start, Edit and its states
+    // reuse names above (external-link, rotate-cw, rotate-ccw, square, play, pencil, loader-circle, circle-check, circle-x).
+    'circle',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
 ];

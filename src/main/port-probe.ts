@@ -24,6 +24,14 @@ import type { ReadinessHandshake } from '../core/engine-reconcile.js';
  * `::1` alone, and a `127.0.0.1`-only probe would wait forever on a healthy server. Never throws.
  */
 export const SITE_READY_TIMEOUT_MS = 15_000;
+/**
+ * HOW LONG A SITE MAY TAKE TO ANSWER BEFORE IT READS FAILED (genie#1393). The 15 s above is ONE probe's budget, not a
+ * verdict: past it a site reads "still starting" and site-manager.ts keeps asking with backoff. Only after this ceiling
+ * with no answer, and its process still running, is it failed. Even then Genie keeps asking, and an answer recovers it.
+ * Three minutes because a boot that starts every site at once (about ten PHP apps cold, plus Defender scanning each new
+ * binary) took longer than 15 s on the owner's machine, and a real `npm run dev` compile can take a minute.
+ */
+export const SITE_READY_CEILING_MS = 180_000;
 /** Between attempts (Genie 1: a bound port usually answers at once). */
 const SITE_RETRY_MS = 250;
 /**

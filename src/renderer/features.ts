@@ -274,6 +274,11 @@ export interface ToolchainSection {
 }
 
 export interface FeatureData {
+    /**
+     * Main's number for this snapshot, taken when it was started (genie#1393). Absent from a host on an older Genie. The
+     * window keeps the newest one ({@link newestSnapshot}): a push and a click's answer race.
+     */
+    readonly seq?: number;
     readonly knowledge: { hits: readonly Hit[] | null; query: string; adding: KnowledgeAdding | null; lastAdd: KnowledgeAdded | null };
     /**
      * `saved`: what the canvas's last `flows.saveGraph` did (genie#1204) — served in the answer to that action only, never
@@ -298,6 +303,19 @@ export interface FeatureData {
     /** The running version (Tynn #763: the header shows it); absent/`null` = not known yet. */
     readonly version?: string | null;
 }
+
+/**
+ * The snapshot the window should show (genie#1393): the NEWER of the two by main's number. A push and a click's answer
+ * race, and the one that lands last is not always the one built last; showing it left a running site reading
+ * `starting` until something else pushed. One without a number (a remote host on an older Genie) is taken as it comes.
+ */
+export function newestSnapshot(current: FeatureData, next: FeatureData): FeatureData {
+    if (current.seq === undefined || next.seq === undefined) return next;
+    return next.seq >= current.seq ? next : current;
+}
+
+/** What a feature action came to, for a control that shows its progress (renderer/site-actions.ts). */
+export type ActOutcome = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
 /** First paint: nothing has been asked yet. */
 export const EMPTY_FEATURES: FeatureData = {
