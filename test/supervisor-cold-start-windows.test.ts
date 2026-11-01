@@ -45,6 +45,31 @@ async function startAndEnd(cwd: string): Promise<string> {
     return `${tree.containment.kind}:${verdict.verified}`;
 }
 
+/**
+ * A provider that lives until the test stops it. A provider that ended on its own after 5 s raced the read below: on a
+ * loaded genie-test-windows PowerShell took longer than that to start, the supervisor had gone with its provider, and the
+ * read came back empty — `Get-Process : Cannot find a process with the process identifier 1108`, non-terminating, exit 0
+ * (batch A's Windows run, 2026-11-01) — which the assertion reported as an image outside Genie's folder.
+ */
+const LIVE_PROVIDER_ARGS = ['-e', 'setInterval(() => {}, 1000)'];
+
+/**
+ * The executable a LIVE process runs, or a failure that says what was read instead: a process gone (or exited) before
+ * the read is never reported as an image somewhere else.
+ */
+function imageOfLive(pid: number): string {
+    const script = [
+        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+        "if ($null -eq $p) { 'GONE' }",
+        "elseif ($p.HasExited) { 'EXITED' }",
+        "elseif ([string]::IsNullOrEmpty($p.Path)) { 'NO-PATH' }",
+        "else { 'PATH ' + $p.Path }",
+    ].join('; ');
+    const read = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true }).trim();
+    if (!read.startsWith('PATH ')) throw new Error(`the supervisor (pid ${pid}) was gone before its image was read: ${read || '(nothing)'}`);
+    return read.slice('PATH '.length);
+}
+
 /** The .NET Framework compiler prism-acp builds with. */
 function csc(): string {
     const windows = process.env.SystemRoot ?? process.env.windir ?? 'C:/Windows';
@@ -105,10 +130,10 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor', () => {
 
         // Genie boots on the new prism-acp and starts an agent.
         await prepareProcessTree({ directory: folder });
-        const provider = launchProvider(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 5000)'], { cwd: dir, env: { ...process.env } });
+        const provider = launchProvider(process.execPath, LIVE_PROVIDER_ARGS, { cwd: dir, env: { ...process.env } });
         const tree = await provider.started;
-        const image = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${tree.supervisorPid}).Path`], { encoding: 'utf8', windowsHide: true }).trim();
-        await provider.stop({ graceMs: 2_000 });
+        // Read while the provider (and so its supervisor) is alive; stopped whatever the read found.
+        const image = await (async () => { try { return imageOfLive(tree.supervisorPid); } finally { await provider.stop({ graceMs: 2_000 }); } })();
         // The positive control for the read: the image is an executable in Genie's folder.
         expect(image.toLowerCase().startsWith(folder.toLowerCase())).toBe(true);
 
@@ -155,10 +180,10 @@ describe.skipIf(process.platform !== 'win32')('the Windows supervisor, in Genie�
         oldBuildIn(otherKey, old);
 
         const folder = await prepareGenieSupervisor(runtime);
-        const provider = launchProvider(process.execPath, ['-e', 'setTimeout(() => process.exit(0), 5000)'], { cwd: dir, env: { ...process.env } });
+        const provider = launchProvider(process.execPath, LIVE_PROVIDER_ARGS, { cwd: dir, env: { ...process.env } });
         const tree = await provider.started;
-        const image = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${tree.supervisorPid}).Path`], { encoding: 'utf8', windowsHide: true }).trim();
-        await provider.stop({ graceMs: 2_000 });
+        // Read while the provider (and so its supervisor) is alive; stopped whatever the read found.
+        const image = await (async () => { try { return imageOfLive(tree.supervisorPid); } finally { await provider.stop({ graceMs: 2_000 }); } })();
         expect(image.toLowerCase().startsWith(folder.toLowerCase())).toBe(true);
 
         const hook = join(dir, 'allow.cjs');
