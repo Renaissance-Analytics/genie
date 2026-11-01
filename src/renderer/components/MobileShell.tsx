@@ -87,6 +87,8 @@ const SCREEN = 'flex h-dvh flex-col overflow-hidden bg-[var(--bg-0)] text-[var(-
 const SCROLL = 'min-h-0 flex-1 overflow-y-auto overscroll-contain';
 /** Below the last row: clear of the home indicator. */
 const SAFE_BOTTOM = 'pb-[max(0.75rem,env(safe-area-inset-bottom))]';
+/** The top bar clears the status bar and notch: the installed app draws under them (black-translucent, viewport-fit=cover). */
+const SAFE_TOP = 'pt-[max(0.75rem,env(safe-area-inset-top))]';
 
 /** The bar a dropped connection shows while the phone dials again. */
 function Reconnecting() {
@@ -104,7 +106,7 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
     const shownRows = agents?.rows == null || selectedWorkspace === null ? agents?.rows ?? null : agents.rows.filter((r) => r.workspaceId === selectedWorkspace);
     return (
         <div data-mobile="shell" className={SCREEN}>
-            <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
+            <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
                 <span className="size-5 rounded-[5px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
                 <span data-remote-badge className="truncate rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-xs font-semibold tracking-wide text-[var(--warning)]">● REMOTE — {host}</span>
                 <span className="flex-1" />
@@ -303,7 +305,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     if (!detail) {
         return (
             <div data-mobile-agent-view="loading" className={SCREEN} aria-busy>
-                <div data-mobile-scroll className={`${SCROLL} flex flex-col p-4`}>
+                <div data-mobile-scroll className={`${SCROLL} flex flex-col px-4 pb-4 ${SAFE_TOP}`}>
                     <Button size="xs" type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</Button>
                     <div className="mt-4 h-6 w-40 animate-pulse rounded-md bg-[var(--bg-2)]" />
                 </div>
@@ -329,7 +331,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     const attach = 'flex size-10 cursor-pointer items-center justify-center rounded-full border border-[var(--border-1)] active:bg-[var(--bg-2)]';
     return (
         <div data-mobile-agent-view={detail.agent.id} className={SCREEN}>
-            <header className="flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
+            <header className={`flex shrink-0 items-center gap-3 border-b border-[var(--border-1)] px-4 pb-3 ${SAFE_TOP}`}>
                 <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="text-sm font-semibold">{detail.agent.name}</span>
                 <ProviderLogo provider={detail.agent.provider} />
@@ -434,7 +436,7 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
     };
     return (
         <div data-mobile-files={path} className={SCREEN}>
-            <header className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
+            <header className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
                 <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="truncate text-sm font-semibold">{workspaceName}</span>
                 <span className="truncate font-mono text-xs text-[var(--fg-3)]">/{path}</span>
@@ -495,7 +497,7 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
     const name = path.slice(path.lastIndexOf('/') + 1);
     return (
         <div data-mobile-file-view={path} className={SCREEN}>
-            <header className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
+            <header className={`flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 pb-3 ${SAFE_TOP}`}>
                 <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="truncate text-sm font-semibold">{name}</span>
             </header>
@@ -532,7 +534,7 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
 export function MobileConnecting({ host }: { host: string }) {
     return (
         <div data-mobile="connecting" role="status" className={SCREEN}>
-            <div data-mobile-scroll className={`${SCROLL} flex flex-col px-6`}>
+            <div data-mobile-scroll className={`${SCROLL} flex flex-col px-6 ${SAFE_TOP} ${SAFE_BOTTOM}`}>
                 {/* `my-auto`, not `justify-center` on the scroller: centred while it fits, and when it does not, it overflows
                     downward where it can be scrolled to — a centred overflow spills off the TOP, out of reach. */}
                 <div className="my-auto flex flex-col items-center gap-3 py-6">
@@ -568,7 +570,7 @@ export function MobilePair({ host, refusal, connecting, onConnect, waiting = nul
     return (
         <div data-mobile="pair" className={SCREEN}>
             {/* The keyboard takes half a small phone: the form scrolls, so Connect is always reachable above it. */}
-            <div data-mobile-scroll className={`${SCROLL} flex flex-col px-6 ${SAFE_BOTTOM}`}>
+            <div data-mobile-scroll className={`${SCROLL} flex flex-col px-6 ${SAFE_TOP} ${SAFE_BOTTOM}`}>
                 <div className="my-auto flex flex-col items-center gap-4 py-6">
                     <span className="size-10 rounded-[10px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
                     <h1 className="text-base font-semibold">Pair with <span className="font-mono">{host}</span></h1>
