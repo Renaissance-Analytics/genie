@@ -227,8 +227,8 @@ export function appTarget(
 
 /**
  * How an app's message reaches its agent (genie#1379; the owner on beta.53: "Users should not have to drive chat for
- * agents to get notifications they need"). EVERY agent is told without the person typing: at once when it can take a
- * turn, when its turn ends when busy. What differs is only whether a STOPPED agent is started for it:
+ * agents to get notifications they need"). EVERY agent is told without the person typing: at once when idle, at its next
+ * step when busy (genie#1411). What differs is only whether a STOPPED agent is started for it:
  * - `push`: an automated agent, and the app wake cap allows a turn — started if stopped;
  * - `push-no-wake`: a manual agent (never started by an app: its mail waits, shown as uncollected), or an automated one
  *   past the cap.

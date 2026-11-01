@@ -100,6 +100,7 @@ beforeEach(async () => {
         host,
         reminders: (input) => services.inboxReminders(input),
         settled: (agentId, delivered) => services.inboxNoticeSettled(agentId, delivered),
+        cumulative: true,
     });
 });
 afterEach(async () => {
@@ -119,6 +120,7 @@ const rewire = (extra: Partial<InboxPushPorts>): void => {
         host,
         reminders: (input) => services.inboxReminders(input),
         settled: (agentId, delivered) => services.inboxNoticeSettled(agentId, delivered),
+        cumulative: true,
         ...extra,
     });
 };
@@ -461,6 +463,7 @@ describe.each(['claude', 'codex'] as const)('mail wakes a %s agent', (provider) 
             host,
             reminders: (input) => services.inboxReminders(input),
             settled: (agentId, delivered) => services.inboxNoticeSettled(agentId, delivered),
+            cumulative: true,
             wake: (id) => {
                 wakes.push(id);
                 if (refuse !== null) return false;

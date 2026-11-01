@@ -120,11 +120,13 @@ describe('through the same delivery as mail', () => {
             prompts,
             host: {
                 subscribe: (l: (id: AgentId) => void) => { listeners.add(l); return () => listeners.delete(l); },
-                promptable: (id: AgentId) => (running.has(id) ? 1 : null),
+                deliverable: (id: AgentId) => (running.has(id) ? 1 : null),
                 runOf: (id: AgentId) => (running.has(id) ? 1 : null),
                 turnsEndedThisRun: () => 0,
+                inTurn: () => false,
+                hasQueuedPrompt: () => false,
                 probe: () => null,
-                prompt: (id: AgentId, text: string, by?: string | null) => { prompts.push({ id, text, by: by ?? null }); return true; },
+                handOff: (id: AgentId, text: string, by?: string | null) => { prompts.push({ id, text, by: by ?? null }); return { queued: null }; },
             },
         };
     }

@@ -13,7 +13,7 @@ import { genieTools, type GenieToolsDeps } from '../src/main/mcp-tools.js';
 
 /**
  * HOW AN APP'S MESSAGE REACHES THE AGENT (genie#1345; genie#1379 replaced D1 as built): EVERY agent is told without the
- * person typing — at once when it can take a turn, when its turn ends when busy. An AUTOMATED agent is also started if it
+ * person typing — at once when idle, at its next step when busy (genie#1411). An AUTOMATED agent is also started if it
  * is stopped, while the app wake cap allows; a MANUAL agent is never started by an app — its mail waits. What it reads is marked as an app's and fenced as data; it
  * cannot reply. Mail from people and agents is delivered exactly as before (the other direction, asserted).
  */
@@ -30,11 +30,14 @@ function fakeHost() {
     const listeners = new Set<(id: AgentId) => void>();
     const host: InboxPushPorts['host'] = {
         subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
-        promptable: (id) => (idle.has(id) ? running.get(id) ?? null : null),
+        // As SessionHost: a running agent takes a notice mid-turn too (genie#1411); this fake folds it, as Claude does.
+        deliverable: (id) => running.get(id) ?? null,
         runOf: (id) => running.get(id) ?? null,
         turnsEndedThisRun: (id) => ended.get(id) ?? 0,
+        inTurn: (id) => running.has(id) && !idle.has(id),
+        hasQueuedPrompt: () => false,
         probe: () => null,
-        prompt: (id, text) => { prompts.push([id, text]); idle.delete(id); return true; },
+        handOff: (id, text) => { prompts.push([id, text]); idle.delete(id); return { queued: null }; },
     };
     return {
         host, prompts, running, idle,
@@ -69,6 +72,7 @@ function wire(policy: (to: string) => AppDelivery) {
             return out;
         },
         settled: (id, ok) => book.settled(id, ok),
+        cumulative: true,
         wake: (id) => { woken.push(id); h.start(id); return true; },
         appMail: (to, message) => (message.from.startsWith('app:') ? policy(to) : null),
         appBudget: { waitMs: () => 0, spend: (id) => { appWakes.push(id); } },

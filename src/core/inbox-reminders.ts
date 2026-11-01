@@ -1,17 +1,18 @@
 /**
- * THE INBOX PUSH'S BOOK (§6.4) — pure. When mail lands for an agent, Genie tells that agent through its own session:
- * a turn of its own, sent only while the session can take one (never mid-turn — a notice landing mid-turn derails the
- * turn — and never while it is still starting). The text says how many and how to collect. This book decides; the
- * caller sends.
+ * THE INBOX PUSH'S BOOK (§6.4) — pure. When mail lands for an agent, Genie tells that agent through its own session,
+ * the way the person's typed message reaches it: mid-turn included (genie#1411; the owner, 2026-11-01: "inbox nudges
+ * should queue up and post to the agent as soon as possible just like user input"), never while it is still starting.
+ * It used to be "never mid-turn", and a long turn held an agent's mail for as long as it ran. The text says how many
+ * and how to collect. This book decides; the caller (main/inbox-push.ts) sends.
  *
  * EXACTLY ONCE PER ARRIVAL BATCH, and nothing else. A batch is what arrived since the agent was last told: told
  * once, it is not repeated on every idle moment; a message arriving on top of it is a new batch and is told at once.
  * A NEW RUN of the agent has been told nothing, so a batch told to the run before it is told again.
  *
  * TOLD MEANS DELIVERED. A notice handed out is SENDING — which also keeps a second event in the same tick from
- * sending it twice — until the caller settles it: `settled(id, true)` when its turn ended cleanly records the batch
- * as told; `settled(id, false)` (the prompt was refused, its turn crashed, the session stopped under it) leaves the
- * batch untold, so the next moment the agent can take a turn tells it. A notice recorded as told when it was merely
+ * sending it twice — until the caller settles it: `settled(id, true)` when the turn that took it ended cleanly records
+ * the batch as told; `settled(id, false)` (the prompt was refused, its turn crashed, the session stopped under it) leaves
+ * the batch untold, so the next moment the agent can take it tells it. A notice recorded as told when it was merely
  * handed out was lost whenever the prompt failed.
  *
  * This used to be a five-minute gap per agent, with a `collected` reset nothing ever called: an agent told about one
@@ -25,7 +26,7 @@ export interface ReminderInput {
     readonly unread: number;
     /** The newest unread message's sequence number — what makes "something new arrived" a fact, not a count. */
     readonly newestSeq: number;
-    /** The agent's session RUN, when it can take a turn now; `null` while it cannot (mid-turn, starting, not running). */
+    /** The agent's session RUN, when a notice can reach it now (mid-turn included); `null` while not (starting, held, not running). */
     readonly run: number | null;
     /** How many of the unread came from APPS (genie#1345): the notice says so. Absent = none. */
     readonly fromApps?: number;
