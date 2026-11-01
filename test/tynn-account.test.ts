@@ -3,14 +3,14 @@ import { chmod, mkdir, readFile, rename, stat, symlink } from 'node:fs/promises'
 import { dirname, join } from 'node:path';
 import { TynnAccount, type TynnAccountPorts } from '../src/main/tynn-account.js';
 
-import { fakeTynnStorage, PAIRING_SCOPES, PAIRING_TOKEN } from './helpers/tynn-storage.js';
+import { fakeTynnStorage, PAIRING_SCOPES, PAIRING_TOKEN, plainCredentialStore } from './helpers/tynn-storage.js';
 
 /** Existing account behavior, now over a durable scoped bearer. Cookies are exchange-only. */
 const HOST = 'https://tynn.example';
 const CODE = 'aB3'.repeat(21) + 'x';
 const USER = { id: '7', name: 'Ada', email: 'ada@example.com' };
 
-function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
+function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404; privateStore?: boolean } = {}) {
     const jar = new Map<string, string>();
     const calls: Array<{ method: string; path: string; headers: Record<string, string>; body?: unknown }> = [];
     let codeValid = true;
@@ -20,6 +20,8 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
     const state = { reachable: opts.reachable ?? true, authFail: opts.authFail ?? 401 };
     const ports: TynnAccountPorts = {
         ...fakeTynnStorage(),
+        // The account's file in plain fs (see 'the credential store it is given'); Genie's private store when asked for.
+        ...(opts.privateStore ? {} : { credentials: plainCredentialStore }),
         host: () => HOST,
         cookies: {
             set: async (host, name, value) => { expect(host).toBe(HOST); jar.set(name, value); },
@@ -52,21 +54,21 @@ function fakeTynn(opts: { reachable?: boolean; authFail?: 401 | 404 } = {}) {
 
 describe.skipIf(process.platform === 'win32')('Tynn account credential permissions', () => {
     it('restricts an existing permissive directory before any account exchange', async () => {
-        const t = fakeTynn(); await chmod(dirname(t.ports.file), 0o755);
+        const t = fakeTynn({ privateStore: true }); await chmod(dirname(t.ports.file), 0o755);
         await TynnAccount.open(t.ports);
         expect((await stat(dirname(t.ports.file))).mode & 0o777).toBe(0o700);
         expect(t.calls).toHaveLength(0);
     });
 
     it('restricts an existing credential file before restoring its bearer', async () => {
-        const t = fakeTynn(); await (await TynnAccount.open(t.ports)).signIn(CODE);
+        const t = fakeTynn({ privateStore: true }); await (await TynnAccount.open(t.ports)).signIn(CODE);
         await chmod(t.ports.file, 0o644);
         expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(true);
         expect((await stat(t.ports.file)).mode & 0o777).toBe(0o600);
     });
 
     it('refuses a symlinked credential file before restoring or sending its bearer', async () => {
-        const t = fakeTynn(); await (await TynnAccount.open(t.ports)).signIn(CODE);
+        const t = fakeTynn({ privateStore: true }); await (await TynnAccount.open(t.ports)).signIn(CODE);
         const before = t.calls.length; await rename(t.ports.file, `${t.ports.file}.original`);
         await symlink(`${t.ports.file}.original`, t.ports.file);
         expect((await TynnAccount.open(t.ports)).status().signedIn).toBe(false);
@@ -74,12 +76,42 @@ describe.skipIf(process.platform === 'win32')('Tynn account credential permissio
     });
 
     it('refuses a symlinked credential directory before exchanging the sign-in code', async () => {
-        const t = fakeTynn(); const root = dirname(t.ports.file);
+        const t = fakeTynn({ privateStore: true }); const root = dirname(t.ports.file);
         const target = join(root, 'real'); const link = join(root, 'alias');
         await mkdir(target); await symlink(target, link);
         const account = await TynnAccount.open({ ...t.ports, file: join(link, 'tynn.json') });
         expect((await account.signIn(CODE)).ok).toBe(false);
         expect(t.calls).toHaveLength(0);
+    });
+});
+
+/*
+ * WHERE THE CREDENTIAL IS KEPT, INJECTED (2026-11-01). On Windows Genie's private store (main/private-credentials.ts)
+ * sets an owner-only ACL through PowerShell on every prepare and write — up to ~10 s a call on a cold, loaded VM. This
+ * file's subject is the ACCOUNT (codes, bearer, revocation), not the ACL, which its own files test against the real OS
+ * (private-credentials*.test.ts). Through that store this file took 200–264 s on genie-test-windows (1.5 s on Linux) and
+ * its revocation CONTROL, three opens and two writes, crossed 30 s (batch B3). So the account's tests keep the file with
+ * plain fs; the permission tests above use Genie's real store, which is also what an account with no store is given.
+ */
+describe('TynnAccount — the credential store it is given', () => {
+    it('opens, signs in and forgets a revoked credential through the store it is given, and reads back what that store wrote', async () => {
+        const t = fakeTynn();
+        const seen: string[] = [];
+        const credentials = {
+            prepare: async (file: string) => { seen.push(`prepare ${file === t.ports.file}`); await plainCredentialStore.prepare(file); },
+            migrate: async (legacy: string, file: string) => { seen.push('migrate'); await plainCredentialStore.migrate(legacy, file); },
+            write: async (file: string, text: string) => { seen.push(`write ${JSON.parse(text).state}`); await plainCredentialStore.write(file, text); },
+        };
+        await (await TynnAccount.open({ ...t.ports, credentials })).signIn(CODE);
+        // Open prepares; sign-in prepares again, then writes the credential.
+        expect(seen).toEqual(['prepare true', 'prepare true', 'write signed-in']);
+        const answer = t.ports.fetch;
+        seen.length = 0;
+        // A launch whose /me answers 401: prepared, then the revocation written through the same store.
+        await TynnAccount.open({ ...t.ports, credentials, fetch: async (url, init) => url.endsWith('/api/v1/me') ? { ok: false, status: 401, text: async () => '{}' } : answer(url, init) });
+        expect(seen).toEqual(['prepare true', 'write signed-out']);
+        // And what it wrote is what the next launch reads.
+        expect(JSON.parse(await readFile(t.ports.file, 'utf8'))).toMatchObject({ state: 'signed-out' });
     });
 });
 

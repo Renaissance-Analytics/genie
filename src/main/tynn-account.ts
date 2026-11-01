@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
-import { migratePrivateCredential, preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
+import { migratePrivateCredential, preparePrivateCredential, writePrivateCredential, type PrivateCredentialStore } from './private-credentials.js';
 
 /** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
@@ -13,6 +13,12 @@ export interface TynnAccountPorts {
     /** Previous shared-home file; migration restricts this file, never its parent directory. */
     readonly legacyFile?: string;
     readonly cipher: { isAvailable(): boolean; encrypt(text: string): Buffer; decrypt(bytes: Buffer): string };
+    /**
+     * Where the encrypted credential is kept. Absent = Genie's private store (main/private-credentials.ts), which is what
+     * the app always uses; tests of the ACCOUNT inject a plain-file store, because on Windows the private store's ACL
+     * work is PowerShell on every prepare and write (test/tynn-account.test.ts, 'the credential store it is given').
+     */
+    readonly credentials?: PrivateCredentialStore;
     /** Fixed Tynn origin in production; injected origin in isolated tests. */
     readonly host: () => string;
     /** The session's cookie jar, for the Tynn origin. */
