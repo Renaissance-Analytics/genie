@@ -18,3 +18,8 @@ export function clockAmPm(at: number): string {
 export function fullDateTime(at: number): string {
     return plain(new Date(at).toLocaleString('en-US', { dateStyle: 'full', timeStyle: 'short' }));
 }
+
+/** `Sat, Oct 31, 3:40 PM` — the exact time set small under a relative one. */
+export function shortDateTime(at: number): string {
+    return plain(new Date(at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true }));
+}

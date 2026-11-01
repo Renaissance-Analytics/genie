@@ -5,6 +5,7 @@ import { approvalFrom } from '../src/core/approval.js';
 import { ApprovalCard } from '../src/renderer/components/ApprovalCard.js';
 import { raisesApprovals } from '../src/main/session-host.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE APPROVAL POLICY SENTENCE (`genie-2-dashboard-design.md` §2.3 / §8.3: "claude proceeds without asking — this
@@ -54,7 +55,9 @@ describe("codex's own options reach the card (the board's `Allow composer for th
         })!;
         const html = renderToStaticMarkup(<ApprovalCard approval={approval} answering={null} onAnswer={() => {}} agentName="wren" />);
         for (const [id, label] of [['codex-accept', 'Allow once'], ['codex-accept-session', 'Allow for this session'], ['codex-accept-amendment', 'Allow and remember this command'], ['codex-decline', 'Deny']]) {
-            expect(html).toMatch(new RegExp(`data-approval-option="${id}"[^>]*>${label}`));
+            const option = control(html, `data-approval-option="${id}"`);
+            expect(option).toMatchObject({ tag: 'button', fancy: true });
+            expect(option!.text.startsWith(label!), option!.text).toBe(true);
         }
     });
 });

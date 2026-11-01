@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { upgradeHost, type HostUpgradeStep } from '../src/core/host-upgrade.js';
 import { ConnectRemote } from '../src/renderer/components/FeatureSurfaces.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * UPGRADE A REMOTE HOST FROM HERE (Tynn #822; Genie 1's remote.upgradeHost — owner only). Genie 2's remote protocol already
@@ -66,7 +67,7 @@ describe('the connected bar — Upgrade <host>', () => {
         renderToStaticMarkup(<ConnectRemote state={connected} remembered={[]} onConnect={() => {}} onDisconnect={() => {}} {...extra} />);
 
     it('the owner, connected: Upgrade studio', () => {
-        expect(render({ onUpgradeHost: () => {} })).toMatch(/data-action="upgrade-host"[^>]*>Upgrade studio</);
+        expect(control(render({ onUpgradeHost: () => {} }), 'data-action="upgrade-host"')).toMatchObject({ tag: 'button', fancy: true, text: 'Upgrade studio' });
     });
 
     it('CONTROL: not the owner (a shared workspace) — no Upgrade (the host would refuse it)', () => {

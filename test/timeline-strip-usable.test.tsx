@@ -5,6 +5,7 @@ import type { StreamEvent } from '../src/core/stream-event.js';
 import type { StreamFilter, TimedEvent } from '../src/core/stream-view.js';
 import { sessionTimeline } from '../src/core/session-timeline.js';
 import { TimelineStrip, type TimelineStripProps } from '../src/renderer/components/TimelineStrip.js';
+import { Button } from '@particle-academy/react-fancy';
 
 /**
  * THE STRIP IS READABLE AND ITS WORDS DO SOMETHING (the owner, 2026-10-18, a screenshot of the strip: "this UX is
@@ -69,7 +70,7 @@ describe('Next edit', () => {
     it('is a button, and pressing it goes to the next edit', () => {
         let pressed = 0;
         const tree = TimelineStrip(props(turns(3), { onNextEdit: () => { pressed += 1; } }));
-        const buttons = find(tree, (el) => el.type === 'button' && el.props['data-action'] === 'next-edit');
+        const buttons = find(tree, (el) => el.type === Button && el.props['data-action'] === 'next-edit');
         expect(buttons).toHaveLength(1);
         (buttons[0]!.props.onClick as () => void)();
         expect(pressed).toBe(1);
@@ -87,7 +88,7 @@ describe('the legend', () => {
         const chosen: (readonly StreamFilter[] | null)[] = [];
         const press = (filter: readonly StreamFilter[] | null, kind: string) => {
             const tree = TimelineStrip(props(turns(3), { filter, onFilter: (next) => { chosen.push(next); } }));
-            const [button] = find(tree, (el) => el.type === 'button' && el.props['data-legend'] === kind);
+            const [button] = find(tree, (el) => el.type === Button && el.props['data-legend'] === kind);
             expect(button, kind).toBeDefined();
             (button!.props.onClick as () => void)();
             return button!;

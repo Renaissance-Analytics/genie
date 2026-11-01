@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { CHAT_LIVE_LINES, chatWindowStart, messageLines } from '../src/core/chat-window.js';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * FOLLOWING LIVE = THE LAST 500 LINES (the owner, 2026-10-22: "are we redrawing the whole chat and work streams every
@@ -65,7 +66,7 @@ describe('what the chat draws', () => {
     it('a thread derived from the ledger’s tail (core/chat-view.ts chatTailStart) offers the history behind it', () => {
         const html = render({ ...thread(Array.from({ length: 40 }, (_, i) => msg(i))), earlier: true });
         expect(rendered(html)).toHaveLength(40);
-        expect(html).toMatch(/data-chat-earlier="more"[^>]*>Earlier messages · show more</);
+        expect(control(html, 'data-chat-earlier="more"')).toMatchObject({ tag: 'button', fancy: true, text: 'Earlier messages · show more' });
     });
 
     it('CONTROL: a short thread draws every message and offers nothing earlier', () => {

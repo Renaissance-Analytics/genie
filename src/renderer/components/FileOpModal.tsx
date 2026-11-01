@@ -1,4 +1,4 @@
-import { Modal } from '@particle-academy/react-fancy';
+import { Button, Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { nameProblem, type FileOpDialog } from '../../core/file-ops.js';
 
@@ -58,8 +58,8 @@ export function FileOpForm({ dialog, error, busy = false, onConfirm, onCancel }:
             {problem && name !== '' ? <p data-problem="name" className="text-xs text-[var(--danger)]">{problem}</p> : null}
             {error ? <p data-problem="file-op" className="text-xs text-[var(--danger)]">{error}</p> : null}
             <div className="flex justify-end gap-2">
-                <button type="button" className={button} onClick={onCancel}>Cancel</button>
-                <button type="submit" data-action="confirm-file-op" className={button} disabled={busy || problem !== null}>{dialog.confirmLabel}</button>
+                <Button size="xs" type="button" className={button} onClick={onCancel}>Cancel</Button>
+                <Button size="xs" type="submit" data-action="confirm-file-op" className={button} disabled={busy || problem !== null}>{dialog.confirmLabel}</Button>
             </div>
         </form>
     );

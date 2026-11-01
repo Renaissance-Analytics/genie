@@ -8,7 +8,7 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
@@ -35,7 +35,8 @@ import { chatAgentsKey, chatSendFor, chatThreadFrom, observedMail, rememberThrea
 import { deliverChat, type ChatSendOutcome } from '../core/chat-send.js';
 import type { Attachment } from '../core/prompt-content.js';
 import { EMPTY_SNAPSHOT, NO_FEATURES, NO_FILES, NO_TERMINALS, NO_UPDATES, SERVABLE, pageBridge, tynnBoardHostOf, type AgentDetail, type GenieBridge, type GenieSnapshot } from './bridge.js';
-import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
+import { EMPTY_FEATURES, newestSnapshot, toolchainRefusalOf, type FeatureAction, type FeatureData } from './features.js';
+import { refusalReason } from './site-actions.js';
 import { deckAnswerRoute } from '../core/deck-resolve.js';
 import { approvalKey, refusalWords, type ApprovalAnswering, type ApprovalRefusal } from '../core/approval-answering.js';
 import type { Approval } from '../core/approval.js';
@@ -152,13 +153,20 @@ function useHostRequests(bridge: GenieBridge | undefined, settings: Readonly<Rec
     }, [bridge]);
 }
 
-function useFeatures(bridge: GenieBridge | undefined): [FeatureData, (data: FeatureData) => void] {
+function useFeatures(bridge: GenieBridge | undefined): [FeatureData, Dispatch<SetStateAction<FeatureData>>] {
     const [data, setData] = useState<FeatureData>(EMPTY_FEATURES);
     useEffect(() => {
         const features = bridge?.features ?? NO_FEATURES;
         let live = true;
-        void features.snapshot().then((d) => { if (live) setData(d); });
-        const off = features.subscribe((d) => { if (live) setData(d); });
+        // Another host numbers its snapshots from its own start: forget this one's, so its first is taken.
+        setData((cur) => {
+            if (cur.seq === undefined) return cur;
+            const { seq: _previousHost, ...rest } = cur;
+            return rest;
+        });
+        // The NEWER snapshot wins, whichever lands last (genie#1393): pushes and a click's answer race.
+        void features.snapshot().then((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
+        const off = features.subscribe((d) => { if (live) setData((cur) => newestSnapshot(cur, d)); });
         return () => { live = false; off(); };
     }, [bridge]);
     return [data, setData];
@@ -1767,19 +1775,21 @@ function DesktopApp({ bridge }: AppProps) {
             onNavigate={(r) => navigate(carryChat(r, parsed, snapshot.agents, openedThreads))}
             features={features}
             onBrowserBounds={(b) => { void (resolvedBridge?.features ?? NO_FEATURES).setBrowserBounds(b); }}
-            onFeature={(action) => {
-                void (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {
+            onFeature={(action) =>
+                (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => {
+                    setFeatures((cur) => newestSnapshot(cur, data));
                     // A refused or failed toolchain action comes back IN the snapshot and is drawn on its row
                     // (ToolchainSurface); the console keeps its line as well.
                     const refusal = toolchainRefusalOf(action, data);
                     if (refusal) console.error('[genie] feature action refused:', refusal.reason);
-                    setFeatures(data);
+                    return { ok: true as const };
                 }).catch((error: unknown) => {
-                    // A refusal is a fact the surface shows; it is never swallowed. The surfaces that do not yet
-                    // carry an error line for a thrown refusal leave it here, in the console.
+                    // A refusal is a fact the surface shows; it is never swallowed. The outcome goes back to the control
+                    // that asked (a site row says it, with Retry: genie#1393); the console keeps its line as well.
                     console.error('[genie] feature action refused:', (error as Error).message);
-                });
-            }}
+                    return { ok: false as const, reason: refusalReason(error) };
+                })
+            }
             // The AgentInbox flyout reads its actions' answers (a thread, an attachment) and a send's refusal.
             featureAsk={(action) => (resolvedBridge?.features ?? NO_FEATURES).act(action).then((data) => { setFeatures(data); return data; })}
             onSend={(id, text, attachments) => (id ? send(id, text, attachments ?? []) : Promise.resolve<ChatSendOutcome>({ kind: 'failed', reason: 'No agent to send to.' }))}
@@ -2018,12 +2028,13 @@ function DesktopApp({ bridge }: AppProps) {
                         if (r.ok) readShares(forWorkspace);
                     });
                 }}
-                onRevoke={(linkId) => {
+                onRevoke={(link) => {
+                    // The row shows where its Revoke stands (ShareWorkspaceForm); the list is read again after it.
                     const forWorkspace = share.workspaceId;
-                    setShare((s) => (s ? { ...s, busy: true, problem: null } : s));
-                    void shares.revoke(linkId).then((r) => {
-                        setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, busy: false, minted: s.minted?.id === linkId ? null : s.minted, problem: r.ok ? null : r.reason } : s));
+                    return shares.revoke(link.id).then((r) => {
+                        if (r.ok) setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, minted: s.minted?.id === link.id ? null : s.minted } : s));
                         readShares(forWorkspace);
+                        return r;
                     });
                 }}
             />

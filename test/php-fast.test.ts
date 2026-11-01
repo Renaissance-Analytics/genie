@@ -32,7 +32,7 @@ describe('the managed php.ini', () => {
 });
 
 describe('the site’s Caddy and its PHP workers', () => {
-    const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102, fcgiPorts: [4102, 4103, 4104, 4105] } })!;
+    const php = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'php', root: 'public', fcgiPort: 4102, fcgiPorts: [4102, 4103, 4104, 4105] } })!;
     it('php_fastcgi names every worker (COUNTED: four)', () => {
         expect(php).toContain('php_fastcgi 127.0.0.1:4102 127.0.0.1:4103 127.0.0.1:4104 127.0.0.1:4105 {');
     });
@@ -42,7 +42,7 @@ describe('the site’s Caddy and its PHP workers', () => {
         expect(block).toMatch(/lb_try_duration/);
     });
     it('CONTROL: one worker reads exactly as before', () => {
-        const one = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
+        const one = serveCaddyfile({ sitePort: 4101, repoPath: '/repo', storageDir: '/data/sites/s/caddy-data', serve: { mode: 'php', root: 'public', fcgiPort: 4102 } })!;
         expect(one).toContain('php_fastcgi 127.0.0.1:4102 {');
     });
 });

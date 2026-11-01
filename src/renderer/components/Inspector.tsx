@@ -1,5 +1,5 @@
 import { FancyDiff } from '@particle-academy/fancy-diff';
-import { CodeView, Icon, JsonEditor } from '@particle-academy/react-fancy';
+import { Button, CodeView, Icon, JsonEditor } from '@particle-academy/react-fancy';
 import type { InspectorContent } from '../../core/inspector.js';
 import type { DiffHeader } from '../../core/agent-view.js';
 
@@ -58,14 +58,14 @@ export function Inspector({ content, onClose, embedded = false, header = null, f
                         <span>· edit {header.index} of {header.total}</span>
                     </span>
                 ) : null}
-                <button
+                <Button size="xs" labelClassName="contents"
                     type="button"
                     aria-label="Close inspector"
                     onClick={onClose}
                     className="flex size-5 items-center justify-center rounded text-[var(--fg-4)] hover:bg-[var(--bg-2)]"
                 >
                     <Icon name="x" size="xs" />
-                </button>
+                </Button>
             </div>
 
             <div className="min-h-0 flex-1 overflow-auto">
@@ -104,8 +104,8 @@ export function Inspector({ content, onClose, embedded = false, header = null, f
                 put back through the file panel's write, only where the file still holds exactly what the edit wrote. */}
             {content.kind === 'diff' && (filesRoute || onRevert) ? (
                 <div className="flex h-8 shrink-0 items-center gap-3 border-t border-[var(--border-1)] px-3">
-                    {filesRoute ? <button type="button" data-action="open-in-files" data-nav={filesRoute} onClick={() => onNavigate?.(filesRoute)} className="text-[11px] text-[var(--fg-2)] hover:underline">Open in workspace files</button> : null}
-                    {onRevert ? <button type="button" data-action="revert-edit" onClick={onRevert} className="text-[11px] text-[var(--fg-2)] hover:underline">Revert this edit</button> : null}
+                    {filesRoute ? <Button size="xs" type="button" data-action="open-in-files" data-nav={filesRoute} onClick={() => onNavigate?.(filesRoute)} className="text-[11px] text-[var(--fg-2)]">Open in workspace files</Button> : null}
+                    {onRevert ? <Button size="xs" type="button" data-action="revert-edit" onClick={onRevert} className="text-[11px] text-[var(--fg-2)]">Revert this edit</Button> : null}
                     {revertOutcome ? <span data-revert-outcome="" className="min-w-0 truncate font-mono text-[10px] text-[var(--fg-4)]">{revertOutcome}</span> : null}
                 </div>
             ) : null}

@@ -4,6 +4,7 @@ import type { AgentRow } from '../src/core/dashboard-view.js';
 import { dashboardAction } from '../src/core/keys.js';
 import { trayOf } from '../src/core/row-tray.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE ROW TRAY (§4.1 keyboard: `Space` toggles it; `.ai/plans/genie-2-dashboard-design.md` §2.3). The row's prose
@@ -56,9 +57,9 @@ describe('the board', () => {
         for (const s of ['target', 'delivered', 'context']) expect(html).toContain(`data-tray-section="${s}"`);
         expect(html).toMatch(/data-tray-section="target"[\s\S]*3\/7[\s\S]*verify the install/);
         expect(html).toMatch(/data-tray-section="context"[\s\S]*178k \/ 200k/);
-        expect(html).toMatch(/data-door="agent"[^>]*>Open agent →</);
-        expect(html).toMatch(/data-door="terminal"[^>]*>Terminal →</);
-        expect(html).toMatch(/data-door="files"[^>]*>Files →</);
+        expect(control(html, 'data-door="agent"')).toMatchObject({ tag: 'button', fancy: true, text: 'Open agent →' });
+        expect(control(html, 'data-door="terminal"')).toMatchObject({ tag: 'button', fancy: true, text: 'Terminal →' });
+        expect(control(html, 'data-door="files"')).toMatchObject({ tag: 'button', fancy: true, text: 'Files →' });
         const tray = html.slice(html.indexOf('data-row-tray="kai"'), html.indexOf('data-agent="wren"'));
         expect(tray).not.toMatch(/data-action="(allow|deny|answer)"|<textarea/);
     });

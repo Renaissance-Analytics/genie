@@ -4,6 +4,7 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
 import type { LiveSession } from '../src/core/roster.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE AGENT VIEW, RENDERED.
@@ -94,7 +95,7 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
 
         expect(html).not.toContain('data-tab="stream"');
         expect(html).toContain('data-tab="terminal"');
-        expect(html).not.toContain('disabled');
+        expect(html).not.toMatch(/\sdisabled=""/);
         // Asked for a tab it does not have, it falls back to its first — Activity, per the board — rather than
         // rendering an empty body under a strip that does not contain the selected tab.
         expect(html).toMatch(/data-tab="activity"[^>]*data-active="true"/);
@@ -357,7 +358,7 @@ describe('a parked approval renders in exactly ONE place', () => {
         // The provider is blocked on a SINGLE promise. A second answer resolves nothing, and
         // the second press would look ignored.
         const html = render({ session: parked(), chatSubject: null, answeringApproval: 'allow' });
-        expect(html).toMatch(/data-approval-option="deny"[^>]*disabled=""/);
+        expect(control(html, 'data-approval-option="deny"')!.open).toMatch(/\sdisabled=""/);
 
         // POSITIVE CONTROL: not disabled when nothing is in flight.
         //

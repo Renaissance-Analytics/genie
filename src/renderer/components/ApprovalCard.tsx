@@ -1,4 +1,4 @@
-import { Icon, Input } from '@particle-academy/react-fancy';
+import { Button, Icon, Input } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import type { Approval, OptionTone } from '../../core/approval.js';
 
@@ -92,7 +92,7 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
             />
             <div className="flex flex-wrap gap-2">
                 {approval.options.map((option) => (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         key={option.id}
                         type="button"
                         data-approval-option={option.id}
@@ -101,12 +101,13 @@ export function ApprovalCardView({ approval, answering, refusal = null, onAnswer
                         // The provider is blocked on a single promise; a second answer resolves
                         // nothing and the second press would look ignored.
                         disabled={answering !== null}
+                        loading={answering === option.id}
                         onClick={() => onAnswer(option.id, note)}
                         className={`rounded-md border px-2.5 py-1 text-xs disabled:opacity-50 ${TONE[option.tone]}`}
                     >
                         {option.label}
                         {KEY_HINT[option.tone] ? <span data-key-hint={KEY_HINT[option.tone]} className="ml-1.5 rounded-sm border border-current/30 px-1 font-mono text-[10px] opacity-70">{KEY_HINT[option.tone]}</span> : null}
-                    </button>
+                    </Button>
                 ))}
             </div>
             {/* The host would not take the last answer: say why, here, where the press was. The buttons above are live again. */}

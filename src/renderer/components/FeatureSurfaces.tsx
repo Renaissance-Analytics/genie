@@ -15,6 +15,7 @@ import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKin
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
@@ -63,6 +64,11 @@ interface SurfaceProps {
     /** Which tab a tabbed surface opens on; the surface’s own default otherwise. */
     readonly tab?: string | undefined;
     readonly data: FeatureData;
+    /**
+     * App.tsx's answers with a Promise<ActOutcome>, so a control that shows its progress can tell success from a refusal
+     * (SiteList, genie#1393); typed `void` so a surface or a test may pass any handler, and read through
+     * `Promise.resolve` by renderer/site-actions.ts, where a plain return counts as done.
+     */
     readonly onAction: (action: FeatureAction) => void;
     readonly onNavigate: (route: string) => void;
 }
@@ -115,9 +121,9 @@ export function KnowledgeSurface({ data, onAction, workspaces = [] }: SurfacePro
                 >
                     <Input name="q" type="search" defaultValue={query} placeholder="Search memories" leading={<Icon name="search" size="xs" />} />
                 </form>
-                <button type="button" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'knowledge.openAdd' })}>
+                <Button size="xs" type="button" className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'knowledge.openAdd' })}>
                     Add a memory
-                </button>
+                </Button>
             </Header>
             {adding ? (
                 <AddKnowledgeForm defaults={adding.defaults} problems={adding.problems} workspaces={workspaces} onSubmit={(form) => onAction({ kind: 'knowledge.create', form })} onCancel={() => onAction({ kind: 'knowledge.cancelForm' })} />
@@ -181,7 +187,7 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
     return (
         <li data-flow={f.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
             <span className={`h-2 w-2 rounded-full ${f.armed ? 'bg-[var(--success)]' : 'bg-[var(--fg-4)]'}`} />
-            <button type="button" data-flow-open={f.id} className="font-medium hover:underline" title="Open on the canvas" onClick={open}>{f.name}</button>
+            <Button size="xs" type="button" data-flow-open={f.id} className="font-medium" title="Open on the canvas" onClick={open}>{f.name}</Button>
             <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, f.workspaceId)}</span>
             {f.refusals.length > 0 ? <Badge color="amber" variant="soft" size="sm">{f.refusals.length} refused</Badge> : null}
             {last ? (
@@ -193,14 +199,14 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                 <span className="text-xs text-[var(--fg-4)]">not run yet</span>
             )}
             <span className="ml-auto flex gap-3">
-                <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</button>
+                <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.runNow', flowId: f.id })}>Run now</Button>
                 {f.armed ? (
-                    <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</button>
+                    <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'flows.disarm', flowId: f.id })}>Disarm</Button>
                 ) : (
-                    <button type="button" className="text-[13px]" onClick={() => onAsk('arm')}>Arm</button>
+                    <Button size="xs" type="button" className="text-[13px]" onClick={() => onAsk('arm')}>Arm</Button>
                 )}
-                <button type="button" className="text-[13px]" onClick={open}>Open</button>
-                <button type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAsk('delete')}>Delete</button>
+                <Button size="xs" type="button" className="text-[13px]" onClick={open}>Open</Button>
+                <Button size="xs" type="button" className="text-[13px] text-[var(--danger)]" onClick={() => onAsk('delete')}>Delete</Button>
             </span>
             <span data-flow-summary={f.id} className="basis-full truncate pl-5 text-xs text-[var(--fg-3)]">{[summary.trigger, ...summary.steps].join(' → ')}</span>
             <span className="basis-full pl-5 text-[11px] text-[var(--fg-4)]">{summary.steps.length} {summary.steps.length === 1 ? 'step' : 'steps'}</span>
@@ -216,7 +222,7 @@ export function FlowRow({ flow: f, workspaces, now, confirming, onAction, onAsk 
                                 <Badge color={OUTCOME_COLOR[r.outcome]} variant="soft" size="sm">{OUTCOME_LABEL[r.outcome]}</Badge>
                                 <span className="text-[var(--fg-3)]">{new Date(r.at).toLocaleString()}</span>
                                 <span className="text-[var(--fg-4)]">{r.trigger === 'manual' ? 'run now' : r.trigger === 'file' ? `when ${r.file ?? 'a file'} was added` : 'on schedule'}</span>
-                                {r.nodes ? <button type="button" className="text-[var(--fg-3)] underline" onClick={open} title="Open the flow; pick this run to see it on the canvas">on the canvas</button> : null}
+                                {r.nodes ? <Button size="xs" type="button" className="text-[var(--fg-3)]" onClick={open} title="Open the flow; pick this run to see it on the canvas">on the canvas</Button> : null}
                                 {r.reason ? <span className="text-[var(--fg-2)]">{r.reason}</span> : null}
                                 {r.steps && r.steps.length > 0 ? <RunSteps steps={r.steps} /> : null}
                             </li>
@@ -275,8 +281,8 @@ export function FlowConfirm({ flow: f, kind, now, onAction, onCancel }: {
                 <p className="font-medium">Delete “{f.name}”? It and its run history are removed.</p>
             )}
             <span className="mt-2 flex gap-2">
-                <button type="button" className={`rounded-md border px-2 py-0.5 ${kind === 'delete' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)]'}`} onClick={() => onAction({ kind: kind === 'arm' ? 'flows.arm' : 'flows.remove', flowId: f.id })}>{kind === 'arm' ? 'Arm' : 'Delete'}</button>
-                <button type="button" className="rounded-md border border-[var(--border-1)] px-2 py-0.5" onClick={onCancel}>Cancel</button>
+                <Button size="xs" type="button" className={`rounded-md border px-2 py-0.5 ${kind === 'delete' ? 'border-[var(--danger)] text-[var(--danger)]' : 'border-[var(--border-1)]'}`} onClick={() => onAction({ kind: kind === 'arm' ? 'flows.arm' : 'flows.remove', flowId: f.id })}>{kind === 'arm' ? 'Arm' : 'Delete'}</Button>
+                <Button size="xs" type="button" className="rounded-md border border-[var(--border-1)] px-2 py-0.5" onClick={onCancel}>Cancel</Button>
             </span>
         </div>
     );
@@ -300,9 +306,9 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
                     onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'flows.newFlow', workspaceId: w.id }); }}
                 >
                     <WorkspacePick workspaces={workspaces} name="workspace" />
-                    <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                    <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                         Add a flow
-                    </button>
+                    </Button>
                 </form>
             </Header>
             {flows === null ? (
@@ -311,9 +317,9 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
                 <div className="flex flex-col items-start gap-2 p-5 text-sm text-[var(--fg-3)]">
                     <p>No flows yet. A flow is a workflow you draw: a trigger (a schedule, a file landing, or you), then the steps it runs.</p>
                     {workspaces.length > 0 ? (
-                        <button type="button" data-flow-new-empty className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'flows.newFlow', workspaceId: workspaces[0]!.id })}>
+                        <Button size="xs" type="button" data-flow-new-empty className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'flows.newFlow', workspaceId: workspaces[0]!.id })}>
                             Build a flow on the canvas
-                        </button>
+                        </Button>
                     ) : null}
                 </div>
             ) : (
@@ -336,6 +342,50 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
 }
 
 /**
+ * THE SITE ROWS, each with its click in flight and its refusal (genie#1393): a Start, Stop or Restart disables that row at
+ * once, is never sent twice, and ends in success or the reason with Retry. The Hosting tab and a workspace's Sites modal
+ * both draw this, so the rule cannot differ between them. The one place the rows hold state; SiteRow stays hook-free.
+ */
+export function SiteList({ sites, editing, onAction }: { sites: readonly HostedSite[]; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
+    const siteActions = useSiteActions(onAction);
+    return (
+        <ul className="divide-y divide-[var(--border-1)]">
+            {sites.map((s) => (
+                <SiteRow key={s.id} site={s} editing={editing?.siteId === s.id ? editing : null} pending={siteActions.pending(s.id)} refusal={siteActions.refusal(s.id)} onAction={(a) => { siteActions.click(a); }} />
+            ))}
+        </ul>
+    );
+}
+
+/** The step a site row says (genie#1393): the click in flight first, then main's own progress; `null` when settled. */
+export type SiteRowStep = 'restarting' | 'stopping' | 'starting' | 'answering' | 'slow';
+
+/** Which action a pending click sent: that control spins, the others are only disabled. */
+const PENDING_ACTION: Readonly<Record<SitePending, FeatureAction['kind']>> = {
+    restart: 'hosting.restartSite',
+    stop: 'hosting.stopSite',
+    start: 'hosting.startSite',
+};
+
+const STEP_WORDS: Readonly<Record<SiteRowStep, string>> = {
+    restarting: 'restarting…',
+    stopping: 'stopping…',
+    starting: 'starting…',
+    answering: 'starting…',
+    slow: 'still starting…',
+};
+
+function siteStep(s: HostedSite, pending: SitePending | null): SiteRowStep | null {
+    if (pending === 'restart') return 'restarting';
+    if (pending === 'stop') return 'stopping';
+    if (pending === 'start') return 'starting';
+    if (s.state === 'starting') return s.step ?? 'answering';
+    // The supervisor bringing a crashed process back by itself.
+    if (s.state === 'restarting') return 'restarting';
+    return null;
+}
+
+/**
  * ONE SITE'S ROW (§6.6) — Genie 1's site row (WorkspaceSiteManager.tsx): the host, its state and port, and what can be
  * done with it. Every control makes the same call an agent's `sites` tool makes (hosting-actions.ts):
  *
@@ -348,40 +398,78 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
  *
  * A site Genie 2 cannot serve says why and offers nothing to click. Hook-free: what is open is native `<details>` or the
  * main process's form state, so the row renders the same on the server, in a test and on screen.
+ *
+ * EVERY ACTION SHOWS ITS PROGRESS (genie#1393; the owner's rule: obvious actions, visible progress, never silent). A click
+ * is `pending` until main answers (renderer/site-actions.ts): the row's controls are disabled at once and it says the
+ * step, restarting / stopping / starting. Then main's own progress: starting while the port has not answered, still
+ * starting (slow) past the first window, with Retry. It ends green (running) or red (failed or exited: the reason, and
+ * Retry). A refused click says why on the row, with Retry. Icons, not words: each control is an icon named by its label.
  */
-export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
-    // Starting (parity audit #9): its process runs but its port has not answered — Stop, but nothing to Open yet.
-    const starting = s.state === 'starting';
+export function SiteRow({ site: s, editing, onAction, pending = null, refusal = null }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; pending?: SitePending | null; refusal?: SiteRefusal | null }) {
+    const step = siteStep(s, pending);
+    const busy = pending !== null;
     const up = s.state === 'running' || s.state === 'restarting' || s.state === 'external';
-    // Its port never answered: the processes still run, and Retry starts it again on fresh ports (a restart).
-    const silent = s.state === 'failed' && s.processIds.length > 0;
-    const button = 'text-[13px]';
+    const starting = s.state === 'starting';
+    // Failed (no answer past the ceiling, or the supervisor gave up) or exited: Retry starts it again on fresh ports.
+    const down = (s.state === 'failed' || s.state === 'exited') && s.processIds.length > 0;
+    const status = step !== null ? 'progress' : up ? 'running' : down ? 'failed' : s.state === 'unservable' ? 'unservable' : 'stopped';
+    // Every control is react-fancy's Button (the owner, 2026-11-01): an icon-only circle named by its label. The one whose
+    // action is in flight spins (`loading`); every other lifecycle control is disabled until main answers.
+    const control = (action: string, label: string, icon: string, act: FeatureAction, color?: 'red') => (
+        <Button
+            type="button"
+            variant="circle"
+            size="sm"
+            icon={icon}
+            {...(color ? { color } : {})}
+            data-site-action={action}
+            aria-label={label}
+            title={label}
+            disabled={busy}
+            loading={busy && PENDING_ACTION[pending!] === act.kind && action !== 'retry-refused'}
+            onClick={() => onAction(act)}
+        />
+    );
     return (
         <li data-site={s.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+            <span
+                data-site-status={status}
+                {...(step !== null ? { 'data-site-step': step } : {})}
+                title={step !== null ? STEP_WORDS[step] : s.state}
+                aria-label={step !== null ? STEP_WORDS[step] : s.state}
+                className="inline-flex items-center gap-1.5"
+            >
+                {step !== null ? (
+                    <span data-site-spinner className={step === 'slow' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}><Icon name="loader-circle" size="sm" className="animate-spin" /></span>
+                ) : status === 'running' ? (
+                    <span className="text-[var(--success)]"><Icon name="circle-check" size="sm" /></span>
+                ) : status === 'failed' ? (
+                    <span className="text-[var(--danger)]"><Icon name="circle-x" size="sm" /></span>
+                ) : (
+                    <span className="text-[var(--fg-4)]"><Icon name="circle" size="sm" /></span>
+                )}
+            </span>
             <span className="font-mono">{s.host}</span>
-            <Badge variant="soft" size="sm">{starting ? 'starting…' : s.state}</Badge>
+            {/* The step in words: only while something is happening, and only the words needed. */}
+            {step !== null ? <span className={`text-xs ${step === 'slow' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{STEP_WORDS[step]}</span> : null}
             {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
-            {/* Why it is not served — an unservable declaration, or the refusal its last start met. */}
+            {/* Why it is not served — an unservable declaration, the refusal its last start met, its process's exit. */}
             {s.problem ? <span data-site-problem className="text-sm text-[var(--danger)]">{s.problem}</span> : null}
+            {refusal ? (
+                <span className="inline-flex items-center gap-2 text-sm text-[var(--danger)]">
+                    <span data-site-refusal>{refusal.reason}</span>
+                    {control('retry-refused', 'Retry', 'rotate-ccw', refusal.action, 'red')}
+                </span>
+            ) : null}
             {s.state === 'unservable' ? null : (
-                <span className="ml-auto flex shrink-0 items-center gap-3">
-                    {up ? (
-                        <button type="button" data-site-action="open" className={button} onClick={() => onAction({ kind: 'hosting.openSite', siteId: s.id })}>Open</button>
-                    ) : null}
-                    {up && s.state !== 'external' ? (
-                        <button type="button" data-site-action="restart" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Restart</button>
-                    ) : null}
-                    {silent ? (
-                        <button type="button" data-site-action="retry" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Retry</button>
-                    ) : null}
-                    {up || starting || silent ? (
-                        <button type="button" data-site-action="stop" className={button} onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
-                    ) : (
-                        <button type="button" data-site-action="start" className={button} onClick={() => onAction({ kind: 'hosting.startSite', siteId: s.id })}>Start</button>
-                    )}
-                    {editing ? null : (
-                        <button type="button" data-site-action="edit" className={button} onClick={() => onAction({ kind: 'hosting.editSite', siteId: s.id })}>Edit</button>
-                    )}
+                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {up ? control('open', 'Open', 'external-link', { kind: 'hosting.openSite', siteId: s.id }) : null}
+                    {up && s.state !== 'external' ? control('restart', 'Restart', 'rotate-cw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
+                    {down || (starting && s.step === 'slow') ? control('retry', 'Retry', 'rotate-ccw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
+                    {up || starting || (s.state === 'failed' && s.processIds.length > 0)
+                        ? control('stop', 'Stop', 'square', { kind: 'hosting.stopSite', siteId: s.id })
+                        : down ? null : control('start', 'Start', 'play', { kind: 'hosting.startSite', siteId: s.id })}
+                    {editing ? null : control('edit', 'Edit', 'pencil', { kind: 'hosting.editSite', siteId: s.id })}
                 </span>
             )}
             {editing ? (
@@ -426,7 +514,7 @@ export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; edit
                     <summary className="cursor-pointer text-[var(--fg-3)]">Remove…</summary>
                     <div className="mt-1 flex items-center gap-3">
                         <span>Remove {s.host}? It is stopped and taken out of this workspace’s project.json. Its folder and files are not touched.</span>
-                        <button type="button" data-site-action="remove" className="rounded-lg border border-[var(--danger)] px-2.5 py-1 text-[13px] text-[var(--danger)]" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</button>
+                        <Button type="button" size="sm" color="red" data-site-action="remove" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</Button>
                     </div>
                 </details>
             )}
@@ -444,9 +532,9 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                     onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'hosting.addSite', workspaceId: w.id, repoPath: w.path }); }}
                 >
                     <WorkspacePick workspaces={workspaces} name="workspace" />
-                    <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                    <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                         Add a site
-                    </button>
+                    </Button>
                 </form>
             </Header>
             {adding?.kind === 'site' ? (
@@ -494,11 +582,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             {hosting.sites.length === 0 ? (
                                 <Empty>No sites yet. Add a site to serve a repo at its own .gen name.</Empty>
                             ) : (
-                                <ul className="divide-y divide-[var(--border-1)]">
-                                    {hosting.sites.map((s) => (
-                                        <SiteRow key={s.id} site={s} editing={hosting.editing?.siteId === s.id ? hosting.editing : null} onAction={onAction} />
-                                    ))}
-                                </ul>
+                                <SiteList sites={hosting.sites} editing={hosting.editing ?? null} onAction={onAction} />
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">
@@ -530,7 +614,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
             return (
                 <div data-frontdoor-line="blocked" className="flex items-center gap-3 px-5 py-2 text-sm">
                     <span className="flex-1">{frontDoor.reason}</span>
-                    <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.retryFrontDoor' })}>Try again</button>
+                    <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.retryFrontDoor' })}>Try again</Button>
                 </div>
             );
         }
@@ -545,7 +629,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
                         https://&lt;name&gt;.gen in your browser needs Genie’s certificate trusted; your OS will ask for permission once.
                         {frontDoor.trustError ? <span data-trust-error className="block text-[var(--fg-3)]">{frontDoor.trustError}</span> : null}
                     </span>
-                    <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.trustCertificate' })}>Trust certificate</button>
+                    <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.trustCertificate' })}>Trust certificate</Button>
                 </div>
             ) : null}
             {frontDoor.certificateError ? (
@@ -557,7 +641,7 @@ function FrontDoorLines({ frontDoor, onAction }: { frontDoor: FrontDoorStatus; o
                         <span>
                             Genie could not update the hosts file ({hosts.error}). Paste this block into <span className="font-mono">{frontDoor.hostsPath}</span> yourself, or try again.
                         </span>
-                        <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.syncHosts' })}>Try again</button>
+                        <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.syncHosts' })}>Try again</Button>
                     </div>
                     <pre data-manual-block className="overflow-auto rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{hosts.manualBlock}</pre>
                 </div>
@@ -620,9 +704,9 @@ export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now
                     {PROCESS_SCHEDULE_PRESETS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                 </select>
                 <Input name="scheduleCustom" placeholder="Custom schedule (0 3 * * *)" aria-label="Custom schedule" />
-                <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                     Add a process
-                </button>
+                </Button>
             </form>
             {processes.length === 0 ? (
                 <Empty>No background processes yet. Add one — a queue worker, a watcher, a dev server — and Genie keeps it running and brings it back after a restart.</Empty>
@@ -639,10 +723,10 @@ export function ProcessesPanel({ processes, workspaces, onAction, now = Date.now
                                 {p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
                                 {p.reason ? <span className="text-sm text-[var(--danger)]">{p.reason}</span> : null}
                                 <span className="ml-auto flex shrink-0 items-center gap-3">
-                                    {up ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</button> : null}
-                                    {up || !p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</button> : null}
-                                    {!up && p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</button> : null}
-                                    {!up && p.durable ? <button type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</button> : null}
+                                    {up ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.stopProcess', processId: p.id })}>Stop</Button> : null}
+                                    {up || !p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.restartProcess', processId: p.id })}>Restart</Button> : null}
+                                    {!up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.startProcess', processId: p.id })}>Start</Button> : null}
+                                    {!up && p.durable ? <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
                                 </span>
                                 {p.log && p.log.lines > 0 ? (
                                     <details data-process-log={p.id} className="basis-full">
@@ -677,11 +761,11 @@ function scheduledRow({ p, up, now, onAction }: { p: NonNullable<FeatureData['ho
             <span className="text-sm text-[var(--fg-2)]">{status}</span>
             {!nudge && p.command ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{p.command}</span> : null}
             <span className="ml-auto flex shrink-0 items-center gap-3">
-                <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.runScheduledNow', processId: p.id })}>Run now</button>
+                <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.runScheduledNow', processId: p.id })}>Run now</Button>
                 {s.enabled
-                    ? <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.pauseSchedule', processId: p.id })}>Pause schedule</button>
-                    : <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.enableSchedule', processId: p.id })}>Enable schedule</button>}
-                {!up ? <button type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</button> : null}
+                    ? <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.pauseSchedule', processId: p.id })}>Pause schedule</Button>
+                    : <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.enableSchedule', processId: p.id })}>Enable schedule</Button>}
+                {!up ? <Button size="xs" type="button" className="text-[13px]" onClick={() => onAction({ kind: 'hosting.removeProcess', processId: p.id })}>Remove</Button> : null}
             </span>
             <span className="basis-full text-xs text-[var(--fg-3)]">
                 {describeSchedule(s.cron)} · Next run: {formatNextRun(s.nextRunAt, now)} · Last run: {formatLastRun(s.lastRunAt, s.lastRunStatus, now)}
@@ -722,18 +806,18 @@ export function DeleteDataConfirm({ instance, workspaces, onAction, onCancel }: 
             {verdict.allowed ? (
                 <>
                     <span>Removes {instance.engine} {instance.version} and deletes {verdict.deletes}. This cannot be undone.</span>
-                    <button
+                    <Button size="xs"
                         type="button"
                         className="ml-auto rounded-lg bg-[var(--danger)] px-2.5 py-1 text-[13px] text-white"
                         onClick={() => onAction({ kind: 'services.remove', serviceId: instance.id, deleteData: true, ...(holder ? { workspaceId: holder } : {}) })}
                     >
                         Delete the data
-                    </button>
+                    </Button>
                 </>
             ) : (
                 <span data-delete-refused>{verdict.reason}</span>
             )}
-            <button type="button" className={verdict.allowed ? 'text-[13px]' : 'ml-auto text-[13px]'} onClick={onCancel}>Keep it</button>
+            <Button size="xs" type="button" className={verdict.allowed ? 'text-[13px]' : 'ml-auto text-[13px]'} onClick={onCancel}>Keep it</Button>
         </div>
     );
 }
@@ -756,9 +840,9 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                 onSubmit={(e) => { e.preventDefault(); const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace'); if (w) onAction({ kind: 'services.add', workspaceId: w.id }); }}
             >
                 <WorkspacePick workspaces={workspaces} name="workspace" />
-                <button type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
+                <Button size="xs" type="submit" disabled={workspaces.length === 0} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px] disabled:opacity-50">
                     Add an engine
-                </button>
+                </Button>
             </form>
             {services.instances.length === 0 ? (
                 <Empty>No service engines yet. Add an engine — Postgres, MySQL, MariaDB, Redis, Mongo, Mailpit, Meilisearch, S3, or an image of your own — dedicated to a workspace or shared by the workstation.</Empty>
@@ -781,21 +865,21 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                     {i.engine === 'custom' && i.image ? <span className="truncate font-mono text-xs text-[var(--fg-4)]">{i.image}</span> : null}
                                     <span className="ml-auto flex gap-3 text-[13px]">
                                         {warning !== null && scope.kind === 'dedicated' ? (
-                                            <button type="button" onClick={() => onAction({ kind: 'services.use', workspaceId: scope.workspaceId, serviceId: i.id })}>Make active</button>
+                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.use', workspaceId: scope.workspaceId, serviceId: i.id })}>Make active</Button>
                                         ) : null}
                                         {inbox ? (
                                             // In Genie's own browser: the surface first (it reports the box the page is placed in), then the page.
-                                            <button type="button" data-open-inbox={inbox} onClick={() => { onNavigate('genie://browser'); onAction({ kind: 'browser.navigate', url: inbox }); }}>Open inbox</button>
+                                            <Button size="xs" type="button" data-open-inbox={inbox} onClick={() => { onNavigate('genie://browser'); onAction({ kind: 'browser.navigate', url: inbox }); }}>Open inbox</Button>
                                         ) : null}
                                         {status === 'running' ? (
-                                            <button type="button" onClick={() => onAction({ kind: 'services.stop', serviceId: i.id })}>Stop</button>
+                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.stop', serviceId: i.id })}>Stop</Button>
                                         ) : (
-                                            <button type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</button>
+                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.start', serviceId: i.id })}>Start</Button>
                                         )}
-                                        <button type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</button>
-                                        <button type="button" data-service-update={i.id} disabled={status === 'docker-not-running' || status === 'absent'} onClick={() => onAction({ kind: 'services.update', serviceId: i.id })}>Update image…</button>
-                                        <button type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</button>
-                                        <button type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</button>
+                                        <Button size="xs" type="button" data-service-logs-button={i.id} onClick={() => onAction({ kind: 'services.logs', serviceId: i.id })}>{myLog ? 'Refresh logs' : 'Logs'}</Button>
+                                        <Button size="xs" type="button" data-service-update={i.id} disabled={status === 'docker-not-running' || status === 'absent'} onClick={() => onAction({ kind: 'services.update', serviceId: i.id })}>Update image…</Button>
+                                        <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.remove', serviceId: i.id, deleteData: false })}>Remove (keep data)</Button>
+                                        <Button size="xs" type="button" data-delete-data={i.id} className="text-[var(--danger)]" onClick={() => setConfirming(confirming === i.id ? null : i.id)}>Remove and delete data…</Button>
                                     </span>
                                 </div>
                                 {warning ? <p className="text-xs text-[var(--warning)]">{warning}</p> : null}
@@ -806,8 +890,8 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                         <p>{services.updating.note}</p>
                                         {services.updating.dependents.length > 0 ? <p className="text-[var(--warning)]">This interrupts: {services.updating.dependents.join('; ')}.</p> : null}
                                         <div className="flex gap-3">
-                                            <button type="button" onClick={() => onAction({ kind: 'services.update', serviceId: i.id, consent: true, confirmed: true })}>{services.updating.dependents.length > 0 ? 'Update and interrupt' : 'Pull and update'}</button>
-                                            <button type="button" onClick={() => onAction({ kind: 'services.cancelUpdate' })}>Cancel</button>
+                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.update', serviceId: i.id, consent: true, confirmed: true })}>{services.updating.dependents.length > 0 ? 'Update and interrupt' : 'Pull and update'}</Button>
+                                            <Button size="xs" type="button" onClick={() => onAction({ kind: 'services.cancelUpdate' })}>Cancel</Button>
                                         </div>
                                     </div>
                                 ) : null}
@@ -815,7 +899,7 @@ function ServicesPanel({ services, workspaces, onAction, onNavigate }: { service
                                     <div data-service-log={i.id} className="flex flex-col gap-1">
                                         <div className="flex items-center gap-3 text-xs text-[var(--fg-3)]">
                                             <span>Logs · the last {myLog.tail} lines Docker kept for this engine</span>
-                                            <button type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'services.hideLogs' })}>Hide logs</button>
+                                            <Button size="xs" type="button" className="ml-auto text-[13px]" onClick={() => onAction({ kind: 'services.hideLogs' })}>Hide logs</Button>
                                         </div>
                                         <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-[var(--bg-1)] p-2 font-mono text-xs">{myLog.text === '' ? 'The engine has written nothing yet.' : myLog.text}</pre>
                                     </div>
@@ -854,12 +938,12 @@ export function EngineChoices({ instances, workspaces, onAction }: { instances: 
                     <span className="font-mono">{c.chosen ? label(c.chosen) : 'none'}</span>
                     <span className="ml-auto flex flex-wrap gap-3 text-[13px]">
                         {c.candidates.filter((x) => x.instance.id !== c.chosen?.id).map((x) => (
-                            <button key={x.instance.id} type="button" data-use={x.instance.id} onClick={() => onAction({ kind: 'services.use', workspaceId: w.id, serviceId: x.instance.id })}>
+                            <Button size="xs" key={x.instance.id} type="button" data-use={x.instance.id} onClick={() => onAction({ kind: 'services.use', workspaceId: w.id, serviceId: x.instance.id })}>
                                 {x.detached ? `Attach ${label(x.instance)}` : `Use ${label(x.instance)}`}
-                            </button>
+                            </Button>
                         ))}
                         {c.chosen && c.chosen.scope.kind === 'shared' ? (
-                            <button type="button" data-detach={c.chosen.id} onClick={() => onAction({ kind: 'services.detach', workspaceId: w.id, serviceId: c.chosen!.id })}>Detach {label(c.chosen)} (keeps its data)</button>
+                            <Button size="xs" type="button" data-detach={c.chosen.id} onClick={() => onAction({ kind: 'services.detach', workspaceId: w.id, serviceId: c.chosen!.id })}>Detach {label(c.chosen)} (keeps its data)</Button>
                         ) : null}
                     </span>
                 </div>
@@ -974,12 +1058,12 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
     return (
         <div data-surface="toolchain" className="flex h-full min-h-0 flex-col">
             <Header title="Toolchain">
-                <button type="button" disabled={busy !== null} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
+                <Button size="xs" type="button" disabled={busy !== null} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.repair' })}>
                     Check and repair
-                </button>
-                <button type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.check' })}>
+                </Button>
+                <Button size="xs" type="button" disabled={busy !== null} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]" onClick={() => onAction({ kind: 'toolchain.check' })}>
                     Check again
-                </button>
+                </Button>
             </Header>
             {busy !== null ? <p data-toolchain-busy="" className="px-5 py-2 text-sm text-[var(--fg-2)]">{busy}</p> : null}
             {tc?.result ? <p data-toolchain-result="" className="px-5 py-2 text-sm">{tc.result}</p> : null}
@@ -993,7 +1077,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                 {f.result.kind === 'repaired' ? f.result.detail : f.result.reason}
                             </span>
                             {f.result.kind === 'needs-install' ? (
-                                <button type="button" disabled={busy !== null} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: (f.result as { tool: string }).tool, consent: true })}>Install</button>
+                                <Button size="xs" type="button" disabled={busy !== null} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: (f.result as { tool: string }).tool, consent: true })}>Install</Button>
                             ) : null}
                         </li>
                     ))}
@@ -1043,7 +1127,7 @@ export function ToolchainSurface({ data, onAction: act }: SurfaceProps) {
                                     {plan && 'label' in plan ? (
                                         <>
                                             <span data-install-command={t.tool} className="ml-auto truncate font-mono text-xs text-[var(--fg-3)]">{plan.label}{plan.elevated ? ' — asks for permission' : ''}</span>
-                                            <button type="button" disabled={busy !== null} className="shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: t.tool, consent: true })}>Install</button>
+                                            <Button size="xs" type="button" disabled={busy !== null} className="shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.install', tool: t.tool, consent: true })}>Install</Button>
                                         </>
                                     ) : plan ? (
                                         <span data-install-refused={t.tool} className="ml-auto text-xs text-[var(--fg-3)]">{plan.refused}</span>
@@ -1074,7 +1158,7 @@ function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { p
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`php` is PHP {current}, Genie's default.</span>
-                    <button type="button" data-use-system="php" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'php', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="php" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'php', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1093,7 +1177,7 @@ function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { p
                         {m.usedBy.length > 0 ? <span className="text-xs text-[var(--fg-2)]">pinned by {m.usedBy.join(', ')}</span> : null}
                         {m.advisory ? <span data-php-advisory={m.version} className="basis-full text-xs text-[var(--danger)]">{m.advisory}</span> : null}
                         <DefaultMark lang="php" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.usedBy.length > 0 || m.version === current} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : m.version === current ? `PHP ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.usedBy.length > 0 || m.version === current} title={m.usedBy.length > 0 ? `Pinned by ${m.usedBy.join(', ')} — change their PHP version first` : m.version === current ? `PHP ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePhp', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1103,9 +1187,9 @@ function PhpVersions({ php, current = null, busy, onAction, refusals = [] }: { p
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install from windows.php.net (checked against its published sha256):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-php-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPhp', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-php-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPhp', version: a.version, consent: true })}>
                             PHP {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1126,7 +1210,7 @@ function NodeVersions({ node, current = null, busy, onAction, refusals = [] }: {
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`node` is Node {current}, Genie's default.</span>
-                    <button type="button" data-use-system="node" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'node', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="node" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'node', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1141,7 +1225,7 @@ function NodeVersions({ node, current = null, busy, onAction, refusals = [] }: {
                         <span className="font-medium">Node {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="node" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Node ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Node ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeNode', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1151,9 +1235,9 @@ function NodeVersions({ node, current = null, busy, onAction, refusals = [] }: {
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install from nodejs.org (checked against its published sha256):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-node-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installNode', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-node-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installNode', version: a.version, consent: true })}>
                             Node {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1173,7 +1257,7 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`go` is Go {current}, Genie's default.</span>
-                    <button type="button" data-use-system="go" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'go', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="go" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'go', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1188,7 +1272,7 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
                         <span className="font-medium">Go {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="go" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Go ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeGo', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Go ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeGo', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1196,9 +1280,9 @@ function GoVersions({ go, current = null, busy, onAction, refusals = [] }: { go:
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install from go.dev (checked against its published sha256):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-go-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installGo', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-go-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installGo', version: a.version, consent: true })}>
                             Go {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1218,7 +1302,7 @@ function JavaVersions({ java, current = null, busy, onAction, refusals = [] }: {
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`java` and `javac` are Java {current}, Genie's default.</span>
-                    <button type="button" data-use-system="java" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'java', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="java" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'java', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1233,7 +1317,7 @@ function JavaVersions({ java, current = null, busy, onAction, refusals = [] }: {
                         <span className="font-medium">Java {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="java" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Java ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeJava', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Java ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeJava', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1243,9 +1327,9 @@ function JavaVersions({ java, current = null, busy, onAction, refusals = [] }: {
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install Eclipse Temurin from Adoptium (checked against its published sha256):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-java-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installJava', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-java-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installJava', version: a.version, consent: true })}>
                             Java {a.line} ({a.version})
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1265,7 +1349,7 @@ function RubyVersions({ ruby, current = null, busy, onAction, refusals = [] }: {
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`ruby`, `gem` and `bundle` are Ruby {current}, Genie's default.</span>
-                    <button type="button" data-use-system="ruby" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'ruby', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="ruby" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'ruby', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1280,7 +1364,7 @@ function RubyVersions({ ruby, current = null, busy, onAction, refusals = [] }: {
                         <span className="font-medium">Ruby {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="ruby" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Ruby ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeRuby', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Ruby ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeRuby', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1290,9 +1374,9 @@ function RubyVersions({ ruby, current = null, busy, onAction, refusals = [] }: {
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install (ruby-lang.org's source on Linux, RubyInstaller on Windows; checked against the published sha256):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-ruby-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRuby', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-ruby-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRuby', version: a.version, consent: true })}>
                             Ruby {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1312,7 +1396,7 @@ function RustVersions({ rust, current = null, busy, onAction, refusals = [] }: {
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`rustc` and `cargo` are Rust {current}, Genie's default.</span>
-                    <button type="button" data-use-system="rust" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'rust', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="rust" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'rust', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1327,7 +1411,7 @@ function RustVersions({ rust, current = null, busy, onAction, refusals = [] }: {
                         <span className="font-medium">Rust {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="rust" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Rust ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeRust', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Rust ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeRust', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1337,9 +1421,9 @@ function RustVersions({ rust, current = null, busy, onAction, refusals = [] }: {
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install through rustup (rust-lang.org; each part verified):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-rust-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRust', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-rust-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installRust', version: a.version, consent: true })}>
                             Rust {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1359,7 +1443,7 @@ function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] 
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`dotnet` is .NET SDK {current}, Genie's default.</span>
-                    <button type="button" data-use-system="dotnet" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'dotnet', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="dotnet" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'dotnet', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1374,7 +1458,7 @@ function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] 
                         <span className="font-medium">.NET SDK {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="dotnet" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `.NET SDK ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeDotnet', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `.NET SDK ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removeDotnet', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1382,9 +1466,9 @@ function DotnetVersions({ dotnet, current = null, busy, onAction, refusals = [] 
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install from Microsoft (checked against its published sha512):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-dotnet-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installDotnet', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-dotnet-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installDotnet', version: a.version, consent: true })}>
                             .NET SDK {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1405,7 +1489,7 @@ function PythonVersions({ python, current = null, busy, onAction, refusals = [] 
             {current !== null ? (
                 <p className="flex items-center gap-2 px-5 py-1 text-xs text-[var(--fg-3)]">
                     <span>`python` and `pip` are Python {current}, Genie's default.</span>
-                    <button type="button" data-use-system="python" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'python', version: null })}>Use the one on your PATH instead</button>
+                    <Button size="xs" type="button" data-use-system="python" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang: 'python', version: null })}>Use the one on your PATH instead</Button>
                 </p>
             ) : null}
             {refusals.map((r) => (
@@ -1420,7 +1504,7 @@ function PythonVersions({ python, current = null, busy, onAction, refusals = [] 
                         <span className="font-medium">Python {m.version}</span>
                         <span className="truncate font-mono text-xs text-[var(--fg-3)]">{m.dir}</span>
                         <DefaultMark lang="python" version={m.version} current={current} busy={busy} onAction={onAction} />
-                        <button type="button" disabled={busy || m.version === current} title={m.version === current ? `Python ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePython', version: m.version })}>Remove</button>
+                        <Button size="xs" type="button" disabled={busy || m.version === current} title={m.version === current ? `Python ${m.version} is the default — make another version the default first` : undefined} className="ml-auto shrink-0 text-[13px]" onClick={() => onAction({ kind: 'toolchain.removePython', version: m.version })}>Remove</Button>
                     </li>
                 ))}
             </ul>
@@ -1430,9 +1514,9 @@ function PythonVersions({ python, current = null, busy, onAction, refusals = [] 
                 <div className="flex flex-wrap items-center gap-2 px-5 py-2 text-sm">
                     <span className="text-xs text-[var(--fg-3)]">Install from python.org (checked against its published sha256):</span>
                     {addable.map((a) => (
-                        <button key={a.version} type="button" data-python-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPython', version: a.version, consent: true })}>
+                        <Button size="xs" key={a.version} type="button" data-python-install={a.version} disabled={busy} className="rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px]" onClick={() => onAction({ kind: 'toolchain.installPython', version: a.version, consent: true })}>
                             Python {a.version}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}
@@ -1452,16 +1536,16 @@ function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonN
             {mp.applied ? (
                 <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-[var(--fg-3)]">
                     <span>Terminals outside Genie use Genie's defaults too (set in {mp.where.join(', ')}).</span>
-                    <button type="button" data-machine-path-undo="" disabled={busy} className="text-[12px] underline" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: false })}>Undo</button>
+                    <Button size="xs" type="button" data-machine-path-undo="" disabled={busy} className="text-[12px]" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: false })}>Undo</Button>
                 </div>
             ) : (
                 <div className="flex flex-col gap-1 pt-1 text-xs text-[var(--fg-3)]">
                     <span>Genie's defaults apply to Genie's own terminals, processes and agents. To use them in every terminal, Genie adds these to the front of your PATH, once:</span>
                     <ul className="font-mono">{mp.entries.map((e) => <li key={e}>{e}</li>)}</ul>
                     <span>in {mp.targets.join(', ')}. Nothing else changes, and Undo puts it back exactly.</span>
-                    <button type="button" data-machine-path-apply="" disabled={busy} className="self-start rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px] text-[var(--fg-1)]" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: true, consent: true })}>
+                    <Button size="xs" type="button" data-machine-path-apply="" disabled={busy} className="self-start rounded-lg border border-[var(--border-1)] px-2 py-0.5 text-[13px] text-[var(--fg-1)]" onClick={() => onAction({ kind: 'toolchain.machinePath', apply: true, consent: true })}>
                         Use Genie's defaults in every terminal
-                    </button>
+                    </Button>
                 </div>
             )}
         </section>
@@ -1472,9 +1556,9 @@ function MachinePathCard({ mp, busy, onAction, refusal }: { mp: NonNullable<NonN
 function DefaultMark({ lang, version, current, busy, onAction }: { lang: 'node' | 'go' | 'php' | 'python' | 'dotnet' | 'rust' | 'ruby' | 'java'; version: string; current: string | null; busy: boolean; onAction: SurfaceProps['onAction'] }) {
     if (version === current) return <span data-is-default={`${lang}:${version}`} className="rounded-sm bg-[var(--primary)]/15 px-1.5 text-[11px] font-medium text-[var(--primary)]">Default</span>;
     return (
-        <button type="button" data-make-default={`${lang}:${version}`} disabled={busy} className="text-[12px] text-[var(--fg-2)] underline" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>
+        <Button size="xs" type="button" data-make-default={`${lang}:${version}`} disabled={busy} className="text-[12px] text-[var(--fg-2)]" onClick={() => onAction({ kind: 'toolchain.setDefault', lang, version })}>
             Make default
-        </button>
+        </Button>
     );
 }
 
@@ -1514,7 +1598,7 @@ function PrimaryWorkspaceRow({ value, onAction }: { value: string | null; onActi
                 <div className="text-xs text-[var(--fg-3)]">Default destination for NEW projects created from Genie. Existing projects can live anywhere — this is a default, not a constraint.</div>
             </div>
             <input readOnly value={value ?? ''} placeholder="No primary workspace chosen" className="w-64 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1 font-mono text-xs" />
-            {pickHostPath ? <button type="button" data-action="browse-primary-workspace" onClick={browse} className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]">Browse</button> : null}
+            {pickHostPath ? <Button size="xs" type="button" data-action="browse-primary-workspace" onClick={browse} className="rounded-md border border-[var(--border-1)] px-2.5 py-1 text-xs hover:bg-[var(--bg-2)]">Browse</Button> : null}
         </div>
     );
 }
@@ -1597,12 +1681,12 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             {g.items.map((i) => {
                                 const on = i.id === active && results === null;
                                 return (
-                                    <button key={i.id} type="button" data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} {...(on ? { 'aria-current': 'page' as const } : {})}
+                                    <Button variant="ghost" size="xs" labelClassName="contents" key={i.id} type="button" data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} {...(on ? { 'aria-current': 'page' as const } : {})}
                                         onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
                                         className={`flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[13px] ${on ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
                                         <Icon name={i.icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
                                         <span className="truncate">{i.label}</span>
-                                    </button>
+                                    </Button>
                                 );
                             })}
                         </div>
@@ -1991,14 +2075,14 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
                 <span>Driving {state.host} — {state.locked ? 'locked' : state.driving ? 'you hold the baton' : state.driver ? `${state.driver} is driving` : 'nobody is driving'}</span>
                 {upgradeLine}
                 {/* The host's OWNER only: a shared workspace cannot change the host itself (main/remote-host.ts refuses it). */}
-                {onUpgradeHost && state.isOwner && !upgrading ? <button type="button" data-action="upgrade-host" className={`ml-auto ${button}`} onClick={onUpgradeHost}>Upgrade {state.host}</button> : null}
-                <button type="button" className={`${onUpgradeHost && state.isOwner && !upgrading ? '' : 'ml-auto '}${button}`} onClick={onDisconnect}>Disconnect</button>
+                {onUpgradeHost && state.isOwner && !upgrading ? <Button size="xs" type="button" data-action="upgrade-host" className={`ml-auto ${button}`} onClick={onUpgradeHost}>Upgrade {state.host}</Button> : null}
+                <Button size="xs" type="button" className={`${onUpgradeHost && state.isOwner && !upgrading ? '' : 'ml-auto '}${button}`} onClick={onDisconnect}>Disconnect</Button>
             </div>
         );
     }
     // The link to a host dropped (Genie 1's remote.reconnect): one click back, with the token this device holds.
     const reconnect = state !== null && !state.connected && state.host && onReconnect ? (
-        <button type="button" data-action="reconnect" onClick={onReconnect} className={button}>Reconnect to {state.host}</button>
+        <Button size="xs" type="button" data-action="reconnect" onClick={onReconnect} className={button}>Reconnect to {state.host}</Button>
     ) : null;
     // THE KNOWN HOSTS (Genie 1's remote.known): each opens in its own window; Forget drops it and its token.
     const list = known.length > 0 ? (
@@ -2008,8 +2092,8 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
                     <span className="font-medium">{h.name ?? h.url.replace(/^wss?:\/\//, '').replace(/\/genie$/, '')}</span>
                     <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{h.url}</span>
                     <span className="ml-auto shrink-0 text-[11px] text-[var(--fg-3)]">{h.lastConnectedAt !== null ? agoText(h.lastConnectedAt, now) : h.paired ? 'paired' : ''}</span>
-                    {onOpenHost ? <button type="button" data-action="open-host" onClick={() => onOpenHost(h.url)} className={button}>Open</button> : null}
-                    {onForgetHost ? <button type="button" data-action="forget-host" onClick={() => onForgetHost(h.url)} className={button}>Forget</button> : null}
+                    {onOpenHost ? <Button size="xs" type="button" data-action="open-host" onClick={() => onOpenHost(h.url)} className={button}>Open</Button> : null}
+                    {onForgetHost ? <Button size="xs" type="button" data-action="forget-host" onClick={() => onForgetHost(h.url)} className={button}>Forget</Button> : null}
                 </li>
             ))}
         </ul>
@@ -2060,7 +2144,7 @@ export function ConnectRemote({ state, remembered, onConnect, onDisconnect, know
                 <span className="font-medium">This screen’s name</span>
                 <Input name="label" placeholder="glenn’s laptop" />
             </label>
-            <button type="submit" className={button}>Connect</button>
+            <Button size="xs" type="submit" className={button}>Connect</Button>
             {state?.lastRefusal ? <div data-problem="connect" className="basis-full text-xs text-[var(--danger)]">{state.lastRefusal}</div> : null}
         </form>
         </details>
@@ -2102,9 +2186,9 @@ function Plugins({ plugins, onAction }: { plugins: FeatureData['plugins']; onAct
                                     {p.label ? <span className={`text-xs ${p.label.startsWith('UNSIGNED') ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{p.label}</span> : null}
                                     {p.reason ? <span className="basis-full text-xs text-[var(--fg-3)]">{p.reason}</span> : null}
                                     {p.state === 'enabled' ? (
-                                        <button type="button" data-action="plugin-disable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: false })}>Disable</button>
+                                        <Button size="xs" type="button" data-action="plugin-disable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: false })}>Disable</Button>
                                     ) : p.state === 'disabled' ? (
-                                        <button type="button" data-action="plugin-enable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: true })}>Enable</button>
+                                        <Button size="xs" type="button" data-action="plugin-enable" data-plugin-id={p.id} className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'plugins.setEnabled', id: p.id, enabled: true })}>Enable</Button>
                                     ) : null}
                                 </li>
                                 );
@@ -2368,17 +2452,10 @@ function githubCapabilityList(rows: readonly GithubCapability[]) {
     );
 }
 
-const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
-    { ms: 3_600_000, label: '1 hour' },
-    { ms: 86_400_000, label: '1 day' },
-    { ms: 7 * 86_400_000, label: '7 days' },
-];
-
 /**
  * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
- * and who is driving, the lock as one button, and SHARING as a roster FIRST and the mint form SECOND:
- * a link is a credential you cannot unsend, so you see who already holds one before minting another.
- * A just-minted URL is shown once, and says so. No transport → the section says devices cannot connect.
+ * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
+ * link, made from a workspace's Share (ShareWorkspaceModal); the old local share link here was removed (audit M-d).
  */
 export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date.now() }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined; now?: number | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
@@ -2407,8 +2484,8 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                     <div data-remote-enabled={remote.enabled ? 'true' : 'false'} className="flex flex-wrap items-center gap-3 text-sm">
                         <Switch checked={remote.enabled} onCheckedChange={(checked) => onAction({ kind: 'settings.set', key: 'remote_access', value: checked })} aria-label="Let your other machines reach this Genie" />
                         <span>{remote.enabled ? `Your other machines can reach ${remote.host} through Tynn, and devices on your tailnet.` : `Remote access is off: your other machines cannot reach ${remote.host} through Tynn or your tailnet.`}</span>
-                        {remote.enabled ? <button type="button" data-action="remote-restart" className={button} onClick={() => onAction({ kind: 'remote.restart' })}>Restart</button> : null}
-                        {remote.enabled && remote.firewall ? <button type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</button> : null}
+                        {remote.enabled ? <Button size="xs" type="button" data-action="remote-restart" className={button} onClick={() => onAction({ kind: 'remote.restart' })}>Restart</Button> : null}
+                        {remote.enabled && remote.firewall ? <Button size="xs" type="button" data-action="remote-firewall" className={button} onClick={() => onAction({ kind: 'remote.allowFirewall' })}>Allow through Windows Firewall</Button> : null}
                         {remote.firewallOutcome ? <span data-firewall-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.firewallOutcome}</span> : null}
                     </div>
                     {/* TAILSCALE (Tynn #821; Genie 1's tailscale.status / install / up): remote access runs over the tailnet, so
@@ -2425,9 +2502,9 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                 <>
                                     <span className="text-[var(--fg-2)]">{remote.tailscale.remedy?.message ?? (remote.tailscale.state === 'needs-login' ? 'This machine is not on your tailnet yet.' : 'Tailscale is not ready.')}</span>
                                     {remote.tailscale.remedy?.command ? <code className="basis-full rounded-md bg-[var(--bg-2)] px-2 py-1 font-mono text-xs">{remote.tailscale.remedy.command}</code> : null}
-                                    {remote.tailscale.state === 'absent' ? <button type="button" data-action="tailscale-install" className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</button> : null}
-                                    {remote.tailscale.state === 'needs-login' ? <button type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</button> : null}
-                                    {remote.tailscale.state === 'needs-login' && remote.tailscale.authUrl ? <a data-action="tailscale-signin" href={remote.tailscale.authUrl} target="_blank" rel="noreferrer" className={button}>Sign in</a> : null}
+                                    {remote.tailscale.state === 'absent' ? <Button size="xs" type="button" data-action="tailscale-install" className={button} onClick={() => onAction({ kind: 'tailscale.install' })}>Install Tailscale</Button> : null}
+                                    {remote.tailscale.state === 'needs-login' ? <Button size="xs" type="button" data-action="tailscale-up" className={button} onClick={() => onAction({ kind: 'tailscale.up' })}>Connect</Button> : null}
+                                    {remote.tailscale.state === 'needs-login' && remote.tailscale.authUrl ? <Button size="xs" data-action="tailscale-signin" href={remote.tailscale.authUrl} target="_blank" rel="noreferrer" iconTrailing="arrow-right" className={button}>Sign in</Button> : null}
                                 </>
                             )}
                             {remote.tailscaleOutcome ? <span data-tailscale-outcome="" className="basis-full text-xs text-[var(--fg-3)]">{remote.tailscaleOutcome}</span> : null}
@@ -2463,7 +2540,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                     ) : (
                         <div className="flex flex-wrap items-center gap-3 text-sm">
                             <span className="font-mono text-xs text-[var(--fg-4)]">{remote.url}</span>
-                            <button type="button" className={button} onClick={() => onAction({ kind: 'remote.issuePin' })}>Pair a device</button>
+                            <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: 'remote.issuePin' })}>Pair a device</Button>
                             {remote.pin ? (
                                 <span className="flex items-center gap-2">
                                     <span data-pin={remote.pin.code} className="font-mono text-lg tracking-[0.3em]">{remote.pin.code}</span>
@@ -2481,7 +2558,7 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                         </div>
                     )}
                     <div className="flex items-center gap-3 text-sm">
-                        <button type="button" className={button} onClick={() => onAction({ kind: remote.locked ? 'remote.unlock' : 'remote.lock' })}>{remote.locked ? 'Unlock' : 'Lock'}</button>
+                        <Button size="xs" type="button" className={button} onClick={() => onAction({ kind: remote.locked ? 'remote.unlock' : 'remote.lock' })}>{remote.locked ? 'Unlock' : 'Lock'}</Button>
                         <span className="text-xs text-[var(--fg-3)]">{remote.locked ? 'Locked: every remote change is refused until you unlock; reading still works.' : 'Lock refuses every remote change at once.'}</span>
                     </div>
                     <div>
@@ -2502,8 +2579,8 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                                 </Tooltip>
                                             ) : null}
                                             <span className="font-mono text-xs text-[var(--fg-4)]">paired {d.pairedAt} · seen {d.lastSeenAt}</span>
-                                            {soon ? <button type="button" data-action="repair-device" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.issuePin', replaces: d.id })}>Re-pair</button> : null}
-                                            <button type="button" className={`${soon ? '' : 'ml-auto '}${button}`} onClick={() => onAction({ kind: 'remote.revokeDevice', deviceId: d.id })}>Revoke</button>
+                                            {soon ? <Button size="xs" type="button" data-action="repair-device" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.issuePin', replaces: d.id })}>Re-pair</Button> : null}
+                                            <Button size="xs" type="button" className={`${soon ? '' : 'ml-auto '}${button}`} onClick={() => onAction({ kind: 'remote.revokeDevice', deviceId: d.id })}>Revoke</Button>
                                         </li>
                                     );
                                 })}
@@ -2523,45 +2600,6 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                 ))}
                             </ul>
                         )}
-                    </div>
-                    <div>
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Sharing</h3>
-                        {remote.shares.length === 0 ? <p className="text-sm text-[var(--fg-3)]">No share links. A link admits one person to one workspace on {remote.host}.</p> : (
-                            <ul className="divide-y divide-[var(--border-1)]">
-                                {remote.shares.map((s) => (
-                                    <li key={s.id} data-share={s.id} className="flex items-center gap-3 py-1.5 text-sm">
-                                        <span className="font-medium">{s.grantedTo}</span>
-                                        <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, s.workspaceId)}</span>
-                                        <Badge variant="soft" size="sm">{s.revoked ? 'revoked' : s.served ? 'served' : 'not shown yet'}</Badge>
-                                        {!s.revoked ? <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.revokeShare', shareId: s.id })}>Revoke</button> : null}
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                        {remote.servedLink ? (
-                            <div data-served-link className="mt-2 rounded-xl border border-[var(--warning)] p-3 text-sm">
-                                <p>This URL is shown once — copy it now; Genie will not show it again.</p>
-                                <code className="block select-all break-all font-mono text-xs">{remote.servedLink.url}</code>
-                            </div>
-                        ) : null}
-                        <form
-                            data-form="mint-share"
-                            className="mt-2 flex flex-wrap items-end gap-2"
-                            onSubmit={(e) => {
-                                e.preventDefault();
-                                const data = new FormData(e.currentTarget);
-                                const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace');
-                                if (!w) return;
-                                onAction({ kind: 'remote.mintShare', workspaceId: w.id, grantedTo: String(data.get('grantedTo') ?? ''), expiresInMs: Number(data.get('expiresInMs') ?? EXPIRIES[0]!.ms) });
-                            }}
-                        >
-                            <WorkspacePick workspaces={workspaces} name="workspace" />
-                            <Input name="grantedTo" placeholder="who gets it" />
-                            <select name="expiresInMs" defaultValue={String(EXPIRIES[0]!.ms)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
-                                {EXPIRIES.map((x) => <option key={x.ms} value={String(x.ms)}>{x.label}</option>)}
-                            </select>
-                            <button type="submit" disabled={workspaces.length === 0} className={`${button} disabled:opacity-50`}>Mint a link</button>
-                        </form>
                     </div>
                 </>
             )}
@@ -2593,15 +2631,15 @@ export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps
     return (
         <div data-surface="browser" className="flex h-full min-h-0 flex-col">
             <div data-view-header="" className="flex h-14 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-5">
-                <button type="button" data-browser-nav="back" aria-label="Back" title="Back" disabled={!canGoBack} onClick={() => onAction({ kind: 'browser.back' })} className={chromeButton}>
+                <Button size="xs" labelClassName="contents" type="button" data-browser-nav="back" aria-label="Back" title="Back" disabled={!canGoBack} onClick={() => onAction({ kind: 'browser.back' })} className={chromeButton}>
                     <Icon name="chevron-left" size="xs" />
-                </button>
-                <button type="button" data-browser-nav="forward" aria-label="Forward" title="Forward" disabled={!canGoForward} onClick={() => onAction({ kind: 'browser.forward' })} className={chromeButton}>
+                </Button>
+                <Button size="xs" labelClassName="contents" type="button" data-browser-nav="forward" aria-label="Forward" title="Forward" disabled={!canGoForward} onClick={() => onAction({ kind: 'browser.forward' })} className={chromeButton}>
                     <Icon name="chevron-right" size="xs" />
-                </button>
-                <button type="button" data-browser-nav="reload" aria-label="Reload" title="Reload" disabled={url === null} onClick={() => onAction({ kind: 'browser.reload' })} className={chromeButton}>
+                </Button>
+                <Button size="xs" labelClassName="contents" type="button" data-browser-nav="reload" aria-label="Reload" title="Reload" disabled={url === null} onClick={() => onAction({ kind: 'browser.reload' })} className={chromeButton}>
                     <Icon name="rotate-cw" size="xs" />
-                </button>
+                </Button>
                 {/* Keyed by the url: the field shows the page the view reports (a link, a redirect, back), not a stale entry. */}
                 <form
                     key={url ?? ''}
@@ -2618,7 +2656,7 @@ export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps
             {routes.length > 0 ? (
                 <div data-browser-sites className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-[var(--border-1)] px-5 py-1.5">
                     {routes.map((r) => (
-                        <button
+                        <Button size="xs"
                             key={r.host}
                             type="button"
                             data-browser-site={r.host}
@@ -2627,7 +2665,7 @@ export function BrowserSurface({ data, onAction, onBrowserBounds }: SurfaceProps
                             className={`rounded-md px-2 py-0.5 font-mono text-[12px] hover:bg-[var(--bg-1)] ${nav?.kind === 'site' && nav.host === r.host ? 'bg-[var(--bg-1)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}
                         >
                             {r.host}
-                        </button>
+                        </Button>
                     ))}
                 </div>
             ) : null}

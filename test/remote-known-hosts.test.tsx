@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { knownHosts, rememberedTokens, remoteFromSearch, remoteWindowSearch, type TokenStorage } from '../src/renderer/remote-session.js';
 import { ConnectRemote } from '../src/renderer/components/FeatureSurfaces.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * KNOWN HOSTS, AND A WINDOW PER REMOTE HOST (the owner, 2026-10-19: "in this release we also need to get the Device
@@ -88,6 +89,6 @@ describe('the Network page — known hosts, Open, Forget, Reconnect', () => {
     it('a window whose link to its host dropped offers Reconnect to that host', () => {
         const dropped = { connected: false, host: 'studio', isOwner: true, workspaceId: null, driving: false, driver: null, locked: false, lastRefusal: 'the connection closed', token: null };
         const html = render({ state: dropped, onReconnect: () => {} });
-        expect(html).toMatch(/data-action="reconnect"[^>]*>Reconnect to studio</);
+        expect(control(html, 'data-action="reconnect"')).toMatchObject({ tag: 'button', fancy: true, text: 'Reconnect to studio' });
     });
 });

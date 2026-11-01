@@ -142,6 +142,16 @@ export class ProcessSupervisor {
             // One exit seen is the cue to look at the rest: a lost pty host takes every pty at once.
             this.recheck();
         });
+        // A port that creates processes elsewhere (the spawn host, genie#1397) knows the pid only once the process exists.
+        pty.onPid?.((ptyId, pid) => {
+            const id = this.#byPty.get(ptyId);
+            const entry = id === undefined ? undefined : this.#entries.get(id);
+            if (!entry || entry.ptyId !== ptyId || entry.pid === pid) return;
+            entry.pid = pid;
+            entry.log.note(`pid ${pid}`);
+            const status = this.#status(entry);
+            for (const l of this.#changeListeners) l(status);
+        });
         pty.onData((ptyId, data) => {
             const id = this.#byPty.get(ptyId);
             if (id === undefined) return;
@@ -328,13 +338,14 @@ export class ProcessSupervisor {
             ...(entry.spec.env ? { env: { ...entry.spec.env } } : {}),
         });
         entry.ptyId = opened.id;
-        entry.pid = opened.pid;
+        // 0 = not known yet (the spawn host answers it through onPid): never a pid to ask the OS about.
+        entry.pid = opened.pid > 0 ? opened.pid : null;
         entry.exitCode = null;
         entry.startedAt = this.#clock.now();
         entry.cancelRestart = null;
         entry.suspectAt = null;
         this.#byPty.set(opened.id, entry.spec.id);
-        entry.log.note(`started (pid ${opened.pid}): ${entry.spec.command}`);
+        entry.log.note(entry.pid !== null ? `started (pid ${entry.pid}): ${entry.spec.command}` : `started: ${entry.spec.command}`);
         this.#transition(entry, 'running');
     }
 

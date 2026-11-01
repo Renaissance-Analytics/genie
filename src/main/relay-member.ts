@@ -58,6 +58,29 @@ interface SiteStream {
 
 const SITE_OPEN_TIMEOUT_MS = 15_000;
 
+/**
+ * RENEWING THE GRANT DURING A LIVE SESSION (genie#1401). Tynn's grants live 15 minutes and the host ends a session whose
+ * grant has expired, so the member fetches a fresh one (bound to the SAME proof key) before then and hands it to the host
+ * as a control `grant-renew`. For a share link that is also what keeps its one session alive at Tynn (tynn.ai #394): Tynn
+ * re-mints from a link pass only while the session is live. Renew this long before the grant in use expires, or after a
+ * third of its life when it is short; a refused renewal is tried again every RENEW_RETRY_MS until that grant expires.
+ */
+const RENEW_LEAD_MS = 5 * 60_000;
+const RENEW_RETRY_MS = 30_000;
+
+/** The grant's `exp` in ms, read only to schedule its renewal (the host is the one that verifies it). */
+function expiresAtOf(token: string): number | null {
+    try {
+        const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as { exp?: unknown };
+        return typeof claims.exp === 'number' ? claims.exp * 1000 : null;
+    } catch {
+        return null;
+    }
+}
+
+/** A fresh grant for this connection's key (main: `mintConnectGrant` with the same `pop_jwk`), or why not. */
+export type RenewGrant = () => Promise<{ ok: true; token: string } | { ok: false; reason: string }>;
+
 /** `offline`: the relay said the machine is not connected to it (genie-cloud's `no-host`), as against any other refusal. */
 export type RelayMemberResult = { ok: true; transport: RelayMemberTransport } | { ok: false; reason: string; offline?: true };
 
@@ -68,6 +91,8 @@ export function openRelayMember(input: {
     grant: string;
     pop: PopKeypair;
     timeoutMs?: number;
+    /** Fetch a fresh grant during the session (genie#1401); absent = the session lasts as long as its first grant. */
+    renew?: RenewGrant;
 }): Promise<RelayMemberResult> {
     return new Promise((resolve) => {
         const ws = input.socket(`${input.relayUrl.replace(/\/+$/, '')}/ws/member`);
@@ -80,6 +105,35 @@ export function openRelayMember(input: {
         let offline = false;
         const streams = new Map<string, SiteStream>();
         let nextReq = 0;
+        let renewTimer: ReturnType<typeof setTimeout> | null = null;
+
+        /** Schedule the next renewal for the grant in use, which expires at `expiresAt`. */
+        const scheduleRenew = (expiresAt: number | null, retry = false) => {
+            if (renewTimer) clearTimeout(renewTimer);
+            renewTimer = null;
+            if (!input.renew || closed || expiresAt === null) return;
+            const left = expiresAt - Date.now();
+            if (left <= 0) return; // the host ends it; nothing left to renew
+            const wait = retry ? Math.min(RENEW_RETRY_MS, left) : Math.max(0, left - Math.min(RENEW_LEAD_MS, Math.floor(left / 3)));
+            renewTimer = setTimeout(() => { void renewNow(expiresAt); }, wait);
+        };
+        const renewNow = async (current: number) => {
+            renewTimer = null;
+            if (!input.renew || closed) return;
+            let fresh: Awaited<ReturnType<RenewGrant>>;
+            try {
+                fresh = await input.renew();
+            } catch (error) {
+                fresh = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+            }
+            if (closed || sid === null || ws.readyState !== OPEN) return;
+            if (!fresh.ok) {
+                scheduleRenew(current, true);
+                return;
+            }
+            ws.send(encodeFrame({ kind: 'data', channel: 'control', sid, payload: { type: 'grant-renew', grant: fresh.token } }));
+            scheduleRenew(expiresAtOf(fresh.token));
+        };
 
         const finish = (result: RelayMemberResult) => {
             if (settled) return;
@@ -91,6 +145,8 @@ export function openRelayMember(input: {
             if (closed) return;
             closed = true;
             because = reason;
+            if (renewTimer) clearTimeout(renewTimer);
+            renewTimer = null;
             input.pop.discard();
             for (const stream of [...streams.values()]) {
                 stream.settle?.({ ok: false, reason: reason ?? 'the connection to the host closed' });
@@ -180,6 +236,7 @@ export function openRelayMember(input: {
                     return;
                 }
                 sid = reply.sid;
+                scheduleRenew(expiresAtOf(input.grant));
                 finish({ ok: true, transport });
                 return;
             }

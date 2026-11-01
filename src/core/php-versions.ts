@@ -229,7 +229,8 @@ export const PHP_INI_EXTENSIONS: readonly string[] = [
  * answer: a file that exists, or nothing — naming a missing file turns errno 60 into 77 and hides the cause.
  */
 export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win32', ca: PhpCaSettings = {}): string {
-    if (platform !== 'win32') return linuxIni(versionDir, ca);
+    const loadOpcache = !opcacheIsBuiltIn(versionOfDir(versionDir));
+    if (platform !== 'win32') return linuxIni(versionDir, ca, loadOpcache);
     return [
         '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
         `; Owned by Genie: ${versionDir}`,
@@ -252,8 +253,8 @@ export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win3
         // left it out because it "makes php-cgi.exe die at startup on Windows"; the file cache in a directory that EXISTS
         // (Genie makes it: `phpCacheDir`) with the fallback on is what lets php-cgi start — measured by
         // scripts/acceptance-php.ts on the Windows test VM. Timestamps are checked on every request: these are sites being
-        // developed, and an edited file must show at once.
-        'zend_extension=opcache',
+        // developed, and an edited file must show at once. Loaded below 8.5 only: from 8.5 it is built in (genie#1394).
+        ...(loadOpcache ? ['zend_extension=opcache'] : []),
         'opcache.enable=1',
         'opcache.enable_cli=0',
         `opcache.file_cache="${phpCacheDir(versionDir)}"`,
@@ -271,7 +272,7 @@ export function phpIniContents(versionDir: string, platform: PhpPlatform = 'win3
  * again warns "Module already loaded" on every start) and no extension_dir — the build knows its own, where opcache.so
  * is. Opcache by name, without Windows' file cache (that answers a php-cgi.exe start-up failure Linux does not have).
  */
-function linuxIni(versionDir: string, ca: PhpCaSettings): string {
+function linuxIni(versionDir: string, ca: PhpCaSettings, loadOpcache: boolean): string {
     return [
         '; Genie-managed php.ini — rewritten when Genie reinstalls this version.',
         `; Owned by Genie: ${versionDir}`,
@@ -287,7 +288,7 @@ function linuxIni(versionDir: string, ca: PhpCaSettings): string {
         'error_reporting = E_ALL',
         '',
         ...caLines(ca),
-        'zend_extension=opcache',
+        ...(loadOpcache ? ['zend_extension=opcache'] : []),
         'opcache.enable=1',
         'opcache.enable_cli=0',
         'opcache.validate_timestamps=1',
@@ -296,6 +297,25 @@ function linuxIni(versionDir: string, ca: PhpCaSettings): string {
         'opcache.max_accelerated_files=50000',
         '',
     ].join('\n');
+}
+
+/**
+ * OPCACHE IS BUILT IN FROM PHP 8.5 (genie#1394): every 8.5 build has it compiled in and there is no extension to load, so
+ * `zend_extension=opcache` fails ("Failed loading Zend extension 'opcache'") and php-cgi's start-up check refuses the
+ * version. Below 8.5 it is a loadable extension and the ini must load it. A version Genie cannot read is treated as one
+ * that needs loading (the behaviour every version had before).
+ */
+export function opcacheIsBuiltIn(version: string): boolean {
+    const m = /^(\d+)\.(\d+)/.exec(version);
+    if (!m) return false;
+    const major = Number(m[1]);
+    const minor = Number(m[2]);
+    return major > 8 || (major === 8 && minor >= 5);
+}
+
+/** A managed version's directory is named by its version (`<root>/8.5.12`, phpVersionsRoot): that name. */
+function versionOfDir(versionDir: string): string {
+    return versionDir.split(/[\\/]/).filter(Boolean).pop() ?? '';
 }
 
 /** The CA file each of PHP's two TLS stacks is told to trust; an absent key is not written. */

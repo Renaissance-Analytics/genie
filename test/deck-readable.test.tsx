@@ -13,6 +13,7 @@ import type { PendingQuestion } from '../src/main/attention-store.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { Deck } from '../src/renderer/components/Deck.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE DECK'S QUESTIONS, READABLE (the owner, 2026-10-15, with a screenshot of the Deck: "I can't read this. This UI is
@@ -129,7 +130,10 @@ describe('Dismiss on the Deck', () => {
 
     it('every agent question has Dismiss beside Answer; a tool approval does not (control)', () => {
         const html = render([...itemsOf([pending()]), approval], { onDismiss: () => {} });
-        expect(html).toMatch(/data-action="deck-submit"[\s\S]*?data-action="question-dismiss"[^>]*data-deck-dismiss="q_1"[^>]*>Dismiss</);
+        expect(html.indexOf('data-action="question-dismiss"')).toBeGreaterThan(html.indexOf('data-action="deck-submit"'));
+        const dismiss = control(html, 'data-deck-dismiss="q_1"');
+        expect(dismiss).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
+        expect(dismiss!.open).toContain('data-action="question-dismiss"');
         expect((html.match(/data-deck-dismiss="/g) ?? []).length).toBe(1);
         expect(html).not.toContain('data-deck-dismiss="approval:kai"');
     });

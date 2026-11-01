@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import type { HostedProcess } from '../src/main/process-book.js';
 import { ProcessesPanel } from '../src/renderer/components/FeatureSurfaces.js';
 import type { FeatureAction } from '../src/renderer/features.js';
+import { Button } from '@particle-academy/react-fancy';
+import { buttonTexts } from './helpers/control-markup.js';
+
 
 /**
  * SCHEDULED TASKS IN HOSTING → PROCESSES (genie#1204), as Genie 1's Processes showed them
@@ -31,7 +34,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Daily at 03:00');
         expect(row).toMatch(/Next run: in 1 hr/);
         expect(row).toMatch(/Last run: Failed 1 hr ago/);
-        expect([...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Run now', 'Pause schedule', 'Remove']);
+        expect(buttonTexts(row)).toEqual(['Run now', 'Pause schedule', 'Remove']);
     });
 
     it('a paused one says so and offers Enable schedule', () => {
@@ -39,7 +42,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Paused — not firing');
         expect(row).toContain('Next run: Not scheduled');
         expect(row).toContain('Last run: Never run');
-        expect([...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Run now', 'Enable schedule', 'Remove']);
+        expect(buttonTexts(row)).toEqual(['Run now', 'Enable schedule', 'Remove']);
     });
 
     it('a nudge shows whom it prompts and with what, and no command', () => {
@@ -51,7 +54,7 @@ describe('a scheduled task in Processes', () => {
     it('CONTROL: a process kept running is not scheduled — Stop and Restart as before', () => {
         const row = rowOf(renderToStaticMarkup(<ProcessesPanel processes={[queue]} workspaces={workspaces} onAction={() => {}} now={NOW} />), 'p4');
         expect(row).not.toContain('scheduled');
-        expect([...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Stop', 'Restart']);
+        expect(buttonTexts(row)).toEqual(['Stop', 'Restart']);
     });
 
     it('its buttons send Run now, Pause / Enable schedule', () => {
@@ -60,7 +63,7 @@ describe('a scheduled task in Processes', () => {
             if (n === null || typeof n !== 'object') return;
             if (Array.isArray(n)) { n.forEach(walk); return; }
             const el = n as { type?: unknown; props?: Record<string, unknown> };
-            if (el.type === 'button' && typeof el.props?.onClick === 'function' && ['Run now', 'Pause schedule', 'Enable schedule'].includes(String(el.props.children))) (el.props.onClick as () => void)();
+            if (el.type === Button && typeof el.props?.onClick === 'function' && ['Run now', 'Pause schedule', 'Enable schedule'].includes(String(el.props.children))) (el.props.onClick as () => void)();
             walk(el.props?.children);
         };
         walk(ProcessesPanel({ processes: [nightly, paused], workspaces, onAction: (a) => { sent.push(a); }, now: NOW }));

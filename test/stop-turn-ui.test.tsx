@@ -10,6 +10,7 @@ import { EMPTY_SNAPSHOT, NO_FILES, type GenieSnapshot } from '../src/renderer/br
 import { ChatFlyout } from '../src/renderer/components/ChatFlyout.js';
 import { TurnStop } from '../src/renderer/components/TurnStop.js';
 import { Shell } from '../src/renderer/Shell.js';
+import { Button } from '@particle-academy/react-fancy';
 
 /**
  * ONE STOP, AND IT STOPS THE TURN (the owner, 2026-10-15: "I hit the stop button at the bottom that appears under the
@@ -98,7 +99,7 @@ describe('the chat’s Stop', () => {
 
     it('the button says what it does and pressing it asks ONCE — it carries no other action', () => {
         let stops = 0;
-        const button = elements(TurnStop({ onStop: () => { stops += 1; }, agentName: 'lark' })).filter((e) => e.type === 'button');
+        const button = elements(TurnStop({ onStop: () => { stops += 1; }, agentName: 'lark' })).filter((e) => e.type === Button);
         expect(button).toHaveLength(1);
         expect(button[0]!.props['data-action']).toBe('stop-turn');
         expect(button[0]!.props['title']).toBe('Stop this turn — lark keeps running');

@@ -1,6 +1,6 @@
 import { headroomLine } from './headroom.js';
 import { computeDiff } from '@particle-academy/fancy-file-commons';
-import type { StreamEvent } from './stream-event.js';
+import type { StreamEvent, ToolKind } from './stream-event.js';
 
 /**
  * HOW THE STREAM IS READ — the ledger's presentation decisions, with no React in sight.
@@ -198,6 +198,11 @@ const TOOL_ICONS: Record<string, string> = {
     other: 'wrench',
 };
 
+/** A tool call's icon, by its kind — the Stream's row and the chat's queued message draw the same one. */
+export function toolIcon(kind: ToolKind | null): string {
+    return kind === null ? 'circle-help' : (TOOL_ICONS[kind] ?? 'wrench');
+}
+
 function toolRow(
     row: TimedEvent,
     event: Extract<StreamEvent, { kind: 'tool' }>,
@@ -207,7 +212,7 @@ function toolRow(
 
     // `null` kind gets its own glyph AND its own note. `other` is a category the provider can
     // claim; `null` is one it did not, and the two must not share a rendering.
-    const icon = event.toolKind === null ? 'circle-help' : (TOOL_ICONS[event.toolKind] ?? 'wrench');
+    const icon = toolIcon(event.toolKind);
 
     // A title that only repeats the tool's name (`Grep Grep`) is said once — and then says nothing about the call
     // (Claude's titles ARE the name), so the call's own argument stands in: `Bash  php artisan test`, an edit's path.

@@ -93,7 +93,7 @@ import {
 import type { StreamEvent } from '../core/stream-event.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { randomUUID } from 'node:crypto';
-import { openAgentThread, openDurableStore, readHistory, RUN_FIELD } from '../core/thread-store.js';
+import { openAgentThread, openDurableStore, readHistory, readPromptRows, RUN_FIELD } from '../core/thread-store.js';
 import { promptDeliveries } from '../core/prompt-delivery.js';
 import { lastNumberedTurn, numberRow, numberTurns } from '../core/turn-numbers.js';
 import { sessionsDir } from './paths.js';
@@ -1081,7 +1081,7 @@ export class SessionHost {
     resolvePrompt(agentId: AgentId, id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }> {
         const resolve = async (): Promise<{ ok: true } | { ok: false; reason: string }> => {
             await this.settled();
-            const { rows } = await readHistory(this.#store(), agentId);
+            const { rows } = await readPromptRows(this.#store(), agentId);
             const status = promptDeliveries(rows).get(id);
             const row = rows.find(({ event: e }) => e.kind === 'message' && e.pending?.id === id)?.event;
             if (!row || row.kind !== 'message' || !row.pending || !status || status === 'sent' || status === 'discarded') return { ok: false, reason: 'This draft was already sent or discarded.' };
@@ -1153,7 +1153,7 @@ export class SessionHost {
                 if (!then || this.#running.get(agentId) !== entry || !entry.session.running) return;
                 try { entry.session.deliver(then.text, then.by); this.#emit(agentId); } catch { /* the run ended under us */ }
             };
-            const { rows } = await readHistory(this.#store(), agentId);
+            const { rows } = await readPromptRows(this.#store(), agentId);
             // The run may have been stopped or replaced while the record was read: deliver only into the one asked for.
             if (this.#running.get(agentId) !== entry || !entry.session.running) return 0;
             const states = promptDeliveries(rows);

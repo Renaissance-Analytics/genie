@@ -44,6 +44,7 @@ import type { AgentDetail } from '../renderer/bridge.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { AGENT_PUSH_INTERVAL_MS, AgentPush } from './agent-push.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
+import { LatestPush } from '../core/latest-push.js';
 import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
@@ -68,7 +69,7 @@ import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
-import { droneRefusal, effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
+import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { wordTynnRefusal } from './drone-refusal.js';
@@ -86,10 +87,14 @@ import { chmod, mkdir, readdir, readFile as readFileText, stat as statPath, writ
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
-import { sweepLeftoverProviders } from './leftover-sweep.js';
+import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
+import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
+import { routeExecThroughSpawnHost, startSpawnHost, type SpawnHostClient } from './spawn-host-client.js';
+import * as diagnosticsChannel from 'node:diagnostics_channel';
+import { Session as InspectorSession } from 'node:inspector';
+import { startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
@@ -129,7 +134,7 @@ import { showOnBoot } from '../core/tray-resident.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
-import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
+import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
@@ -163,7 +168,7 @@ import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
-import { killProcess, killProcessAsync, listProcesses, listProcessesAsync } from './process-list.js';
+import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
@@ -193,10 +198,10 @@ import { runOfficialTool } from './official-tools.js';
 import { artboardRead, artboardReview, repoCall, type PanelsHostDeps } from './official-panels-host.js';
 import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { wireInboxPush } from './inbox-push.js';
+import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
 import { AppInboxKeys } from './app-inbox-keys.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
-import { appDelivery, isAppSender, type AppSourceKind } from '../core/app-inbox.js';
+import { type AppSourceKind } from '../core/app-inbox.js';
 import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
 import { WorkspaceColors } from './workspace-color-host.js';
@@ -270,6 +275,44 @@ if (launch.kind === 'exit') {
 }
 
 let window: BrowserWindow | null = null;
+/**
+ * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
+ * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
+ * lifecycle.log. Every invoke handler is timed from here, before any is registered; the log is opened at boot.
+ */
+let stallLog: ((line: string) => void) | null = null;
+/** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
+let stallProfiler: { capture(ms: number): void } | null = null;
+/**
+ * THE SPAWN HOST (genie#1397): the child that creates every process main used to create on its own thread — the Docker
+ * CLI (600 s of the owner's main in one beta.54 session, up to 18.3 s at a time), every other `execFileRunner` command,
+ * `docker events`, and the supervisor's ptys (sites, workers, the front door). Started at boot; stopped last at quit.
+ */
+let spawnHostNow: SpawnHostClient | null = null;
+const stallWatchdog = new StallWatchdog({
+    log: (line) => stallLog?.(line),
+    onMainStall: (ms) => stallProfiler?.capture(ms),
+    routeOf: () => {
+        const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
+        const at = url.indexOf('#');
+        return at === -1 ? null : url.slice(at + 1);
+    },
+});
+timeIpcHandlers(ipcMain, stallWatchdog);
+/** A window's name in the log: its page (`index`, `question`, `browser`…), from its URL. */
+function windowNameOf(contents: Electron.WebContents): string {
+    try {
+        const page = new URL(contents.getURL()).pathname.split('/').pop() ?? '';
+        return page.replace(/[.]html$/, '') || 'blank';
+    } catch {
+        return 'unknown';
+    }
+}
+/** Electron's own hang signal for a window, into the log: `unresponsive`, then `responsive` with how long. */
+function watchWindowHang(w: BrowserWindow): void {
+    w.on('unresponsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), true); });
+    w.on('responsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), false); });
+}
 /** The tray outlives every window; held so it is not garbage-collected into nothing. */
 let tray: Tray | null = null;
 /** The tray's handlers, kept so a held login (Tynn #794) can redraw its menu; and what it last showed as held. */
@@ -739,9 +782,11 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
 async function reapV1Runtime(includeShells: boolean): Promise<void> {
     const userData = app.getPath('userData');
     const roots = ['runtime', 'toolchain', 'pty-host'].map((d) => join(userData, d));
-    const victims = v1Leftovers(listProcesses(), { roots, selfPid: process.pid, includeShells });
+    // Read and ended OFF the loop (beta.53 freezes: this listing was a PowerShell run on main at every boot, ~3 s on Windows).
+    const victims = v1Leftovers(await listProcessesAsync(), { roots, selfPid: process.pid, includeShells });
     if (victims.length === 0) return;
-    const killed = victims.filter((v) => killProcess(v.pid));
+    const ended = await Promise.all(victims.map(async (v) => ((await killProcessAsync(v.pid)) ? v : null)));
+    const killed = ended.filter((v) => v !== null);
     const report = { at: new Date().toISOString(), found: victims.length, killed: killed.length, victims: victims.map((v) => ({ pid: v.pid, executable: v.executable, why: v.why })) };
     await writeFileText(join(genieHome(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
@@ -1148,6 +1193,18 @@ async function boot(): Promise<void> {
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
+    // BEFORE anything runs a command: every execFileRunner call from here on is created in the spawn host, not on main.
+    spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
+    routeExecThroughSpawnHost(spawnHostNow);
+    stallLog = lifecycleLog;
+    stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
+    stallWatchdog.start();
+    watchOutboundCalls(diagnosticsChannel, stallWatchdog);
+    ipcMain.on('genie:renderer-stall', (event, report: unknown) => stallWatchdog.renderer(report, windowNameOf(event.sender)));
+    app.on('child-process-gone', (_event, details) => stallWatchdog.processGone(details));
+    app.on('render-process-gone', (_event, contents, details) => stallWatchdog.processGone({ type: `renderer:${windowNameOf(contents)}`, reason: details.reason, exitCode: details.exitCode }));
+    for (const w of BrowserWindow.getAllWindows()) watchWindowHang(w);
+    app.on('browser-window-created', (_event, w) => watchWindowHang(w));
     /*
      * WHAT THE AGENT ENGINE TELLS AND ASKS ITS OWNER — the same callbacks wherever the engine runs: in `genie-host` (the
      * host split, phase 1 — main/genie-host.ts, the default) or, as the fallback, in this process.
@@ -1666,11 +1723,7 @@ async function boot(): Promise<void> {
         // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
-        runStatus: (command, cwd) => new Promise<number>((resolve) => {
-            execFileCb(command, { shell: true, cwd, timeout: 30_000, windowsHide: true }, (error) => {
-                resolve(error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? ((error as { code: number }).code) : 1);
-            });
-        }),
+        runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
         onSignedIn: (provider) => {
             for (const id of host?.signedOutAgents(provider) ?? []) {
                 void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
@@ -1913,7 +1966,15 @@ async function boot(): Promise<void> {
         return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
     });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
-    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url === 'string') openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(workstationRoleNow, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    /*
+     * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
+     * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
+     * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. Until P3 moves the dial
+     * into main itself (host split, audit M-e), this is where main decides.
+     */
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
     ipcMain.handle('genie:tynn-workstations', async () => {
@@ -1958,7 +2019,13 @@ async function boot(): Promise<void> {
         if (!grant.ok) return { ...(await wordTynnRefusal(grant, rereadRole)), stage: 'tynn' };
         // Tynn gave the way in: the window moves its step on to reaching the machine.
         if (!event.sender.isDestroyed()) event.sender.send('genie:relay-open-step', workstationId, 'relay');
-        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop });
+        // A fresh grant for the SAME key before each one expires (genie#1401): the session lasts while the window stays.
+        const renew = async () => {
+            const now = tynnAccount;
+            if (!now?.status().signedIn) return { ok: false as const, reason: 'signed out of Tynn' };
+            return mintConnectGrant((path, init) => now.request(path, init), workstationId, pop.publicJwk);
+        };
+        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop, renew });
         if (!opened.ok) return { ...opened, stage: 'relay' };
         const channel = `relay_${++nextRelayChannel}`;
         const sender = event.sender;
@@ -1987,7 +2054,8 @@ async function boot(): Promise<void> {
             expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7,
         });
     });
-    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId) : { ok: false, reason: 'not a link' }));
+    // Revoking a claimed link ends its guest's live session NOW: this host re-checks its relay sessions at once (audit M-c).
+    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId, async () => { await relayHostNow?.revalidate(); }) : { ok: false, reason: 'not a link' }));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
@@ -2275,10 +2343,12 @@ async function boot(): Promise<void> {
         },
     };
     void refreshTailscale();
-    const processPorts = (): FeaturePorts => ({ tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    // Set once the feature push exists (below): Docker answering after a snapshot stopped waiting for it pushes again.
+    let requestFeaturePush = (): void => {};
+    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
-        tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        tailscale: () => execFileText('tailscale', ['status', '--json']),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
         // The phone's page (§6.8): the built renderer, from the same directory the window loads it from — and, named after
@@ -2293,7 +2363,7 @@ async function boot(): Promise<void> {
             const keyFile = join(dir, 'key.pem');
             try {
                 await mkdir(dir, { recursive: true });
-                await new Promise<void>((resolve, reject) => { execFileCb('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { windowsHide: true, timeout: 60_000 }, (error) => (error ? reject(error) : resolve())); });
+                await execFileText('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
                 // The private key, the user's only (best effort; on Windows the per-user profile is the guard) — as Genie 1.
                 await chmod(keyFile, 0o600).catch(() => {});
                 return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
@@ -2348,6 +2418,9 @@ async function boot(): Promise<void> {
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
+        // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
+        // main's own engine takes them only if the spawn host cannot start.
+        processPty: spawnHostNow ? spawnHostNow.ptyPort(ptyPort) : ptyPort,
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -2546,13 +2619,18 @@ async function boot(): Promise<void> {
         }),
     });
     services = composed;
-    const pushFeatures = () => {
-        void featureSnapshot(composed, featureState, processPorts()).then((data) => {
+    // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change
+    // used to build its own snapshot concurrently, and they landed out of order.
+    const featurePush = new LatestPush<FeatureData>({
+        build: () => featureSnapshot(composed, featureState, { ...processPorts(), onEngineStatusesLate: () => pushFeatures() }),
+        deliver: (data) => {
             // Every window: a flow editor window draws the flow's runs and armed state from the same snapshot (genie#1204).
             broadcast(FEATURE_CHANNELS.changed, data);
             for (const l of featureListeners) l(data);
-        });
-    };
+        },
+    });
+    const pushFeatures = () => featurePush.request();
+    requestFeaturePush = pushFeatures;
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
     // A WORKSPACE setting changed — the tabs an agent made with workspaceTabs (beta.35 item 36): every window reloads that
@@ -2650,7 +2728,7 @@ async function boot(): Promise<void> {
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,
         readFile: (path) => readFile(path, 'utf8'),
-        exec: (command, args) => new Promise<string>((resolve, reject) => { execFileCb(command, [...args], { windowsHide: true, timeout: 10_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
     }).then((id) => (id ? machineKeyOf(id) : null));
     // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
     readWorkstationRoleNow = () => readRole();
@@ -2930,14 +3008,14 @@ async function boot(): Promise<void> {
     // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
-    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(([running, interrupted]) => {
+    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(async ([running, interrupted]) => {
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
-        // from before the ledger (beta.32 and earlier) left on an agent's thread.
+        // from before the ledger (beta.32 and earlier) left on an agent's thread. Read off the loop (beta.53 freezes).
         // NEVER from a window that ADOPTED a running agent host: its providers are the host's live agents, not leftovers.
         // Only a host this window STARTED (or replaced) has no live agents yet; adopted or unreachable hosts hold live ones.
-        if (agentEngineLink === null || agentEngineLink.how === 'started' || agentEngineLink.how === 'replaced') sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
+        if (agentEngineLink === null || agentEngineLink.how === 'started' || agentEngineLink.how === 'replaced') await sweepLeftoverProvidersAsync((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
         const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {
@@ -2989,14 +3067,17 @@ async function boot(): Promise<void> {
         return (await host.start(record, cwdFor(record))).ok;
     };
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
-    // An app's message (genie#1345, the owner's D1): an automated agent is told now — woken, at most once per window by
-    // apps; a manual agent hears it on its next turn.
-    const appWakes = new Map<string, number>();
+    // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told — an idle one after the coalescing window, a busy
+    // one when its turn ends. An app's message starts a stopped agent only if it is automated and the app wake cap allows;
+    // a turn only apps' mail causes is spent from that cap, and past it the mail waits for the window.
     wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
         wake: wakeAgent,
-        appMail: (to, message) => (isAppSender(message.from) ? appDelivery(registry?.find(to)?.mode ?? 'manual', appWakes.get(to) ?? null, Date.now()) : null),
-        appWoke: (agentId) => { appWakes.set(agentId, Date.now()); },
+        ...appMailPushPorts({
+            modeOf: (agentId) => registry?.find(agentId)?.mode,
+            now: () => Date.now(),
+            schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
+        }),
     });
     // THE WORKSPACE'S APPS AND SCRIPTS CARD (genie#1345): this host's own window only (preload `appInbox`); a key is
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
@@ -3616,6 +3697,9 @@ app.on('before-quit', (event) => {
     keepaliveNow?.stop();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
+    // Last: the spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
+    // itself. It would also go on its own when main exits (its IPC channel closes).
+    void spawnHostNow?.stop();
     void remoteSocketNow?.stop();
     void filesHost?.close();
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned

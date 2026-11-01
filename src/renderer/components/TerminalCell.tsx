@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { useEffect, useRef, type ComponentType } from 'react';
 import type { TerminalPaneProps } from './TerminalPane.js';
 
@@ -38,9 +39,9 @@ export function TerminalCell(p: TerminalCellProps) {
         return <div data-terminal-panel-starting="" className="flex min-h-0 flex-1 items-center justify-center text-[12px] text-[var(--fg-3)]">Starting a terminal…</div>;
     }
     const restart = (
-        <button type="button" data-action="terminal-panel-restart" onClick={p.onStart} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+        <Button size="xs" type="button" data-action="terminal-panel-restart" onClick={p.onStart} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
             Start a new terminal
-        </button>
+        </Button>
     );
     if (p.terminal === null) {
         return (

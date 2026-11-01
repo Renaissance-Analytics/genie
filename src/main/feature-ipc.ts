@@ -1,4 +1,5 @@
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { hostPathRefusal, REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -20,7 +21,7 @@ import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
-import { inboxThreads, pairOf, threadKeyOfMessage, threadOf, uncollected } from '../core/inbox-threads.js';
+import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import { approvalNoteText } from '../core/approval-note.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
@@ -43,7 +44,8 @@ import {
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { FeatureAction, FeatureData, InboxSearchResult, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { AskedRecord } from './attention-store.js';
 
 /**
  * THE FEATURE SURFACES' MAIN-SIDE HALF.
@@ -60,6 +62,13 @@ import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, Toolc
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /**
+     * How long a snapshot waits for Docker's engine statuses before it goes out with the last read (genie#1393); absent =
+     * ENGINE_STATUS_WAIT_MS. The first read ever is always waited for: there is no last one to show.
+     */
+    readonly engineStatusWaitMs?: number | undefined;
+    /** Docker answered after a snapshot stopped waiting for it: push again, so the Services tab catches up (main.ts). */
+    readonly onEngineStatusesLate?: (() => void) | undefined;
     /**
      * A message that must reach a running agent (SessionHost.deliver): an approval's note, after a Genie approval is
      * answered on the Deck or a toast (beta.33 item 16). Absent = no sessions here, and a note is refused, never dropped.
@@ -244,8 +253,6 @@ export interface FeatureState {
     serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
-    /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
-    servedLink?: { id: string; url: string } | null;
     /** What the last Allow through the firewall did (Tynn #820), in words. */
     firewallOutcome?: string | null;
     /** What the last Tailscale Connect or Install did (Tynn #821), in words. */
@@ -255,10 +262,16 @@ export interface FeatureState {
     inboxThread?: InboxThreadView | null;
     /** Transient: an attachment's bytes an `inbox.attachment` action asked for, served once. */
     servedAttachment?: { id: string; name: string; base64: string } | null;
+    /** Transient: a thread search an `inbox.search` action asked for, served in its answer only. */
+    inboxSearch?: InboxSearchResult | null;
+    /** Transient: a decided question's record an `inbox.question` action asked for, served once. */
+    servedQuestion?: { id: string; record: AskedRecord | null } | null;
 }
 
 /** The most of one thread an `inbox.thread` action serves at once. */
 const INBOX_THREAD_MAX = 2_000;
+/** The most hits a thread search serves; its `total` still counts every match. */
+const INBOX_SEARCH_MAX = 200;
 
 /** The Toolchain section: the scan, plus each further fact only when there is one (never an empty placeholder). */
 export function toolchainSection(state: FeatureState): ToolchainSection | null {
@@ -463,7 +476,46 @@ function tynnIntegration(services: ComposedServices, state: FeatureState, accoun
     };
 }
 
+/**
+ * A SNAPSHOT NEVER WAITS ON A SLOW DOCKER FOR LONG (genie#1393). Every snapshot (a click's answer, every push) read the
+ * engines' statuses from Docker first: `docker version`, then one `docker container inspect` per engine, each allowed
+ * 20 s. So the Hosting tab's state, built before that read, reached the window only when Docker answered, slowest exactly
+ * when Genie has just started a dozen sites and every supervisor transition asked for another snapshot. Now: one read at
+ * a time (a snapshot asked for while one is in flight joins it), and a snapshot waits at most this long for it before it
+ * goes out with the LAST read Docker gave; when the read lands, `onEngineStatusesLate` asks for a fresh push.
+ */
+export const ENGINE_STATUS_WAIT_MS = 1_500;
+const engineReads = new WeakMap<object, { last?: EngineStatusView[]; inFlight?: Promise<EngineStatusView[]> }>();
+
+async function engineStatusesWithin(services: ComposedServices, ports: FeaturePorts): Promise<EngineStatusView[]> {
+    let entry = engineReads.get(services);
+    if (!entry) { entry = {}; engineReads.set(services, entry); }
+    const e = entry;
+    const read = e.inFlight ?? (e.inFlight = services.engineStatuses().then(
+        (views) => { e.last = views; return views; },
+    ).finally(() => { delete e.inFlight; }));
+    const prior = e.last;
+    if (prior === undefined) return read;
+    const late = Symbol('late');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const first = await Promise.race([read.catch(() => late), new Promise<typeof late>((r) => { timer = setTimeout(() => r(late), ports.engineStatusWaitMs ?? ENGINE_STATUS_WAIT_MS); })]);
+    clearTimeout(timer);
+    if (first !== late) return first as EngineStatusView[];
+    // Only when Docker's answer CHANGES what was shown: a push builds a snapshot, which reads Docker again, so a Docker
+    // that is merely slow would otherwise push forever.
+    read.then((views) => { if (JSON.stringify(views) !== JSON.stringify(prior)) ports.onEngineStatusesLate?.(); }, () => {});
+    return prior;
+}
+
+/**
+ * Every snapshot's number, taken when it STARTS (genie#1393). Snapshots race: a click's answer built while a site was
+ * `starting` could land after the push built when it answered, and the window kept whichever came last. The window keeps
+ * the higher number (renderer/features.ts `newestSnapshot`).
+ */
+let snapshotSeq = 0;
+
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
+    const seq = ++snapshotSeq;
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
     const hits = state.knowledgeQuery
@@ -475,14 +527,16 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const mail = services.inbox.all();
     const nameOf = participantNamer(roster, mail);
     return {
+        seq,
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         // Genie's tools as steps (genie#1204): their kinds go to the editor window, which registers them before its canvas mounts.
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
-        // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
-        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
+        // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
+        // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
+        services: { instances: await engineStatusesWithin(services, ports), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
@@ -490,6 +544,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             threads: inboxThreads(mail, nameOf), uncollected: uncollected(mail),
             // Served in the answer to the action that asked, once — never in a pushed snapshot.
             thread: state.inboxThread ?? null, servedAttachment: state.servedAttachment ?? null,
+            search: state.inboxSearch ?? null, question: state.servedQuestion ?? null,
         },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
@@ -507,9 +562,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             pin: services.remote.activePin(),
             devices: services.remote.devices(),
             pairRequests: services.pairing.requests(),
-            shares: services.remote.shares(),
             connections: services.remote.connections(),
-            servedLink: state.servedLink ?? null,
             enabled: services.settings.snapshot().remote_access === true,
             firewall: ports.allowFirewall !== undefined,
             firewallOutcome: state.firewallOutcome ?? null,
@@ -1474,10 +1527,23 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const key = action.key ?? (action.messageId ? threadKeyOfMessage(mail, action.messageId) : null);
             if (!key) throw new Error(action.messageId ? `no message ${action.messageId}` : 'which thread?');
             const limit = Math.min(Math.max(action.limit, 1), INBOX_THREAD_MAX);
-            const t = threadOf(mail, key, limit);
-            next.inboxThread = { key, messages: t.messages, more: t.more, limit, focus: action.messageId ?? null };
+            // A window by seq (the owner, 2026-11-01: sort and page): older BEFORE a seq, a live refresh FROM one.
+            const t = threadWindow(mail, key, { limit, beforeSeq: action.beforeSeq, fromSeq: action.fromSeq });
+            next.inboxThread = { key, messages: t.messages, more: t.more, newer: t.newer, limit, focus: action.messageId ?? null };
             break;
         }
+        // Search ONE thread over its stored mail (the owner, 2026-11-01): history the flyout has not loaded is found too.
+        case 'inbox.search': {
+            if (!pairOf(action.key)) throw new Error(`${action.key} is not a thread`);
+            const mail = services.inbox.all();
+            const r = searchThread(mail, action.key, action.query, participantNamer(services.agentAddresses(), mail), INBOX_SEARCH_MAX);
+            next.inboxSearch = { key: action.key, query: action.query, hits: r.hits, total: r.total };
+            break;
+        }
+        // The questions an FTQ answer answered (the owner, 2026-11-01), read from the attention store's records.
+        case 'inbox.question':
+            next.servedQuestion = { id: action.questionId, record: services.attention.asked(action.questionId) };
+            break;
         case 'inbox.markAllRead': {
             // The person's own receive, to the end: the only thing that marks mail read.
             const n = services.inbox.unread(HUMAN).length;
@@ -1575,12 +1641,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
             break;
         }
-        case 'remote.mintShare': {
-            // Served exactly once: the URL rides this answer and no snapshot after it.
-            const m = services.remote.mintShare({ workspaceId: action.workspaceId, grantedTo: action.grantedTo, expiresInMs: action.expiresInMs });
-            next.servedLink = { id: m.link.id, url: m.url };
-            break;
-        }
         // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.
         case 'integrations.tynnSignIn': {
             const { url } = await tynnAccountOf(ports).startSignIn();
@@ -1623,9 +1683,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
             await services.syncAgentDocs(action.workspacePath, 'you');
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
-            break;
-        case 'remote.revokeShare':
-            if (!services.remote.revokeShare(action.shareId)) throw new Error(`no share link ${action.shareId}`);
             break;
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());

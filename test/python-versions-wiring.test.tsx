@@ -9,6 +9,7 @@ import type { PythonInstallOutcome, PythonVersionsView } from '../src/main/pytho
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * GENIE'S OWN PYTHON (TC4a), from the person's clicks to what they see: Settings → Toolchain lists the Python versions
@@ -112,7 +113,9 @@ describe("Python's default (TC4a-2)", () => {
         expect(html).toMatch(/data-python-version="3[.]15[.]1"[^>]*data-default="true"/);
         expect(html).toMatch(/data-python-version="3[.]14[.]9"[^>]*data-default="false"[^]*?data-make-default="python:3[.]14[.]9"/);
         expect(html).not.toContain('data-make-default="python:3.15.1"');
-        expect(html).toMatch(/<button[^>]*disabled=""[^>]*title="Python 3[.]15[.]1 is the default[^"]*"[^>]*>Remove/);
+        const defaultRemove = control(html, 'title="Python 3.15.1 is the default');
+        expect(defaultRemove).toMatchObject({ tag: 'button', fancy: true, text: 'Remove' });
+        expect(defaultRemove!.open).toMatch(/\sdisabled=""/);
         expect(html).toContain('data-use-system="python"');
     });
 });

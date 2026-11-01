@@ -1,4 +1,4 @@
-import { Modal } from '@particle-academy/react-fancy';
+import { Button, Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { agentSlug } from '../../core/agent-create.js';
 import { ACP_PROVIDERS } from '../../core/engine.js';
@@ -62,8 +62,8 @@ export function NewAgentView({ workspaceName, name, purpose, provider, busy, err
             </label>
             {error ? <p data-new-agent-error="" className="rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2.5 py-1.5 text-xs">{error}</p> : null}
             <div className="flex justify-end gap-2">
-                <button type="button" className={button} disabled={busy} onClick={onCancel}>Cancel</button>
-                <button type="button" data-action="create-agent" className={primary} disabled={!ready} onClick={onCreate}>{busy ? 'Creating…' : 'Create agent'}</button>
+                <Button size="xs" type="button" className={button} disabled={busy} onClick={onCancel}>Cancel</Button>
+                <Button size="xs" type="button" data-action="create-agent" className={primary} disabled={!ready} onClick={onCreate}>{busy ? 'Creating…' : 'Create agent'}</Button>
             </div>
         </div>
     );

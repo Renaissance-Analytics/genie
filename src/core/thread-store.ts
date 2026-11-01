@@ -298,6 +298,44 @@ export async function readHistory(store: SessionStore, agentId: AgentId, options
     return { rows: newestFirst.reverse(), earlier, earlierTurns, lastTurn };
 }
 
+/**
+ * THE ROWS THAT DECIDE WHICH PROMPTS ARE OWED (beta.53 freezes; Windows logged AppHangTransient for Genie.exe on the
+ * owner's machine, main's thread not pumping for 5 s+): every `run`, every message with a `pending` draft, every
+ * `prompt_delivery` — in order, as {@link readWholeHistory} would give them, and nothing else. What `core/prompt-delivery.ts`
+ * `promptDeliveries` reads, and where a draft's text and content are found.
+ *
+ * A draft's state can be anywhere in the record, so the whole log is READ — but from the end in chunks the event loop runs
+ * between (`linesFromEnd`), and a line is handed to `JSON.parse` only when its bytes say it may be one of those rows, or
+ * it is not written the way the store writes (as in {@link readHistory}: inside a JSON string every quote is escaped, so
+ * `"pending":{` or `"kind":"run"` in a row's TEXT never matches). Before, Send on a draft and every Restart parsed every
+ * line of a 24–374 MB log in one synchronous run on main.
+ */
+export async function readPromptRows(store: SessionStore, agentId: AgentId): Promise<{ rows: HistoryRow[] }> {
+    if (!(store instanceof ThreadStore)) {
+        const whole = await readWholeHistory(store, agentId);
+        return { rows: whole.rows.filter((r) => PROMPT_KINDS.has(r.event.kind) && (r.event.kind !== 'message' || Boolean((r.event as { pending?: unknown }).pending))) };
+    }
+    const newestFirst: HistoryRow[] = [];
+    for await (const lines of store.linesFromEnd(threadKeyFor(agentId))) {
+        for (const line of lines) {
+            if (opensWithKind(line) && !line.includes(PENDING) && !line.includes(KIND_RUN) && !line.includes(KIND_DELIVERY)) continue;
+            const entry: unknown = JSON.parse(line.toString('utf8'));
+            if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) throw new Error(`a line of the thread log for ${agentId} is not an object`);
+            const e = entry as Record<string, unknown>;
+            if (typeof e.message !== 'object' || e.message === null || Array.isArray(e.message)) throw new Error(`a stored thread entry for ${agentId} has no message object`);
+            const row = historyRow({ position: typeof e.position === 'number' ? e.position : 0, message: e.message, recordedAt: typeof e.recorded_at === 'string' ? e.recorded_at : '' }, {});
+            if (row === null || !PROMPT_KINDS.has(row.event.kind)) continue;
+            if (row.event.kind === 'message' && !(row.event as { pending?: unknown }).pending) continue;
+            newestFirst.push(row);
+        }
+    }
+    return { rows: newestFirst.reverse() };
+}
+
+const PROMPT_KINDS = new Set(['run', 'message', 'prompt_delivery']);
+const PENDING = Buffer.from('"pending":{');
+const KIND_RUN = Buffer.from('"kind":"run"');
+const KIND_DELIVERY = Buffer.from('"kind":"prompt_delivery"');
 const POSITION = Buffer.from('{"position":');
 const OPENS_WITH_KIND = Buffer.from(',"message":{"kind":"');
 const TURN = Buffer.from('"turn"');

@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, toolchainRefusalOf, type FeatureData } from '../src/renderer/features.js';
+import { controlByText } from './helpers/control-markup.js';
 
 /**
  * THE TOOLCHAIN SURFACE — what a person sees for T1–T3: a first-run line naming what is missing, each missing tool's
@@ -51,7 +52,9 @@ describe('Toolchain', () => {
     it('while something runs: the progress line, and the buttons are disabled; Docker’s warning offers Update anyway', () => {
         const busy = render({ ...base, busy: 'Installing php: winget install --id PHP.PHP.8.4' });
         expect(busy).toContain('data-toolchain-busy');
-        expect(busy).toMatch(/<button[^>]*disabled=""[^>]*>Check and repair/);
+        const repair = controlByText(busy, 'Check and repair');
+        expect(repair).toMatchObject({ tag: 'button', fancy: true });
+        expect(repair!.open).toMatch(/\sdisabled=""/);
         const warned = render({ ...base, warning: { tool: 'docker', reason: 'Updating Docker restarts its engine, which stops genie-svc-postgres.', affected: ['genie-svc-postgres'] } });
         expect(warned).toContain('data-toolchain-warning="docker"');
         expect(warned).toMatch(/Update anyway/);

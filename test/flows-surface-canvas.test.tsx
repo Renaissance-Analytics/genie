@@ -4,6 +4,7 @@ import { FLOW_SCHEMA_URL } from '../src/core/flow-form.js';
 import type { FlowRecord } from '../src/main/flow-store.js';
 import { FlowRow, FlowsSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from '../src/renderer/features.js';
+import { Button } from '@particle-academy/react-fancy';
 
 /**
  * THE FLOWS PAGE IS A LIST OF WORKFLOWS (genie#1204; the owner, 2026-10-26: "Flows are not bg process, they are fucking
@@ -31,7 +32,7 @@ const click = (node: unknown, match: (props: Record<string, unknown>) => boolean
         if (x === null || typeof x !== 'object') return;
         if (Array.isArray(x)) { x.forEach(walk); return; }
         const el = x as { type?: unknown; props?: Record<string, unknown> };
-        if (el.type === 'button' && el.props && match(el.props) && typeof el.props.onClick === 'function') (el.props.onClick as () => void)();
+        if (el.type === Button && el.props && match(el.props) && typeof el.props.onClick === 'function') (el.props.onClick as () => void)();
         walk(el.props?.children);
     };
     walk(node);

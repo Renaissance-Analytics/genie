@@ -253,9 +253,13 @@ export class EnvelopeSites {
         return info;
     }
 
-    /** The person's (or an agent's) Restart: the processes run again, and — since it is now running — a remembered Stop is lifted. */
+    /**
+     * The person's (or an agent's) Restart: the processes run again, and — since it is now running — a remembered Stop is
+     * lifted. A second Restart while the first is still in its first answer window JOINS it (genie#1393: a double click, or
+     * a person and an agent at once, never starts two).
+     */
     async restart(siteId: string): Promise<SiteInfo> {
-        const info = this.#sites.restart(siteId);
+        const info = this.#sites.restart(siteId, { join: true });
         await this.#remember(siteId, false);
         return info;
     }

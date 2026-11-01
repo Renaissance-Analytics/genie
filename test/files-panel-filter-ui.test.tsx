@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { FilesPanel, type FilesPanelProps } from '../src/renderer/components/FilesPanel.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE FILE PANEL'S HEADER PER THE BOARD (`Workspace Files.dc.html`): 38px — `Files` · `All | Changed N` segmented
@@ -25,14 +26,16 @@ describe('the header', () => {
         const html = render({ filter: 'all', onFilter: () => {} });
         expect(html).toMatch(/<header[^>]*class="[^"]*h-\[38px\]/);
         expect(html).toMatch(/data-files-filter="all"[^>]*data-current="true"/);
-        expect(html).toMatch(/data-files-filter="changed"(?![^>]*data-current)[^>]*>Changed 4</);
+        const changedChip = control(html, 'data-files-filter="changed"');
+        expect(changedChip).toMatchObject({ tag: 'button', fancy: true, text: 'Changed 4' });
+        expect(changedChip!.open).not.toContain('data-current');
         expect(html).toContain('one per workspace');
         expect(html).toContain('data-action="close-files"');
     });
 
     it('with nothing changed the chip reads `Changed`, not `Changed 0`', () => {
         const html = render({ state: { ...state, changed: null, unreported: [], files: [] }, filter: 'all', onFilter: () => {} });
-        expect(html).toMatch(/data-files-filter="changed"[^>]*>Changed</);
+        expect(control(html, 'data-files-filter="changed"')).toMatchObject({ tag: 'button', fancy: true, text: 'Changed' });
         expect(html).not.toContain('Changed 0');
     });
 

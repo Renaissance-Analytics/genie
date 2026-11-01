@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { fancyWsTransport } from '../src/main/ws-server-transport.js';
@@ -45,7 +45,6 @@ beforeEach(async () => {
     host = new RemoteHost({ confirm: allowEveryPairing,
         api, hostName: 'alphar', baton: new Baton(),
         pins: new PairingPins({ now: Date.now, random: () => 0.482913 }),
-        shares: new ShareLinks({ host: `127.0.0.1:${port}`, now: Date.now, random: () => 's' }),
         devices,
         transport: fancyWsTransport({ attach: attachWebSocketServer, server, path: '/genie', address: () => `ws://127.0.0.1:${port}/genie` }),
     });

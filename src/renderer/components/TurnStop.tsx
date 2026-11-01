@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 
 /**
  * `STOP THIS TURN` — the one turn Stop, drawn where the running turn is shown: beside the Agent view's state pill
@@ -15,7 +15,7 @@ import { Icon } from '@particle-academy/react-fancy';
  */
 export function TurnStop({ onStop, agentName, className }: { onStop: () => void; agentName?: string | undefined; className?: string | undefined }) {
     return (
-        <button
+        <Button size="xs" labelClassName="contents"
             type="button"
             data-action="stop-turn"
             title={`Stop this turn — ${agentName ?? 'the agent'} keeps running`}
@@ -24,6 +24,6 @@ export function TurnStop({ onStop, agentName, className }: { onStop: () => void;
         >
             <Icon name="square" size="xs" />
             Stop this turn
-        </button>
+        </Button>
     );
 }

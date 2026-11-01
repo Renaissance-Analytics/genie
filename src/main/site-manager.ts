@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { genHost, laravelServeCommand, serveCaddyfile, type DevServer, type ServeSpec } from '../core/serve-config.js';
 import type { ProcessSupervisor } from './process-supervisor.js';
-import { SITE_READY_TIMEOUT_MS } from './port-probe.js';
+import { SITE_READY_CEILING_MS } from './port-probe.js';
 
 /**
  * HOSTED `.gen` SITES (§6.6) — the manager.
@@ -55,6 +55,13 @@ export interface CreateSiteInput {
  */
 export type SiteState = 'running' | 'starting' | 'restarting' | 'stopped' | 'exited' | 'failed' | 'external' | 'unservable';
 
+/**
+ * Where a `starting` site is (genie#1393): `answering` is its first answer window (SITE_READY_TIMEOUT_MS); `slow` is past
+ * it, with Genie still asking. Slow is progress, never a failure: a site answers late under load (a boot that starts every
+ * site at once), and the moment it does it is running and routed.
+ */
+export type SiteStep = 'answering' | 'slow';
+
 export interface SiteInfo {
     readonly id: string;
     readonly name: string;
@@ -68,8 +75,14 @@ export interface SiteInfo {
     readonly state: SiteState;
     /** Supervisor process ids, main first. Empty for an external site and one never started. */
     readonly processIds: readonly string[];
-    /** Why it is not served: an unservable site's reason, or the refusal its last start met. `null` otherwise. */
+    /**
+     * Why it is not served, in words that are TRUE of its process (genie#1393): an unservable site's reason, the refusal its
+     * last start met, its dev server's exit or the supervisor giving up on it, or (its process running) no answer within
+     * the ceiling. `null` otherwise.
+     */
     readonly problem: string | null;
+    /** Present only while `starting`: which part of the start it is in. */
+    readonly step?: SiteStep;
 }
 
 export interface UnservableSiteInput {
@@ -114,14 +127,22 @@ export interface SiteManagerDeps {
     readonly serviceEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * WAIT FOR THE PORT (parity audit #9; Genie 1 `main/dev-server/site-manager.ts:1005-1013`): after a start, the site
-     * is `starting` until this answers true for its port, then `running` — and only then routed. False (the budget spent,
-     * `readyTimeoutMs`) is `failed`, with the reason on the site. `behindCaddy`: a static or php site, whose own Caddy
+     * is `starting` until this answers true for its port, then `running` — and only then routed. False (one probe's budget
+     * spent) is NOT a failure (genie#1393): the site reads `starting`/`slow` and is asked again with backoff, `failed` only
+     * past `readyCeilingMs`, and an answer at any point makes it running. `behindCaddy`: a static or php site, whose own Caddy
      * answers 502 until the site behind it is up (main/port-probe.ts `siteAnswers`). Absent = no wait: running as soon as
      * the process is (a test's manager; Genie's own is wired in compose.ts).
      */
     readonly probeReady?: (port: number, options: { behindCaddy: boolean }) => Promise<boolean>;
-    /** The budget `probeReady` is given, for the failure's reason; absent = SITE_READY_TIMEOUT_MS. */
-    readonly readyTimeoutMs?: number;
+    /**
+     * How long, with no answer, before a site whose process runs reads `failed` (genie#1393); absent =
+     * SITE_READY_CEILING_MS. Genie keeps asking past it, and a later answer still makes it running.
+     */
+    readonly readyCeilingMs?: number;
+    /** The wait between probes (backoff); absent = a real timer that does not hold Genie open. Injected by tests. */
+    readonly sleep?: (ms: number) => Promise<void>;
+    /** The clock the ceiling is measured on; absent = Date.now. */
+    readonly now?: () => number;
     /**
      * THE SITE'S OWN APP CREDENTIAL (genie#1345): `GENIE_INBOX_URL` / `GENIE_INBOX_TOKEN`, minted for THIS site, so its
      * server can report to an agent of its workspace. Read at every start and compared like the service env (a rotate or a
@@ -145,8 +166,13 @@ interface SiteRecord {
     startedEnv?: string;
     /** A running PHP site's worker: what an engine change restarts ALONE, on the same port (Tynn #756). */
     phpWorker?: { readonly command: string; readonly fcgiPorts: readonly number[] };
-    /** Its port's answer since the last start (parity audit #9): `waiting` reads `starting`, `silent` reads `failed`. */
-    readiness?: 'waiting' | 'answered' | 'silent';
+    /**
+     * Its port's answer since the last start (parity audit #9, genie#1393): `waiting` (first window) and `slow` read
+     * `starting`; `silent` (past the ceiling, process running) reads `failed`; `answered` is running.
+     */
+    readiness?: 'waiting' | 'slow' | 'answered' | 'silent';
+    /** When the start the readiness belongs to was made (deps.now). */
+    startedAt?: number;
     /** Bumped by every start and stop: an answer for an earlier start is ignored. */
     generation?: number;
 }
@@ -174,6 +200,15 @@ export const PHP_WORKERS = 4;
 /** The supervisor ids of a site's PHP workers: `<site>-fcgi` (the first, as it always was), then `<site>-fcgi-2` …. */
 export function phpWorkerIds(siteId: string, count: number): string[] {
     return Array.from({ length: count }, (_, i) => (i === 0 ? `${siteId}-fcgi` : `${siteId}-fcgi-${i + 1}`));
+}
+
+/** The first wait between readiness probes after a miss, doubling to READY_RETRY_MAX_MS (genie#1393). */
+const READY_RETRY_FIRST_MS = 1_000;
+const READY_RETRY_MAX_MS = 30_000;
+
+/** A wait that never holds Genie open at quit. */
+function realSleep(ms: number): Promise<void> {
+    return new Promise((resolve) => { setTimeout(resolve, ms).unref?.(); });
 }
 
 export class SiteManager {
@@ -245,11 +280,15 @@ export class SiteManager {
      * that was down comes up. Its name, and so its hosts line and certificate, do not change. Throws the reason for a
      * site Genie 2 cannot serve and for an external one (a server you run yourself has no process of Genie's to restart).
      */
-    restart(id: string): SiteInfo {
+    restart(id: string, options: { join?: boolean } = {}): SiteInfo {
         const record = this.#sites.get(id);
         if (!record) throw new Error(`no site ${id}`);
         if (record.unservable) throw new Error(`${record.host} cannot be served by Genie 2: ${record.unservable.reason}`);
         if (record.input?.hostPort !== undefined) throw new Error(`${record.host} is a server you run yourself on port ${record.input.hostPort}; Genie has no process of its own to restart for it`);
+        // A SECOND CLICK JOINS THE FIRST (genie#1393): a start still in its first answer window IS the restart just asked
+        // for, and starting again would throw the half-booted one away. Past that window (slow), Retry is a deliberate
+        // restart and goes through. `join` is the person's and an agent's Restart; a toolchain update's restart is not.
+        if (options.join === true && record.readiness === 'waiting' && this.#info(record).state === 'starting') return this.#info(record);
         try {
             this.#stopProcesses(record);
             this.#start(record);
@@ -373,6 +412,8 @@ export class SiteManager {
                 this.#deps.preparePhpCgi?.(input.serve.version);
             }
             const port = this.#deps.allocatePort();
+            // The site's own Caddy storage, beside its Caddyfile — never Caddy's shared default (serveCaddyfile says why).
+            const storageDir = join(this.#deps.configDir, id, 'caddy-data');
             const processIds: string[] = [];
             let spec: ServeSpec;
             if (input.serve.mode === 'php') {
@@ -380,14 +421,14 @@ export class SiteManager {
                 const fcgiPorts = Array.from({ length: Math.max(1, this.#deps.phpWorkers ?? PHP_WORKERS) }, () => this.#deps.allocatePort());
                 spec = { mode: 'php', root: input.serve.root, fcgiPort: fcgiPorts[0]!, fcgiPorts };
                 // Rendered BEFORE anything starts: a root that escapes the repo is refused with nothing running.
-                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
+                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, storageDir, serve: spec })!;
                 record.phpWorker = { command: cgiCommand, fcgiPorts };
                 this.#startPhpWorker(record, baseEnv);
                 processIds.push(...phpWorkerIds(id, fcgiPorts.length));
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {
                 spec = input.serve;
-                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
+                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, storageDir, serve: spec })!;
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             }
             // Main process first in the list: the route's target and the state's source.
@@ -400,8 +441,12 @@ export class SiteManager {
     }
 
     /**
-     * The readiness wait for the start just made (Genie 1 waited for the port before calling a site ready). An answer
-     * that arrives after another start or a stop belongs to a start that no longer exists and changes nothing.
+     * THE READINESS WAIT for the start just made (Genie 1 waited for the port before calling a site ready), and it does
+     * not give up (genie#1393). One probe (SITE_READY_TIMEOUT_MS) is the first window; a miss reads `slow` (still
+     * starting) and Genie asks again with backoff for as long as the process runs. Past the ceiling with no answer it reads
+     * `failed`, and Genie still asks: the moment the port answers the site is running and routed, with no click. A
+     * process that exits, or that the supervisor gives up on, ends the asking; the site then reads as its process does.
+     * An answer that arrives after another start or a stop belongs to a start that no longer exists and changes nothing.
      */
     #awaitReady(record: SiteRecord, behindCaddy: boolean): void {
         const generation = (record.generation ?? 0) + 1;
@@ -412,16 +457,48 @@ export class SiteManager {
             return;
         }
         record.readiness = 'waiting';
-        const port = record.port;
-        void probe(port, { behindCaddy }).catch(() => false).then((answered) => {
-            if (record.generation !== generation || record.stopped || !this.#sites.has(record.id)) return;
-            record.readiness = answered ? 'answered' : 'silent';
-            if (!answered) {
-                const seconds = Math.round((this.#deps.readyTimeoutMs ?? SITE_READY_TIMEOUT_MS) / 1000);
-                record.problem = `${record.host} did not answer on 127.0.0.1:${port} within ${seconds} s: its process is running, but nothing served the port. Its log says why; Retry starts it again`;
+        record.startedAt = this.#now();
+        void this.#watchReady(record, generation, record.port, behindCaddy, probe);
+    }
+
+    async #watchReady(record: SiteRecord, generation: number, port: number, behindCaddy: boolean, probe: NonNullable<SiteManagerDeps['probeReady']>): Promise<void> {
+        const current = () => record.generation === generation && !record.stopped && this.#sites.has(record.id);
+        const ceiling = this.#deps.readyCeilingMs ?? SITE_READY_CEILING_MS;
+        const sleep = this.#deps.sleep ?? realSleep;
+        let gap = READY_RETRY_FIRST_MS;
+        for (;;) {
+            const main = this.#deps.supervisor.status(record.processIds[0]!);
+            // Exited, gave up, stopped: nothing will answer. The site reads as its process does, in its words (#info).
+            if (!main || main.state === 'exited' || main.state === 'failed' || main.state === 'stopped') {
+                if (current()) this.#changed();
+                return;
             }
-            this.#changed();
-        });
+            // Between automatic restarts there is no process to ask; ask once it is back.
+            const answered = main.state === 'running' ? await probe(port, { behindCaddy }).catch(() => false) : false;
+            if (!current()) return;
+            if (answered) {
+                record.readiness = 'answered';
+                this.#changed();
+                return;
+            }
+            const after = this.#deps.supervisor.status(record.processIds[0]!);
+            if (!after || after.state === 'exited' || after.state === 'failed' || after.state === 'stopped') {
+                this.#changed();
+                return;
+            }
+            const next = this.#now() - (record.startedAt ?? 0) >= ceiling ? 'silent' : 'slow';
+            if (record.readiness !== next) {
+                record.readiness = next;
+                this.#changed();
+            }
+            await sleep(gap);
+            if (!current()) return;
+            gap = Math.min(gap * 2, READY_RETRY_MAX_MS);
+        }
+    }
+
+    #now(): number {
+        return (this.#deps.now ?? Date.now)();
     }
 
     /**
@@ -555,15 +632,28 @@ export class SiteManager {
 
     #info(record: SiteRecord): SiteInfo {
         let state: SiteState;
+        let step: SiteStep | undefined;
+        let problem = record.problem;
         if (record.unservable) state = 'unservable';
         else if (record.external) state = record.stopped ? 'stopped' : 'external';
         else if (record.processIds.length === 0) state = 'stopped';
         else {
             const main = this.#deps.supervisor.status(record.processIds[0]!);
             state = main ? main.state : 'stopped';
-            // Alive is not answering (parity audit #9): running only once the port has.
-            if (state === 'running' && record.readiness === 'waiting') state = 'starting';
-            else if (state === 'running' && record.readiness === 'silent') state = 'failed';
+            // Alive is not answering (parity audit #9): running only once the port has. Slow is still starting (#1393).
+            if (state === 'running' && (record.readiness === 'waiting' || record.readiness === 'slow')) {
+                state = 'starting';
+                step = record.readiness === 'waiting' ? 'answering' : 'slow';
+            } else if (state === 'running' && record.readiness === 'silent') {
+                state = 'failed';
+                const minutes = Math.round((this.#deps.readyCeilingMs ?? SITE_READY_CEILING_MS) / 60_000);
+                problem ??= `${record.host} did not answer on 127.0.0.1:${record.port} within ${minutes} min: its process is running, but nothing served the port. Genie is still asking; its log says why, and Retry starts it again`;
+            } else if (main && main.state === 'failed') {
+                // The supervisor gave up (a crash loop): its own words, never "its process is running".
+                problem ??= `${main.name} ${main.reason ?? `stopped after exit code ${main.exitCode ?? '?'}`}`;
+            } else if (main && main.state === 'exited') {
+                problem ??= `${main.name} exited with code ${main.exitCode ?? '?'}`;
+            }
         }
         return {
             id: record.id,
@@ -575,7 +665,8 @@ export class SiteManager {
             port: record.port,
             state,
             processIds: record.processIds,
-            problem: record.problem,
+            problem,
+            ...(step ? { step } : {}),
         };
     }
 }

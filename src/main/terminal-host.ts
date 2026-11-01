@@ -54,6 +54,7 @@ export interface PtySpawnOptions {
 /** A live pty, as the engine reports it. */
 export interface PtyOpened {
     id: string;
+    /** 0 = not known yet: a port that creates the process elsewhere (the spawn host) reports it through `onPid`. */
     pid: number;
     shell: string;
     /** Bounded history, so a window joining a running build sees what it missed. */
@@ -86,6 +87,8 @@ export interface PtyPort {
      * leaves liveness to the exit event and the pid.
      */
     isLive?(id: string): boolean;
+    /** Subscribe to a pty's pid once it is known, for a port whose `open` answered 0 (the spawn host, genie#1397). */
+    onPid?(listener: (id: string, pid: number) => void): () => void;
 }
 
 export interface TerminalOptions {

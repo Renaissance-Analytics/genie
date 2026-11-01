@@ -62,6 +62,9 @@ export async function connectableWorkstations(request: SessionRequest, thisMachi
     for (const row of Array.isArray(rows) ? rows : []) {
         const r = row as Record<string, unknown>;
         if (typeof r.id !== 'string' || thisMachine.has(r.id) || byId.has(r.id)) continue;
+        // No entitlement at all: Tynn still lists a machine whose share link was claimed, after its one session is over
+        // (tynn.ai #394), with no source and not connectable. It is not this person's to reach, so it is not offered.
+        if (typeof r.source !== 'string' || r.source === '') continue;
         byId.set(r.id, {
             id: r.id,
             name: typeof r.name === 'string' && r.name !== '' ? r.name : r.id,
@@ -194,6 +197,8 @@ export type RelayHostStatus =
 export interface RelayHostHandle {
     status(): RelayHostStatus;
     stop(): void;
+    /** Re-check every live session's grant with Tynn now, rather than at the next timer (a link was just revoked). */
+    revalidate(): Promise<void>;
 }
 
 /**
@@ -261,6 +266,7 @@ export function startRelayHost(input: {
 
     return {
         status: () => status,
+        revalidate: async () => { await link?.revalidate(); },
         stop() {
             stopped = true;
             link?.close();

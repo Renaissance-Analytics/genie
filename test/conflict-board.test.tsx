@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { conflictBody, conflictHunks, takeLabel } from '../src/core/conflict-words.js';
 import { conflictMessage } from '../src/core/files-popout.js';
 import { FilesPanel, type FilesPanelProps } from '../src/renderer/components/FilesPanel.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE CONFLICT, AS THE BOARD DRAWS IT (`Workspace Files`, the error state): a red `git-merge` banner, the lines
@@ -61,7 +62,7 @@ describe('the banner', () => {
         const order = ['compare', 'keep-mine', 'take-theirs'].map((a) => html.indexOf(`data-action="${a}"`));
         expect(order.every((i) => i > 0)).toBe(true);
         expect([...order].sort((a, b) => a - b)).toEqual(order);
-        expect(html).toMatch(/data-action="take-theirs"[^>]*>Take atlas’s</);
+        expect(control(html, 'data-action="take-theirs"')).toMatchObject({ tag: 'button', fancy: true, text: 'Take atlas’s' });
         expect(html).not.toContain('data-action="merge"');
         expect(html).not.toContain('&lt;&lt;&lt;&lt;&lt;&lt;&lt;');
     });
@@ -70,7 +71,7 @@ describe('the banner', () => {
         const html = renderToStaticMarkup(<FilesPanel {...props()} />);
         expect(html).toContain('Your version is kept as a draft and nothing is lost.');
         expect(html).not.toContain('has been told');
-        expect(html).toMatch(/data-action="take-theirs"[^>]*>Take theirs</);
+        expect(control(html, 'data-action="take-theirs"')).toMatchObject({ tag: 'button', fancy: true, text: 'Take theirs' });
     });
 
     it('the status bar says conflict and the hunk count; Compare shows your buffer against the disk', () => {

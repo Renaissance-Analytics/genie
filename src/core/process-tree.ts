@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from 'node:child_process';
+import { ChildProcess, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -87,6 +87,13 @@ export interface ProcessTree {
     read?(): Promise<readonly ProcessInfo[] | null>;
     /** `killTree`, asynchronously: the same rules (no tree, the same process only, the cap), each kill off main. */
     reap?(targets: readonly ProcessInfo[], now: readonly ProcessInfo[], limit?: number): Promise<ReapResult>;
+    /**
+     * WHICH PROCESSES `fn` CREATED, WITHOUT READING THE MACHINE (beta.53 freezes: a start's before/after `snapshot` was two
+     * PowerShell readings on main, 2–20 s each on Windows). Runs `fn` and pushes into `sink` the pid of every child this
+     * process creates while it runs — exactly the spawn's own, since nothing else runs on main inside a synchronous call.
+     * What `fn` made before a throw is kept; the throw is rethrown. Present with `read`; absent on a synchronous test tree.
+     */
+    capture?(fn: () => void, sink: number[]): void;
 }
 
 /** One process as the snapshot reads it. `started` is epoch ms (Windows: CreationDate; Linux/macOS: `ps lstart`). */
@@ -114,6 +121,8 @@ export interface ProcessTreeIo {
     snapshotAsync?(): Promise<ProcessInfo[]>;
     /** `killOne` without blocking. Never rejects for an already-dead pid. */
     killOneAsync?(pid: number): Promise<void>;
+    /** `ProcessTree.capture`: run `fn`, pushing into `sink` the pid of each child created meanwhile. */
+    captureSpawns?(fn: () => void, sink: number[]): void;
 }
 
 /**
@@ -242,6 +251,7 @@ export function makeProcessTree(io: ProcessTreeIo): ProcessTree {
             await Promise.all(same.map((t) => killOneAsync(t.pid).catch(() => {})));
             return { killed: same.length, refused: false };
         },
+        ...(io.captureSpawns ? { capture: io.captureSpawns.bind(io) } : {}),
     } : {};
     return {
         ...async,
@@ -352,7 +362,28 @@ export function parsePosixSnapshot(out: string, selfPid: number): ProcessInfo[] 
     return rows.filter((r) => !(r.ppid === selfPid && /(^|\/)ps$/.test(r.name)));
 }
 
+/**
+ * The children THIS process creates while `fn` runs: Node's `child_process` creates every child through
+ * `ChildProcess.prototype.spawn` (spawn, execFile and fork included, whatever module imported them), and the pid is set
+ * when it returns. Hooked for the length of the synchronous call only, restored on every path.
+ */
+function captureChildSpawns(fn: () => void, sink: number[]): void {
+    const proto = ChildProcess.prototype as unknown as { spawn: (...args: unknown[]) => unknown };
+    const original = proto.spawn;
+    proto.spawn = function capturing(this: ChildProcess, ...args: unknown[]): unknown {
+        const result = original.apply(this, args);
+        if (typeof this.pid === 'number') sink.push(this.pid);
+        return result;
+    };
+    try {
+        fn();
+    } finally {
+        proto.spawn = original;
+    }
+}
+
 export const systemProcessTree: ProcessTree = makeProcessTree({
+    captureSpawns: captureChildSpawns,
     snapshot: () => (process.platform === 'win32' ? win32Snapshot() : posixSnapshot()),
     snapshotAsync: () => (process.platform === 'win32' ? win32SnapshotAsync() : posixSnapshotAsync()),
     // The same kill as killOne below — one pid, never `/T` — without holding the event loop.

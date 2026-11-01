@@ -40,7 +40,7 @@ import { TynnProjectPicker, type TynnProjectsView } from './components/TynnProje
 import { WorkspaceRuntimeModal } from './components/WorkspaceRuntimeModal.js';
 import { BrowserSurface, FlowsSurface, HostingSurface, KnowledgeSurface, SettingsSurface, type RemoteConnectProps } from './components/FeatureSurfaces.js';
 import { InboxFlyout } from './components/InboxFlyout.js';
-import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
+import { EMPTY_FEATURES, type ActOutcome, type FeatureAction, type FeatureData } from './features.js';
 import { mayBrowse } from '../core/workstation-role.js';
 import type { ProviderStatus } from './components/FeatureSurfaces.js';
 import { openFileRoute } from '../core/files-panel.js';
@@ -132,7 +132,7 @@ export interface ShellProps {
     /** What the feature surfaces render from; `null` sections draw skeletons. Defaults to nothing asked yet. */
     features?: FeatureData | undefined;
     /** A feature surface asking the main process for something. */
-    onFeature?: ((action: FeatureAction) => void) | undefined;
+    onFeature?: ((action: FeatureAction) => void | Promise<ActOutcome>) | undefined;
     /**
      * A feature action whose ANSWER the caller reads (the AgentInbox flyout: a thread's history, an attachment's bytes, a
      * send's refusal). Absent = no AgentInbox in this window.
@@ -848,6 +848,8 @@ export function Shell({
                         inbox={features.inbox}
                         compose={inboxCompose}
                         loadThread={(req) => featureAsk({ kind: 'inbox.thread', ...req }).then((d) => d.inbox?.thread ?? null)}
+                        searchThread={(key, query) => featureAsk({ kind: 'inbox.search', key, query }).then((d) => d.inbox?.search ?? null)}
+                        loadQuestion={(questionId) => featureAsk({ kind: 'inbox.question', questionId }).then((d) => d.inbox?.question ?? null)}
                         send={(to, text, files) => featureAsk({ kind: 'inbox.send', to, text, ...(files.length > 0 ? { attachments: files } : {}) }).then(() => undefined)}
                         attachment={(attachmentId) => featureAsk({ kind: 'inbox.attachment', attachmentId }).then((d) => d.inbox?.servedAttachment ?? null)}
                         markAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}

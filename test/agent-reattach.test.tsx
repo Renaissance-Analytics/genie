@@ -12,6 +12,7 @@ import { Store } from '../src/main/store.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { AgentRosterView } from '../src/renderer/components/ImportedAgents.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * REATTACH (agent management parity item 2; the owner, 2026-10-21: "...or detach it (so its files remain but it's not loaded
@@ -122,7 +123,9 @@ describe('the workspace’s agent roster (Genie 1’s Registered / On disk only)
         for (const b of findAll(ui, (p) => p['data-action'] === 'reattach-agent')) (b.onClick as () => void)();
         expect(did).toEqual(['atlas']);
         const busy = renderToStaticMarkup(<AgentRosterView {...roster} busy="atlas" notice="atlas is registered." error="acme already has an agent named atlas" />);
-        expect(busy).toMatch(/data-agent="atlas"[^>]*disabled=""/);
+        const atlas = control(busy, 'data-agent="atlas"');
+        expect(atlas).toMatchObject({ tag: 'button', fancy: true });
+        expect(atlas!.open).toMatch(/\sdisabled=""/);
         expect(busy).toContain('atlas is registered.');
         expect(busy).toContain('acme already has an agent named atlas');
     });

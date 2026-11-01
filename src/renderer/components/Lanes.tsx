@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { useRef, useState } from 'react';
 import { drawerLabels, laneSummary, laneTracks, rangeFromDrag, timelineOf, type TimeRange } from '../../core/lanes.js';
 import type { TimedEvent } from '../../core/stream-view.js';
@@ -74,7 +75,7 @@ export function Lanes({ rows, range, onRange, now }: LanesProps) {
                 {labels ? <span className="text-[11px] text-[var(--fg-3)]">Drag across the lanes to select a range; the stream below filters to it.</span> : null}
                 {labels?.selected ? <span data-lanes-selected="" className="font-mono text-[11px] text-[var(--fg-2)]">{labels.selected}</span> : null}
                 {range ? (
-                    <button type="button" data-range-clear onClick={() => onRange(null)} className="text-[11px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">Clear range</button>
+                    <Button size="xs" type="button" data-range-clear onClick={() => onRange(null)} className="text-[11px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">Clear range</Button>
                 ) : null}
             </div>
 

@@ -3,6 +3,7 @@ import * as lucide from '@particle-academy/react-fancy/icons';
 import { FEATURE_ICONS } from '../core/rail-view.js';
 import { NAV_GROUPS } from '../core/settings-nav.js';
 import { KIND_COPY } from './components/AddWorkspaceWizard.js';
+import { ORDER_ICON } from '../core/inbox-view.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -77,6 +78,8 @@ export const ICON_NAMES: readonly string[] = [
     'history',
     // The Dashboard's "From Tynn" door (§6.1).
     'link',
+    // A share link someone has opened: Claimed, in the Share dialog (audit M-c).
+    'user-check',
 
     /*
      * The stream ledger's icons.
@@ -92,6 +95,9 @@ export const ICON_NAMES: readonly string[] = [
     'eye-off', 'pause', 'play',
     // The header's update chip: download, then restart to install.
     'download', 'rotate-cw',
+    // The ArtBoard's "Open full size" Button. Its name reached Button as a prop, so the <Icon name> scan never saw it and
+    // it rendered blank until the icon-prop scan (test/icons.test.ts, 2026-11-01) read Button props too.
+    'maximize-2',
     // The timeline strip's `Lanes ▾` toggle (the board), open or closed.
     'chevron-down', 'chevron-up',
     // The turns layout's collapsed card.
@@ -115,6 +121,8 @@ export const ICON_NAMES: readonly string[] = [
     'lock',
     // The Genie browser window: a tab whose page is loading.
     'loader',
+    // A chat message queued behind the agent's current step.
+    'clock',
     // The Tynn tab's live board (genie#1295 B4): following Tynn, or reconnecting to it.
     'radio', 'wifi-off',
     // The file panel's word-wrap toggle (beta.33 item 15; Genie 1's IconWrap).
@@ -128,8 +136,16 @@ export const ICON_NAMES: readonly string[] = [
     // Apps and scripts that report to agents (genie#1345): a site (globe), a process (cog), a script key; a message's level
     // (circle-check / circle-x / info); a card action in flight. Named in data (`APP_KIND_ICON`), so registered here.
     'cog', 'key-round', 'circle-x', 'loader-circle',
+    // A hosted site's row (genie#1393): stopped is an empty circle. Open, Restart, Retry, Stop, Start, Edit and its states
+    // reuse names above (external-link, rotate-cw, rotate-ccw, square, play, pencil, loader-circle, circle-check, circle-x).
+    'circle',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
+    // The AgentInbox thread (owner 2026-11-01): its order toggle (named in data, `ORDER_ICON`), Load older / Newest, and
+    // an FTQ answer's expand — an option chosen or not (circle / square), a note, a dismissal, a record no longer kept.
+    ...Object.values(ORDER_ICON),
+    'chevrons-down', 'chevrons-up', 'arrow-up-to-line', 'arrow-down-to-line',
+    'circle', 'sticky-note', 'circle-slash', 'archive-x', 'search-x',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */
