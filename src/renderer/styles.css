@@ -7,6 +7,10 @@
  * A control LOOKS clickable (the owner, 2026-11-01: "things that are clickable but it doesn't look like they are").
  * Tailwind v4's preflight gives every button `cursor: default`, and react-fancy's Button adds no cursor of its own, so
  * every Button and Button-as-link shows the pointer here, once, unless it is disabled.
+ *
+ * TEMPORARY: the fancy agent has been asked (2026-11-01) to put the pointer cursor in react-fancy's Button itself, with
+ * aria-busy while `loading` and a default type="button". When a react-fancy release with the pointer lands, remove this
+ * rule (and its test in test/real-buttons-dashboard.test.tsx).
  */
 @layer base {
     [data-react-fancy-button]:not(:disabled) {
