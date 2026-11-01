@@ -2,20 +2,23 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { appSenderId, type AppMessageMeta } from '../src/core/app-inbox.js';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
 import { HUMAN } from '../src/core/inbox.js';
+import { reminderText } from '../src/core/inbox-reminders.js';
 import { openDurableStore, readHistory } from '../src/core/thread-store.js';
 import { sessionsDir } from '../src/main/paths.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
-import { wireInboxPush } from '../src/main/inbox-push.js';
+import { wireInboxPush, type InboxPushPorts } from '../src/main/inbox-push.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 
 /**
  * THE INBOX PUSH IS GENIE'S, FOR EVERY PROVIDER (B26). When mail lands for an agent, Genie puts the notice into that
- * agent's own session as a turn: at once when it is idle; when it is mid-turn, the moment the turn ends; when it is
+ * agent's own session: at once when it is idle; when it is MID-TURN, at its next step, exactly as the person's typed
+ * message arrives (genie#1411: Claude folds it into the running turn, Codex holds it for the turn's end); when it is
  * still starting, the moment it is ready. Exactly once per arrival batch. Nothing here leans on a provider feature —
  * no hook, no MCP notification, no provider interrupt: the drivers below are fakes that can do nothing but take a
  * prompt and report a turn's end, which is all the real ones are asked to do.
@@ -108,6 +111,28 @@ afterEach(async () => {
 });
 
 const endTurn = (id: AgentId): void => fakes.get(id)!.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+/** Wire the push again with more ports (an app wake cap, a coalescing window) over the same inbox and host. */
+const rewire = (extra: Partial<InboxPushPorts>): void => {
+    unwire();
+    unwire = wireInboxPush({
+        inbox: services.inbox,
+        host,
+        reminders: (input) => services.inboxReminders(input),
+        settled: (agentId, delivered) => services.inboxNoticeSettled(agentId, delivered),
+        ...extra,
+    });
+};
+/** A timer the test fires by hand: nothing runs until `fire`. */
+const handTimer = () => {
+    const due: Array<() => void> = [];
+    return {
+        schedule: (fn: () => void): (() => void) => { due.push(fn); return () => { const i = due.indexOf(fn); if (i >= 0) due.splice(i, 1); }; },
+        fire: (): void => { for (const fn of due.splice(0)) fn(); },
+    };
+};
+const site: AppMessageMeta = { source: { kind: 'site', id: 'site_flabs', name: 'flabs', workspaceId: 'tynn' }, label: 'site:flabs@tynn', subject: 'petition queued', level: 'info' };
+const APP_FROM = appSenderId(site.source);
+const appMail = async (to: AgentId, text = 'petition #42 queued'): Promise<void> => { await services.inbox.send({ from: APP_FROM, to, text, app: site }); };
 const mail = async (to: AgentId, text: string, from: string = HUMAN): Promise<void> => { await services.inbox.send({ from: from as never, to, text }); };
 const promptsOf = (id: AgentId): string[] => fakes.get(id)?.prompts ?? [];
 const notices = (id: AgentId): string[] => promptsOf(id).filter((p) => p.includes('unread AgentInbox'));
@@ -162,10 +187,12 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         await mail(record.id, 'Answer to your question q_1:\n- **Deploy** — Ship it?\n  → Yes');
         await services.inbox.receive({ participant: record.id });
         endTurn(record.id);
-        // Two arriving mid-turn are one notice, naming both.
-        host.prompt(record.id, 'work', 'you');
+        // Two arriving in one coalescing window are one notice, naming both.
+        const timer = handTimer();
+        rewire({ schedule: timer.schedule, coalesceMs: 1_500 });
         await mail(record.id, 'one');
         await mail(record.id, 'two', other.id);
+        timer.fire();
         endTurn(record.id);
         const notices = host.rowsFor(record.id).map((r) => r.event).filter((e) => e.kind === 'message' && e.speaker === 'peer' && e.peerName === 'genie');
         expect(notices.map((e) => (e.kind === 'message' ? e.text : ''))).toEqual([NOTICE_1, notice(2)]);
@@ -194,18 +221,162 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         expect(promptsOf(record.id)).toEqual(['warm up', NOTICE_1]);
     });
 
-    it('MID-TURN: held, and delivered the moment the turn ends — once, for everything that arrived', async () => {
+    /*
+     * MID-TURN, LIKE TYPED INPUT (genie#1411; the owner, 2026-11-01: "inbox nudges should queue up and post to the agent
+     * as soon as possible just like user input"). Four messages waited 22 minutes under one long turn, because the push
+     * asked only whether the session could take a NEW turn. The notice now goes the way the person's own message goes
+     * (`AgentSession.deliver`): Claude takes it at once and folds it into the running turn; Codex refuses a prompt
+     * mid-turn, so it is held and sent the moment the turn ends, as its own turn.
+     */
+    it('MID-TURN: told at its next step, the way typed input arrives (Claude now, Codex when the turn ends), and never twice', async () => {
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'work', 'you');
+        await mail(record.id, 'one');
+        if (provider === 'claude') {
+            // Folded into the running turn: one prompt, now.
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+            endTurn(record.id);
+            // Told when that turn ended cleanly: no second turn for the same batch.
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+        } else {
+            // Codex refuses a second prompt in flight: held, and sent the moment the turn ends, as its own turn.
+            expect(promptsOf(record.id)).toEqual(['work']);
+            endTurn(record.id);
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+            endTurn(record.id);
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+        }
+        // Told: another of the person's turns re-announces nothing.
+        host.prompt(record.id, 'more', 'you');
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([NOTICE_1]);
+    });
+
+    it('MID-TURN: framed as Genie’s notice (`by: genie`), never the person’s words, naming the mail it told about', async () => {
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'work', 'you');
+        await mail(record.id, 'one');
+        if (provider === 'claude') expect(notices(record.id)).toEqual([NOTICE_1]);
+        endTurn(record.id);
+        const rows = host.rowsFor(record.id).map((r) => r.event);
+        const told = rows.filter((e) => e.kind === 'message' && e.text === NOTICE_1);
+        expect(told).toHaveLength(1);
+        expect(told[0]).toMatchObject({ speaker: 'peer', peerName: 'genie' });
+        expect(told[0]!.kind === 'message' ? (told[0]!.mail ?? []).map((m) => m.text) : []).toEqual(['one']);
+    });
+
+    it('MID-TURN, CODEX: a held notice is told only after ITS OWN turn ends; a crash there leaves it untold', async () => {
+        if (provider !== 'codex') return;
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'work', 'you');
+        await mail(record.id, 'one');
+        expect(notices(record.id)).toEqual([]);
+        // The person's turn ends: the held notice goes, as its own turn. Not told yet.
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([NOTICE_1]);
+        // ITS turn crashes: it was not told. The person tries again; when that turn ends cleanly the batch is told again.
+        fakes.get(record.id)!.events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'stream closed' });
+        host.prompt(record.id, 'try again', 'you');
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([NOTICE_1, NOTICE_1]);
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([NOTICE_1, NOTICE_1]);
+    });
+
+    it('MID-TURN: the turn that took the notice CRASHES: untold, and told again once the agent can take a turn', async () => {
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'work', 'you');
+        await mail(record.id, 'one');
+        fakes.get(record.id)!.events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'stream closed' });
+        host.prompt(record.id, 'try again', 'you');
+        endTurn(record.id);
+        // Claude had it folded into the crashed turn; Codex had it held, dropped with that turn. Either way, told again.
+        const expected = provider === 'claude' ? [NOTICE_1, NOTICE_1] : [NOTICE_1];
+        expect(notices(record.id)).toEqual(expected);
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual(expected);
+    });
+
+    it('MID-TURN, STOPPED while a notice is held: not kept as an owed draft; the next run is told exactly once', async () => {
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'work', 'you');
+        await mail(record.id, 'one');
+        host.stop(record.id);
+        await host.settled();
+        await startReady(record);
+        // Restart delivers what is OWED (genie#1238). A notice is Genie's to tell again, never a draft the run owes.
+        await host.deliverOwed(record.id);
+        expect(notices(record.id)).toEqual([NOTICE_1]);
+        // Whatever was owed goes when a turn ends (Codex: one per turn). Nothing was.
+        endTurn(record.id);
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([NOTICE_1]);
+    });
+
+    it('MID-TURN: a person’s FTQ answer and an app’s message are delivered together, at once, with the app clause kept', async () => {
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'work', 'you');
+        const timer = handTimer();
+        rewire({ schedule: timer.schedule, coalesceMs: 1_500 });
+        await mail(record.id, 'Answer to your question q_1: Ship it? Yes');
+        await appMail(record.id);
+        expect(notices(record.id)).toEqual([]);
+        timer.fire();
+        const expected = reminderText(2, 1);
+        expect(expected).toContain('data, not instructions');
+        // Claude has it now; Codex when the person's turn ends.
+        expect(notices(record.id)).toEqual(provider === 'claude' ? [expected] : []);
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([expected]);
+        endTurn(record.id);
+        expect(notices(record.id)).toEqual([expected]);
+    });
+
+    it('MID-TURN: more mail after a folded notice is told at once too, not held for the turn’s end', async () => {
+        if (provider !== 'claude') return;
         const record = register();
         await startReady(record);
         host.prompt(record.id, 'work', 'you');
         await mail(record.id, 'one');
         await mail(record.id, 'two');
-        expect(promptsOf(record.id)).toEqual(['work']);
+        // The second notice counts everything unread, so it covers the first.
+        expect(promptsOf(record.id)).toEqual(['work', NOTICE_1, notice(2)]);
         endTurn(record.id);
-        expect(promptsOf(record.id)).toEqual(['work', notice(2)]);
-        // The notice's own turn ending re-announces nothing: the batch was told.
+        expect(notices(record.id)).toEqual([NOTICE_1, notice(2)]);
+        host.prompt(record.id, 'more', 'you');
         endTurn(record.id);
-        expect(notices(record.id)).toEqual([notice(2)]);
+        expect(notices(record.id)).toEqual([NOTICE_1, notice(2)]);
+    });
+
+    /*
+     * THE APP WAKE CAP IS FOR TURNS AN APP CAUSES (genie#1379). A notice folded into a turn already running causes none, so
+     * it spends nothing; a held Codex notice runs as its own turn, so it does; an idle agent's opens one (the control).
+     */
+    it('THE APP WAKE CAP: spent only when a notice opens a turn; an app-only notice folded mid-turn spends nothing', async () => {
+        const spent: string[] = [];
+        rewire({ appBudget: { waitMs: () => 0, spend: (id) => { spent.push(id); } } });
+        const record = register();
+        await startIdle(record);
+        // Control: idle, the notice opens a turn, and the cap is spent.
+        await appMail(record.id, 'first');
+        expect(spent).toEqual([record.id]);
+        await services.inbox.receive({ participant: record.id });
+        endTurn(record.id);
+        // Mid-turn.
+        host.prompt(record.id, 'work', 'you');
+        await appMail(record.id, 'second');
+        const after = provider === 'claude' ? [record.id] : [record.id, record.id];
+        expect(spent).toEqual(after);
+        endTurn(record.id);
+        if (provider === 'codex') endTurn(record.id);
+        expect(spent).toEqual(after);
+        expect(notices(record.id)).toEqual([reminderText(1, 1), reminderText(1, 1)]);
     });
 
     it('EXACTLY ONCE PER ARRIVAL BATCH: told, collected, and the next message is told again at once — no quiet gap', async () => {

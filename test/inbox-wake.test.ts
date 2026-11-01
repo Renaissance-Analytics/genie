@@ -185,15 +185,21 @@ describe.each(['manual', 'automated'] as const)('an IDLE %s agent', (mode) => {
 });
 
 describe('a BUSY agent', () => {
-    it('is not interrupted; told when its turn ends, as a follow-up turn — nobody types again', async () => {
+    // genie#1411 (the owner, 2026-11-01: "inbox nudges should queue up and post to the agent as soon as possible just
+    // like user input"): a long turn used to hold the notice until it ended. Now it goes at the agent's next step.
+    it('is told at its next step, mid-turn, the way typed input arrives; no follow-up turn when the turn ends; no cap spent', async () => {
         const agent = register('manual', 'fancy');
         startIdle(agent);
         host.prompt(agent.id, 'the person’s task', 'you');
         await appMail(agent.id);
-        time.advance(COALESCE_MS * 4);
         expect(notices(agent.id)).toEqual([]);
-        endTurn(agent.id);
         time.advance(COALESCE_MS);
+        expect(host.probe(agent.id)?.inTurn).toBe(true);
+        expect(notices(agent.id)).toEqual([reminderText(1, 1)]);
+        // Folded into the running turn: it caused no turn, so the app wake cap is untouched.
+        expect(appTurns.get(agent.id) ?? []).toEqual([]);
+        endTurn(agent.id);
+        time.advance(COALESCE_MS * 4);
         expect(notices(agent.id)).toEqual([reminderText(1, 1)]);
     });
 });
