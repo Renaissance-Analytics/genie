@@ -1206,6 +1206,11 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.inTurn ?? false;
     }
 
+    /** Every prompt held for the agent's turn end, by id (`[]` with no session): what the agent host's window replica reads. */
+    queuedPromptIds(agentId: AgentId): readonly string[] {
+        return this.#running.get(agentId)?.session.queuedPromptIds ?? [];
+    }
+
     /** The prompt held under `id` (`deliver`'s answer) is still waiting in the agent's current run. */
     hasQueuedPrompt(agentId: AgentId, id: string): boolean {
         return this.#running.get(agentId)?.session.hasQueuedPrompt(id) ?? false;
@@ -1420,6 +1425,12 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.modelState() ?? null;
     }
 
+    /** Whether `modelState` / `switchModel` would answer (not `null`), read without asking the provider. */
+    modelCaps(agentId: AgentId): { readonly state: boolean; readonly switch: boolean } {
+        const session = this.#running.get(agentId)?.session;
+        return { state: session?.canSayModels ?? false, switch: session?.canSwitchModel ?? false };
+    }
+
     /** Switch the running agent's model without a restart, or `null`: not running here, or its driver cannot. */
     switchModel(agentId: AgentId, modelId: string): Promise<void> | null {
         return this.#running.get(agentId)?.session.switchModel(modelId) ?? null;
@@ -1582,6 +1593,6 @@ function rowReplaced(entry: Running, before: StreamEvent): void {
 }
 
 /** A measured comms reading as the row fields; `null` (not measured) leaves all three `null`, never `0`. */
-function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
+export function commsFields(c: Comms | null): { collaborators: number | null; commsAgeSeconds: number | null; links: Comms['links'] | null } {
     return { collaborators: c?.collaborators ?? null, commsAgeSeconds: c?.commsAgeSeconds ?? null, links: c?.links ?? null };
 }

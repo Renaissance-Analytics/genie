@@ -270,6 +270,20 @@ const isMethod = (m: unknown): m is RemoteMethod | ControlMethod =>
     typeof m === 'string' && ((REMOTE_METHODS as readonly string[]).includes(m) || (CONTROL_METHODS as readonly string[]).includes(m));
 
 export function parseMessage(text: string): { ok: true; message: WireMessage } | { ok: false; reason: string } {
+    return parseFrame(text, isMethod);
+}
+
+/** One frame of the envelope over a method table `M`. `WireMessage` is `Frame` over the remote bridge's table. */
+export type Frame<M extends string> =
+    | Exclude<WireMessage, { kind: 'call' }>
+    | { kind: 'call'; id: number; method: M; args: unknown[] };
+
+/**
+ * THE FRAME PARSER, for any method table (the host split, 2026-10-31): the remote bridge's table above, and the local
+ * host's `engine.*` table (core/engine-protocol.ts). One envelope — hello, welcome, call, result, event — so the window's
+ * link to its own host and a remote window's link to another Genie are the same protocol, validated the same way.
+ */
+export function parseFrame<M extends string>(text: string, isMethodOf: (m: unknown) => m is M): { ok: true; message: Frame<M> } | { ok: false; reason: string } {
     let raw: unknown;
     try {
         raw = JSON.parse(text);
@@ -289,13 +303,13 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token} or relay' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
-            return { ok: true, message: raw as unknown as WireMessage };
+            return { ok: true, message: raw as unknown as Frame<M> };
         }
         case 'call': {
             if (typeof raw.id !== 'number' || typeof raw.method !== 'string' || !Array.isArray(raw.args)) {
                 return { ok: false, reason: 'a call needs a numeric id, a method and an args array' };
             }
-            if (!isMethod(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method` };
+            if (!isMethodOf(raw.method)) return { ok: false, reason: `"${raw.method}" is not a bridge method` };
             return { ok: true, message: { kind: 'call', id: raw.id, method: raw.method, args: raw.args } };
         }
         case 'result': {
@@ -308,7 +322,7 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             return { ok: true, message: { kind: 'event', channel: raw.channel, payload: raw.payload } };
         case 'welcome':
             if (typeof raw.connectionId !== 'string' || typeof raw.host !== 'string' || typeof raw.isOwner !== 'boolean') return { ok: false, reason: 'a welcome needs connectionId, host and isOwner' };
-            return { ok: true, message: raw as unknown as WireMessage };
+            return { ok: true, message: raw as unknown as Frame<M> };
         case 'refused':
             return { ok: true, message: { kind: 'refused', reason: typeof raw.reason === 'string' ? raw.reason : 'refused' } };
         case 'pairing':

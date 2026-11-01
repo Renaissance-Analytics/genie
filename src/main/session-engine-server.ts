@@ -1,0 +1,441 @@
+import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { hostname } from 'node:os';
+import type { McpServer } from '@particle-academy/prism-acp';
+import { heldRows, rowsPatch, type HeldRows, type RowsPatch } from '../core/agent-push-wire.js';
+import {
+    DURABLE_CALLBACKS,
+    ENGINE_PROTOCOL,
+    parseEngineFrame,
+    type EngineAgentUpdate,
+    type EngineCallback,
+    type EngineGlobalView,
+    type EngineMethod,
+    type WireAttachment,
+} from '../core/engine-protocol.js';
+import type { AgentId, AgentRecord } from '../core/identity.js';
+import type { ClientTransport } from '../core/remote-protocol.js';
+import type { TimedEvent } from '../core/stream-view.js';
+import type { SessionHost } from './session-host.js';
+
+/**
+ * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
+ *
+ * It owns nothing of its own: it puts a real `SessionHost` behind the protocol. What the session host used to tell
+ * main.ts through its options (a thread id, a plan, a turn's number, an action's sound) it tells the window as
+ * `engine.callback` events; what it used to ask main.ts (the agent's record now, its private credentials) it asks the
+ * window, or holds what the window pushed.
+ *
+ * Three rules make the window's replica exact:
+ *  1. **State before answers.** A command's effect is pushed BEFORE its result, on the same ordered socket, so a read the
+ *     window makes after awaiting a command sees that command's effect.
+ *  2. **Patches, never documents.** An agent's rows travel as `rowsPatch` deltas against what this connection last sent
+ *     (core/agent-push-wire.ts), and its ledger only while the window watches it.
+ *  3. **Nothing is lost to a crashed window.** Callbacks that change the window's stores (`DURABLE_CALLBACKS`) are queued
+ *     while no window is connected and flushed to the next one.
+ */
+
+type HostOptions = ConstructorParameters<typeof SessionHost>[0];
+
+/** What the session host is built with, from this server: its owner's half of the options. */
+export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
+
+export interface EngineServerOptions {
+    /** The token a window must say in `hello` (constant-time compared). */
+    readonly token: string;
+    /** This host's build: a window of another build replaces it (core/engine-protocol.ts `hostDecision`). */
+    readonly build: string;
+    readonly pid?: number;
+    /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
+    readonly onShutdown?: () => void;
+    /** The number of authenticated windows changed (the host's idle exit watches it). */
+    readonly onClients?: (count: number) => void;
+    /** How state pushes are coalesced: the timer. Default 16 ms, one frame — a streamed reply's chunks travel together. */
+    readonly schedule?: (ms: number, fn: () => void) => () => void;
+    readonly coalesceMs?: number;
+    readonly log?: (line: string) => void;
+}
+
+/** The most rows one frame carries: a longer patch is cut into several (see `#updatesFor`). */
+export const PATCH_CHUNK_ROWS = 200;
+
+/** How many store-changing callbacks are kept for a window that is not there (a resume each, at most). */
+const QUEUE_LIMIT = 10_000;
+
+interface Held {
+    seq: number;
+    rows: HeldRows<TimedEvent> | null;
+    ledger: HeldRows<TimedEvent> | null;
+}
+
+interface Connection {
+    readonly id: string;
+    readonly transport: ClientTransport & { trusted?: () => void };
+    authed: boolean;
+    readonly held: Map<string, Held>;
+    readonly watched: Set<string>;
+    lastGlobal: string;
+    nextCall: number;
+    readonly pending: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
+}
+
+export class SessionEngineServer {
+    readonly #options: EngineServerOptions;
+    #host: SessionHost | null = null;
+    readonly #records = new Map<string, AgentRecord>();
+    readonly #env = new Map<string, Readonly<Record<string, string>>>();
+    readonly #connections = new Set<Connection>();
+    readonly #queue: EngineCallback[] = [];
+    readonly #dirty = new Set<string>();
+    #cancelFlush: (() => void) | null = null;
+    readonly #schedule: (ms: number, fn: () => void) => () => void;
+
+    constructor(options: EngineServerOptions) {
+        this.#options = options;
+        this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
+    }
+
+    /** The session host's options that this server answers. Built BEFORE the host (it is handed to its constructor). */
+    hostOptions(): EngineHostOptions {
+        return {
+            currentRecord: (id) => this.#records.get(id) ?? null,
+            // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
+            serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
+            prepareMcpServers: (record, cwd) => this.#reverse('client.prepareMcpServers', [record, cwd]) as Promise<readonly McpServer[]>,
+            onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
+            onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
+            onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
+            onAction: (agentId, kind) => this.callback({ name: 'action', agentId, kind }),
+            onHeadroom: (provider, headroom) => this.callback({ name: 'headroom', provider, headroom }),
+            onMcpServers: (agentId, reports) => this.callback({ name: 'mcpServers', agentId, reports }),
+        };
+    }
+
+    attach(host: SessionHost): void {
+        this.#host = host;
+        host.subscribe((agentId) => this.#markDirty(agentId));
+    }
+
+    get clients(): number {
+        return [...this.#connections].filter((c) => c.authed).length;
+    }
+
+    /** A callback to the window: now, or (when it changes the window's stores) queued for the next window. */
+    callback(callback: EngineCallback): void {
+        const live = [...this.#connections].filter((c) => c.authed);
+        if (live.length === 0) {
+            if (DURABLE_CALLBACKS.has(callback.name) && this.#queue.length < QUEUE_LIMIT) this.#queue.push(callback);
+            return;
+        }
+        // Whatever it is about is pushed first: a callback never runs ahead of the state it concerns.
+        this.#flush();
+        for (const c of live) this.#event(c, 'engine.callback', callback);
+    }
+
+    /** A connection (a window) arrived: it must say the token before anything else. */
+    accept(transport: ClientTransport & { trusted?: () => void }): void {
+        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map() };
+        this.#connections.add(conn);
+        transport.onMessage((text) => this.#onMessage(conn, text));
+        transport.onClose(() => {
+            const was = conn.authed;
+            this.#connections.delete(conn);
+            for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
+            conn.pending.clear();
+            if (was) this.#options.onClients?.(this.clients);
+        });
+    }
+
+    #onMessage(conn: Connection, text: string): void {
+        const parsed = parseEngineFrame(text);
+        if (!parsed.ok) {
+            if (!conn.authed) conn.transport.close();
+            else this.#options.log?.(`engine: a frame was refused: ${parsed.reason}`);
+            return;
+        }
+        const message = parsed.message;
+        if (!conn.authed) {
+            // Nothing before the token: a call, an event or a wrong token closes the connection.
+            if (message.kind !== 'hello' || message.auth.kind !== 'token' || !sameToken(message.auth.token, this.#options.token)) {
+                conn.transport.send(JSON.stringify({ kind: 'refused', reason: 'this host does not know that token' }));
+                conn.transport.close();
+                return;
+            }
+            conn.authed = true;
+            conn.transport.trusted?.();
+            conn.transport.send(JSON.stringify({ kind: 'welcome', connectionId: conn.id, host: hostname(), isOwner: true, workspaceId: null, protocol: ENGINE_PROTOCOL, build: this.#options.build, pid: this.#options.pid ?? process.pid }));
+            this.#dump(conn);
+            this.#options.onClients?.(this.clients);
+            return;
+        }
+        if (message.kind === 'call') {
+            void this.#call(conn, message.id, message.method, message.args);
+            return;
+        }
+        if (message.kind === 'result') {
+            const pending = conn.pending.get(message.id);
+            if (!pending) return;
+            conn.pending.delete(message.id);
+            if (message.ok) pending.resolve(message.value);
+            else pending.reject(new Error(message.reason));
+        }
+    }
+
+    /** Everything a window that just connected needs: every running agent in full, the global view, then the queue. */
+    #dump(conn: Connection): void {
+        const host = this.#host;
+        if (host) for (const id of host.startedIds()) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
+        this.#sendGlobal(conn);
+        conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
+        const queued = this.#queue.splice(0, this.#queue.length);
+        for (const callback of queued) this.#event(conn, 'engine.callback', callback);
+    }
+
+    async #call(conn: Connection, id: number, method: EngineMethod, args: unknown[]): Promise<void> {
+        let reply: { ok: true; value: unknown } | { ok: false; reason: string };
+        try {
+            reply = { ok: true, value: await this.#dispatch(conn, method, args) };
+        } catch (error) {
+            reply = { ok: false, reason: error instanceof Error ? error.message : String(error) };
+        }
+        // RULE 1: the command's effect, then its answer.
+        this.#flush();
+        conn.transport.send(JSON.stringify(reply.ok ? { kind: 'result', id, ok: true, value: reply.value ?? null } : { kind: 'result', id, ok: false, reason: reply.reason }));
+    }
+
+    async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
+        const host = this.#host;
+        if (!host) throw new Error('The agent engine is still starting.');
+        const id = (i = 0): AgentId => {
+            const v = args[i];
+            if (typeof v !== 'string') throw new Error(`${method} names an agent`);
+            return v as AgentId;
+        };
+        const str = (i: number): string => (typeof args[i] === 'string' ? (args[i] as string) : '');
+        const by = (i: number): string | null => (typeof args[i] === 'string' ? (args[i] as string) : null);
+        switch (method) {
+            case 'engine.start': {
+                const record = args[0] as AgentRecord;
+                if (!record || typeof record.id !== 'string') throw new Error('engine.start needs a record');
+                this.#records.set(record.id, record);
+                const env = args[2];
+                this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
+                const windowEnv = args[3];
+                if (windowEnv && typeof windowEnv === 'object') adoptWindowEnv(process.env, windowEnv as Record<string, string>);
+                return host.start(record, str(1));
+            }
+            case 'engine.stop':
+                return host.stop(id(), (args[1] as { graceful?: boolean } | undefined) ?? {});
+            case 'engine.prompt':
+                return host.prompt(id(), str(1), by(2), (args[3] as Parameters<SessionHost['prompt']>[3]) ?? {});
+            case 'engine.handOff':
+                return host.handOff(id(), str(1), by(2), (args[3] as Parameters<SessionHost['handOff']>[3]) ?? {});
+            case 'engine.promptWith': {
+                const wire = Array.isArray(args[2]) ? (args[2] as WireAttachment[]) : [];
+                const attachments = wire.map((a) => ({ name: a.name, type: a.type, bytes: new Uint8Array(Buffer.from(a.b64, 'base64')) }));
+                return host.promptWith(id(), str(1), attachments, by(3));
+            }
+            case 'engine.cancel':
+                return host.cancel(id(), by(1));
+            case 'engine.deliver':
+                return host.deliver(id(), str(1), by(2));
+            case 'engine.answerApproval':
+                return host.answerApproval(id(), str(1), str(2));
+            case 'engine.settleParked':
+                return host.settleParked(id(), args[1] === 'allow' ? 'allow' : 'deny');
+            case 'engine.notice':
+                return host.notice(id(), str(1));
+            case 'engine.reportPlan':
+                return host.reportPlan(id(), Array.isArray(args[1]) ? (args[1] as { content: string; status: string }[]) : []);
+            case 'engine.resolvePrompt':
+                return host.resolvePrompt(id(), str(1), args[2] === 'send' ? 'send' : 'discard');
+            case 'engine.recordOwed':
+                await host.recordOwed(id(), str(1), by(2));
+                return true;
+            case 'engine.deliverOwed':
+                return host.deliverOwed(id(), (args[1] as { text: string; by: string } | undefined) ?? undefined);
+            case 'engine.ended':
+                return host.ended(id());
+            case 'engine.settled':
+                await host.settled();
+                return true;
+            case 'engine.drained':
+                await host.drained(typeof args[0] === 'number' ? args[0] : 2_000);
+                return true;
+            case 'engine.modelState': {
+                const state = host.modelState(id());
+                return state === null ? null : { state: await state };
+            }
+            case 'engine.switchModel': {
+                const switched = host.switchModel(id(), str(1));
+                if (switched === null) return false;
+                await switched;
+                return true;
+            }
+            case 'engine.resumeLimit':
+                host.resumeLimit(str(0));
+                return true;
+            case 'engine.clearDesignLogin':
+                host.clearDesignLogin(str(0));
+                return true;
+            case 'engine.stopAll':
+                await host.stopAll((left) => this.#event(conn, 'engine.stopAllLeft', left));
+                return true;
+            case 'engine.watchLedger':
+                conn.watched.add(id());
+                this.#markDirty(id());
+                return true;
+            case 'engine.unwatchLedger': {
+                conn.watched.delete(id());
+                const held = conn.held.get(id());
+                if (held) held.ledger = null;
+                return true;
+            }
+            case 'engine.records': {
+                const records = Array.isArray(args[0]) ? (args[0] as AgentRecord[]) : [];
+                this.#records.clear();
+                for (const r of records) if (r && typeof r.id === 'string') this.#records.set(r.id, r);
+                return true;
+            }
+            case 'engine.ping':
+                return 'pong';
+            case 'engine.shutdown':
+                if (!this.#options.onShutdown) throw new Error('This host cannot be shut down from a window.');
+                // Answered first: the shutdown ends this process, and the window waits for the pid, not for this reply.
+                setTimeout(() => this.#options.onShutdown?.(), 0);
+                return true;
+            case 'client.prepareMcpServers':
+                throw new Error('client.prepareMcpServers is the window\'s to answer');
+        }
+    }
+
+    /** A call to the WINDOW (the newest one): what only it has in phase 1. Refused when no window is connected. */
+    #reverse(method: EngineMethod, args: unknown[]): Promise<unknown> {
+        const conn = [...this.#connections].filter((c) => c.authed).at(-1);
+        if (!conn) return Promise.reject(new Error('No Genie window is connected to prepare this agent\'s credentials. Open Genie and start it again.'));
+        const id = conn.nextCall++;
+        return new Promise((resolve, reject) => {
+            conn.pending.set(id, { resolve, reject });
+            conn.transport.send(JSON.stringify({ kind: 'call', id, method, args }));
+        });
+    }
+
+    #markDirty(agentId: string): void {
+        this.#dirty.add(agentId);
+        if (this.#cancelFlush !== null) return;
+        this.#cancelFlush = this.#schedule(this.#options.coalesceMs ?? 16, () => { this.#cancelFlush = null; this.#flush(); });
+    }
+
+    /** Every pending change, to every window, now (RULE 1 calls this before each answer). */
+    #flush(): void {
+        if (this.#cancelFlush !== null) { this.#cancelFlush(); this.#cancelFlush = null; }
+        if (this.#dirty.size === 0) return;
+        const ids = [...this.#dirty];
+        this.#dirty.clear();
+        for (const conn of this.#connections) {
+            if (!conn.authed) continue;
+            for (const id of ids) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
+            this.#sendGlobal(conn);
+        }
+    }
+
+    /**
+     * One agent's change as updates for this connection: usually one. A patch longer than `PATCH_CHUNK_ROWS` rows (a
+     * first full ledger, a long run's rows) is CUT into several frames, each applying to the one before — so the window
+     * never parses megabytes in one block on the thread that routes keystrokes (it drains frames under a time budget).
+     */
+    #updatesFor(conn: Connection, agentId: string): EngineAgentUpdate[] {
+        const host = this.#host!;
+        const id = agentId as AgentId;
+        let held = conn.held.get(agentId);
+        if (!held) { held = { seq: 0, rows: null, ledger: null }; conn.held.set(agentId, held); }
+        const rows = host.rowsFor(id);
+        const rowsP = rowsPatch(held.rows, rows);
+        const watched = conn.watched.has(agentId);
+        const ledgerRows = watched ? host.ledgerFor(id) : null;
+        const ledgerP = ledgerRows !== null ? rowsPatch(held.ledger, ledgerRows) : null;
+        const view = this.#viewFor(id);
+        const pieces = Math.max(1, Math.ceil(rowsP.append.length / PATCH_CHUNK_ROWS), ledgerP ? Math.ceil(ledgerP.append.length / PATCH_CHUNK_ROWS) : 0);
+        const cut = (p: RowsPatch<TimedEvent>, k: number, prevSeq: number | null): RowsPatch<TimedEvent> => {
+            if (k === 0) return { base: p.base, keep: p.keep, append: p.append.slice(0, PATCH_CHUNK_ROWS) };
+            const from = Math.min(p.append.length, k * PATCH_CHUNK_ROWS);
+            return { base: prevSeq, keep: p.keep + from, append: p.append.slice(from, from + PATCH_CHUNK_ROWS) };
+        };
+        const updates: EngineAgentUpdate[] = [];
+        for (let k = 0; k < pieces; k += 1) {
+            const prev = k === 0 ? null : held.seq;
+            const seq = ++held.seq;
+            updates.push({ id: agentId, seq, view, rows: cut(rowsP, k, prev), ...(ledgerP ? { ledger: cut(ledgerP, k, prev) } : {}) });
+        }
+        held.rows = heldRows(held.seq, rows);
+        if (ledgerRows !== null) held.ledger = heldRows(held.seq, ledgerRows);
+        return updates;
+    }
+
+    #viewFor(id: AgentId): EngineAgentUpdate['view'] {
+        const host = this.#host!;
+        return {
+            probe: host.probe(id),
+            runOf: host.runOf(id),
+            promptable: host.promptable(id),
+            lastTurnEnd: host.lastTurnEnd(id),
+            turns: host.turnsFor(id),
+            turnsEndedThisRun: host.turnsEndedThisRun(id),
+            recentStderr: [...host.recentStderrFor(id)],
+            refusal: host.refusals.get(id) ?? null,
+            unusableThreadId: host.unusableThreadIds.get(id) ?? null,
+            models: host.modelCaps(id),
+            deliverable: host.deliverable(id),
+            inTurn: host.inTurn(id),
+            queued: [...host.queuedPromptIds(id)],
+        };
+    }
+
+    #sendGlobal(conn: Connection): void {
+        const host = this.#host;
+        if (!host) return;
+        const view: EngineGlobalView = {
+            startedIds: host.startedIds(),
+            heldLogins: host.heldLogins(),
+            signedOutProviders: host.signedOutProviders(),
+            pausedProviders: host.pausedProviders(),
+            pausedAgents: Object.fromEntries(host.pausedProviders().map((p) => [p, host.pausedAgents(p)])),
+            signedOutAgents: Object.fromEntries(host.signedOutProviders().map((p) => [p, host.signedOutAgents(p)])),
+            designLoginAgents: host.designLoginAgents(),
+        };
+        const text = JSON.stringify(view);
+        if (text === conn.lastGlobal) return;
+        conn.lastGlobal = text;
+        conn.transport.send(`{"kind":"event","channel":"engine.global","payload":${text}}`);
+    }
+
+    #event(conn: Connection, channel: string, payload: unknown): void {
+        conn.transport.send(JSON.stringify({ kind: 'event', channel, payload }));
+    }
+}
+
+/** What is the host's own and never the window's: how it runs, and where its home is. */
+const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST_BUILD', 'GENIE_HOST_IDLE_MS']);
+
+/**
+ * THE WINDOW'S ENVIRONMENT, TAKEN BEFORE A START: a provider is launched from the host's `process.env` (filtered by the
+ * drivers' allow-list), so the host takes the window's — added, changed and removed — except what is the host's own.
+ * Names compare case-insensitively on Windows, as the OS does.
+ */
+export function adoptWindowEnv(target: NodeJS.ProcessEnv, windowEnv: Readonly<Record<string, string>>, platform: NodeJS.Platform = process.platform): void {
+    const norm = (k: string): string => (platform === 'win32' ? k.toUpperCase() : k);
+    const incoming = new Map(Object.entries(windowEnv).filter(([k]) => !HOST_ONLY_ENV.has(norm(k))).map(([k, v]) => [norm(k), [k, v] as const]));
+    const existing = new Map<string, string>();
+    for (const key of Object.keys(target)) {
+        if (HOST_ONLY_ENV.has(norm(key))) continue;
+        if (!incoming.has(norm(key))) delete target[key];
+        else existing.set(norm(key), key);
+    }
+    // A name the host already has keeps its own spelling (`Path` stays `Path`): one variable, never two.
+    for (const [n, [k, v]] of incoming) target[existing.get(n) ?? k] = v;
+}
+
+function sameToken(given: string, expected: string): boolean {
+    const a = Buffer.from(given, 'utf8');
+    const b = Buffer.from(expected, 'utf8');
+    return a.length === b.length && timingSafeEqual(a, b);
+}

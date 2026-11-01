@@ -54,8 +54,8 @@ export interface WorkspaceOpsPorts {
     };
     host: {
         probe(agentId: AgentRecord['id']): LiveSession | null;
-        prompt(agentId: AgentRecord['id'], text: string): boolean;
-        stop(agentId: AgentRecord['id']): boolean;
+        prompt(agentId: AgentRecord['id'], text: string): boolean | Promise<boolean>;
+        stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
     };
     attention: { finished(): readonly { agentId: string; handoff: string | null; at: string }[] };
     terminals: { list(): readonly { id: string; workspaceId: string }[]; close(id: string): boolean };

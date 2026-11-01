@@ -789,6 +789,11 @@ export class AgentSession {
         }
     }
 
+    /** The ids of the prompts held for the turn's end, in order — what the agent host tells a window (the host split). */
+    get queuedPromptIds(): readonly string[] {
+        return this.#afterTurn.map((p) => p.id);
+    }
+
     hasQueuedPrompt(id: string): boolean {
         return this.#afterTurn.some((p) => p.id === id);
     }
@@ -1432,6 +1437,18 @@ export class AgentSession {
         const driver = this.#driver;
         if (!driver || this.#exited || !this.#alive || typeof driver.modelState !== 'function') return null;
         return driver.modelState();
+    }
+
+    /**
+     * Whether `modelState()` / `switchModel()` would answer rather than `null` — read without asking the provider, so the
+     * agent host can tell a window that is not in its process (the host split, phase 1).
+     */
+    get canSayModels(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.modelState === 'function';
+    }
+
+    get canSwitchModel(): boolean {
+        return Boolean(this.#driver) && !this.#exited && this.#alive && typeof this.#driver?.setModel === 'function';
     }
 
     /** Ask the running provider to read its rate limits, or `null` when nothing is running or it cannot (`SessionDriver.readRateLimits`). */

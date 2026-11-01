@@ -39,8 +39,8 @@ export interface AgentOpsPorts {
         setModel(id: AgentRecord['id'], model: string | null): Promise<AgentRecord | null>;
     };
     host: {
-        start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
-        stop(id: AgentRecord['id']): boolean;
+        start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
+        stop(id: AgentRecord['id']): boolean | Promise<boolean>;
         /**
          * How the last stop ended, once it has (`SessionHost.ended`): a restart starts only after it. REQUIRED: it was
          * optional, main.ts never passed it, and every restart inside Claude's stop grace was refused "still stopping".
@@ -52,7 +52,7 @@ export interface AgentOpsPorts {
         /** Switch the running agent's model, no restart (`SessionHost.switchModel`): `null` = not running, or it cannot. */
         switchModel?(id: AgentRecord['id'], model: string): Promise<void> | null;
         /** Answer a parked shell question by the new tool setting (`SessionHost.settleParked`): `false` = none parked. */
-        settleParked?(id: AgentRecord['id'], decision: 'allow' | 'deny'): boolean;
+        settleParked?(id: AgentRecord['id'], decision: 'allow' | 'deny'): boolean | Promise<boolean>;
         /**
          * WHAT A RESTART OWES (`SessionHost.deliverOwed`, genie#1238): every prompt of this agent's record that was never
          * delivered — the resume prompt of an interrupted turn, the person's drafts — handed to the new run, in the order
@@ -82,7 +82,7 @@ export interface AgentOpsPorts {
      * prompt; `landedSince` is whether its `imDone` handoff arrived at or after `sinceMs`; the wait is bounded by `waitMs`.
      */
     handoff: {
-        ask(id: AgentRecord['id'], text: string): boolean;
+        ask(id: AgentRecord['id'], text: string): boolean | Promise<boolean>;
         landedSince(id: AgentRecord['id'], sinceMs: number): boolean;
         now(): number;
         sleep(ms: number): Promise<void>;
@@ -137,13 +137,13 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
      * ended (its grace, its kill, a fresh reading); a stop that left processes running refuses the restart, naming them,
      * BEFORE a fresh restart discards the thread.
      */
-    ports.host.stop(record.id);
+    await ports.host.stop(record.id);
     const verdict = await ports.host.ended(record.id);
     if (verdict && !verdict.verified && verdict.survivors.length > 0) {
         return { ok: false, reason: `${record.name}'s previous run did not end, so it was not started again: ${verdict.reason}` };
     }
     if (plan.kind === 'graceful') {
-        const started = ports.host.start(record, ports.cwdFor(record));
+        const started = await ports.host.start(record, ports.cwdFor(record));
         if (!started.ok) return started;
         await ports.host.deliverOwed(record.id, cutsTurn ? { text: RESUME_AFTER_USER_RESTART, by: 'genie' } : undefined);
         return { ok: true, kind: 'graceful' };
@@ -155,7 +155,7 @@ export async function restartAgent(ports: AgentOpsPorts, agentId: string, kind: 
      * nothing. Nothing can record the new run's thread before the clear: `onThreadId` fires from a provider update, never
      * inside `start()`, and `clearThread` changes the in-memory record before its first await — no await comes between.
      */
-    const started = ports.host.start({ ...record, threadId: null }, ports.cwdFor(record));
+    const started = await ports.host.start({ ...record, threadId: null }, ports.cwdFor(record));
     if (!started.ok) return started;
     const cleared = ports.registry.clearThread(record.id);
     return (await cleared) ? { ok: true, kind: 'fresh', discarded: plan.discards } : UNKNOWN;
@@ -222,7 +222,7 @@ const HANDOFF_BEFORE = (outcome: 'unmount' | 'delete') =>
 async function askForHandoff(ports: AgentOpsPorts, record: AgentRecord, outcome: 'unmount' | 'delete'): Promise<HandoffAsk> {
     if (ports.host.probe(record.id)?.running !== true) return 'not-running';
     const since = ports.handoff.now();
-    if (!ports.handoff.ask(record.id, HANDOFF_BEFORE(outcome))) return 'missing';
+    if (!(await ports.handoff.ask(record.id, HANDOFF_BEFORE(outcome)))) return 'missing';
     const deadline = since + ports.handoff.waitMs;
     while (!ports.handoff.landedSince(record.id, since)) {
         if (ports.handoff.now() >= deadline) return 'missing';

@@ -37,16 +37,16 @@ export interface HostApiDeps {
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
     host: Pick<RestartPorts, 'prompt'> & {
-        start(record: AgentRecord, cwd: string): { ok: true } | { ok: false; reason: string };
-        stop(agentId: AgentRecord['id']): boolean;
+        start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
+        stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
         resolvePrompt?(agentId: AgentRecord['id'], id: string, action: 'send' | 'discard'): Promise<{ ok: true } | { ok: false; reason: string }>;
-        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): { ok: true } | { ok: false; reason: string };
+        answerApproval(agentId: AgentRecord['id'], optionId: string, note?: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         /** `Stop this turn`: the current turn ends, the agent keeps running (`SessionHost.cancel`). Never `stop`. */
-        cancel(agentId: AgentRecord['id']): CancelOutcome;
+        cancel(agentId: AgentRecord['id']): CancelOutcome | Promise<CancelOutcome>;
         /** `Resume now`: the provider login held for its rate limit opens (Tynn #794). */
         resumeLimit(provider: string): void;
         /** Your message WITH files — the chat composer's attach (`SessionHost.promptWith`); absent = files are refused. */
-        promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): { ok: true } | { ok: false; reason: string | null };
+        promptWith?(agentId: AgentRecord['id'], text: string, attachments: readonly Attachment[], by: string | null): ({ ok: true } | { ok: false; reason: string | null }) | Promise<{ ok: true } | { ok: false; reason: string | null }>;
         subscribe(listener: (agentId: string) => void): () => void;
     };
     /** The New agent form, created on this host (main/agent-create-host.ts): its AGENT.md written, then registered. */
@@ -186,7 +186,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             }
             case 'stopAgent': {
                 const r = agent(args[0]);
-                return { ok: r ? deps.host.stop(r.id) : false };
+                return { ok: r ? await deps.host.stop(r.id) : false };
             }
             case 'resumeLimit': {
                 const r = agent(args[0]);
@@ -207,10 +207,10 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                     if (!r) return { ok: false, reason: 'unknown agent' };
                     if (attachments === null || attachments.length === 0) return { ok: false, reason: 'an attachment is not a file' };
                     if (!deps.host.promptWith) return { ok: false, reason: 'this host does not take files in a message' };
-                    const sent = deps.host.promptWith(r.id, text, attachments, 'you');
+                    const sent = await deps.host.promptWith(r.id, text, attachments, 'you');
                     return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
                 }
-                return { ok: r !== null && text.length > 0 && deps.host.prompt(r.id, text, 'you') };
+                return { ok: r !== null && text.length > 0 && (await deps.host.prompt(r.id, text, 'you')) };
             }
             case 'resolvePrompt': {
                 const r = agent(args[0]);

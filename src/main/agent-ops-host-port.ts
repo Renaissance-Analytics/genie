@@ -1,5 +1,5 @@
 import type { AgentOpsPorts } from './agent-ops-host.js';
-import type { SessionHost } from './session-host.js';
+import type { AgentEngine } from './agent-engine.js';
 
 /**
  * THE SESSION HOST AS AGENT OPERATIONS SEE IT — the one place the real `SessionHost` is wired into `AgentOpsPorts.host`.
@@ -8,7 +8,7 @@ import type { SessionHost } from './session-host.js';
  * host use it too, so a method the wiring forgets is forgotten in the tests as well. `host` is late-bound: main.ts
  * creates the session host after the ports.
  */
-export function sessionHostPort(host: () => SessionHost | null): AgentOpsPorts['host'] {
+export function sessionHostPort(host: () => AgentEngine | null): AgentOpsPorts['host'] {
     return {
         start: (record, cwd) => host()!.start(record, cwd),
         stop: (id) => host()!.stop(id),
