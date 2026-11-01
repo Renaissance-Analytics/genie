@@ -1,6 +1,6 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Icon, Popover } from '@particle-academy/react-fancy';
+import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
 import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
@@ -202,7 +202,7 @@ function RowTrayView({ row, onNavigate }: { row: AgentRow; onNavigate: (route: s
             ) : null}
             <div className="flex gap-2">
                 {tray.doors.map((d) => (
-                    <button key={d.door} type="button" data-door={d.door} onClick={(e) => { e.stopPropagation(); onNavigate(d.route); }} className="rounded-md border border-[var(--border-2)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{d.label}</button>
+                    <Button key={d.door} type="button" size="xs" data-door={d.door} onClick={(e) => { e.stopPropagation(); onNavigate(d.route); }}>{d.label}</Button>
                 ))}
             </div>
         </div>
@@ -238,7 +238,7 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
             {...(focused ? { 'data-focused': 'true' } : {})}
             {...(role ? { 'data-reveal': role } : {})}
             onClick={() => onOpen(row.id)}
-            className={`${GRID} relative h-8 items-center border-b border-[var(--border-1)] text-[13px] transition-opacity hover:bg-[var(--bg-1)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
+            className={`${GRID} relative h-8 cursor-pointer items-center border-b border-[var(--border-1)] text-[13px] transition-opacity hover:bg-[var(--bg-1)] ${focused ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--accent)]' : ''}`}
             // The reveal: the rest dims to .32; the row and its peers carry a 2px violet left border (the board).
             {...(role === 'dim' ? { style: { opacity: 0.32 } } : role ? { style: { boxShadow: 'inset 2px 0 0 var(--violet-400)' } } : {})}
         >
@@ -282,16 +282,17 @@ function AgentRowView({ row, onOpen, onFix, focused = false, reveal = null, lane
                 {target?.kind === 'fixes' ? (
                     <div className="flex min-w-0 gap-1.5">
                         {target.fixes.map((f) => (
-                            <button
+                            <Button
                                 key={f}
                                 type="button"
+                                size="xs"
                                 data-fix={f}
                                 data-fix-for={row.id}
                                 onClick={(e) => { e.stopPropagation(); (onFix ?? ((r) => onOpen(r.agentId)))(fixRoute(row.id, f)); }}
-                                className="shrink-0 rounded-md border border-[var(--border-2)] px-2 py-px text-xs hover:bg-[var(--bg-2)]"
+                                className="shrink-0 py-px"
                             >
                                 {f}
-                            </button>
+                            </Button>
                         ))}
                     </div>
                 ) : null}
@@ -389,11 +390,11 @@ function GroupHeader({
                     <span data-workspace-fault={group.fault.repo} className="ml-2.5 flex shrink-0 items-center gap-1.5 text-[var(--warning)]">
                         <Icon name="circle-alert" size="xs" />
                         {group.fault.text}
-                        <button type="button" data-action="locate-repo" onClick={() => onLocateRepo?.(group.workspaceId, group.fault!.repo)} className="rounded border border-[var(--border-1)] px-1.5 text-[11px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Locate repo</button>
+                        <Button type="button" size="xs" data-action="locate-repo" onClick={() => onLocateRepo?.(group.workspaceId, group.fault!.repo)} className="px-1.5 py-0 text-[11px]">Locate repo</Button>
                     </span>
                 ) : null}
                 {/* A DOOR, not a label: the board's right-aligned `Open workspace →` opens the workspace's own page. */}
-                <button type="button" data-open-workspace={group.workspaceId} onClick={() => onOpenWorkspace?.(group.workspaceId)} className="ml-auto shrink-0 rounded px-1 text-[var(--fg-3)] hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)]">Open workspace →</button>
+                <Button type="button" variant="ghost" size="xs" iconTrailing="arrow-right" data-open-workspace={group.workspaceId} onClick={() => onOpenWorkspace?.(group.workspaceId)} className="ml-auto shrink-0 py-0">Open workspace</Button>
             </div>
 
             {/*
@@ -404,15 +405,9 @@ function GroupHeader({
             {group.empty ? (
                 <div className="flex h-8 items-center gap-3 border-b border-[var(--border-1)] pl-7 pr-5 text-[13px] text-[var(--fg-3)]">
                     <span>No agents</span>
-                    <button
-                        type="button"
-                        data-add-agent={group.workspaceId}
-                        onClick={() => onAddAgent(group.workspaceId)}
-                        className="flex items-center gap-1 rounded-md border border-[var(--border-1)] px-2 py-px text-xs hover:bg-[var(--bg-2)]"
-                    >
-                        <Icon name="plus" size="xs" />
+                    <Button type="button" size="xs" icon="plus" data-add-agent={group.workspaceId} onClick={() => onAddAgent(group.workspaceId)} className="py-px">
                         Add agent
-                    </button>
+                    </Button>
                 </div>
             ) : null}
         </>
@@ -574,25 +569,18 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                     A workspace is a folder Genie works in. Add one and its agents appear here, with
                     what each is doing and what it has produced.
                 </p>
-                <button
-                    type="button"
-                    data-add-workspace
-                    onClick={onAddWorkspace}
-                    className="flex items-center gap-1.5 rounded-lg border border-[var(--border-2)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]"
-                >
-                    <Icon name="plus" size="sm" />
+                <Button type="button" size="md" icon="plus" data-add-workspace onClick={onAddWorkspace}>
                     Add a workspace
-                </button>
+                </Button>
                 {onAddWorkspaceFromGit ? (
-                    <button type="button" data-action="add-from-git" onClick={onAddWorkspaceFromGit} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
+                    <Button type="button" size="md" icon="git-branch" data-action="add-from-git" onClick={onAddWorkspaceFromGit}>
                         From a git URL
-                    </button>
+                    </Button>
                 ) : null}
                 {onAddWorkspaceFromTynn ? (
-                    <button type="button" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn} className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-[13px] hover:bg-[var(--bg-2)]">
-                        <Icon name="link" size="sm" />
+                    <Button type="button" size="md" icon="link" data-action="add-from-tynn" onClick={onAddWorkspaceFromTynn}>
                         From Tynn
-                    </button>
+                    </Button>
                 ) : null}
             </div>
         );
@@ -619,18 +607,17 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 {/* The board's segmented control. The grouping lives in the route (`group=`), so it is linkable. */}
                 <div className="flex overflow-hidden rounded-lg border border-[var(--border-1)] text-xs">
                     {(['workspace', 'status'] as const).map((g, i) => (
-                        <button key={g} type="button" data-group-toggle={g} {...(g === group ? { 'data-current': 'true' } : {})} onClick={() => onGroup?.(g)} className={`px-2.5 py-1 ${i > 0 ? 'border-l border-[var(--border-1)] ' : ''}${g === group ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}>
+                        <Button key={g} type="button" variant="ghost" size="xs" aria-pressed={g === group} data-group-toggle={g} {...(g === group ? { 'data-current': 'true' } : {})} onClick={() => onGroup?.(g)} className={`rounded-none ${i > 0 ? 'border-l border-[var(--border-1)] ' : ''}${g === group ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}>
                             {g === 'workspace' ? 'By workspace' : 'By status'}
-                        </button>
+                        </Button>
                     ))}
                 </div>
                 <RateLimitPills limits={rateLimits ?? {}} />
                 {/* `py-1`, not a row-height class: the row-height census counts ` h-7 ` as "28px header rows", and this is a button. */}
-                <button type="button" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie — the composer, one click from the board" className="flex items-center gap-1.5 rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
-                    <Icon name="message-square" className="h-3.5 w-3.5" />
+                <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie — the composer, one click from the board">
                     Chat
-                    <span className="font-mono text-[11px] text-[var(--fg-4)]">⌘J</span>
-                </button>
+                    <span className="ml-1.5 font-mono text-[11px] text-[var(--fg-4)]">⌘J</span>
+                </Button>
             </div>
             {legend ? (
                 <div data-legend="" className="flex shrink-0 items-center gap-5 border-b border-[var(--border-1)] px-7 py-2 text-xs text-[var(--fg-3)]">
@@ -747,8 +734,9 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
     return (
         <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
             <Popover.Trigger>
-                <button
+                <Button
                     type="button"
+                    size="xs"
                     data-rate-limit={provider}
                     data-level={level}
                     aria-haspopup="dialog"
@@ -756,12 +744,12 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                     aria-label={`${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
                     // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
-                    className={`flex cursor-pointer items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
+                    className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
                     <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span>
                     <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
-                </button>
+                </Button>
             </Popover.Trigger>
             <Popover.Content
                 role="dialog"

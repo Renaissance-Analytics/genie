@@ -5,6 +5,7 @@ import { agentFileText, agentSlug, newAgentRefusal } from '../src/core/agent-cre
 import { parseAgentManifest } from '../src/core/agent-manifest.js';
 import { createAgent, type AgentCreatePorts } from '../src/main/agent-create-host.js';
 import { NewAgentView } from '../src/renderer/components/NewAgentModal.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * A NEW AGENT IS ASKED FOR, NOT INVENTED (the owner, 2026-10-23: "the agent creation UX is totally busted. It didn't give
@@ -102,13 +103,16 @@ describe('the New agent form', () => {
         expect(html).toMatch(/data-new-agent-field="provider"/);
         expect(html).toMatch(/<option value="claude"/);
         expect(html).toMatch(/<option value="codex"/);
-        expect(html).toMatch(/<button[^>]*data-action="create-agent"[^>]*disabled=""/);
+        expect(control(html, 'data-action="create-agent"')).toMatchObject({ tag: 'button', fancy: true, text: 'Create agent' });
+        expect(control(html, 'data-action="create-agent"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('shows the folder the name becomes; Create is live once name and purpose are there (control); a refusal is said', () => {
         const html = view({ name: 'Laravel App', purpose: 'App work' });
         expect(html).toMatch(/Created as[^<]*<strong>laravel-app<\/strong>/);
-        expect(html).not.toMatch(/<button[^>]*data-action="create-agent"[^>]*disabled=""/);
+        // The same button, found (so the absence of `disabled` is not the absence of the button).
+        expect(control(html, 'data-action="create-agent"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-action="create-agent"')!.open).not.toMatch(/\sdisabled=""/);
         expect(view({ name: 'genie', purpose: 'x', error: '"genie" is a reserved name' })).toMatch(/data-new-agent-error=""[^>]*>[^<]*reserved/);
     });
 });

@@ -4,6 +4,7 @@ import type { AgentRow } from '../src/core/dashboard-view.js';
 import { fixRoute, groupByStatus } from '../src/core/dashboard-view.js';
 import { globalAction } from '../src/core/keys.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE DASHBOARD IS A BOARD YOU READ — but what it draws must be real. The board audit of 2026-10-12 found the
@@ -34,7 +35,12 @@ describe('group headers', () => {
         const html = render();
         expect(html).toContain('data-open-workspace="tynn"');
         expect(html).toContain('data-open-workspace="fancy"');
-        expect(html).toMatch(/<button[^>]*data-open-workspace="tynn"[^>]*>Open workspace →<\/button>/);
+        // A real button (react-fancy's), reading "Open workspace" with the arrow as its trailing ICON, not a "→" to read.
+        const door = control(html, 'data-open-workspace="tynn"');
+        expect(door).toMatchObject({ tag: 'button', fancy: true, text: 'Open workspace' });
+        // Its trailing icon element. That 'arrow-right' resolves to a glyph is test/icons.test.ts's claim: the icon
+        // registry is not loaded in a static render, so the icon is its empty span here.
+        expect(door!.inner).toMatch(/<span[^>]*data-action-icon="trailing"[^>]*><span[^>]*data-react-fancy-icon=""[^>]*><\/span><\/span>$/);
     });
 });
 
@@ -71,7 +77,7 @@ describe('the doors on a row', () => {
     });
 
     it('the header offers Chat ⌘J — the composer, one click away from the board — and the chord it names works everywhere', () => {
-        expect(render()).toMatch(/<button[^>]*data-action="chat-genie"/);
+        expect(control(render(), 'data-action="chat-genie"')).toMatchObject({ tag: 'button', fancy: true, text: 'Chat ⌘J' });
         const j = { key: 'j', ctrlKey: false, metaKey: true, altKey: false, shiftKey: false, typing: false };
         expect(globalAction(j)).toBe('toggle-chat');
         expect(globalAction({ ...j, metaKey: false, ctrlKey: true })).toBe('toggle-chat');

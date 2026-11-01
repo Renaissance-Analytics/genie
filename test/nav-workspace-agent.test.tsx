@@ -5,6 +5,7 @@ import { routeWorkspace } from '../src/core/route.js';
 import type { RailItem } from '../src/core/rail-view.js';
 import { AgentView } from '../src/renderer/components/AgentView.js';
 import { Sidebar } from '../src/renderer/components/Sidebar.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * WORKSPACE ↔ AGENT NAVIGATION, PART 1 (Tynn #805; the owner, 2026-10-17: "the workspace and agent views need to have
@@ -51,6 +52,6 @@ describe('the agent’s header leads back', () => {
         const idle = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as LiveSession;
         const html = renderToStaticMarkup(<AgentView agent={agent} session={idle} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null} onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} />);
         expect(html).toMatch(/<button[^>]*data-crumb="tynn"[^>]*data-nav="genie:\/\/workspace\/tynn"|<button[^>]*data-nav="genie:\/\/workspace\/tynn"[^>]*data-crumb="tynn"/);
-        expect(html).toMatch(/data-crumb="tynn"[^>]*>Tynn\.ai \/<\/button>/);
+        expect(control(html, 'data-crumb="tynn"')).toMatchObject({ tag: 'button', fancy: true, text: 'Tynn.ai /' });
     });
 });
