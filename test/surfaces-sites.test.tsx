@@ -20,7 +20,7 @@ const render = (sites: HostedSite[], editing: SiteEditing | null = null) =>
     renderToStaticMarkup(<HostingSurface data={{ ...EMPTY_FEATURES, hosting: { sites, processes: [], adding: null, editing, frontDoor: { running: false, reason: 'off' } } } as FeatureData} onAction={() => {}} onNavigate={() => {}} />);
 
 /** The buttons in the markup, in order, by name: an icon control's label, else its text (genie#1393: icons over words). */
-const buttons = (rowHtml: string) => [...rowHtml.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[1]!)?.[1] ?? m[2]!.replace(/<[^>]+>/g, '').trim());
+const buttons = (rowHtml: string) => [...rowHtml.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[1]!)?.[1] ?? (/data-react-fancy-button-label="[^"]*"[^>]*>([^<]*)</.exec(m[2]!)?.[1] ?? /^([^<]*)$/.exec(m[2]!)?.[1] ?? '').trim());
 
 const row = (html: string, id: string) => {
     const m = new RegExp(`<li[^>]*data-site="${id}"[^>]*>([\\s\\S]*?)</li>`).exec(html);

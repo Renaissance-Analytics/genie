@@ -127,7 +127,8 @@ describe('icons over words', () => {
         const cs = controls(html).filter((c) => c.action !== 'remove');
         expect(cs.map((c) => c.label)).toEqual(['Open', 'Restart', 'Stop', 'Edit']);
         for (const m of html.matchAll(/<button[^>]*data-site-action="(?!remove")[^"]+"[^>]*>([\s\S]*?)<\/button>/g)) {
-            expect(m[1]!.replace(/<[^>]+>/g, '').trim()).toBe('');
+            // No text between any two tags: an icon, nothing to read.
+            expect(m[1]).not.toMatch(/(^|>)\s*[^<\s][^<]*(<|$)/);
             expect(m[1]).toMatch(/<svg/);
         }
     });

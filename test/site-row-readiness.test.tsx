@@ -12,7 +12,7 @@ import type { SiteInfo } from '../src/main/site-manager.js';
 const site = (over: Partial<SiteInfo> & Pick<SiteInfo, 'id' | 'host' | 'state'>): HostedSite =>
     ({ name: over.host.replace(/\.gen$/, ''), workspaceId: 'acme', repoPath: '/w/acme', serve: { mode: 'proxy' }, port: 4101, processIds: [over.id], problem: null, ...over }) as HostedSite;
 /** The buttons in the markup, in order, by name: an icon control's label, else its text (genie#1393: icons over words). */
-const buttons = (html: string) => [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[1]!)?.[1] ?? m[2]!.replace(/<[^>]+>/g, '').trim());
+const buttons = (html: string) => [...html.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[1]!)?.[1] ?? (/data-react-fancy-button-label="[^"]*"[^>]*>([^<]*)</.exec(m[2]!)?.[1] ?? /^([^<]*)$/.exec(m[2]!)?.[1] ?? '').trim());
 function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
     if (Array.isArray(node)) return node.flatMap(elements);
     if (!isValidElement(node)) return [];
