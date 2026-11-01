@@ -100,7 +100,7 @@ async function servePhp(workerEnv: Record<string, string>): Promise<number> {
     writeFileSync(join(repo, 'public', 'index.php'), '<?php echo "ok";\n');
     const [sitePort, fcgiPort] = [await freePort(), await freePort()];
     const file = join(repo, 'Caddyfile');
-    writeFileSync(file, serveCaddyfile({ sitePort, repoPath: repo, serve: { mode: 'php', root: 'public', fcgiPort } })!);
+    writeFileSync(file, serveCaddyfile({ sitePort, repoPath: repo, storageDir: join(repo, 'caddy-data'), serve: { mode: 'php', root: 'public', fcgiPort } })!);
     const env = { ...process.env };
     delete env.PHP_FCGI_MAX_REQUESTS;
     procs.push(spawn(phpCgi!, ['-b', `127.0.0.1:${fcgiPort}`], { stdio: 'ignore', env: { ...env, ...workerEnv } }));

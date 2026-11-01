@@ -373,6 +373,8 @@ export class SiteManager {
                 this.#deps.preparePhpCgi?.(input.serve.version);
             }
             const port = this.#deps.allocatePort();
+            // The site's own Caddy storage, beside its Caddyfile — never Caddy's shared default (serveCaddyfile says why).
+            const storageDir = join(this.#deps.configDir, id, 'caddy-data');
             const processIds: string[] = [];
             let spec: ServeSpec;
             if (input.serve.mode === 'php') {
@@ -380,14 +382,14 @@ export class SiteManager {
                 const fcgiPorts = Array.from({ length: Math.max(1, this.#deps.phpWorkers ?? PHP_WORKERS) }, () => this.#deps.allocatePort());
                 spec = { mode: 'php', root: input.serve.root, fcgiPort: fcgiPorts[0]!, fcgiPorts };
                 // Rendered BEFORE anything starts: a root that escapes the repo is refused with nothing running.
-                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
+                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, storageDir, serve: spec })!;
                 record.phpWorker = { command: cgiCommand, fcgiPorts };
                 this.#startPhpWorker(record, baseEnv);
                 processIds.push(...phpWorkerIds(id, fcgiPorts.length));
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             } else {
                 spec = input.serve;
-                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, serve: spec })!;
+                const caddyfile = serveCaddyfile({ sitePort: port, repoPath: input.repoPath, storageDir, serve: spec })!;
                 this.#runCaddy(record, caddy, caddyfile, baseEnv, proc);
             }
             // Main process first in the list: the route's target and the state's source.

@@ -456,6 +456,10 @@ function startExternalFrontDoor(input: {
     if (opened.ca === null) return off(`Genie’s certificate authority could not be set up (${opened.error}); https://<name>.gen is off in external browsers and in the in-app browser`);
     const ca = opened.ca;
     const caddyfile = join(caddyDir, 'Caddyfile');
+    // Caddy's storage: where XDG_DATA_HOME (below) has put it since the first beta, now named in the Caddyfile too.
+    const caddyStorage = join(caddyDir, 'data', 'caddy');
+    /** What this process last wrote to the Caddyfile; null = not yet, so the first render always writes. */
+    let written: string | null = null;
     // Earlier betas remembered `caddy trust` (Caddy's own root) with this marker. Trust is read from the OS store now,
     // and that root is no longer served; the marker would only mislead whoever reads the folder.
     rmSync(join(caddyDir, 'trusted'), { force: true });
@@ -497,8 +501,13 @@ function startExternalFrontDoor(input: {
                 return;
             }
         }
+        // Written only when the config CHANGED. render() runs on every process status change anywhere in Genie, and
+        // each one rewrote the same bytes: a file write Defender scans and a reload decision Caddy's --watch makes.
+        const next = frontDoorCaddyfile(routes, tls, caddyStorage);
+        if (next === written) return;
         mkdirSync(caddyDir, { recursive: true });
-        writeFileSync(caddyfile, frontDoorCaddyfile(routes, tls), 'utf8');
+        writeFileSync(caddyfile, next, 'utf8');
+        written = next;
     };
     // READ from the OS store by the CA's thumbprint — never a marker. A store that cannot be read is untrusted with
     // the reason, so the person still has the Trust door.
