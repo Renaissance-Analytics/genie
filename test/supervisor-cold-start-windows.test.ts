@@ -71,12 +71,14 @@ function imageOfLive(pid: number): string {
 
 /** The PowerShell that reads a process's image: one line, one answer (`PATH <image>`, `GONE` or `NO-PATH`). */
 function imageReadScript(pid: number): string {
-    return [
-        `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
+    // Two statements: the lookup, then ONE if-chain. Its branches are joined by a space — a `;` would end the `if`.
+    const chain = [
         "if ($null -eq $p) { 'GONE' }",
         "elseif ([string]::IsNullOrEmpty($p.Path)) { 'NO-PATH' }",
         "else { 'PATH ' + $p.Path }",
-    ].join('; ');
+    ].join(' ');
+    // `exit 0`: the answer is the output; a lookup that found nothing must not turn into PowerShell failing.
+    return `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue; ${chain}; exit 0`;
 }
 
 /** The image the read answered, or the failure that says the process was gone: never an image somewhere else. */
@@ -100,6 +102,8 @@ describe('reading a supervisor’s image (the Windows tests’ helper)', () => {
         // Every block closed, and one if.
         expect(script.split('{').length).toBe(script.split('}').length);
         expect(script.match(/\bif\b/g)).toHaveLength(1);
+        // Ends answered: a lookup that found nothing is an answer (GONE), not a PowerShell failure.
+        expect(script.trimEnd().endsWith('exit 0')).toBe(true);
     });
 
     it('a read that found the process gives its image; one that did not says it was gone, never an image elsewhere', () => {
