@@ -10,11 +10,6 @@ import type { SessionHost } from './session-host.js';
  */
 export type AgentEngine = SessionHost | SessionEngineClient;
 
-/** Where agents run: in `genie-host` (the default), or in the window's process (`GENIE_AGENT_HOST=in-process`, diagnosis). */
-export function agentHostMode(env: NodeJS.ProcessEnv): 'process' | 'in-process' {
-    return env.GENIE_AGENT_HOST?.trim().toLowerCase() === 'in-process' ? 'in-process' : 'process';
-}
-
 /** Reconnect backoff after the link drops (Genie 1's host-loss recovery, `g1:main/terminal/host-service.ts:1428`). */
 export const RECONNECT_BACKOFF_MS: readonly number[] = [1_000, 2_000, 4_000, 8_000];
 
@@ -43,8 +38,9 @@ const killPid = (pid: number): void => {
 };
 
 /**
- * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had: the caller runs the engine
- * in-process, and the reason is on the Deck — never a quiet downgrade.
+ * Find (adopt, replace or start) the host and connect to it. `null` when it cannot be had at all: the caller falls back
+ * to the EMERGENCY in-process engine and says so on the Deck — never a quiet downgrade, and never a mode anyone chooses
+ * (the owner, 2026-11-01: "we split host from UI for good"; plan §4.1).
  */
 export async function connectAgentEngine(options: AgentEngineLinkOptions): Promise<AgentEngineLink | null> {
     const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));

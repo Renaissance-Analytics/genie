@@ -96,7 +96,7 @@ import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
-import { agentHostMode, connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
+import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
@@ -1206,10 +1206,11 @@ async function boot(): Promise<void> {
      * not be routed through my UI … All work should be handled on the host side"). Every session — its provider, its ACP
      * parsing, its ledger, its thread writes, its containment — runs in `genie-host`; this process keeps a replica it reads
      * synchronously and sends commands to. A window that freezes, crashes or restarts no longer stops an agent, and an
-     * agent's work no longer runs on the thread that routes the person's keystrokes. `GENIE_AGENT_HOST=in-process` keeps
-     * the engine here (diagnosis only); a host that cannot start falls back to it, said on the Deck.
+     * agent's work no longer runs on the thread that routes the person's keystrokes. There is no in-process MODE (the owner,
+     * 2026-11-01: "we split host from UI for good"): only a host that cannot start at all falls back to the EMERGENCY
+     * in-process engine below, said on the Deck (plan §4.1).
      */
-    if (agentHostMode(process.env) === 'process') {
+    {
         agentEngineLink = await connectAgentEngine({
             callbacks: engineCallbacks,
             launch: {

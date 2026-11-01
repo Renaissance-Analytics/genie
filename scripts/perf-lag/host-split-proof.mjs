@@ -8,7 +8,8 @@
  * streaming nonstop (stub-codex-busy.mjs) — measured by measure.mjs in the real window (main's event-loop gaps over
  * 50 ms, keystroke-to-paint, CPU profiles):
  *
- *   1. BEFORE: `GENIE_AGENT_HOST=in-process` — the agents run in Electron main, as every build before phase 1;
+ *   1. BEFORE: the emergency fallback (host.js withheld, so the host cannot start) — the agents run in Electron main,
+ *      as every build before phase 1;
  *   2. AFTER:  the default — the agents run in genie-host.
  *
  * Then, still AFTER: the window CRASHES (Electron main killed outright). The host and every provider must still be
@@ -18,7 +19,7 @@
  * Results: perf-out/host-split-proof.json and a summary on stdout. Every Genie process this started is ended on exit.
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -50,7 +51,12 @@ const launched = [];
 
 function launch(label, mode) {
     const e = { ...env, LAUNCHED_AT_MS: String(Date.now()) };
-    if (mode === 'in-process') e.GENIE_AGENT_HOST = 'in-process'; else delete e.GENIE_AGENT_HOST;
+    // THE BASELINE has no switch (the owner, 2026-11-01: there is no in-process mode). It is the emergency fallback, reached
+    // the way a real failure reaches it: the host bundle is withheld, the host cannot start, and the agents run in main —
+    // as every build before phase 1. Put back for the AFTER runs.
+    const hostJs = join(root, 'dist', 'main', 'host.js');
+    if (mode === 'in-process' && existsSync(hostJs)) renameSync(hostJs, `${hostJs}.withheld`);
+    if (mode !== 'in-process' && existsSync(`${hostJs}.withheld`)) renameSync(`${hostJs}.withheld`, hostJs);
     const args = ['--inspect=9229', '.', '--remote-debugging-port=9222', ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : [])];
     const child = spawn(electron, args, { cwd: root, env: e, stdio: ['ignore', 'ignore', 'ignore'], detached: process.platform !== 'win32' });
     launched.push(child.pid);
