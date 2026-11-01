@@ -37,7 +37,18 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (line) => console.log(`[proof ${new Date().toISOString()}] ${line}`);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } };
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
-const providerPids = () => (readJson(join(runtime, 'children.json'))?.records ?? []).flatMap((r) => r.processes.map((p) => p.pid));
+// LOADED WINDOW (2026-11-01): the first Windows run measured agents mostly STARTING (the host's first spawn came 73 s
+// after launch, the eleventh ~160 s, in a 150 s window), and its provider gauge read 0 while 8 were running (children.json
+// read mid-rename). So: the agents' spawns are read from the host's own lifecycle.log lines, the measured window starts
+// once all of them have spawned, and the LOAD is proved inside that window by thread growth.
+const AGENTS = 11;
+const lifecycleText = () => { try { return readFileSync(join(runtime, 'lifecycle.log'), 'utf8'); } catch { return ''; } };
+/** Every agent spawn in this seed's lifecycle.log: when, whose, and its first pid (the supervisor that holds the provider). */
+const spawns = () => lifecycleText().split('\n').flatMap((line) => {
+    const m = /^(\S+) spawn kind=agent owner=(\S+) run=\d+ pids=(\d+)/.exec(line);
+    return m ? [{ t: Date.parse(m[1]), owner: m[2], pid: Number(m[3]) }] : [];
+});
+const providerPids = () => spawns().map((x) => x.pid);
 const threadBytes = () => { let n = 0; for (const f of existsSync(join(runtime, 'sessions')) ? readdirSync(join(runtime, 'sessions')) : []) n += statSync(join(runtime, 'sessions', f)).size; return n; };
 const killTree = (pid) => {
     if (!pid || !alive(pid)) return;
@@ -64,14 +75,30 @@ function launch(label, mode) {
     return { child, at: Number(e.LAUNCHED_AT_MS) };
 }
 
-async function measure(label, at, seconds) {
-    const code = await new Promise((r) => {
+async function measure(label, at, seconds, needSpawns = AGENTS) {
+    let exited = false;
+    const done = new Promise((r) => {
         const m = spawn(process.execPath, [join(root, 'scripts', 'perf-lag', 'measure.mjs'), label, String(seconds)], { cwd: out, env: { ...process.env, LAUNCHED_AT_MS: String(at) }, stdio: 'inherit' });
-        m.once('exit', r);
+        m.once('exit', (code) => { exited = true; r(code); });
     });
+    // The LOADED window: from 15 s after the needed spawns have all happened (since this launch) to the end of the run.
+    let loadedAt = null;
+    let bytesAtLoaded = null;
+    while (!exited && loadedAt === null) {
+        const since = spawns().filter((x) => x.t >= at);
+        if (since.length >= needSpawns) {
+            loadedAt = Math.max(...since.map((x) => x.t)) + 15_000;
+            while (!exited && Date.now() < loadedAt) await sleep(500);
+            bytesAtLoaded = threadBytes();
+            log(`${label}: all ${needSpawns} agents spawned; loaded window from +${loadedAt - at} ms, threads ${bytesAtLoaded} bytes`);
+        } else await sleep(1000);
+    }
+    const code = await done;
+    const bytesAtEnd = threadBytes();
     const result = readJson(join(out, `${label}-result.json`));
     if (code !== 0 || !result) log(`measure ${label} exited ${code}`);
-    return result;
+    if (loadedAt === null) log(`${label}: only ${spawns().filter((x) => x.t >= at).length} of ${needSpawns} agents spawned during the run: NO loaded window`);
+    return result ? { ...result, loadedFromMs: loadedAt === null ? null : loadedAt - at, threadGrowthInLoadedWindow: bytesAtLoaded === null ? null : bytesAtEnd - bytesAtLoaded } : null;
 }
 
 function clean() {
@@ -109,21 +136,22 @@ summary.after = await measure('after', window.at, SECONDS);
 // 3. THE WINDOW CRASHES
 const host = readJson(join(runtime, 'host.json'));
 const providers = providerPids();
-summary.crash = { hostPid: host?.pid ?? null, providers: providers.length, providersAliveBefore: providers.filter(alive).length };
+// POSITIVE CONTROL: the gauge must see the agents alive before it is trusted to see them alive after.
+summary.crash = { hostPid: host?.pid ?? null, providers: providers.length, providersAliveBefore: providers.filter(alive).length, controlOk: providers.length >= AGENTS && providers.filter(alive).length >= AGENTS };
 const bytesBefore = threadBytes();
 log(`killing the window outright (electron pid=${window.child.pid}); host pid=${host?.pid}, ${providers.length} providers`);
 // Electron main ONLY — never its tree: on Windows the host's parent pid IS this process, and a tree kill would take the
 // host with it, which is not what a crashed window does. Chromium's own children exit with their browser process.
 try { process.kill(window.child.pid, 'SIGKILL'); } catch { /* gone */ }
-await sleep(10_000);
+await sleep(15_000);
 summary.crash.hostAliveAfterCrash = host?.pid ? alive(host.pid) : false;
 summary.crash.providersAliveAfterCrash = providers.filter(alive).length;
 summary.crash.threadBytesGrewWithNoWindow = threadBytes() > bytesBefore;
-summary.crash.threadBytes = { atCrash: bytesBefore, tenSecondsLater: threadBytes() };
+summary.crash.threadBytes = { atCrash: bytesBefore, fifteenSecondsLater: threadBytes() };
 
 // 4. A NEW WINDOW ADOPTS THE HOST
 window = launch('adopted', 'host');
-summary.adopted = await measure('adopted', window.at, Math.min(120, SECONDS));
+summary.adopted = await measure('adopted', window.at, Math.min(150, SECONDS), 0);
 const hostAfter = readJson(join(runtime, 'host.json'));
 summary.crash.samehostPidAfterRelaunch = hostAfter?.pid === host?.pid;
 summary.crash.providersAliveAfterRelaunch = providers.filter(alive).length;
@@ -136,7 +164,18 @@ const brief = (k) => {
     const r = summary[k];
     if (!r) return null;
     const lag = r.lag ?? [];
+    const from = r.loadedFromMs;
+    const loadedLag = from === null || from === undefined ? null : lag.filter(([t]) => t >= from);
+    const loadedKeys = from === null || from === undefined ? null : (r.keys ?? []).filter(([t]) => t >= from).map(([, d]) => d).sort((a, b) => a - b);
+    const q = (v, p) => (v && v.length ? v[Math.min(v.length - 1, Math.floor(p * v.length))] : null);
     return {
+        loaded: loadedLag === null ? null : {
+            fromMs: from,
+            threadGrowthBytes: r.threadGrowthInLoadedWindow,
+            main: { gaps: loadedLag.length, over250: loadedLag.filter(([, d]) => d > 250).length, maxMs: Math.max(0, ...loadedLag.map(([, d]) => d)), totalMs: loadedLag.reduce((a, [, d]) => a + d, 0) },
+            keys: { n: loadedKeys.length, p50: q(loadedKeys, 0.5), p95: q(loadedKeys, 0.95), max: loadedKeys.at(-1) ?? null },
+        },
+        rendererCallsTimedOut: r.rendererCallsTimedOut ?? null,
         main: { gaps: lag.length, over250: lag.filter(([, d]) => d > 250).length, maxMs: Math.max(0, ...lag.map(([, d]) => d)), totalMs: lag.reduce((a, [, d]) => a + d, 0), cpuMs: r.mainTop?.totalMs ?? null },
         boot: r.boot?.mainLag ?? null,
         steady: r.steady?.mainLag ?? null,
