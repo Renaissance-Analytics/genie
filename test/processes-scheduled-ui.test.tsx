@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { HostedProcess } from '../src/main/process-book.js';
 import { ProcessesPanel } from '../src/renderer/components/FeatureSurfaces.js';
 import type { FeatureAction } from '../src/renderer/features.js';
+import { Button } from '@particle-academy/react-fancy';
 
 /**
  * SCHEDULED TASKS IN HOSTING → PROCESSES (genie#1204), as Genie 1's Processes showed them
@@ -60,7 +61,7 @@ describe('a scheduled task in Processes', () => {
             if (n === null || typeof n !== 'object') return;
             if (Array.isArray(n)) { n.forEach(walk); return; }
             const el = n as { type?: unknown; props?: Record<string, unknown> };
-            if (el.type === 'button' && typeof el.props?.onClick === 'function' && ['Run now', 'Pause schedule', 'Enable schedule'].includes(String(el.props.children))) (el.props.onClick as () => void)();
+            if (el.type === Button && typeof el.props?.onClick === 'function' && ['Run now', 'Pause schedule', 'Enable schedule'].includes(String(el.props.children))) (el.props.onClick as () => void)();
             walk(el.props?.children);
         };
         walk(ProcessesPanel({ processes: [nightly, paused], workspaces, onAction: (a) => { sent.push(a); }, now: NOW }));

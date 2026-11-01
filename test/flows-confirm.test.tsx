@@ -5,6 +5,7 @@ import { flowReach } from '../src/core/flow-reach.js';
 import type { FlowRecord } from '../src/main/flow-store.js';
 import { FlowConfirm, FlowRow } from '../src/renderer/components/FeatureSurfaces.js';
 import type { FeatureAction } from '../src/renderer/features.js';
+import { Button } from '@particle-academy/react-fancy';
 
 /**
  * ARM AND DELETE ASK FIRST, AND ARM SAYS WHAT THE FLOW WILL DO (genie#1204; the owner, 2026-10-26: "i have no UX for
@@ -43,7 +44,7 @@ describe('the confirm', () => {
             if (n === null || typeof n !== 'object') return;
             if (Array.isArray(n)) { n.forEach(walk); return; }
             const el = n as { type?: unknown; props?: Record<string, unknown> };
-            if (el.type === 'button' && el.props?.children === label && typeof el.props.onClick === 'function') (el.props.onClick as () => void)();
+            if (el.type === Button && el.props?.children === label && typeof el.props.onClick === 'function') (el.props.onClick as () => void)();
             walk(el.props?.children);
         };
         walk(node);
@@ -82,7 +83,7 @@ describe('a flow row', () => {
                 if (n === null || typeof n !== 'object') return;
                 if (Array.isArray(n)) { n.forEach(walk); return; }
                 const el = n as { type?: unknown; props?: Record<string, unknown> };
-                if (el.type === 'button' && typeof el.props?.onClick === 'function') (el.props.onClick as () => void)();
+                if (el.type === Button && typeof el.props?.onClick === 'function') (el.props.onClick as () => void)();
                 walk(el.props?.children);
             };
             walk(row);
