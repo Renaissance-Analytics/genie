@@ -40,7 +40,7 @@ describe('group headers', () => {
         expect(door).toMatchObject({ tag: 'button', fancy: true, text: 'Open workspace' });
         // Its trailing icon element. That 'arrow-right' resolves to a glyph is test/icons.test.ts's claim: the icon
         // registry is not loaded in a static render, so the icon is its empty span here.
-        expect(door!.inner).toMatch(/<span[^>]*data-react-fancy-icon=""[^>]*><\/span>$/);
+        expect(door!.inner).toMatch(/<span[^>]*data-action-icon="trailing"[^>]*><span[^>]*data-react-fancy-icon=""[^>]*><\/span><\/span>$/);
     });
 });
 
