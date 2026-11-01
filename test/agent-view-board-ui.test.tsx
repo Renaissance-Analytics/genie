@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { LiveSession } from '../src/core/roster.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentView.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE AGENT VIEW'S HEADER AND RIGHT COLUMN PER THE BOARD. Header: `{workspace} /` breadcrumb, the fidelity dot, the
@@ -23,7 +24,7 @@ const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
 describe('the header', () => {
     it('breadcrumb, fidelity dot, name, provider chip, the pill in turns', () => {
         const html = render();
-        expect(html).toMatch(/data-crumb="tynn"[^>]*>Tynn\.ai \//);
+        expect(control(html, 'data-crumb="tynn"')).toMatchObject({ tag: 'button', fancy: true, text: 'Tynn.ai /' });
         expect(html).toContain('data-fidelity="declared"');
         // The provider is its LOGO, then the engine (genie#1266): no provider word.
         expect(html).toMatch(/data-provider-chip="claude"[^>]*><span[^>]*data-provider-logo="claude"[\s\S]*?<\/svg><\/span>ACP</);

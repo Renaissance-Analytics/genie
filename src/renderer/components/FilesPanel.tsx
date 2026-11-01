@@ -1,4 +1,4 @@
-import { ContextMenu, Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
+import { Button, ContextMenu, Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
 import { useState, type ReactNode } from 'react';
 import { fileMenuItems, type FileMenuAction, type FileMenuTarget } from '../../core/file-menu.js';
 import { CodeEditor, FileViewer, resolveFileKind } from '@particle-academy/fancy-code';
@@ -234,38 +234,38 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                 <span className="text-xs font-semibold">Files</span>
                 {single ? null : (
                     <div className="flex overflow-hidden rounded-md border border-[var(--border-1)] text-[11px]">
-                        <button type="button" data-files-filter="all" {...(filter === 'all' ? { 'data-current': 'true' } : {})} onClick={() => onFilter?.('all')} className={`px-2 py-0.5 ${filter === 'all' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>All</button>
+                        <Button variant="ghost" size="xs" type="button" data-files-filter="all" {...(filter === 'all' ? { 'data-current': 'true' } : {})} onClick={() => onFilter?.('all')} className={`px-2 py-0.5 ${filter === 'all' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>All</Button>
                         {/* `data-changes` while there ARE changes — the chip is the door the footer's fold used to be. */}
-                        <button type="button" data-files-filter="changed" {...(filter === 'changed' ? { 'data-current': 'true' } : {})} {...(changed > 0 ? { 'data-changes': '' } : {})} onClick={() => onFilter?.('changed')} className={`border-l border-[var(--border-1)] px-2 py-0.5 ${filter === 'changed' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>{changed > 0 ? `Changed ${changed}` : 'Changed'}</button>
+                        <Button variant="ghost" size="xs" type="button" data-files-filter="changed" {...(filter === 'changed' ? { 'data-current': 'true' } : {})} {...(changed > 0 ? { 'data-changes': '' } : {})} onClick={() => onFilter?.('changed')} className={`border-l border-[var(--border-1)] px-2 py-0.5 ${filter === 'changed' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>{changed > 0 ? `Changed ${changed}` : 'Changed'}</Button>
                     </div>
                 )}
                 <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.name ?? workspace.id} · {workspace.path}</span>
                 {prefs?.lockedRoot ? (
                     <span data-locked-root={prefs.lockedRoot} title={`The tree is locked to ${prefs.lockedRoot}`} className="inline-flex items-center gap-1 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 font-mono text-[11px] text-[var(--fg-2)]">
                         <Icon name="lock" size="xs" />{prefs.lockedRoot}
-                        {onPrefs ? <button type="button" data-action="unlock-tree" title="Unlock: the whole workspace again" className="ml-1 text-[var(--fg-4)] hover:text-[var(--fg-1)]" onClick={() => onPrefs({ lockedRoot: null })}>Unlock</button> : null}
+                        {onPrefs ? <Button variant="ghost" size="xs" type="button" data-action="unlock-tree" title="Unlock: the whole workspace again" className="ml-1 text-[var(--fg-4)] hover:text-[var(--fg-1)]" onClick={() => onPrefs({ lockedRoot: null })}>Unlock</Button> : null}
                     </span>
                 ) : null}
                 <span className="ml-auto" />
                 {prefs && onPrefs ? (
                     <>
-                        {single ? null : <button type="button" data-action="toggle-tree" aria-pressed={!treeHidden} className={button} title={treeHidden ? 'Show the file tree' : 'Hide the file tree'} onClick={() => onPrefs({ treeHidden: !treeHidden })}><Icon name="folder-tree" size="xs" /></button>}
-                        {single ? null : <button type="button" data-action="pin-tree" aria-pressed={prefs.treePinned} className={button} title={prefs.treePinned ? 'Tree pinned open — click to let it hide when a file opens' : 'Pin the tree open'} onClick={() => onPrefs({ treePinned: !prefs.treePinned, ...(prefs.treePinned ? {} : { treeHidden: false }) })}><Icon name="pin" size="xs" /></button>}
-                        <button type="button" data-action="word-wrap" aria-pressed={wordWrap} className={`${button} ${wordWrap ? 'bg-[var(--bg-3)]' : ''}`} title={wordWrap ? 'Word wrap: on' : 'Word wrap: off'} onClick={() => onPrefs({ wordWrap: !wordWrap })}><Icon name="wrap-text" size="xs" /></button>
+                        {single ? null : <Button size="xs" labelClassName="contents" type="button" data-action="toggle-tree" aria-pressed={!treeHidden} className={button} title={treeHidden ? 'Show the file tree' : 'Hide the file tree'} onClick={() => onPrefs({ treeHidden: !treeHidden })}><Icon name="folder-tree" size="xs" /></Button>}
+                        {single ? null : <Button size="xs" labelClassName="contents" type="button" data-action="pin-tree" aria-pressed={prefs.treePinned} className={button} title={prefs.treePinned ? 'Tree pinned open — click to let it hide when a file opens' : 'Pin the tree open'} onClick={() => onPrefs({ treePinned: !prefs.treePinned, ...(prefs.treePinned ? {} : { treeHidden: false }) })}><Icon name="pin" size="xs" /></Button>}
+                        <Button size="xs" labelClassName="contents" type="button" data-action="word-wrap" aria-pressed={wordWrap} className={`${button} ${wordWrap ? 'bg-[var(--bg-3)]' : ''}`} title={wordWrap ? 'Word wrap: on' : 'Word wrap: off'} onClick={() => onPrefs({ wordWrap: !wordWrap })}><Icon name="wrap-text" size="xs" /></Button>
                     </>
                 ) : null}
                 {single ? null : <span className="text-[11px] text-[var(--fg-4)]">one per workspace</span>}
                 {popped ? (
-                    <button type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</button>
+                    <Button size="xs" type="button" data-action="bring-back-files" className={button} title="Dock the panel back into the main window" onClick={onClose}>Dock it back</Button>
                 ) : (
                     <>
                         {onPin ? (
-                            <button type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
+                            <Button size="xs" type="button" data-action="pin-files" data-pin={pinned ? 'on' : 'off'} className={button} title={pinned ? 'Pinned: the panel reserves its gutter' : 'Pin the panel'} onClick={onPin}>
                                 {pinned ? 'Pinned' : 'Pin'}
-                            </button>
+                            </Button>
                         ) : null}
-                        {onPopOut ? <button type="button" data-action="pop-out-files" className={button} title="Pop the panel into its own window" onClick={onPopOut}>Pop out</button> : null}
-                        <button type="button" data-action="close-files" className={button} title="Close the panel (⌘B)" onClick={onClose}>Close</button>
+                        {onPopOut ? <Button size="xs" type="button" data-action="pop-out-files" className={button} title="Pop the panel into its own window" onClick={onPopOut}>Pop out</Button> : null}
+                        <Button size="xs" type="button" data-action="close-files" className={button} title="Close the panel (⌘B)" onClick={onClose}>Close</Button>
                     </>
                 )}
             </header>
@@ -291,13 +291,13 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                             const plus = d?.plus ?? null;
                                             const minus = d?.minus ?? null;
                                             return (
-                                            <button key={f} type="button" data-changed-file={f} onClick={() => onSelect(f)} className={`flex w-full items-center gap-1.5 px-3 py-0.5 text-left font-mono text-[11.5px] hover:bg-[var(--bg-2)] ${open?.ok && open.path === f ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                                            <Button variant="ghost" size="xs" labelClassName="contents" key={f} type="button" data-changed-file={f} onClick={() => onSelect(f)} className={`flex w-full items-center gap-1.5 px-3 py-0.5 text-left font-mono text-[11.5px] hover:bg-[var(--bg-2)] ${open?.ok && open.path === f ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
                                                 <span {...(at !== null ? { 'data-changed-at': at } : {})} className="w-10 shrink-0 text-[10px] text-[var(--fg-4)]">{at !== null ? hhmm(at) : ''}</span>
                                                 <span className="truncate">{f}</span>
                                                 {plus !== null ? <span data-plus={plus} className="shrink-0 text-[10px] text-[var(--success)]">+{plus}</span> : null}
                                                 {minus !== null ? <span data-minus={minus} className="shrink-0 text-[10px] text-[var(--danger)]">−{minus}</span> : null}
                                                 {marks.get(f) ? <Marker path={f} count={marks.get(f)!.count} tone={marks.get(f)!.tone} names={marks.get(f)!.names} /> : null}
-                                            </button>
+                                            </Button>
                                             );
                                         })}
                                     </div>
@@ -337,11 +337,11 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             const plugin = pluginTabs.find((p) => p.path === t);
                             const tab = (
                                 <div key={t} data-file-tab={t} {...(fileActions ? { 'data-file-menu': 'tab' } : {})} {...(tabDirty(t) ? { 'data-dirty': 'true' } : {})} {...(plugin ? { 'data-plugin-tab': t } : {})} {...(paused.some((p) => p.path === t) ? { 'data-paused': 'true' } : {})} className={`flex items-center gap-1 border-r border-[var(--border-1)] px-3 text-xs ${active ? 'bg-[var(--bg-0)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'} ${mark?.tone === 'writing' ? 'shadow-[inset_0_-2px_0_var(--accent)]' : ''}`}>
-                                    <button type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</button>
+                                    <Button variant="ghost" size="xs" type="button" onClick={() => onSelect(t)} className="font-mono">{t.split('/').pop()}</Button>
                                     {plugin ? <span data-plugin-name="" className="rounded bg-[var(--bg-2)] px-1 text-[10px] text-[var(--fg-3)]" title={`Open in the ${plugin.pluginName} plugin's editor`}>{plugin.pluginName}</span> : null}
                                     {tabDirty(t) ? <span data-dirty-dot="" title="Unsaved changes (Ctrl+S saves)" className="text-[var(--accent)]">●</span> : null}
-                                    {onOpenInPane && !single ? <button type="button" data-action="open-in-pane" aria-label={`open ${t} in a pane`} title="Open in its own pane beside the terminals" onClick={() => onOpenInPane(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">⧉</button> : null}
-                                    <button type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</button>
+                                    {onOpenInPane && !single ? <Button size="xs" type="button" data-action="open-in-pane" aria-label={`open ${t} in a pane`} title="Open in its own pane beside the terminals" onClick={() => onOpenInPane(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">⧉</Button> : null}
+                                    <Button variant="ghost" size="xs" type="button" aria-label={`close ${t}`} onClick={() => onCloseTab(t)} className="text-[var(--fg-4)] hover:text-[var(--fg-1)]">×</Button>
                                 </div>
                             );
                             return fileActions ? (
@@ -352,9 +352,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             ) : tab;
                         })}
                         {activePlugin ? (
-                            activePlugin.dirty ? <button type="button" data-action="save-file" onClick={() => activePlugin.onSave?.()} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button> : null
+                            activePlugin.dirty ? <Button size="xs" type="button" data-action="save-file" onClick={() => activePlugin.onSave?.()} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</Button> : null
                         ) : edit && open?.ok && edit.dirty && !edit.conflict ? (
-                            <button type="button" data-action="save-file" onClick={edit.onSave} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</button>
+                            <Button size="xs" type="button" data-action="save-file" onClick={edit.onSave} className="ml-auto mr-2 my-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Save</Button>
                         ) : null}
                     </div>
                     {fileActions || copied !== undefined ? <CopyAnnounce state={copied ?? 'idle'} /> : null}
@@ -377,9 +377,9 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             )}
                             <p className="mt-1 text-[var(--fg-3)]">{conflictBody(edit.told ?? null)}</p>
                             <div className="mt-2 flex gap-2">
-                                <button type="button" data-action="compare" aria-pressed={edit.comparing === true} onClick={() => edit.onCompare?.()} className="rounded-md border border-[var(--primary)] bg-[var(--primary)] px-2 py-0.5 text-xs text-white hover:opacity-90">Compare</button>
-                                <button type="button" data-action="keep-mine" onClick={edit.onKeepMine} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Keep mine</button>
-                                <button type="button" data-action="take-theirs" onClick={edit.onTakeTheirs} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{takeLabel(state?.activity.find((a) => a.verb === 'writing' && a.path === edit.conflict!.path)?.agent ?? null)}</button>
+                                <Button size="xs" type="button" data-action="compare" aria-pressed={edit.comparing === true} onClick={() => edit.onCompare?.()} className="rounded-md border border-[var(--primary)] bg-[var(--primary)] px-2 py-0.5 text-xs text-white hover:opacity-90">Compare</Button>
+                                <Button size="xs" type="button" data-action="keep-mine" onClick={edit.onKeepMine} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Keep mine</Button>
+                                <Button size="xs" type="button" data-action="take-theirs" onClick={edit.onTakeTheirs} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">{takeLabel(state?.activity.find((a) => a.verb === 'writing' && a.path === edit.conflict!.path)?.agent ?? null)}</Button>
                             </div>
                             </div>
                           </div>
@@ -397,7 +397,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                             <div data-unreported-banner={open.path} className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-1.5 text-xs text-[var(--fg-3)]">
                                 <Icon name="eye-off" size="xs" />
                                 No agent reported this change
-                                {onShowDiff ? <button type="button" data-action="show-diff" onClick={onShowDiff} className="ml-auto rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Show diff</button> : null}
+                                {onShowDiff ? <Button size="xs" type="button" data-action="show-diff" onClick={onShowDiff} className="ml-auto rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]">Show diff</Button> : null}
                             </div>
                         ) : null}
                         {/* Show diff: git's last commit against the open text — captioned as that, never as anyone's change. */}
@@ -486,7 +486,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                     ))}
                     {/* The count, and the door to the Changed filter (the board's header chip is the other door). */}
                     {touched.size > 0 ? (
-                        <button type="button" data-action="show-changed" onClick={() => onFilter?.('changed')} className="ml-auto hover:text-[var(--fg-1)]">{touched.size} changed in this workspace ▸</button>
+                        <Button variant="ghost" size="xs" type="button" data-action="show-changed" onClick={() => onFilter?.('changed')} className="ml-auto hover:text-[var(--fg-1)]">{touched.size} changed in this workspace ▸</Button>
                     ) : null}
                 </footer>
             ) : null}

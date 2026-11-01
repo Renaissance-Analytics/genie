@@ -95,6 +95,9 @@ export const ICON_NAMES: readonly string[] = [
     'eye-off', 'pause', 'play',
     // The header's update chip: download, then restart to install.
     'download', 'rotate-cw',
+    // The ArtBoard's "Open full size" Button. Its name reached Button as a prop, so the <Icon name> scan never saw it and
+    // it rendered blank until the icon-prop scan (test/icons.test.ts, 2026-11-01) read Button props too.
+    'maximize-2',
     // The timeline strip's `Lanes ▾` toggle (the board), open or closed.
     'chevron-down', 'chevron-up',
     // The turns layout's collapsed card.

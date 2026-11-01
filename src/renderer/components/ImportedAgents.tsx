@@ -1,4 +1,4 @@
-import { Icon, Modal } from '@particle-academy/react-fancy';
+import { Button, Icon, Modal } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { importedAgentsOffer, type ImportedAgent } from '../../core/agent-adoption.js';
 import { ProviderLogo } from './ProviderLogo.js';
@@ -12,8 +12,6 @@ import { ProviderLogo } from './ProviderLogo.js';
  * The view is hook-free (a test renders and presses it); `ImportedAgentsModal` holds the list and the busy state.
  */
 
-const button = 'rounded-md border border-[var(--border-1)] px-3 py-1 text-xs hover:bg-[var(--bg-2)] disabled:opacity-50';
-const primary = 'flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)] disabled:opacity-50';
 const muted = 'text-xs text-[var(--fg-3)]';
 
 /**
@@ -33,7 +31,7 @@ function unregisteredAgentList({ agents, busy, verb, onAct }: { agents: readonly
                         {a.refusal ? <span data-adopt-refusal="" className="text-xs text-[var(--danger)]">{a.refusal}</span> : null}
                     </div>
                     {a.refusal === null ? (
-                        <button type="button" data-action={verb.action} data-agent={a.name} disabled={busy !== null} onClick={() => onAct(a.name)} className={button}>{busy === a.name ? verb.busyLabel : verb.label}</button>
+                        <Button type="button" size="xs" data-action={verb.action} data-agent={a.name} loading={busy === a.name} aria-busy={busy === a.name} disabled={busy !== null} onClick={() => onAct(a.name)}>{busy === a.name ? verb.busyLabel : verb.label}</Button>
                     ) : null}
                 </li>
             ))}
@@ -75,7 +73,7 @@ export function ImportedAgentsView({ workspaceName, path, agents, busy, notice, 
             {notice ? <p data-imported-agents-notice="" role="status" className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-1.5 text-xs">{notice}</p> : null}
             {unregisteredAgentList({ agents, busy, verb: { action: 'adopt-agent', label: 'Adopt', busyLabel: 'Adopting…' }, onAct: onAdopt })}
             <div className="flex items-center justify-end gap-2">
-                <button type="button" data-action="open-workspace" disabled={busy !== null} onClick={onOpen} className={primary}><Icon name="check" size="xs" />Open workspace</button>
+                <Button type="button" size="xs" color="violet" icon="check" data-action="open-workspace" disabled={busy !== null} onClick={onOpen}>Open workspace</Button>
             </div>
         </div>
     );

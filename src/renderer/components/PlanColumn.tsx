@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { PLAN_WIDTH_DEFAULT, PLAN_WIDTH_MAX, PLAN_WIDTH_MIN, clampPlanWidth, planDragWidth, readPlanWidth, writePlanWidth } from '../../core/plan-column.js';
 
 type Store = Pick<Storage, 'getItem' | 'setItem'>;
@@ -64,7 +64,7 @@ export function PlanColumnView({ name, plan, steps, width, onDiscuss, onResizeSt
                                     <span className={`w-3 shrink-0 ${step.status === 'completed' ? 'text-[var(--success)]' : step.current ? 'text-[var(--sky-400)]' : 'text-[var(--fg-4)]'}`}>{step.status === 'completed' ? '✓' : step.current ? '◐' : '○'}</span>
                                     <span className="min-w-0 flex-1">{step.content}</span>
                                     {onDiscuss ? (
-                                        <button
+                                        <Button variant="ghost" size="xs" labelClassName="contents"
                                             type="button"
                                             data-plan-discuss={i}
                                             aria-label="Discuss in chat"
@@ -73,7 +73,7 @@ export function PlanColumnView({ name, plan, steps, width, onDiscuss, onResizeSt
                                             className="shrink-0 rounded p-0.5 font-normal text-[var(--fg-3)] opacity-0 hover:bg-[var(--bg-2)] hover:text-[var(--fg-1)] focus-visible:opacity-100 group-hover:opacity-100"
                                         >
                                             <Icon name="message-square" size="xs" />
-                                        </button>
+                                        </Button>
                                     ) : null}
                                 </li>
                             ))}

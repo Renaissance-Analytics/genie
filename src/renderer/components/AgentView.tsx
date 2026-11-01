@@ -11,7 +11,7 @@ import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core
 import { FidelityDot } from './Dashboard.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
-import { Dropdown, Icon, Select, Switch } from '@particle-academy/react-fancy';
+import { Button, Dropdown, Icon, Select, Switch } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
@@ -290,7 +290,7 @@ function CopyLogButton({ text }: { text: string }) {
     const { state, copy } = useCopyText();
     return (
         <>
-            <button type="button" data-action="copy-log" data-copy-state={state} onClick={() => { void copy(text); }} className={`flex h-[26px] items-center rounded-lg px-2.5 text-[12px] hover:bg-[var(--bg-2)] ${state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>{copyWords(state, 'Copy log')}</button>
+            <Button size="xs" type="button" data-action="copy-log" data-copy-state={state} onClick={() => { void copy(text); }} className={`flex h-[26px] items-center rounded-lg px-2.5 text-[12px] hover:bg-[var(--bg-2)] ${state === 'failed' ? 'text-[var(--danger)]' : 'text-[var(--fg-3)]'}`}>{copyWords(state, 'Copy log')}</Button>
             <CopyAnnounce state={state} />
         </>
     );
@@ -601,7 +601,7 @@ function AgentViewBody({
                     path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
                 <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
                 {/* Back to its workspace (Tynn #805): the crumb is a link. */}
-                {workspace ? <button data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] hover:underline">{workspace.name ?? workspace.id} /</button> : null}
+                {workspace ? <Button variant="ghost" size="xs" labelClassName="truncate" data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">{workspace.name ?? workspace.id} /</Button> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium">{agent.name}</span>
                 <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
@@ -621,17 +621,17 @@ function AgentViewBody({
                 <div className="ml-auto flex shrink-0 items-center gap-1">
                     {/* START, when it is not running (the owner: there was no way to start the genie agent). */}
                     {actions.start && onStart ? (
-                        <button type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} aria-label="Start" className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                        <Button size="xs" labelClassName="contents" type="button" data-action="start" title="Start — the agent's session begins; its conversation resumes when it has one" onClick={() => onStart(agent.id)} aria-label="Start" className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                             <Icon name="play" size="xs" />
                             <span className="@max-[46rem]:hidden">Start</span>
-                        </button>
+                        </Button>
                     ) : null}
                     {/* STOP THIS TURN, while a turn runs that can be stopped: the TURN ends, the agent keeps running. Ending the
                         session is "Stop agent" in the operations menu. */}
                     {actions.stop && onCancelTurn ? <TurnStop onStop={() => onCancelTurn(agent.id)} agentName={agent.name} /> : null}
                     {/* SIGNED OUT (the owner, 2026-10-18): the provider's own login, in a window of its own, with what to do. */}
                     {actions.login && onProviderLogin ? (
-                        <button
+                        <Button size="xs" labelClassName="contents"
                             type="button"
                             data-action="provider-login"
                             title={`Open the ${providerLogin(agent.provider)?.name ?? agent.provider} login in a window of its own; your agents come back once you are signed in`}
@@ -640,11 +640,11 @@ function AgentViewBody({
                         >
                             <ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-1)]" />
                             Log in
-                        </button>
+                        </Button>
                     ) : null}
                     {/* ACCOUNT PAUSED (the owner, 2026-10-21: a payment failure): put the account right with the provider, then this. */}
                     {actions.retryAccount && onAccountRetry ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="account-retry"
                             title={`Once the ${providerLogin(agent.provider)?.name ?? agent.provider} account is put right: every agent it stopped comes back`}
@@ -652,11 +652,11 @@ function AgentViewBody({
                             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--danger)]/20"
                         >
                             Try again
-                        </button>
+                        </Button>
                     ) : null}
                     {/* CLAUDE DESIGN'S LOGIN (#1081): a tool was refused for want of /design-login; one click opens it. */}
                     {actions.designLogin && onDesignLogin ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="design-login"
                             title="Open Claude Code in a window of its own to run /design-login; the agents waiting on it are told to retry once it has run"
@@ -664,10 +664,10 @@ function AgentViewBody({
                             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
                         >
                             Log in to Claude Design
-                        </button>
+                        </Button>
                     ) : null}
                     {actions.resumeLimit && onResumeLimit ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="resume-limit"
                             title={`Resume now — every ${agent.provider} agent waiting for the rate limit goes on`}
@@ -675,7 +675,7 @@ function AgentViewBody({
                             className="flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
                         >
                             Resume now
-                        </button>
+                        </Button>
                     ) : null}
                     {/*
                      * The way to TALK to this agent.
@@ -689,7 +689,7 @@ function AgentViewBody({
                      * linkable and the subject lives in the URL. Not drawn when the chat is already on the page.
                      */}
                     {chatInView ? null : (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         type="button"
                         data-action="chat"
                         // The destination as an ATTRIBUTE, matching the rail's `data-nav`
@@ -706,12 +706,12 @@ function AgentViewBody({
                         <Icon name="message-square" size="xs" />
                         <span className="@max-[46rem]:hidden">Chat</span>
                         <span className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘J</span>
-                    </button>
+                    </Button>
                     )}
 
                     {/* Take over and Open terminal only where this window can open one: a button with nothing behind it is not drawn. */}
                     {onTakeOver ? (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         type="button"
                         data-action="take-over"
                         onClick={() => onTakeOver(agent.id)}
@@ -722,21 +722,21 @@ function AgentViewBody({
                         <Icon name="square-terminal" size="xs" />
                         <span className="@max-[46rem]:hidden">Take over</span>
                         <span className="font-mono text-[10px] text-[var(--fg-4)] @max-[46rem]:hidden">⌘⇧T</span>
-                    </button>
+                    </Button>
                     ) : null}
                     {/* In the error state (the board): the Take Over window IS the terminal. */}
                     {actions.openTerminal && onTakeOver ? (
-                        <button type="button" data-action="open-terminal" aria-label="Open terminal" title="Open terminal" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                        <Button size="xs" labelClassName="contents" type="button" data-action="open-terminal" aria-label="Open terminal" title="Open terminal" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                             <Icon name="square-terminal" size="xs" />
                             <span className="@max-[46rem]:hidden">Open terminal</span>
-                        </button>
+                        </Button>
                     ) : null}
                     {ops && menu.length > 0 ? (
                         <>
                             {/* RESTART — THE ONE (genie#1238): whenever it has a session, running or Broken; primary when Broken.
                                 It keeps the conversation, starts a Broken agent again and sends what it is owed. */}
                             {actions.restart ? (
-                                <button
+                                <Button size="xs" labelClassName="contents"
                                     type="button"
                                     data-action="restart"
                                     title="Restart — same conversation; anything not yet delivered to it is sent once it is up"
@@ -748,13 +748,13 @@ function AgentViewBody({
                                 >
                                     <Icon name="rotate-ccw" size="xs" />
                                     <span className="@max-[46rem]:hidden">Restart</span>
-                                </button>
+                                </Button>
                             ) : null}
                             <Dropdown placement="bottom-end">
                                 <Dropdown.Trigger>
-                                    <button type="button" data-action="agent-more" aria-label="More operations" className="flex items-center rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+                                    <Button size="xs" labelClassName="contents" type="button" data-action="agent-more" aria-label="More operations" className="flex items-center rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                                         <Icon name="ellipsis" size="xs" />
-                                    </button>
+                                    </Button>
                                 </Dropdown.Trigger>
                                 <Dropdown.Items>
                                     {menu.map((item) => (
@@ -834,8 +834,8 @@ function AgentViewBody({
                         <p className="mt-2 text-[var(--fg-4)]">{agent.name} is not running, so there is nothing to ask for a handoff.</p>
                     )}
                     <div className="mt-3 flex gap-2">
-                        <button type="submit" data-action="confirm-delete" className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">{ops.deletePreview.outcome === 'delete' ? 'Delete' : 'Unmount'} {agent.name}</button>
-                        <button type="button" onClick={ops.onCancelDelete} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</button>
+                        <Button size="xs" type="submit" data-action="confirm-delete" className="rounded-lg bg-[var(--danger)] px-3 py-1.5 text-xs text-white">{ops.deletePreview.outcome === 'delete' ? 'Delete' : 'Unmount'} {agent.name}</Button>
+                        <Button size="xs" type="button" onClick={ops.onCancelDelete} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-xs">Cancel</Button>
                     </div>
                 </form>
             ) : null}
@@ -843,7 +843,7 @@ function AgentViewBody({
             {/* Tabs. The set itself is the signal — a missing tab says what Genie cannot see. */}
             <div role="tablist" className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
                 {tabs.map((t) => (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         key={t}
                         type="button"
                         role="tab"
@@ -858,7 +858,7 @@ function AgentViewBody({
                         {TAB_LABEL[t]}
                         {/* The indicator: how many it has running now, on the tab, from every tab. */}
                         {t === 'shells' && shells.count > 0 ? <span data-shells-count={shells.count} className="ml-1.5 rounded-full bg-[var(--success)] px-1.5 text-[10px] font-semibold text-[var(--bg-1)]">{shells.count}</span> : null}
-                    </button>
+                    </Button>
                 ))}
                 {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
                 {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="ml-auto truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
@@ -867,16 +867,16 @@ function AgentViewBody({
             <div className="flex min-h-0 flex-1">
                 {index && indexCollapsed ? (
                     <nav data-index-column="collapsed" className="flex min-h-0 w-[52px] shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-[var(--border-1)] px-1 py-3">
-                        <button type="button" data-index-toggle="expand" aria-label="Expand the turns column" title="Expand" onClick={toggleIndex} className="mb-1.5 rounded-md p-1 text-[var(--fg-4)] hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
+                        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-index-toggle="expand" aria-label="Expand the turns column" title="Expand" onClick={toggleIndex} className="mb-1.5 rounded-md p-1 text-[var(--fg-4)] hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
                             <Icon name="chevron-right" size="xs" />
-                        </button>
+                        </Button>
                         {turnNumbers(index).map((t) => {
                             const door = `genie://agent/${agent.id}?tab=stream&at=${t.rowId}`;
                             return (
-                                <button key={t.id} type="button" data-index-number={t.n} {...(t.live ? { 'data-live': t.live } : {})} data-nav={door} title={`Turn ${t.n}`} onClick={() => onNavigate(door)} className={`flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[11px] text-[var(--fg-2)] ${t.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}>
+                                <Button variant="ghost" size="xs" labelClassName="contents" key={t.id} type="button" data-index-number={t.n} {...(t.live ? { 'data-live': t.live } : {})} data-nav={door} title={`Turn ${t.n}`} onClick={() => onNavigate(door)} className={`flex w-full items-center justify-center gap-1 rounded-md py-1 font-mono text-[11px] text-[var(--fg-2)] ${t.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}>
                                     {t.live ? <span className={`size-1.5 shrink-0 animate-pulse rounded-full ${INDEX_LIVE[t.live]}`} /> : null}
                                     {t.n}
-                                </button>
+                                </Button>
                             );
                         })}
                     </nav>
@@ -887,15 +887,15 @@ function AgentViewBody({
                                 <h2 className="flex items-center px-2 pb-1.5 text-[11px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]">
                                     <span className="flex-1">{section.title}</span>
                                     {i === 0 ? (
-                                        <button type="button" data-index-toggle="collapse" aria-label="Collapse the turns column to its numbers" title="Collapse" onClick={toggleIndex} className="rounded-md p-0.5 normal-case hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
+                                        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-index-toggle="collapse" aria-label="Collapse the turns column to its numbers" title="Collapse" onClick={toggleIndex} className="rounded-md p-0.5 normal-case hover:bg-[var(--bg-1)] hover:text-[var(--fg-2)]">
                                             <Icon name="chevron-left" size="xs" />
-                                        </button>
+                                        </Button>
                                     ) : null}
                                 </h2>
                                 {section.items.map((item) => {
                                     const door = `genie://agent/${agent.id}?tab=stream&at=${item.rowId}`;
                                     return (
-                                        <button
+                                        <Button size="xs" labelClassName="contents"
                                             key={item.id}
                                             type="button"
                                             data-index-item={item.id}
@@ -909,7 +909,7 @@ function AgentViewBody({
                                                 <span className={`truncate ${item.mono ? 'font-mono' : ''}`}>{item.label}</span>
                                             </span>
                                             {item.meta ? <span className="w-full truncate font-mono text-[10px] text-[var(--fg-4)]">{item.meta}</span> : null}
-                                        </button>
+                                        </Button>
                                     );
                                 })}
                             </div>
@@ -1015,10 +1015,10 @@ function AgentViewBody({
                                     <ul className="flex flex-col gap-0.5">
                                         {changes.map((path) => (
                                             <li key={path}>
-                                                <button type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
+                                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
                                                     <Icon name="file-code" className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
                                                     <span className="truncate">{path}</span>
-                                                </button>
+                                                </Button>
                                             </li>
                                         ))}
                                     </ul>
@@ -1092,7 +1092,7 @@ function AgentViewBody({
                                         {/* Whether this session was STARTED with Genie's MCP — the servers the host handed the driver. */}
                                         {session?.mcpServers ? (
                                             session.mcpServers.includes('genie') ? (
-                                                <span data-rail-mcp="given" className="flex items-center gap-2">Genie’s MCP — given to this session <button type="button" data-door="mcp-tools" onClick={() => onNavigate('genie://settings/mcp')} className="rounded-md border border-[var(--border-1)] px-1.5 text-[11px] hover:bg-[var(--bg-2)]">its tools →</button></span>
+                                                <span data-rail-mcp="given" className="flex items-center gap-2">Genie’s MCP — given to this session <Button size="xs" type="button" data-door="mcp-tools" onClick={() => onNavigate('genie://settings/mcp')} className="rounded-md border border-[var(--border-1)] px-1.5 text-[11px] hover:bg-[var(--bg-2)]">its tools →</Button></span>
                                             ) : (
                                                 <span data-rail-mcp="missing" className="text-[var(--warning)]">This session was not given Genie’s MCP — it started before the server was listening. Restart it to connect.</span>
                                             )
@@ -1108,7 +1108,7 @@ function AgentViewBody({
                                 {sections.length > 0 ? (
                                     <div role="tablist" data-settings-tabs="" className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
                                         {sections.map((s) => (
-                                            <button
+                                            <Button size="xs"
                                                 key={s.id}
                                                 type="button"
                                                 role="tab"
@@ -1118,7 +1118,7 @@ function AgentViewBody({
                                                 className={`rounded-md px-2 py-0.5 text-[12px] ${s.id === shown ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}
                                             >
                                                 {s.label}
-                                            </button>
+                                            </Button>
                                         ))}
                                     </div>
                                 ) : null}
@@ -1150,9 +1150,9 @@ function AgentViewBody({
                                                         const selectedEntry = listed?.models.find((m) => m.modelId === selected) ?? null;
                                                         const unlisted = listed && ops.model && !listed.models.some((m) => m.modelId === ops.model) ? ops.model : null;
                                                         const refresh = ops.onRefreshModels ? (
-                                                            <button type="button" data-action="models-refresh" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
+                                                            <Button size="xs" type="button" data-action="models-refresh" onClick={() => ops.onRefreshModels?.()} className="ml-2 rounded-md border border-[var(--border-1)] px-1.5 py-0.5 hover:bg-[var(--bg-2)]">
                                                                 Refresh list
-                                                            </button>
+                                                            </Button>
                                                         ) : null;
                                                         // A running agent switches without a restart (prism-acp 0.22 setModel): Claude's CLI at once, Codex
                                                         // with its next turn. Said as the select's tooltip — one line of help, not a paragraph.
@@ -1240,9 +1240,9 @@ function AgentViewBody({
                                                 <div data-rail="mode" data-mode={ops.mode} className={rowClass}>
                                                     <span className={labelClass}>Mode</span>
                                                     <span className="rounded-md bg-[var(--bg-3)] px-2 py-0.5 font-medium">{ops.mode}</span>
-                                                    <button type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => { touch('mode'); ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual'); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                                    <Button size="xs" type="button" data-action={`mode-${ops.mode === 'manual' ? 'automated' : 'manual'}`} onClick={() => { touch('mode'); ops.onSetMode(ops.mode === 'manual' ? 'automated' : 'manual'); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
                                                         switch to {ops.mode === 'manual' ? 'automated' : 'manual'}
-                                                    </button>
+                                                    </Button>
                                                     {help('Mode is wording for the agent, not a permission boundary.')}
                                                     {outcomeFor('mode')}
                                                 </div>
@@ -1251,9 +1251,9 @@ function AgentViewBody({
                                                 <div data-settings-row="run" className={rowClass}>
                                                     <span className={labelClass}>Run</span>
                                                     {runControls(agent, session?.running === true && onStop !== undefined).map((item) => (
-                                                        <button key={item.id} type="button" data-run-action={item.id} title={item.hint} onClick={() => { touch('run'); act(item.id); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
+                                                        <Button size="xs" key={item.id} type="button" data-run-action={item.id} title={item.hint} onClick={() => { touch('run'); act(item.id); }} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 hover:bg-[var(--bg-2)]">
                                                             {item.label}
-                                                        </button>
+                                                        </Button>
                                                     ))}
                                                     {outcomeFor('run')}
                                                 </div>
@@ -1266,9 +1266,9 @@ function AgentViewBody({
                                                     <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                                                         {removeControls(agent).map((item) => (
                                                             <span key={item.id} className="flex items-center gap-2">
-                                                                <button type="button" data-remove-action={item.id} onClick={() => { touch('remove'); act(item.id); }} className={`rounded-md border px-2 py-0.5 ${item.danger ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--bg-2)]' : 'border-[var(--border-1)] hover:bg-[var(--bg-2)]'}`}>
+                                                                <Button size="xs" type="button" data-remove-action={item.id} onClick={() => { touch('remove'); act(item.id); }} className={`rounded-md border px-2 py-0.5 ${item.danger ? 'border-[var(--danger)] text-[var(--danger)] hover:bg-[var(--bg-2)]' : 'border-[var(--border-1)] hover:bg-[var(--bg-2)]'}`}>
                                                                     {item.label}
-                                                                </button>
+                                                                </Button>
                                                                 <span className="text-[11px] text-[var(--fg-4)]">{item.hint}</span>
                                                             </span>
                                                         ))}
@@ -1492,16 +1492,16 @@ function AgentViewBody({
                  */}
                 {railModeNow === 'strip' && !railOpen && railText ? (
                     <div data-right-column="strip" className="flex h-8 w-8 shrink-0 flex-col items-center border-l border-[var(--border-1)] bg-[var(--bg-1)]">
-                        <button type="button" data-action="expand-rail" title={railText} onClick={() => setRailOpen(true)} className="flex h-full w-full items-center justify-center text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
+                        <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-action="expand-rail" title={railText} onClick={() => setRailOpen(true)} className="flex h-full w-full items-center justify-center text-[var(--fg-3)] hover:bg-[var(--bg-2)]">
                             <Icon name="panel-right" size="xs" />
-                        </button>
+                        </Button>
                         <span className="sr-only">{railText}</span>
                     </div>
                 ) : null}
                 {showColumn && (inspector || ended || termBlock) ? (
                 <aside data-right-column="" className={`flex min-h-0 w-[380px] shrink-0 flex-col border-l border-[var(--border-1)] ${railModeNow === 'strip' ? 'absolute right-0 top-0 z-20 h-full bg-[var(--surface)] shadow-xl' : ''}`}>
                 {railModeNow === 'strip' ? (
-                    <button type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</button>
+                    <Button variant="ghost" size="xs" type="button" data-action="collapse-rail" onClick={() => setRailOpen(false)} className="flex h-7 shrink-0 items-center gap-1.5 border-b border-[var(--border-1)] px-3 text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-2)]">Close</Button>
                 ) : null}
                 {inspector ? <Inspector content={inspector} onClose={() => onSelect(null)} embedded header={diffHeader(rows, selectedId)} filesRoute={`genie://agent/${agent.id}?tab=files`} onNavigate={onNavigate} onRevert={revertSelected ?? undefined} revertOutcome={revertOutcome} /> : null}
                 {ended || termBlock ? (
@@ -1515,10 +1515,10 @@ function AgentViewBody({
                                 <span className="text-[11px] text-[var(--fg-4)]">live, read-only here</span>
                                 <span className="flex-1" />
                                 {onTakeOver ? (
-                                    <button type="button" data-action="take-over-rail" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)] hover:underline">
+                                    <Button size="xs" labelClassName="contents" type="button" data-action="take-over-rail" onClick={() => onTakeOver(agent.id)} className="flex items-center gap-1.5 text-[12px] text-[var(--fg-2)]">
                                         Take over
                                         <span className="font-mono text-[10px] text-[var(--fg-4)]">⌘⇧T</span>
-                                    </button>
+                                    </Button>
                                 ) : null}
                             </div>
                             <p className="font-mono text-[11px] text-[var(--fg-3)]">{lastOutputLabel(termBlock.lastOutputAt, clock())}</p>
@@ -1538,7 +1538,7 @@ function AgentViewBody({
                             <div className="flex items-center gap-2">
                                 {/* No Restart of its own (genie#1238): the header's Restart is the one, in the same view. */}
                                 {/* The board's `Open terminal` in the block: a Take Over window on this agent — the same door the header offers, where the reader is looking. */}
-                                {onTakeOver ? <button type="button" data-action="open-terminal-rail" onClick={() => onTakeOver(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</button> : null}
+                                {onTakeOver ? <Button size="xs" type="button" data-action="open-terminal-rail" onClick={() => onTakeOver(agent.id)} className="flex h-[26px] items-center rounded-lg border border-[var(--border-1)] px-2.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Open terminal</Button> : null}
                                 <CopyLogButton text={[ended.reason, ended.lastTool ?? '', ended.log].filter(Boolean).join('\n')} />
                             </div>
                         </section>

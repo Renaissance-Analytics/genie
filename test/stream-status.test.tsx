@@ -5,6 +5,7 @@ import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import { Stream } from '../src/renderer/components/Stream.js';
 import { ChipsRow } from '../src/renderer/components/TimelineStrip.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * TWO LAYOUT FIXES the owner pointed at (2026-10-14):
@@ -51,7 +52,8 @@ describe('the chips row never pushes the find box out of view', () => {
         expect(laneEnd).toBeGreaterThan(html.indexOf('data-chip-lane'));
         expect(html).toMatch(/data-find-box=""[^>]*class="[^"]*shrink-0/);
         // Every chip keeps its width inside the lane (it scrolls rather than squashes).
-        const chips = html.match(/<button[^>]*class="flex h-6 [^"]*"/g) ?? [];
+        // The chips: the buttons that carry their on/off state (react-fancy Buttons; class order is the Button's).
+        const chips = (html.match(/<button\b[^>]*\sdata-on="[^"]*"[^>]*>/g) ?? []).map((t) => /\sclass="([^"]*)"/.exec(t)?.[1] ?? '');
         expect(chips.length).toBeGreaterThan(0);
         expect(chips.filter((c) => !c.includes('shrink-0'))).toHaveLength(0);
     });
