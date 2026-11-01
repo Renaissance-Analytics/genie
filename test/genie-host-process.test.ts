@@ -8,6 +8,7 @@ import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { connectSocket, pidAlive } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
+import { SpawnHostClient } from '../src/main/spawn-host-client.js';
 
 /**
  * THE HOST IS ITS OWN PROCESS, AND AN AGENT OUTLIVES ITS WINDOW (the host split, phase 1).
@@ -75,7 +76,8 @@ beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie-host-home-'));
     workspace = await mkdtemp(join(tmpdir(), 'genie-host-ws-'));
     hostProcess = spawn(process.execPath, ['--import', 'tsx', 'src/main/genie-host.ts'], {
-        env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB, GENIE_HOST_IDLE_MS: '600000' },
+        // The spawn host's real entry, as TypeScript (the host forks it with its own --import tsx).
+        env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
         stdio: ['ignore', 'pipe', 'pipe'],
     });
     hostProcess.stdout?.on('data', (d) => { hostLog += String(d); });
@@ -104,6 +106,41 @@ describe('genie-host as its own process', () => {
         const code = await new Promise<number | null>((r) => second.once('exit', r));
         expect(code).toBe(0);
         expect(parseHostRecord(await readText(join(home, 'runtime', 'host.json')))?.pid).toBe(hostProcess.pid);
+    }, 120_000);
+
+    it('a SUPERVISED PROCESS outlives its window, and the next window finds it with its tag, its pid and what it printed (P2.1)', async () => {
+        // The window's side, as main.ts builds it: a spawn client over the engine link to the host's `processes` child.
+        const open = async () => {
+            const w = await window();
+            const spawn = new SpawnHostClient({ entry: '', link: w.client.spawnLink('processes') });
+            w.client.onSpawnFrame('processes', (frame) => spawn.linkFrame(frame));
+            return { ...w, spawn };
+        };
+        const first = await open();
+        expect(await first.spawn.linkUp()).toEqual([]);
+        const pty = first.spawn.ptyPort();
+        const pids: number[] = [];
+        pty.onPid?.((_id, pid) => pids.push(pid));
+        const ticker = `setInterval(() => console.log('tick ' + Date.now()), 150)`;
+        const started = pty.open({ cwd: workspace, command: `"${process.execPath}" -e "${ticker}"`, shell: true, tag: { kind: 'process', processId: 'worker:ticks', workspaceId: 'ws' } });
+        const pid = await until('the process pid', () => pids[0] ?? null, 30_000);
+        expect(pidAlive(pid)).toBe(true); // positive control: the gauge sees it alive while its window is there
+
+        first.transport.close(); // the window goes
+        await sleep(2_000);
+        expect(pidAlive(pid)).toBe(true); // it did not go with it
+
+        const second = await open();
+        const found = await second.spawn.linkUp();
+        const mine = found.find((p) => p.id === started.id);
+        expect(mine).toMatchObject({ pid, tag: { kind: 'process', processId: 'worker:ticks', workspaceId: 'ws' } });
+        expect(mine!.scrollback).toMatch(/tick \d+/);
+
+        // Taken back, it is the new window's to end: killed through the link, it is gone.
+        second.spawn.adoptPty(mine!);
+        expect(second.spawn.ptyPort().kill(started.id)).toBe(true);
+        await until('the process to end', () => !pidAlive(pid), 15_000);
+        second.transport.close();
     }, 120_000);
 
     it('an agent keeps running and writing while no window is connected, and the next window adopts it', async () => {

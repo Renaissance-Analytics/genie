@@ -23,6 +23,7 @@ import type { LiveSession } from '../core/roster.js';
 import type { CancelOutcome, PromptContext, StopVerdict } from '../core/session.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import { commsFields } from './session-host.js';
+import type { SpawnFrame } from './spawn-host-protocol.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -100,6 +101,9 @@ export class SessionEngineClient {
     readonly #listeners = new Set<(agentId: AgentId) => void>();
     readonly #watched = new Set<string>();
     #stopAllLeft: ((left: number) => void) | null = null;
+    /** The spawn host's frames by profile (the host split, P2.1), and who hears the link come and go. */
+    readonly #spawnListeners = new Map<string, Set<(frame: SpawnFrame) => void>>();
+    readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -157,6 +161,7 @@ export class SessionEngineClient {
                     if (m.channel === 'engine.ready') {
                         this.#afterDump();
                         finish({ ok: true, welcome: welcomed });
+                        for (const l of [...this.#linkListeners]) l.up();
                         return;
                     }
                     this.#onEvent(m.channel, m.payload);
@@ -180,6 +185,7 @@ export class SessionEngineClient {
                 this.#welcome = null;
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
+                for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: 'genie window' }));
@@ -246,6 +252,12 @@ export class SessionEngineClient {
             case 'engine.callback':
                 this.#onCallback(payload as EngineCallback);
                 return;
+            case 'spawn.frame': {
+                const p = payload as { profile?: unknown; frame?: unknown };
+                const listeners = typeof p?.profile === 'string' ? this.#spawnListeners.get(p.profile) : undefined;
+                if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
+                return;
+            }
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
                 return;
@@ -317,6 +329,35 @@ export class SessionEngineClient {
 
     #emit(agentId: AgentId): void {
         for (const listener of [...this.#listeners]) listener(agentId);
+    }
+
+    /**
+     * genie-host's spawn-host child of `profile`, as a link for a SpawnHostClient (the host split, P2.1): its frames go
+     * out as notifications (no result per keystroke), in order on the one socket; nothing is sent while not connected.
+     */
+    spawnLink(profile: string): { send(frame: SpawnFrame): void } {
+        return {
+            send: (frame) => {
+                const t = this.#transport;
+                if (t === null || this.#welcome === null) return;
+                t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.spawn', args: [profile, frame] }));
+            },
+        };
+    }
+
+    /** The frames of genie-host's spawn-host child of `profile`. */
+    onSpawnFrame(profile: string, listener: (frame: SpawnFrame) => void): () => void {
+        let set = this.#spawnListeners.get(profile);
+        if (!set) { set = new Set(); this.#spawnListeners.set(profile, set); }
+        set.add(listener);
+        return () => set!.delete(listener);
+    }
+
+    /** The link came up (connected, its dump in) or went down: when spawn clients reconcile, and when they stop. */
+    onLink(up: () => void, down: (reason: string) => void): () => void {
+        const entry = { up, down };
+        this.#linkListeners.add(entry);
+        return () => this.#linkListeners.delete(entry);
     }
 
     /** Push every record again (main calls it when one changed). */

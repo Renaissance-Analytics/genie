@@ -91,7 +91,8 @@ import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
-import { routeExecThroughSpawnHost, startSpawnHost, type SpawnHostClient } from './spawn-host-client.js';
+import { routeExecThroughSpawnHost, SpawnHostClient, startSpawnHost } from './spawn-host-client.js';
+import type { ListedPty } from './spawn-host-protocol.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
 import { Session as InspectorSession } from 'node:inspector';
 import { startStallProfiler } from './stall-profile.js';
@@ -289,6 +290,12 @@ let stallProfiler: { capture(ms: number): void } | null = null;
  * `docker events`, and the supervisor's ptys (sites, workers, the front door). Started at boot; stopped last at quit.
  */
 let spawnHostNow: SpawnHostClient | null = null;
+/** The interactive terminals' spawn host (the host split, P2.1): genie-host's `terminals` child; null = this process's engine. */
+let spawnTerminalsNow: SpawnHostClient | null = null;
+/** Live ptys a previous window started, found under genie-host at boot: the supervisor's and the terminals' to adopt. */
+let adoptablePtys: ListedPty[] = [];
+/** How long after the boot's restore an adopted process nobody claimed is ended. */
+const UNCLAIMED_GRACE_MS = 60_000;
 const stallWatchdog = new StallWatchdog({
     log: (line) => stallLog?.(line),
     onMainStall: (ms) => stallProfiler?.capture(ms),
@@ -1193,9 +1200,6 @@ async function boot(): Promise<void> {
     rendererErrorLog = lifecycleLog;
     setPrivateCredentialFailureLog(lifecycleLog);
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
-    // BEFORE anything runs a command: every execFileRunner call from here on is created in the spawn host, not on main.
-    spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
-    routeExecThroughSpawnHost(spawnHostNow);
     stallLog = lifecycleLog;
     stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
     stallWatchdog.start();
@@ -1289,6 +1293,40 @@ async function boot(): Promise<void> {
         if (agentEngineLink === null) mainErrors.record('agent-host', new Error('Genie could not start its agent host, so agents run inside the window this time (see logs/genie-host.log).'));
         host = agentEngineLink?.client ?? null;
     }
+    /*
+     * EVERY PROCESS THIS WINDOW STARTS IS STARTED BY GENIE-HOST (the host split, P2.1; plan §11a): #1405's spawn host is
+     * the HOST's child now (two profiles: processes, terminals), reached over the engine link — so sites, queue workers
+     * and open terminals outlive this window, and what a previous window left running is taken back below. Only the
+     * emergency in-process fallback (no host at all) forks a spawn host of this window's own, as #1405 did.
+     * BEFORE anything runs a command: every execFileRunner call from here on is created there, never on main.
+     */
+    if (agentEngineLink) {
+        const engineLink = agentEngineLink.client;
+        const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
+        const shells = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('terminals'), log: lifecycleLog });
+        engineLink.onSpawnFrame('processes', (frame) => processes.linkFrame(frame));
+        engineLink.onSpawnFrame('terminals', (frame) => shells.linkFrame(frame));
+        const reconcile = async (): Promise<ListedPty[]> => {
+            const [p, t] = await Promise.all([processes.linkUp(), shells.linkUp()]);
+            return [...p, ...t];
+        };
+        engineLink.onLink(
+            // The link back after a loss: whatever is running that this window does not know is taken back now.
+            () => { void reconcile().then((found) => { for (const pty of found) { services?.supervisor.adopt(pty); terminals?.adopt(pty); } }, (error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
+            (why) => { processes.linkDown(why); shells.linkDown(why); },
+        );
+        // The link is already up (it came up in connectAgentEngine): the first reconcile is now, before anything starts.
+        adoptablePtys = await reconcile().catch((error: unknown) => {
+            lifecycleLog(`spawn host list failed reason=${error instanceof Error ? error.message : String(error)}`);
+            return [];
+        });
+        if (adoptablePtys.length > 0) lifecycleLog(`spawn host found running=${adoptablePtys.length} (${adoptablePtys.map((p) => p.tag?.kind === 'process' ? p.tag.processId : p.tag?.kind ?? 'untagged').join(', ')})`);
+        spawnHostNow = processes;
+        spawnTerminalsNow = shells;
+    } else {
+        spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
+    }
+    routeExecThroughSpawnHost(spawnHostNow);
     if (host === null) {
         /*
          * THE SPAWN LEDGER (hosting plan 1.5 / 1.6), when the engine runs HERE. Every agent run's processes are written down
@@ -1419,7 +1457,10 @@ async function boot(): Promise<void> {
     // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
     }, () => services?.settings.snapshot() ?? {});
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
-    terminals = new TerminalHost(ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
+    // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
+    // the open ones a previous window left running are taken back with what they printed.
+    terminals = new TerminalHost(spawnTerminalsNow ? spawnTerminalsNow.ptyPort() : ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
+    for (const pty of adoptablePtys) terminals.adopt(pty);
     // §6.5: what the terminals showed at the last quit, handed back once per workspace.
     snapshots = await TerminalSnapshots.open(genieHome());
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
@@ -2421,6 +2462,8 @@ async function boot(): Promise<void> {
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
         // main's own engine takes them only if the spawn host cannot start.
         processPty: spawnHostNow ? spawnHostNow.ptyPort(ptyPort) : ptyPort,
+        // What a previous window left running under genie-host: adopted before any site or kept process starts.
+        adoptPtys: adoptablePtys,
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -2857,6 +2900,13 @@ async function boot(): Promise<void> {
     // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
     registry.subscribe(() => processScheduler?.plan());
     const restoredProcesses = processBook.restore();
+    // WHAT NOBODY CLAIMED (the host split, P2.1): a process a previous window ran that this one no longer wants is ended,
+    // and named, once the boot's starts (sites above, the book here) have had their chance — never left running unseen.
+    if (adoptablePtys.length > 0) {
+        setTimeout(() => {
+            for (const r of composed.supervisor.reapUnclaimed()) lifecycleLog(`spawn host reaped unclaimed process=${r.processId} pid=${r.pid}`);
+        }, UNCLAIMED_GRACE_MS).unref?.();
+    }
     if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.

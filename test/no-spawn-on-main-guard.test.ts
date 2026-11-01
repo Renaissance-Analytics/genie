@@ -20,7 +20,9 @@ import { describe, expect, it } from 'vitest';
  * neither list, on purpose.
  */
 
-const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts']);
+// `spawn-relay.ts` runs in genie-host, never in Electron main: it forks the spawn host's children there (the host split,
+// P2.1), which is what takes process creation out of the window entirely.
+const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts', 'src/main/spawn-relay.ts']);
 
 /** Still spawning on main, by name. Remove a line when its module moves; never add one. */
 const KNOWN: Readonly<Record<string, string>> = {

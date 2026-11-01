@@ -1,7 +1,8 @@
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
 import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
@@ -12,6 +13,7 @@ import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRu
 import { SessionEngineServer } from './session-engine-server.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
+import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 
 /**
  * GENIE-HOST — the per-user host process (the host split, phase 1: `.ai/plans/genie-2-host-split-2026-10-31.md`).
@@ -90,6 +92,8 @@ async function main(): Promise<void> {
     const token = randomBytes(32).toString('hex');
     let shuttingDown = false;
     let lastBusy = Date.now();
+    // The spawn-host children (the host split, P2.1), bound late: they and the engine server refer to each other.
+    let relay: SpawnRelay | null = null;
     const engine = new SessionEngineServer({
         token,
         build,
@@ -97,6 +101,7 @@ async function main(): Promise<void> {
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
+        spawn: { send: (profile, frame) => relay?.send(profile, frame), windowGone: () => relay?.windowGone() },
     });
     const host = new SessionHost({
         userData: home,
@@ -128,6 +133,16 @@ async function main(): Promise<void> {
     });
     engine.attach(host);
     host.subscribe(() => { lastBusy = Date.now(); });
+    /*
+     * EVERY PROCESS THE WINDOW STARTS, STARTED HERE (the host split, P2.1; plan §11a): #1405's spawn host as THIS
+     * process's children — `processes` (exec, streams, supervised ptys) and `terminals` (interactive shells) — so a site,
+     * a queue worker and an open terminal outlive the window, and the next window takes them back.
+     */
+    relay = startSpawnRelay({
+        entry: process.env.GENIE_SPAWN_HOST_ENTRY && process.env.GENIE_SPAWN_HOST_ENTRY.length > 0 ? process.env.GENIE_SPAWN_HOST_ENTRY : join(dirname(fileURLToPath(import.meta.url)), 'spawn-host.js'),
+        send: (profile, frame) => engine.spawnFrame(profile, frame),
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
 
     server.on('connection', (socket) => engine.accept(lineTransport(socket)));
 
@@ -147,6 +162,8 @@ async function main(): Promise<void> {
         // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
         // host nobody wants.
         await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
+        // Then every process the window started ("Shut down everything"): the spawn-host children end their ptys.
+        await relay?.stop().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));
@@ -161,7 +178,7 @@ async function main(): Promise<void> {
 
     // IDLE EXIT: nothing running and no window for IDLE_MS. While an agent runs, the host stays — that is the point.
     setInterval(() => {
-        if (host.count > 0 || engine.clients > 0) { lastBusy = Date.now(); return; }
+        if (host.count > 0 || engine.clients > 0 || (relay?.live() ?? 0) > 0) { lastBusy = Date.now(); return; }
         if (Date.now() - lastBusy >= IDLE_MS) void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with no agent and no window`);
     }, Math.min(30_000, Math.max(1_000, Math.floor(IDLE_MS / 4)))).unref?.();
     // Kept alive by the server; the interval above is unref'd so it never holds a host that is otherwise done.
