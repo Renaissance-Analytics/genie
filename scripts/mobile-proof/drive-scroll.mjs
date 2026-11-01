@@ -185,7 +185,7 @@ async function controlSwipes(context, profile) {
 /** The whole proof for one screen: below the fold first (control), one swipe moves it, more swipes reach it. */
 async function proveScreen(page, cdp, profile, screen, target) {
     const vp = page.viewportSize();
-    await page.waitForSelector(target, { timeout: 30_000 });
+    await page.waitForSelector(target, { state: 'attached', timeout: 30_000 });
     await sleep(500);
     const before = await measure(page, target);
     await page.screenshot({ path: join(OUT, `${profile}-${screen}-0-before.png`) });
@@ -211,13 +211,27 @@ async function proveScreen(page, cdp, profile, screen, target) {
     }
     const method = PROVEN[0];
     let last = await measure(page, target);
-    for (let i = 0; i < 12 && last.bottom > last.vh; i++) { await swipe(cdp, method, vp.width, vp.height); last = await measure(page, target); }
+    let swipes = 0;
+    let still = 0;
+    while (last.bottom > last.vh && swipes < 80 && still < 2) {
+        const was = last.scroller?.scrollTop ?? null;
+        await swipe(cdp, method, vp.width, vp.height);
+        swipes += 1;
+        last = await measure(page, target);
+        still = was !== null && last.scroller?.scrollTop === was ? still + 1 : 0;
+    }
     await page.screenshot({ path: join(OUT, `${profile}-${screen}-2-reached.png`) });
-    check(`${profile} ${screen}: swiping reaches the last of it`, last.bottom <= last.vh + 1, `target bottom ${last.bottom?.toFixed(0)} vs viewport ${last.vh}`);
+    const end = last.scroller ? `scroller scrollTop ${last.scroller.scrollTop} of max ${last.scroller.scrollHeight - last.scroller.clientHeight}` : 'no scroller';
+    check(`${profile} ${screen}: swiping reaches the last of it`, last.bottom <= last.vh + 1, `target bottom ${last.bottom?.toFixed(0)} vs viewport ${last.vh} after ${swipes} more swipes; ${end}${still >= 2 ? '; the scroller stopped moving' : ''}`);
     check(`${profile} ${screen}: the page itself did not scroll (the screen owns its scroll; the bars stay put)`, (last.docScroll ?? 0) === 0, `document scrollTop ${last.docScroll}`);
     // Back to the top, then pull down once more: headless Chromium has no pull-to-refresh UI, so this records that the
     // pull is absorbed with no reload — informational, not proof of a real phone's behaviour.
-    for (let i = 0; i < 14; i++) await swipe(cdp, method, vp.width, vp.height, true);
+    for (let i = 0, prev = -1; i < 80; i++) {
+        const top = await page.evaluate(() => document.querySelector('[data-mobile-scroll]')?.scrollTop ?? 0);
+        if (top === 0 || top === prev) break;
+        prev = top;
+        await swipe(cdp, method, vp.width, vp.height, true);
+    }
     await page.evaluate(() => { window.__stillHere = true; });
     await swipe(cdp, method, vp.width, vp.height, true);
     note(`${profile} ${screen}: a pull at the top`, (await page.evaluate(() => window.__stillHere === true)) ? 'absorbed, no reload' : 'the page RELOADED');
