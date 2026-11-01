@@ -10,8 +10,10 @@ export default defineConfig({
         emptyOutDir: false,
         ssr: true,
         sourcemap: true,
-        // Three entries: `entry` (package.json main) picks doctor mode or Genie; each is its own file, shared code chunks beside them.
-        lib: { entry: { entry: 'src/main/entry.ts', main: 'src/main/main.ts', doctor: 'src/main/doctor.ts' }, formats: ['es'], fileName: (_format, name) => `${name}.js` },
+        // Four entries: `entry` (package.json main) picks doctor mode or Genie; `spawn-host` is the child main forks to create
+        // processes off its own thread (src/main/spawn-host.ts, genie#1397) — it imports nothing from electron. Each is its
+        // own file, shared code chunks beside them.
+        lib: { entry: { entry: 'src/main/entry.ts', main: 'src/main/main.ts', doctor: 'src/main/doctor.ts', 'spawn-host': 'src/main/spawn-host.ts' }, formats: ['es'], fileName: (_format, name) => `${name}.js` },
         // Electron and Node builtins are provided by the runtime, not bundled.
         /*
          * `node-pty` is EXTERNAL, and it has to be: it is a native addon that loads its `.node`

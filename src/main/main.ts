@@ -86,11 +86,11 @@ import { chmod, mkdir, readdir, readFile as readFileText, stat as statPath, writ
 import { sacredNameOf } from '../core/agent-adoption.js';
 import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
-import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
 import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
 import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
+import { routeExecThroughSpawnHost, startSpawnHost, type SpawnHostClient } from './spawn-host-client.js';
 import * as diagnosticsChannel from 'node:diagnostics_channel';
 import { Session as InspectorSession } from 'node:inspector';
 import { startStallProfiler } from './stall-profile.js';
@@ -131,7 +131,7 @@ import { showOnBoot } from '../core/tray-resident.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
-import { execFileRunner, probeToolsLive } from './toolchain-runner.js';
+import { execFileRunner, probeToolsLive, execFileText } from './toolchain-runner.js';
 import { latestIndex, runUpdate, type CommandRunner, type LanguageUpdatePorts } from './toolchain-prober.js';
 import { planInstall, type PackageManager, type Platform } from '../core/toolchain.js';
 import { checkAndRepair, detectPackageManager, ensurePhpCaBundle, installTool, nodeToolchainFs, phpCaBundleNow, phpWorkerEnv, preferGenieNode, processEnv, restoreToolchainEnv, toolchainPaths, type ToolchainOpsPorts } from './toolchain-ops.js';
@@ -280,6 +280,12 @@ let window: BrowserWindow | null = null;
 let stallLog: ((line: string) => void) | null = null;
 /** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
 let stallProfiler: { capture(ms: number): void } | null = null;
+/**
+ * THE SPAWN HOST (genie#1397): the child that creates every process main used to create on its own thread — the Docker
+ * CLI (600 s of the owner's main in one beta.54 session, up to 18.3 s at a time), every other `execFileRunner` command,
+ * `docker events`, and the supervisor's ptys (sites, workers, the front door). Started at boot; stopped last at quit.
+ */
+let spawnHostNow: SpawnHostClient | null = null;
 const stallWatchdog = new StallWatchdog({
     log: (line) => stallLog?.(line),
     onMainStall: (ms) => stallProfiler?.capture(ms),
@@ -1183,6 +1189,9 @@ async function boot(): Promise<void> {
     setPrivateCredentialFailureLog(lifecycleLog);
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
+    // BEFORE anything runs a command: every execFileRunner call from here on is created in the spawn host, not on main.
+    spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
+    routeExecThroughSpawnHost(spawnHostNow);
     stallLog = lifecycleLog;
     stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
     stallWatchdog.start();
@@ -1655,11 +1664,7 @@ async function boot(): Promise<void> {
         // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         binaryFor: (provider) => providerBinary(provider as AgentRecord['provider']) ?? null,
-        runStatus: (command, cwd) => new Promise<number>((resolve) => {
-            execFileCb(command, { shell: true, cwd, timeout: 30_000, windowsHide: true }, (error) => {
-                resolve(error === null ? 0 : typeof (error as { code?: unknown }).code === 'number' ? ((error as { code: number }).code) : 1);
-            });
-        }),
+        runStatus: (command, cwd) => execFileRunner(command, [], { shell: true, cwd, timeoutMs: 30_000 }).then((r) => r.exitCode, () => 1),
         onSignedIn: (provider) => {
             for (const id of host?.signedOutAgents(provider) ?? []) {
                 void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, SIGNED_IN_AGAIN, 'genie'); }).finally(() => registry?.touch());
@@ -2277,7 +2282,7 @@ async function boot(): Promise<void> {
     const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
-        tailscale: () => new Promise<string>((resolve, reject) => { execFileCb('tailscale', ['status', '--json'], { windowsHide: true }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        tailscale: () => execFileText('tailscale', ['status', '--json']),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
         // The phone's page (§6.8): the built renderer, from the same directory the window loads it from — and, named after
@@ -2292,7 +2297,7 @@ async function boot(): Promise<void> {
             const keyFile = join(dir, 'key.pem');
             try {
                 await mkdir(dir, { recursive: true });
-                await new Promise<void>((resolve, reject) => { execFileCb('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { windowsHide: true, timeout: 60_000 }, (error) => (error ? reject(error) : resolve())); });
+                await execFileText('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
                 // The private key, the user's only (best effort; on Windows the per-user profile is the guard) — as Genie 1.
                 await chmod(keyFile, 0o600).catch(() => {});
                 return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
@@ -2347,6 +2352,9 @@ async function boot(): Promise<void> {
     const composed = await composeServices({
         userData: genieHome(),
         pty: ptyPort,
+        // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
+        // main's own engine takes them only if the spawn host cannot start.
+        processPty: spawnHostNow ? spawnHostNow.ptyPort(ptyPort) : ptyPort,
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -2654,7 +2662,7 @@ async function boot(): Promise<void> {
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,
         readFile: (path) => readFile(path, 'utf8'),
-        exec: (command, args) => new Promise<string>((resolve, reject) => { execFileCb(command, [...args], { windowsHide: true, timeout: 10_000 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout)))); }),
+        exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
     }).then((id) => (id ? machineKeyOf(id) : null));
     // WHAT TYNN SAYS THIS MACHINE IS (genie#1278 W5): Tynn's answer only; signed in, no answer is a drone.
     readWorkstationRoleNow = () => readRole();
@@ -3618,6 +3626,9 @@ app.on('before-quit', (event) => {
     keepaliveNow?.stop();
     // Every supervised process, the front door, an in-flight flow run, the knowledge database.
     void services?.shutdown();
+    // Last: the spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
+    // itself. It would also go on its own when main exits (its IPC channel closes).
+    void spawnHostNow?.stop();
     void remoteSocketNow?.stop();
     void filesHost?.close();
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
