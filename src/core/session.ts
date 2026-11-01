@@ -408,6 +408,8 @@ export class AgentSession {
      * child. A stop reaches the roots' tree AS IT IS THEN, so a provider the shell launched later is still reached.
      */
     #roots: readonly ProcessInfo[] | null = null;
+    /** The off-loop reading that settles `#roots` after the newest spawn on a tree with `read` + `capture`; a stop waits for it. */
+    #rootsReading: Promise<void> | null = null;
     /** Every process of this run seen so far (the roots' trees at start and at stop) — what a verification checks. */
     #members: readonly ProcessInfo[] = [];
     /**
@@ -1064,6 +1066,27 @@ export class AgentSession {
         });
         const tree = this.#options.processTree ?? systemProcessTree;
         const aroundSpawn = (spawn: () => void): void => {
+            if (tree.read && tree.capture) {
+                /*
+                 * NOTHING READ ON THE LOOP (beta.53 freezes: the two `snapshot()` readings below were PowerShell on main,
+                 * 2–20 s each on Windows, around every spawn — eleven agents resuming held the window for minutes). The
+                 * spawn's own children are captured as they are created; their start times and trees come from a
+                 * reading off the loop. The newest spawn's reading is the one kept; a stop waits for it (`#rootsReading`).
+                 */
+                const pids: number[] = [];
+                const read = tree.read.bind(tree);
+                const reading: Promise<void> = Promise.resolve().then(async () => {
+                    const after = await read().catch(() => null);
+                    if (this.#rootsReading !== reading) return;
+                    if (after === null) { this.#roots = null; return; }
+                    this.#roots = after.filter((p) => pids.includes(p.pid) && p.ppid === process.pid);
+                    this.#members = subtreeOf(after, this.#roots);
+                    this.#options.onSpawned?.(this.#members);
+                });
+                this.#rootsReading = reading;
+                tree.capture(spawn, pids);
+                return;
+            }
             const before = tree.snapshot();
             try { spawn(); }
             finally {
@@ -1181,21 +1204,43 @@ export class AgentSession {
         const tree = this.#options.processTree ?? systemProcessTree;
         const driver = this.#driver;
         const graceMs = options.graceMs ?? 0;
+        /*
+         * The tree BEFORE the provider is told to end, read OFF the loop on a tree that can (beta.53 freezes: this was a
+         * PowerShell reading on main before every graceful stop — a restart, a hibernate, a quit). It waits for the
+         * start's own reading first, so a stop asked right after a start still knows the spawn's processes.
+         */
+        const read = tree.read?.bind(tree);
+        const earlyOffLoop = read && tree.capture
+            ? (async (): Promise<void> => {
+                await this.#rootsReading;
+                const roots = this.#roots;
+                if (!roots || roots.length === 0) return;
+                const early = await read().catch(() => null);
+                if (early) this.#members = unionOf(this.#members, subtreeOf(early, roots));
+            })()
+            : null;
+        const earlyOnLoop = (): void => {
+            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
+            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
+        };
         if (graceMs > 0 && driver?.stop && this.#alive && !this.#exited) {
             // PRISM-ACP 0.21.1 OWNS THE TREE: its stop closes stdin, waits the grace, ends the supervised tree (a Job Object
             // on Windows) and reports. Genie's reading then verifies it as before — and reaps anything it still finds.
-            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
-            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
-            let ended: Promise<unknown>;
-            try { ended = Promise.resolve(driver.stop({ graceMs })); } catch (error) { ended = Promise.reject(error); }
+            const stopDriver = driver.stop.bind(driver);
+            const ended = (earlyOffLoop ?? Promise.resolve(earlyOnLoop())).then(() => stopDriver({ graceMs }));
             this.#stopping = ended.catch(() => undefined).then(() => this.#endTree(tree, signal));
         } else if (graceMs > 0 && driver?.endInput && this.#alive && !this.#exited) {
             // The tree BEFORE stdin closes: a provider that then ends on its own (on Windows) orphans its children, and
             // a reading after its exit could no longer reach them from the roots.
-            const early = this.#roots && this.#roots.length > 0 ? tree.snapshot() : null;
-            if (early && this.#roots) this.#members = unionOf(this.#members, subtreeOf(early, this.#roots));
-            try { driver.endInput(); } catch { /* a stdin already closed: the kill below ends it */ }
-            this.#stopping = this.#exitWithin(graceMs).then(() => this.#endTree(tree, signal));
+            const endInput = driver.endInput.bind(driver);
+            const close = (): void => { try { endInput(); } catch { /* a stdin already closed: the kill below ends it */ } };
+            if (earlyOffLoop) {
+                this.#stopping = earlyOffLoop.then(close).then(() => this.#exitWithin(graceMs)).then(() => this.#endTree(tree, signal));
+            } else {
+                earlyOnLoop();
+                close();
+                this.#stopping = this.#exitWithin(graceMs).then(() => this.#endTree(tree, signal));
+            }
         } else {
             this.#stopping = this.#endTree(tree, signal);
         }
@@ -1229,7 +1274,12 @@ export class AgentSession {
 
     /** Kill, reap, verify. Synchronous up to the first verification; retries (bounded) only for a survivor. */
     #endTree(tree: ProcessTree, signal: NodeJS.Signals): Promise<StopVerdict> {
-        if (tree.read && tree.reap) return this.#endTreeAsync(tree.read.bind(tree), tree.reap.bind(tree), signal);
+        if (tree.read && tree.reap) {
+            const read = tree.read.bind(tree);
+            const reap = tree.reap.bind(tree);
+            // The start's own reading first (a stop right after a start): its roots are what this ends.
+            return (this.#rootsReading ?? Promise.resolve()).then(() => this.#endTreeAsync(read, reap, signal));
+        }
         const roots = this.#roots;
         const before = roots && roots.length > 0 ? tree.snapshot() : null;
         if (before && roots) this.#members = unionOf(this.#members, subtreeOf(before, roots));

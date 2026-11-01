@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { leftoverProviders, type ProcessRow } from '../src/core/leftover-providers.js';
+import { sweepLeftoverProvidersAsync } from '../src/main/leftover-sweep.js';
 
 /**
  * NO AGENT IS EVER DRIVEN BY TWO PROCESSES (Tynn #796, part 2). The owner, 2026-10-17: after an upgrade moic resumed
@@ -88,11 +89,30 @@ describe('the leftovers at boot', () => {
 });
 
 describe('wired', () => {
-    it('main sweeps the leftovers BEFORE the relaunch plan starts any agent', () => {
+    it('main sweeps the leftovers BEFORE the relaunch plan starts any agent — awaited, off the loop (beta.53 freezes)', () => {
         const main = readFileSync('src/main/main.ts', 'utf8');
-        const sweep = main.indexOf('sweepLeftoverProviders(');
+        const sweep = main.indexOf('await sweepLeftoverProvidersAsync(');
         const plan = main.indexOf('relaunchPlan({');
         expect(sweep).toBeGreaterThan(-1);
         expect(plan).toBeGreaterThan(sweep);
+    });
+});
+
+describe('the sweep off the loop (sweepLeftoverProvidersAsync, beta.53 freezes)', () => {
+    it('ends exactly the leftovers its listing found and says so; a listing that fails ends nothing', async () => {
+        const ended: number[] = [];
+        const lines: string[] = [];
+        const rows: ProcessRow[] = [
+            { pid: 49076, ppid: 46204, cmd: provider(MOIC) },
+            { pid: 50000, ppid: 46204, cmd: 'node build.js' },
+        ];
+        const found = await sweepLeftoverProvidersAsync([{ name: 'moic', threadId: MOIC }], { list: async () => rows, end: async (pid) => { ended.push(pid); } }, (l) => lines.push(l));
+        expect(found).toEqual([{ agent: 'moic', pids: [49076] }]);
+        expect(ended).toEqual([49076]);
+        expect(lines.join('\n')).toMatch(/ended 1 process\(es\) still running moic's session/);
+        const none = await sweepLeftoverProvidersAsync([{ name: 'moic', threadId: MOIC }], { list: async () => { throw new Error('WMI unavailable'); }, end: async (pid) => { ended.push(pid); } }, (l) => lines.push(l));
+        expect(none).toEqual([]);
+        expect(ended).toEqual([49076]);
+        expect(lines.at(-1)).toMatch(/could not list processes, nothing swept/);
     });
 });

@@ -5,6 +5,7 @@ import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import { browserStallEnv, watchRendererStalls } from './renderer-stalls.js';
 
 type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
 
@@ -405,6 +406,12 @@ const bridge: PreloadBridge = {
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+
+// THIS WINDOW'S OWN STALLS (beta.53 freezes): a long task, or no frame presented while visible, over 1 s — sent to main's
+// stall watchdog for lifecycle.log. Imported by THIS preload only: a module two preloads share becomes a chunk a sandboxed
+// preload cannot require (see the clipboard note below).
+const stallEnv = browserStallEnv();
+if (stallEnv) watchRendererStalls((report) => ipcRenderer.send('genie:renderer-stall', report), stallEnv);
 
 // Every copy button in this window writes through main (main/clipboard-ipc.ts): the page's clipboard can fail silently here.
 // The channel is core/clipboard-wire.ts CLIPBOARD_WRITE_CHANNEL, written out: a module two preloads import becomes a shared

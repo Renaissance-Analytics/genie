@@ -87,8 +87,12 @@ import { createAgent, type AgentCreatePorts } from './agent-create-host.js';
 import { adoptAgent, readImportedAgents, type AgentAdoptionPorts } from './agent-adoption-host.js';
 import { execFile as execFileCb } from 'node:child_process';
 import { restartWithHandoff } from './restart-with-handoff.js';
-import { sweepLeftoverProviders } from './leftover-sweep.js';
+import { sweepLeftoverProvidersAsync } from './leftover-sweep.js';
 import { openLifecycleLog } from './lifecycle-log.js';
+import { StallWatchdog, timeIpcHandlers, watchOutboundCalls } from './stall-watchdog.js';
+import * as diagnosticsChannel from 'node:diagnostics_channel';
+import { Session as InspectorSession } from 'node:inspector';
+import { startStallProfiler } from './stall-profile.js';
 import { setPrivateCredentialFailureLog } from './private-credentials.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
@@ -160,7 +164,7 @@ import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
-import { killProcess, killProcessAsync, listProcesses, listProcessesAsync } from './process-list.js';
+import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
@@ -267,6 +271,38 @@ if (launch.kind === 'exit') {
 }
 
 let window: BrowserWindow | null = null;
+/**
+ * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
+ * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
+ * lifecycle.log. Every invoke handler is timed from here, before any is registered; the log is opened at boot.
+ */
+let stallLog: ((line: string) => void) | null = null;
+/** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
+let stallProfiler: { capture(ms: number): void } | null = null;
+const stallWatchdog = new StallWatchdog({
+    log: (line) => stallLog?.(line),
+    onMainStall: (ms) => stallProfiler?.capture(ms),
+    routeOf: () => {
+        const url = window && !window.isDestroyed() ? window.webContents.getURL() : '';
+        const at = url.indexOf('#');
+        return at === -1 ? null : url.slice(at + 1);
+    },
+});
+timeIpcHandlers(ipcMain, stallWatchdog);
+/** A window's name in the log: its page (`index`, `question`, `browser`…), from its URL. */
+function windowNameOf(contents: Electron.WebContents): string {
+    try {
+        const page = new URL(contents.getURL()).pathname.split('/').pop() ?? '';
+        return page.replace(/[.]html$/, '') || 'blank';
+    } catch {
+        return 'unknown';
+    }
+}
+/** Electron's own hang signal for a window, into the log: `unresponsive`, then `responsive` with how long. */
+function watchWindowHang(w: BrowserWindow): void {
+    w.on('unresponsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), true); });
+    w.on('responsive', () => { if (!w.isDestroyed()) stallWatchdog.unresponsive(windowNameOf(w.webContents), false); });
+}
 /** The tray outlives every window; held so it is not garbage-collected into nothing. */
 let tray: Tray | null = null;
 /** The tray's handlers, kept so a held login (Tynn #794) can redraw its menu; and what it last showed as held. */
@@ -734,9 +770,11 @@ async function importFromV1(theRegistry: Registry): Promise<void> {
 async function reapV1Runtime(includeShells: boolean): Promise<void> {
     const userData = app.getPath('userData');
     const roots = ['runtime', 'toolchain', 'pty-host'].map((d) => join(userData, d));
-    const victims = v1Leftovers(listProcesses(), { roots, selfPid: process.pid, includeShells });
+    // Read and ended OFF the loop (beta.53 freezes: this listing was a PowerShell run on main at every boot, ~3 s on Windows).
+    const victims = v1Leftovers(await listProcessesAsync(), { roots, selfPid: process.pid, includeShells });
     if (victims.length === 0) return;
-    const killed = victims.filter((v) => killProcess(v.pid));
+    const ended = await Promise.all(victims.map(async (v) => ((await killProcessAsync(v.pid)) ? v : null)));
+    const killed = ended.filter((v) => v !== null);
     const report = { at: new Date().toISOString(), found: victims.length, killed: killed.length, victims: victims.map((v) => ({ pid: v.pid, executable: v.executable, why: v.why })) };
     await writeFileText(join(genieHome(), 'v1-reap.json'), JSON.stringify(report, null, 2), 'utf8');
     console.log(`[genie] reaped v1's runtime: ${killed.length} of ${victims.length} (${victims.filter((v) => v.why === 'orphaned shell').length} orphaned shells, ${victims.filter((v) => v.why === 'v1 runtime binary').length} v1 binaries)`);
@@ -1144,6 +1182,15 @@ async function boot(): Promise<void> {
     setPrivateCredentialFailureLog(lifecycleLog);
     const spawnLedger = SpawnLedger.open(join(runtimeDir(genieHome()), 'children.json'), randomUUID());
     lifecycleLog(`boot pid=${process.pid} version=${app.getVersion()}`);
+    stallLog = lifecycleLog;
+    stallProfiler = startStallProfiler(new InspectorSession(), lifecycleLog);
+    stallWatchdog.start();
+    watchOutboundCalls(diagnosticsChannel, stallWatchdog);
+    ipcMain.on('genie:renderer-stall', (event, report: unknown) => stallWatchdog.renderer(report, windowNameOf(event.sender)));
+    app.on('child-process-gone', (_event, details) => stallWatchdog.processGone(details));
+    app.on('render-process-gone', (_event, contents, details) => stallWatchdog.processGone({ type: `renderer:${windowNameOf(contents)}`, reason: details.reason, exitCode: details.exitCode }));
+    for (const w of BrowserWindow.getAllWindows()) watchWindowHang(w);
+    app.on('browser-window-created', (_event, w) => watchWindowHang(w));
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
     // PRISM-ACP 0.21.1's SUPERVISOR (a Job Object on Windows, built once per install and hash-checked at every launch),
     // prepared before any agent starts, in Genie's own runtime folder: a missing compiler or a quarantined build is said
@@ -2871,12 +2918,12 @@ async function boot(): Promise<void> {
     // user stopped was not running at quit, so it is not in the list. Taken once, so a crash mid-restore starts nobody twice.
     // The agents a shutdown cut off mid-turn are resumed WHATEVER the setting (Genie cancelled their turn, not you) and
     // told to continue; the rest only with the setting on, unprompted.
-    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(([running, interrupted]) => {
+    void Promise.all([registry.takeRunningAtQuit(), registry.takeInterruptedAtQuit()]).then(async ([running, interrupted]) => {
         // NO AGENT DRIVEN BY TWO PROCESSES (Tynn #796): a provider a previous Genie left running on an agent's session
         // (its quit cut short by an installer, a crash) ends BEFORE any agent here is started or resumed.
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
-        // from before the ledger (beta.32 and earlier) left on an agent's thread.
-        sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
+        // from before the ledger (beta.32 and earlier) left on an agent's thread. Read off the loop (beta.53 freezes).
+        await sweepLeftoverProvidersAsync((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
         const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {
