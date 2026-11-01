@@ -68,7 +68,7 @@ import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
-import { droneRefusal, effectiveRoleOf, type WorkstationRole } from '../core/workstation-role.js';
+import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { wordTynnRefusal } from './drone-refusal.js';
@@ -1902,7 +1902,15 @@ async function boot(): Promise<void> {
         return browser.open(at, 'user-gesture', { key: `relay:${conn.workstationId}`, title, port: via.port, ca: via.ca, hosts });
     });
     ipcMain.handle('genie:files-popout', (_event, workspaceId: unknown) => { if (typeof workspaceId === 'string') filesWindows?.popOut(workspaceId); });
-    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url === 'string') openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    // A drone never connects out (audit M-b): refused HERE, from the role main read from Tynn, not only hidden in the window.
+    ipcMain.handle('genie:remote-open-window', (_event, url: unknown, name: unknown) => { if (typeof url !== 'string') return; const refused = outboundDialRefusal(workstationRoleNow, url); if (refused) return { ok: false, reason: refused }; openRemoteWindow(url, typeof name === 'string' ? name : null); });
+    /*
+     * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
+     * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
+     * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. Until P3 moves the dial
+     * into main itself (host split, audit M-e), this is where main decides.
+     */
+    session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
     // Tynn lists, and a connection to one — the grant and its proof key minted and held HERE, never in the window.
     ipcMain.handle('genie:tynn-workstations', async () => {
