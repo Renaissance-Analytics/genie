@@ -1,4 +1,4 @@
-import { ContentRenderer, Modal } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer, Modal } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 
 /**
@@ -28,7 +28,7 @@ export function WhatsNewBody({ whatsNew, onClose }: { whatsNew: { version: strin
         <div data-whats-new={whatsNew.version} className="flex flex-col gap-4">
             <ContentRenderer clipboardWriter={genieClipboardWriter} value={whatsNew.notes} format="markdown" lineSpacing={1.5} className="max-h-[60vh] overflow-auto text-sm text-[var(--fg-2)]" />
             <div className="flex justify-end">
-                <button type="button" data-action="whats-new-close" onClick={onClose} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white">Close</button>
+                <Button size="xs" type="button" data-action="whats-new-close" onClick={onClose} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm font-medium text-white">Close</Button>
             </div>
         </div>
     );

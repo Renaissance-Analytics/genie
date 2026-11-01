@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { useState } from 'react';
 import { filterRepos, type AccessibleRepo, type RepoListing } from '../../core/github.js';
 import type { FolderKind, PlanStep } from '../../core/workspace-model.js';
@@ -69,7 +70,7 @@ export function GithubRepoBrowser({ listing, query, selectedUrl, onQuery, onPick
         return (
             <div data-repo-browser="signed-out" className={browserBox}>
                 <span className={smallMuted}>Sign in to GitHub to pick from your repositories, private ones included. Meanwhile, paste any git URL below.</span>
-                <div><button type="button" data-action="github-sign-in" onClick={() => onGithub('sign-in')} className={smallButton}>Sign in to GitHub…</button></div>
+                <div><Button size="xs" type="button" data-action="github-sign-in" onClick={() => onGithub('sign-in')} className={smallButton}>Sign in to GitHub…</Button></div>
             </div>
         );
     }
@@ -78,8 +79,8 @@ export function GithubRepoBrowser({ listing, query, selectedUrl, onQuery, onPick
             <div data-repo-browser="not-installed" className={browserBox}>
                 <span className={smallMuted}>The Genie AOS app is not installed on any of your GitHub accounts yet, so there are no repositories to list. Install it on the accounts and repositories Genie should reach, then check again.</span>
                 <div className="flex gap-2">
-                    <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={smallButton}>Install Genie on GitHub…</button>
-                    <button type="button" data-action="repos-reload" onClick={onReload} className={smallButton}>Check again</button>
+                    <Button size="xs" type="button" data-action="github-install" onClick={() => onGithub('install')} className={smallButton}>Install Genie on GitHub…</Button>
+                    <Button size="xs" type="button" data-action="repos-reload" onClick={onReload} className={smallButton}>Check again</Button>
                 </div>
             </div>
         );
@@ -88,7 +89,7 @@ export function GithubRepoBrowser({ listing, query, selectedUrl, onQuery, onPick
         return (
             <div data-repo-browser="failed" className={browserBox}>
                 <span className="text-xs text-[var(--danger)]">{listing.message}</span>
-                <div><button type="button" data-action="repos-reload" onClick={onReload} className={smallButton}>Try again</button></div>
+                <div><Button size="xs" type="button" data-action="repos-reload" onClick={onReload} className={smallButton}>Try again</Button></div>
             </div>
         );
     }
@@ -99,7 +100,7 @@ export function GithubRepoBrowser({ listing, query, selectedUrl, onQuery, onPick
         <div data-repo-browser="listed" className={browserBox}>
             <div className="flex items-center gap-2">
                 <input data-field="repo-search" aria-label="Search your repositories" value={query} placeholder={`Search ${listing.repos.length} repositories…`} onChange={(e) => onQuery(e.target.value)} className="min-w-0 flex-1 rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 text-xs" />
-                <button type="button" data-action="repos-reload" onClick={onReload} className={smallButton}>Refresh</button>
+                <Button size="xs" type="button" data-action="repos-reload" onClick={onReload} className={smallButton}>Refresh</Button>
             </div>
             {shown.length === 0 ? (
                 <span className={smallMuted}>{listing.repos.length === 0 ? 'Your GitHub sign-in reaches no repositories yet.' : 'No repository matches that search.'}</span>
@@ -107,10 +108,10 @@ export function GithubRepoBrowser({ listing, query, selectedUrl, onQuery, onPick
                 <ul className="flex max-h-56 flex-col overflow-y-auto">
                     {shown.map((r) => (
                         <li key={r.fullName}>
-                            <button type="button" data-repo-pick={r.fullName} aria-pressed={r.cloneUrl === chosen} onClick={() => onPick(r)} className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-[var(--bg-2)] ${r.cloneUrl === chosen ? 'bg-[var(--bg-2)]' : ''}`}>
+                            <Button size="xs" labelClassName="contents" type="button" data-repo-pick={r.fullName} aria-pressed={r.cloneUrl === chosen} onClick={() => onPick(r)} className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs hover:bg-[var(--bg-2)] ${r.cloneUrl === chosen ? 'bg-[var(--bg-2)]' : ''}`}>
                                 <span className="font-mono">{r.fullName}</span>
                                 <span data-repo-private={r.private ? 'true' : 'false'} className={smallMuted}>{r.private ? 'Private' : 'Public'}</span>
-                            </button>
+                            </Button>
                         </li>
                     ))}
                 </ul>
@@ -152,8 +153,8 @@ export function AddFromGitView({ url, query, repos, busy, onUrl, onQuery, onPrev
             <input name="url" type="text" aria-label="Git URL" value={url} onChange={(e) => onUrl(e.target.value)} placeholder="https://github.com/owner/name.git or git@host:owner/name.git" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-1 font-mono text-xs" />
             <p className="text-xs text-[var(--fg-3)]">Genie clones it to a staging folder and reads it; then you choose what goes into the new workspace and where it lives. Nothing of yours is written until you confirm.</p>
             <div className="flex gap-2">
-                <button type="submit" data-action="clone-and-read" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60">{busy ? 'Cloning…' : 'Clone and read it'}</button>
-                <button type="button" className={button} onClick={onCancel}>Cancel</button>
+                <Button size="xs" type="submit" data-action="clone-and-read" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60">{busy ? 'Cloning…' : 'Clone and read it'}</Button>
+                <Button size="xs" type="button" className={button} onClick={onCancel}>Cancel</Button>
             </div>
         </form>
     );
@@ -177,7 +178,7 @@ export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel
             <section data-add-preview="refused" className="mx-auto my-4 flex max-w-xl flex-col gap-3 rounded-xl border border-[var(--danger)] p-4 text-sm">
                 <p className="font-semibold">Genie will not add that folder</p>
                 <p className="text-[var(--fg-2)]">{preview.reason}</p>
-                <div><button type="button" className={button} onClick={onCancel}>Pick another folder</button></div>
+                <div><Button size="xs" type="button" className={button} onClick={onCancel}>Pick another folder</Button></div>
             </section>
         );
     }
@@ -200,8 +201,8 @@ export function AddWorkspacePreview({ preview, busy = false, onConfirm, onCancel
                 ))}
             </ol>
             <div className="flex gap-2">
-                <button type="button" data-action="confirm-add" disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => (busy ? undefined : preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? (preview.content?.kind === 'envelope' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Creating…' : 'Create and add') : preview.source === 'git' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Adding…' : 'Add this workspace'}</button>
-                <button type="button" className={button} onClick={onCancel}>Cancel</button>
+                <Button size="xs" type="button" data-action="confirm-add" loading={busy} disabled={busy} className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white disabled:opacity-60" onClick={() => (busy ? undefined : preview.source === 'tynn' && onConfirmTynn ? onConfirmTynn(preview.parent, preview.project.id) : preview.source === 'git' && preview.url && preview.parent !== undefined && onConfirmGit ? onConfirmGit(preview.url, preview.parent) : onConfirm(preview.path))}>{preview.source === 'tynn' ? (preview.content?.kind === 'envelope' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Creating…' : 'Create and add') : preview.source === 'git' ? (busy ? 'Cloning…' : 'Clone and add') : busy ? 'Adding…' : 'Add this workspace'}</Button>
+                <Button size="xs" type="button" className={button} onClick={onCancel}>Cancel</Button>
             </div>
         </section>
     );

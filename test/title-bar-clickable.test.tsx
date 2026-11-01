@@ -22,7 +22,7 @@ function clickability(html: string): Array<{ tag: string; clickable: boolean }> 
         const tag = name!.toLowerCase();
         if (closing) { stack.pop(); continue; }
         const noDrag = /-webkit-app-region:no-drag/.test(attrs!) || (stack.at(-1) ?? false);
-        if (INTERACTIVE.has(tag)) out.push({ tag: whole!.slice(0, 120), clickable: noDrag });
+        if (INTERACTIVE.has(tag)) out.push({ tag: whole!, clickable: noDrag });
         if (!selfClosing && !VOID.has(tag)) stack.push(noDrag);
     }
     return out;

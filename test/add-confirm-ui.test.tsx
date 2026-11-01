@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { AddWorkspacePreview, type AddPreviewView } from '../src/renderer/components/AddWorkspacePreview.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE CONFIRM BUTTON WHILE AN ADD RUNS, AND WHERE THE PERSON LANDS (parity rows 25 and 38; the controller itself is
@@ -17,7 +18,11 @@ describe('the confirm button while the add runs', () => {
     // A Tynn project whose envelope Tynn names is cloned, so its button says so (parity item 3).
     const tynnEnvelope: AddPreviewView = { ...tynn, kind: 'full-envelope', content: { kind: 'envelope', url: 'https://github.com/example-org/tynn.agi.git', branch: 'main' } };
     const folder: AddPreviewView = { ok: true, path: '/w/repo', kind: 'simple-repo', steps };
-    const button = (html: string) => html.match(/<button[^>]*data-action="confirm-add"[^>]*>[^<]*<\/button>/)?.[0] ?? '';
+    // The confirm button's own tag and its visible label (react-fancy's Button: its attributes first, its label in a span).
+    const button = (html: string) => {
+        const c = control(html, 'data-action="confirm-add"');
+        return c ? `${c.open}${c.text}` : '';
+    };
 
     it.each([
         ['git', git, 'Clone and add', 'Cloning…'],

@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ConnectMenu, TynnWorkstationRows } from '../src/renderer/components/ConnectMenu.js';
 import { ConnectRemote } from '../src/renderer/components/FeatureSurfaces.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * "YOUR WORKSTATIONS" READS AT A GLANCE (the owner, 2026-10-28, on beta.50's popover: "the workstation connection UI is
@@ -55,7 +56,7 @@ describe('the popover', () => {
 describe('the role switch stays reachable: Settings → Remote access', () => {
     it('a pilot gets it there, on one line', () => {
         const html = renderToStaticMarkup(<ConnectRemote state={null} remembered={[]} onConnect={() => {}} onDisconnect={() => {}} tynnWorkstations={LIST} onOpenWorkstation={() => {}} onSetRole={setRole} />);
-        expect(row(html, 'ws_found')).toMatch(/<button[^>]*data-action="change-role"[^>]*class="[^"]*whitespace-nowrap/);
+        expect(control(row(html, 'ws_found'), 'data-action="change-role"')!.open).toMatch(/\sclass="[^"]*\bwhitespace-nowrap\b/);
     });
 
     it('CONTROL: TynnWorkstationRows with onSetRole still offers it (what Settings renders)', () => {

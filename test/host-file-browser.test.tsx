@@ -10,6 +10,7 @@ import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { fileEntriesOf, HostPathPickerForm } from '../src/renderer/components/HostPathPicker.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * EVERY FILE AND FOLDER INPUT READS THE HOST (Tynn #835; the owner, 2026-10-19: FileBrowser "is what we should be using
@@ -159,9 +160,9 @@ describe('the picker — react-fancy FileBrowser over the host listing', () => {
     it('Choose is offered once something is picked, naming it (CONTROL: nothing picked, nothing to choose)', () => {
         const base = { mode: 'directory' as const, listDir: async () => ({ ok: true as const, path: '/', entries: [] }), onPick: () => {}, onCancel: () => {} };
         const none = renderToStaticMarkup(<HostPathPickerForm {...base} />);
-        expect(none).toMatch(/data-action="pick-path" disabled=""/);
+        expect(control(none, 'data-action="pick-path"')!.open).toMatch(/\sdisabled=""/);
         const some = renderToStaticMarkup(<HostPathPickerForm {...base} initialSelection="/w/new" />);
-        expect(some).not.toMatch(/data-action="pick-path" disabled=""/);
+        expect(control(some, 'data-action="pick-path"')!.open).not.toMatch(/\sdisabled=""/);
         expect(some).toContain('data-action="pick-path"');
         expect(some).toContain('/w/new');
     });

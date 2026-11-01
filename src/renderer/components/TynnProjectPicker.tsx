@@ -1,4 +1,4 @@
-import { Skeleton } from '@particle-academy/react-fancy';
+import { Button, Skeleton } from '@particle-academy/react-fancy';
 import type { TynnProject } from '../../core/tynn.js';
 
 /**
@@ -35,7 +35,7 @@ export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: 
                             const added = state.added?.[p.id];
                             return (
                                 <li key={p.id}>
-                                    <button
+                                    <Button size="xs" labelClassName="contents"
                                         type="button"
                                         data-tynn-project={p.id}
                                         {...(added ? { 'data-tynn-added': added } : {})}
@@ -50,14 +50,14 @@ export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: 
                                                 <span className="ml-auto text-xs text-[var(--primary)]">Open workspace</span>
                                             </>
                                         ) : null}
-                                    </button>
+                                    </Button>
                                 </li>
                             );
                         })}
                     </ul>
                 </>
             )}
-            <div><button type="button" data-action="cancel-tynn-pick" className={button} onClick={onCancel}>Cancel</button></div>
+            <div><Button size="xs" type="button" data-action="cancel-tynn-pick" className={button} onClick={onCancel}>Cancel</Button></div>
         </section>
     );
 }

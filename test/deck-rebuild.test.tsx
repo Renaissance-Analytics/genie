@@ -5,6 +5,7 @@ import { deckSections, dismissableStale, needsYouCount, type DeckItem, type Sign
 import { deckItemsFrom, questionStale } from '../src/core/deck-sources.js';
 import type { PendingQuestion } from '../src/main/attention-store.js';
 import { Deck, type DeckProps } from '../src/renderer/components/Deck.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE DECK, REBUILT (the owner, 2026-10-15, answering the Deck's purpose):
@@ -108,7 +109,11 @@ describe('grouped by workspace — on screen', () => {
     });
 
     it('a row has Open (its agent) beside its age; Genie’s own item has no agent to open (control)', () => {
-        expect(html).toMatch(/data-deck-age="q_a1"[^>]*>[^<]*<\/time><button[^>]*data-action="deck-open"[^>]*data-deck-open="q_a1"[^>]*>Open</);
+        // Beside its age: the <time>, then the Open button (react-fancy's), for THAT item.
+        expect(html).toMatch(/data-deck-age="q_a1"[^>]*>[^<]*<\/time><button\b[^>]*data-deck-open="q_a1"/);
+        const open = control(html, 'data-deck-open="q_a1"');
+        expect(open).toMatchObject({ tag: 'button', fancy: true, text: 'Open' });
+        expect(open!.open).toContain('data-action="deck-open"');
         expect((html.match(/data-action="deck-open"/g) ?? []).length).toBe(5);
         expect(html).not.toContain('data-deck-open="genie:main-error:1"');
     });
@@ -126,7 +131,8 @@ describe('stale: kept, and marked', () => {
         expect(html).toMatch(/data-deck-item="q_c1"[^>]*class="[^"]*opacity-60/);
         expect(html).not.toContain('data-deck-form="q_c1"');
         expect(html).toContain('data-deck-answer-anyway="q_c1"');
-        expect(rowOf('q_c1')).toMatch(/data-action="question-dismiss"[^>]*data-deck-dismiss="q_c1"[^>]*>Dismiss</);
+        expect(control(rowOf('q_c1'), 'data-deck-dismiss="q_c1"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss' });
+        expect(control(rowOf('q_c1'), 'data-deck-dismiss="q_c1"')!.open).toContain('data-action="question-dismiss"');
         // A stale question is not drawn as an agent that has STOPPED for you.
         expect(rowOf('q_c1')).not.toContain('data-blocking-dot');
     });
@@ -142,7 +148,8 @@ describe('stale: kept, and marked', () => {
     });
 
     it('"Dismiss all stale" says how many, and removes exactly the stale questions shown (counted)', () => {
-        expect(html).toMatch(/data-action="deck-dismiss-stale"[^>]*data-deck-stale="2"[^>]*>Dismiss all stale \(2\)</);
+        expect(control(html, 'data-deck-stale="2"')).toMatchObject({ tag: 'button', fancy: true, text: 'Dismiss all stale (2)' });
+        expect(control(html, 'data-deck-stale="2"')!.open).toContain('data-action="deck-dismiss-stale"');
         expect(dismissableStale(ITEMS).map((i) => i.id)).toEqual(['q_c1', 'q_a3']);
     });
 

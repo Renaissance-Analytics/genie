@@ -1,4 +1,4 @@
-import { Icon, Select } from '@particle-academy/react-fancy';
+import { Button, Icon, Select } from '@particle-academy/react-fancy';
 import { defaultRemoteChoice, githubOwnerOptions, remotePlanText, type Published, type PublishStep, type RemoteChoice } from '../../core/agi-remote.js';
 import type { GithubView } from '../../core/github.js';
 
@@ -55,15 +55,15 @@ export function RemoteChoiceView({ choice, github, folder, onChoice, onGithub }:
             <span className="text-xs font-semibold">Where it is kept</span>
             <div className="flex flex-wrap gap-2">
                 {(['none', 'github', 'paste'] as const).map((k) => (
-                    <button key={k} type="button" data-remote-kind={k} aria-pressed={choice.kind === k} disabled={k === 'github' && !signedIn} onClick={() => pick(k)} className={chip(choice.kind === k)}>
+                    <Button size="xs" labelClassName="contents" key={k} type="button" data-remote-kind={k} aria-pressed={choice.kind === k} disabled={k === 'github' && !signedIn} onClick={() => pick(k)} className={chip(choice.kind === k)}>
                         {k === 'github' ? <span className="inline-flex items-center gap-1"><Icon name="github" size="xs" />{KIND_LABEL[k]}</span> : KIND_LABEL[k]}
-                    </button>
+                    </Button>
                 ))}
             </div>
             {!signedIn ? (
                 <span className={muted}>
                     Genie can create the repository on GitHub when you are signed in.{' '}
-                    <button type="button" data-action="github-sign-in" onClick={() => onGithub('sign-in')} className={link}>Sign in to GitHub…</button>
+                    <Button size="xs" type="button" data-action="github-sign-in" onClick={() => onGithub('sign-in')} className={link}>Sign in to GitHub…</Button>
                 </span>
             ) : null}
             {choice.kind === 'paste' ? (
@@ -93,8 +93,8 @@ function GithubOwner({ choice, github, onChoice, onGithub }: { choice: Extract<R
             </label>
             <span className={muted}>
                 Don&apos;t see an account?{' '}
-                <button type="button" data-action="github-install-other" onClick={() => onGithub('install')} className={link}>Install Genie on another account/org…</button>{' '}
-                <button type="button" data-action="github-refresh" onClick={() => onGithub('refresh')} className={link}>Check again</button>
+                <Button size="xs" type="button" data-action="github-install-other" onClick={() => onGithub('install')} className={link}>Install Genie on another account/org…</Button>{' '}
+                <Button size="xs" type="button" data-action="github-refresh" onClick={() => onGithub('refresh')} className={link}>Check again</Button>
             </span>
         </div>
     );
@@ -121,13 +121,13 @@ export function OwnerPicker({ label, field, value, github, why, onOwner, onGithu
             {chosen && chosen.installed === false ? (
                 <span className="flex items-center gap-2 text-xs text-[var(--amber-400)]">
                     <span className="flex-1">Genie isn&apos;t installed on <strong>{chosen.login}</strong> — install it there {why}.</span>
-                    <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install here…</button>
+                    <Button size="xs" type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install here…</Button>
                 </span>
             ) : null}
             {chosen?.approve ? (
                 <span className="flex items-center gap-2 text-xs text-[var(--amber-400)]">
                     <span className="flex-1">{chosen.approve.reason}</span>
-                    <button type="button" data-action="github-approve" onClick={() => onGithub({ approve: chosen.approve!.installationId })} className={button}>Approve on GitHub…</button>
+                    <Button size="xs" type="button" data-action="github-approve" onClick={() => onGithub({ approve: chosen.approve!.installationId })} className={button}>Approve on GitHub…</Button>
                 </span>
             ) : null}
         </>
@@ -162,9 +162,9 @@ export function PublishedView({ name, path, published, onOpen, onGithub }: Publi
                 ))}
             </ul>
             <div className="flex items-center justify-end gap-2">
-                {notInstalled ? <button type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install Genie on {notInstalled.account}…</button> : null}
-                {needsApproval ? <button type="button" data-action="github-approve" onClick={() => onGithub({ approve: needsApproval.installationId })} className={button}>Approve on GitHub…</button> : null}
-                <button type="button" data-action="open-workspace" onClick={onOpen} className="flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)]"><Icon name="check" size="xs" />Open workspace</button>
+                {notInstalled ? <Button size="xs" type="button" data-action="github-install" onClick={() => onGithub('install')} className={button}>Install Genie on {notInstalled.account}…</Button> : null}
+                {needsApproval ? <Button size="xs" type="button" data-action="github-approve" onClick={() => onGithub({ approve: needsApproval.installationId })} className={button}>Approve on GitHub…</Button> : null}
+                <Button size="xs" labelClassName="contents" type="button" data-action="open-workspace" onClick={onOpen} className="flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)]"><Icon name="check" size="xs" />Open workspace</Button>
             </div>
         </div>
     );

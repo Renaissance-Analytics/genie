@@ -25,6 +25,7 @@ import { MobilePair } from '../src/renderer/components/MobileShell.js';
 import { PairPrompt } from '../src/renderer/components/PairPrompt.js';
 import { Sidebar } from '../src/renderer/components/Sidebar.js';
 import type { RemoteSection } from '../src/renderer/features.js';
+import { controlByText } from './helpers/control-markup.js';
 
 const g = globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean };
 let host: HTMLDivElement;
@@ -144,7 +145,9 @@ describe('the phone while it waits', () => {
         expect(html).toMatch(/data-mobile-waiting/);
         expect(html).toContain('Press Allow on alphar:7421 to finish pairing');
         expect(html).toContain('1:30 left');
-        expect(html).toMatch(/<button[^>]*disabled[^>]*>Waiting for Allow…<\/button>/);
+        const waiting = controlByText(html, 'Waiting for Allow…');
+        expect(waiting).toMatchObject({ tag: 'button', fancy: true });
+        expect(waiting!.open).toMatch(/\sdisabled=""/);
     });
 
     it('a denial is shown as the host said it', () => {

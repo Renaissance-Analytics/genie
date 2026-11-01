@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { pickerStart, workspaceFolderName } from '../src/core/add-workspace.js';
 import { carryOverV1, SETTINGS } from '../src/core/settings.js';
 import { AddWorkspaceSource, NewWorkspaceForm } from '../src/renderer/components/AddWorkspaceModal.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * ADD A WORKSPACE THE WAY GENIE 1 DID (the owner, 2026-10-21: "This … is NOT the correct way. Look at Genie 1"; and
@@ -90,10 +91,10 @@ describe('New workspace', () => {
         const empty = renderToStaticMarkup(NewWorkspaceForm({ ...base, parent: 'C:\\_Projects' }));
         expect(empty).toContain('Workspace name');
         expect(empty).toMatch(/value="C:\\_Projects"/);
-        expect(empty).toMatch(/data-action="create-workspace"[^>]*disabled=""/);
+        expect(control(empty, 'data-action="create-workspace"')!.open).toMatch(/\sdisabled=""/);
         const named = renderToStaticMarkup(NewWorkspaceForm({ ...base, name: 'Acme Storefront', parent: 'C:\\_Projects' }));
         expect(named).toContain('Lands at C:\\_Projects\\acme-storefront.agi');
-        expect(named).not.toMatch(/data-action="create-workspace"[^>]*disabled=""/);
+        expect(control(named, 'data-action="create-workspace"')!.open).not.toMatch(/\sdisabled=""/);
     });
 
     it('with no folder yet it asks for one; Browse is there; a refusal shows in the form', () => {
@@ -101,7 +102,7 @@ describe('New workspace', () => {
         expect(html).toContain('Pick the folder your workspaces live in.');
         expect(html).toContain('data-action="browse-parent"');
         expect(html).toMatch(/data-add-error=""[^>]*>[^<]*C:\\w\\acme\.agi is not empty\./);
-        expect(html).toMatch(/data-action="create-workspace"[^>]*disabled=""/);
+        expect(control(html, 'data-action="create-workspace"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('pressing Create creates; Browse browses (the buttons do what they say)', () => {
