@@ -227,6 +227,8 @@ export class SessionEngineServer {
                 return host.stop(id(), (args[1] as { graceful?: boolean } | undefined) ?? {});
             case 'engine.prompt':
                 return host.prompt(id(), str(1), by(2), (args[3] as Parameters<SessionHost['prompt']>[3]) ?? {});
+            case 'engine.handOff':
+                return host.handOff(id(), str(1), by(2), (args[3] as Parameters<SessionHost['handOff']>[3]) ?? {});
             case 'engine.promptWith': {
                 const wire = Array.isArray(args[2]) ? (args[2] as WireAttachment[]) : [];
                 const attachments = wire.map((a) => ({ name: a.name, type: a.type, bytes: new Uint8Array(Buffer.from(a.b64, 'base64')) }));
@@ -382,6 +384,9 @@ export class SessionEngineServer {
             refusal: host.refusals.get(id) ?? null,
             unusableThreadId: host.unusableThreadIds.get(id) ?? null,
             models: host.modelCaps(id),
+            deliverable: host.deliverable(id),
+            inTurn: host.inTurn(id),
+            queued: [...host.queuedPromptIds(id)],
         };
     }
 

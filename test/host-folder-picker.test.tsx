@@ -11,6 +11,7 @@ import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { HostPathPickerForm, newFolderHandler, PickerNav } from '../src/renderer/components/HostPathPicker.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE FOLDER PICKER GOES ANYWHERE AND MAKES A FOLDER (the owner, 2026-10-22: "I am unable to create a folder or navigate
@@ -168,9 +169,9 @@ describe('the picker — Up, the roots, a typed path, New folder', () => {
 
     it('Up is disabled at the root — there is nothing above it (CONTROL: enabled anywhere else, above)', () => {
         const html = renderToStaticMarkup(<HostPathPickerForm {...base} mode="directory" initialPath="/" />);
-        expect(html).toMatch(/data-action="picker-up"[^>]*disabled=""/);
+        expect(control(html, 'data-action="picker-up"')!.open).toMatch(/\sdisabled=""/);
         const below = renderToStaticMarkup(<HostPathPickerForm {...base} mode="directory" initialPath="/home" />);
-        expect(below).not.toMatch(/data-action="picker-up"[^>]*disabled=""/);
+        expect(control(below, 'data-action="picker-up"')!.open).not.toMatch(/\sdisabled=""/);
     });
 
     it('the roots are one click each: the drives on Windows, `/` elsewhere', () => {

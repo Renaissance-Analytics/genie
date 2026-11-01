@@ -85,7 +85,7 @@ interface Replica {
     ledgerReadAt: number;
 }
 
-const EMPTY_VIEW: EngineAgentView = { probe: null, runOf: null, promptable: null, lastTurnEnd: null, turns: 0, turnsEndedThisRun: 0, recentStderr: [], refusal: null, unusableThreadId: null, models: { state: false, switch: false } };
+const EMPTY_VIEW: EngineAgentView = { probe: null, runOf: null, promptable: null, lastTurnEnd: null, turns: 0, turnsEndedThisRun: 0, recentStderr: [], refusal: null, unusableThreadId: null, models: { state: false, switch: false }, deliverable: null, inTurn: false, queued: [] };
 const EMPTY_GLOBAL: EngineGlobalView = { startedIds: [], heldLogins: [], signedOutProviders: [], pausedProviders: [], pausedAgents: {}, signedOutAgents: {}, designLoginAgents: [] };
 const NO_ROWS: readonly TimedEvent[] = [];
 
@@ -403,6 +403,19 @@ export class SessionEngineClient {
         return this.#view(agentId).promptable;
     }
 
+    /** The inbox push's gate (#1412): the run when a notice may be delivered now, else null — the host's answer, as pushed. */
+    deliverable(agentId: AgentId): number | null {
+        return this.#view(agentId).deliverable;
+    }
+
+    inTurn(agentId: AgentId): boolean {
+        return this.#view(agentId).inTurn;
+    }
+
+    hasQueuedPrompt(agentId: AgentId, id: string): boolean {
+        return this.#view(agentId).queued.includes(id);
+    }
+
     lastTurnEnd(agentId: AgentId): EngineAgentView['lastTurnEnd'] {
         return this.#view(agentId).lastTurnEnd;
     }
@@ -450,6 +463,14 @@ export class SessionEngineClient {
 
     prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): Promise<boolean> {
         return this.#value('engine.prompt', [agentId, text, by, context], false);
+    }
+
+    /**
+     * The typed-input path (#1412): the host's `{ queued }` or null. Its effect — a held prompt among them — is in the
+     * replica when this answers (the host pushes state before answers).
+     */
+    handOff(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): Promise<{ queued: string | null } | null> {
+        return this.#value<{ queued: string | null } | null>('engine.handOff', [agentId, text, by, context], null);
     }
 
     promptWith(agentId: AgentId, text: string, attachments: readonly Attachment[], by: string | null = 'you'): Promise<{ ok: true } | { ok: false; reason: string | null }> {

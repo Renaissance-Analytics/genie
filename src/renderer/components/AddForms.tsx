@@ -1,6 +1,6 @@
 import { PathBrowse } from './HostPathPicker.js';
 import { useState } from 'react';
-import { Input } from '@particle-academy/react-fancy';
+import { Button, Input } from '@particle-academy/react-fancy';
 import { workspaceLabel } from '../../core/workspace-label.js';
 import type { KnowledgeForm, Problem, ServiceForm, SiteFormDefaults, SiteMode } from '../../core/forms.js';
 import { CUSTOM_KINDS, DEFAULT_CUSTOM_NAME, parseEnvLines, SERVICE_CATALOG } from '../../core/services.js';
@@ -109,8 +109,8 @@ export function AddSiteForm({ defaults, problems, onSubmit, onCancel, phpVersion
                 Single-page app — serve index.html for unknown paths
             </label>
             <div className="flex gap-2">
-                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">{submitLabel}</button>
-                <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
+                <Button size="xs" type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">{submitLabel}</Button>
+                <Button size="xs" type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</Button>
             </div>
         </form>
     );
@@ -245,14 +245,14 @@ export function AddServiceForm({ defaults, problems, consent, workspaceName, onS
             {consent ? (
                 <div data-consent className="rounded-xl border border-[var(--warning)] p-3 text-sm">
                     <p>{consent.note}</p>
-                    <button type="submit" name="consent" value="pull" className="mt-2 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">
+                    <Button size="xs" type="submit" name="consent" value="pull" className="mt-2 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">
                         Pull {consent.image} and add
-                    </button>
+                    </Button>
                 </div>
             ) : null}
             <div className="flex gap-2">
-                <button type="submit" value="add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add engine</button>
-                <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
+                <Button size="xs" type="submit" value="add" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add engine</Button>
+                <Button size="xs" type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</Button>
             </div>
         </form>
     );
@@ -314,8 +314,8 @@ export function AddKnowledgeForm({ defaults, problems, workspaces, onSubmit, onC
                 </select>
             </Row>
             <div className="flex gap-2">
-                <button type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add memory</button>
-                <button type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</button>
+                <Button size="xs" type="submit" className="rounded-lg bg-[var(--primary)] px-3 py-1.5 text-sm text-white">Add memory</Button>
+                <Button size="xs" type="button" onClick={onCancel} className="rounded-lg border border-[var(--border-1)] px-3 py-1.5 text-sm">Cancel</Button>
             </div>
         </form>
     );

@@ -286,6 +286,46 @@ describe('a long patch is cut into frames (the window never parses megabytes in 
     });
 });
 
+describe('the inbox push reads (#1412): deliverable, inTurn, the queue, and the hand-off', () => {
+    it('mid-turn, a hand-off is held: the replica reads it queued as the host does, then delivered at the turn\'s end', async () => {
+        const { client } = await window();
+        const r = record();
+        const events = await started(client, r);
+        expect(client.deliverable(r.id)).toBe(host.deliverable(r.id));
+        expect(client.inTurn(r.id)).toBe(false);
+        // A turn in flight.
+        expect(await client.prompt(r.id, 'work', 'you')).toBe(true);
+        await settle();
+        expect(client.inTurn(r.id)).toBe(host.inTurn(r.id));
+        expect(client.inTurn(r.id)).toBe(true);
+        expect(client.deliverable(r.id)).toBe(host.deliverable(r.id));
+        // The hand-off answers what the host answered, and its held prompt is in the replica when the answer lands.
+        const handed = await client.handOff(r.id, 'mail arrived', 'genie', { retold: true });
+        expect(handed).not.toBeNull();
+        const queued = handed!.queued;
+        if (queued !== null) {
+            expect(client.hasQueuedPrompt(r.id, queued)).toBe(true);
+            expect(host.hasQueuedPrompt(r.id, queued)).toBe(true);
+        }
+        // The turn ends: the held prompt goes to the provider, and the replica stops reading it as held.
+        events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+        await settle();
+        if (queued !== null) expect(client.hasQueuedPrompt(r.id, queued)).toBe(host.hasQueuedPrompt(r.id, queued));
+        expect(client.inTurn(r.id)).toBe(host.inTurn(r.id));
+        expect(client.deliverable(r.id)).toBe(host.deliverable(r.id));
+    });
+
+    it('a hand-off to an agent with no session answers null, as the host does', async () => {
+        const { client } = await window();
+        const r = record();
+        expect(host.handOff(r.id as AgentId, 'x')).toBeNull();
+        expect(await client.handOff(r.id, 'x')).toBeNull();
+        expect(client.deliverable(r.id)).toBeNull();
+        expect(client.inTurn(r.id)).toBe(false);
+        expect(client.hasQueuedPrompt(r.id, 'nope')).toBe(false);
+    });
+});
+
 describe('the host asks the window, and tells it', () => {
     it('an agent\'s MCP servers are prepared BY THE WINDOW (its secrets) before its driver starts', async () => {
         const asked: string[] = [];

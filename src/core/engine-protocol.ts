@@ -26,6 +26,8 @@ export const ENGINE_METHODS = [
     'engine.start',
     'engine.stop',
     'engine.prompt',
+    // The typed-input path the inbox push uses (#1412): `{ queued }` or null, as SessionHost.handOff answers.
+    'engine.handOff',
     'engine.promptWith',
     'engine.cancel',
     'engine.deliver',
@@ -91,6 +93,10 @@ export interface EngineAgentView {
     readonly unusableThreadId: string | null;
     /** Whether `modelState` / `switchModel` would answer rather than `null` (the session host's `modelCaps`). */
     readonly models: { readonly state: boolean; readonly switch: boolean };
+    /** What the inbox push reads (#1412): the run when a notice may be delivered now, a turn in flight, the held prompts. */
+    readonly deliverable: number | null;
+    readonly inTurn: boolean;
+    readonly queued: readonly string[];
 }
 
 /** `engine.agent`: one agent changed. `rows` = this run's rows; `ledger` only while the window watches it. */

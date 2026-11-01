@@ -89,12 +89,12 @@ export function ShareWorkspaceForm({ workspaceName, links, minted, problem, busy
                             <span className="font-medium">Reaches</span>
                             <Select aria-label="Reaches" list={[{ value: 'workspace', label: `${workspaceName} only` }, { value: 'whole', label: 'The whole workstation' }]} value={whole ? 'whole' : 'workspace'} onValueChange={(v) => setWhole(v === 'whole')} />
                         </label>
-                        <button type="button" data-action="mint-share-link" disabled={busy} onClick={() => { linkCopy.reset(); onMint({ capability, expiresInDays: days, whole }); }} className={button}>Create link</button>
+                        <Button size="xs" type="button" data-action="mint-share-link" disabled={busy} onClick={() => { linkCopy.reset(); onMint({ capability, expiresInDays: days, whole }); }} className={button}>Create link</Button>
                     </div>
                     {minted?.url ? (
                         <div data-share-minted="" className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-1)] px-3 py-2">
                             <code className="min-w-0 flex-1 truncate font-mono text-xs">{minted.url}</code>
-                            <button type="button" data-action="copy-share-link" data-copy-state={linkCopy.state} onClick={() => { void linkCopy.copy(minted.url!); }} className={button}>{copyWords(linkCopy.state, 'Copy')}</button>
+                            <Button size="xs" type="button" data-action="copy-share-link" data-copy-state={linkCopy.state} onClick={() => { void linkCopy.copy(minted.url!); }} className={button}>{copyWords(linkCopy.state, 'Copy')}</Button>
                             <CopyAnnounce state={linkCopy.state} />
                             <span className="basis-full text-xs text-[var(--fg-3)]">Shown this once — Tynn keeps no copy you can read back. {linkWords(minted)}.</span>
                         </div>

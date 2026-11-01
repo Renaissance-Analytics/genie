@@ -1,4 +1,4 @@
-import { FileBrowser, Modal, type FileEntry } from '@particle-academy/react-fancy';
+import { Button, FileBrowser, Modal, type FileEntry } from '@particle-academy/react-fancy';
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { hostFolder, parentOf, rootLabel, rootsOf } from '../../core/host-path.js';
 import type { HostListing, HostMade } from '../../main/host-fs.js';
@@ -37,13 +37,13 @@ export function PickerNav({ path, roots, onNavigate }: { readonly path: string; 
     const up = parentOf(path);
     return (
         <div data-picker-path={path} className="flex items-center gap-1 text-xs">
-            <button type="button" data-action="picker-up" disabled={up === null} title={up === null ? 'Already at the top' : `Up to ${up}`} onClick={() => { if (up !== null) onNavigate(up); }} className={button}>
+            <Button size="xs" type="button" data-action="picker-up" disabled={up === null} title={up === null ? 'Already at the top' : `Up to ${up}`} onClick={() => { if (up !== null) onNavigate(up); }} className={button}>
                 ↑ Up
-            </button>
+            </Button>
             {roots.map((root) => (
-                <button key={root} type="button" data-picker-root={root} title={root === '/' ? 'The top of this machine' : `The ${rootLabel(root)} drive`} onClick={() => onNavigate(root)} className={`${button} font-mono${hostFolder(path) === root ? ' bg-[var(--bg-2)]' : ''}`}>
+                <Button size="xs" key={root} type="button" data-picker-root={root} title={root === '/' ? 'The top of this machine' : `The ${rootLabel(root)} drive`} onClick={() => onNavigate(root)} className={`${button} font-mono${hostFolder(path) === root ? ' bg-[var(--bg-2)]' : ''}`}>
                     {rootLabel(root)}
-                </button>
+                </Button>
             ))}
         </div>
     );
@@ -122,8 +122,8 @@ export function HostPathPickerForm({ mode, listDir, mkdir, initialPath = '/', in
             </div>
             <div className="flex items-center gap-2">
                 <span data-picked="" className="min-w-0 flex-1 truncate font-mono text-xs text-[var(--fg-3)]">{picked.length === 0 ? (mode === 'directory' ? 'Pick a folder' : 'Pick a file') : picked.join(', ')}</span>
-                <button type="button" data-action="cancel-pick" onClick={onCancel} className={button}>Cancel</button>
-                <button type="button" data-action="pick-path" disabled={picked.length === 0} onClick={() => onPick(multiple ? picked : picked[0]!)} className={button}>Choose</button>
+                <Button size="xs" type="button" data-action="cancel-pick" onClick={onCancel} className={button}>Cancel</Button>
+                <Button size="xs" type="button" data-action="pick-path" disabled={picked.length === 0} onClick={() => onPick(multiple ? picked : picked[0]!)} className={button}>Choose</Button>
             </div>
         </div>
     );
@@ -167,7 +167,7 @@ export function PathBrowse({ name, root }: { readonly name: string; readonly roo
     if (!pick || root === null) return null;
     return (
         <>
-            <button
+            <Button size="xs"
                 type="button"
                 data-action="browse-path"
                 className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs hover:bg-[var(--bg-2)]"
@@ -190,7 +190,7 @@ export function PathBrowse({ name, root }: { readonly name: string; readonly roo
                 }}
             >
                 Browse…
-            </button>
+            </Button>
             {problem ? <span data-problem="browse" className="text-xs text-[var(--danger)]">{problem}</span> : null}
         </>
     );

@@ -89,16 +89,26 @@ describe('a start on the real tree: no synchronous reading; the spawn’s own pr
         const t = asyncTable();
         const log: string[] = [];
         const spawned: Array<readonly ProcessInfo[]> = [];
-        const s = session(t, claudeLike(t, 910_000, log).factory, (m) => spawned.push(m));
+        /*
+         * WAITED FOR, NOT SLEPT ON (2026-11-01). The reading lands after two timers (the shared reader's pump, the table's
+         * 5 ms), and this waited a fixed 50 ms for it: on omarchy-test under the full suite (load 9–13 on 2 vCPU) the
+         * timers ran late and `spawned` was still empty — a red that named nothing about a spawn. Now the test waits for
+         * the reading itself; one that never lands fails by name at the deadline.
+         */
+        let landed!: () => void;
+        const reading = new Promise<void>((r) => { landed = r; });
+        const s = session(t, claudeLike(t, 910_000, log).factory, (m) => { spawned.push(m); landed(); });
         s.start();
         // Another agent's provider, created by main right after this start returned (the boot burst).
         t.child(920_000, 'other-supervisor.exe');
         expect(t.syncReads()).toBe(0);
-        await new Promise((r) => setTimeout(r, 50));
+        let deadline: ReturnType<typeof setTimeout> | undefined;
+        const never = new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error('the reading after the start never landed (10 s)')), 10_000); });
+        try { await Promise.race([reading, never]); } finally { clearTimeout(deadline); }
         expect(t.syncReads()).toBe(0);
         expect(t.asyncReads()).toBeGreaterThan(0);
-        expect(spawned.at(-1)?.map((p) => p.pid).sort()).toEqual([910_000, 910_001]);
-    });
+        expect(spawned.at(-1)?.map((p) => p.pid).sort(), 'the spawn’s own processes, from the reading after').toEqual([910_000, 910_001]);
+    }, 30_000);
 
     it('a graceful stop reads off the loop, closes stdin, verifies the end — and never touches the sibling', async () => {
         const t = asyncTable();

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { workstationOpenFrom } from '../src/core/tynn-sign-in.js';
 import { listShareLinks, mintShareLink, revokeShareLink, NOT_REGISTERED } from '../src/main/tynn-share-links.js';
 import { ShareWorkspaceForm } from '../src/renderer/components/ShareWorkspaceModal.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * SHARING THROUGH TYNN (Tynn #839; Genie 1's workspace-share-links.ts + ShareWorkspaceModal, v1 inventory rows 111-116).
@@ -106,7 +107,8 @@ describe('the Share dialog (its form; Fancy’s Modal portals, so it is not rend
         expect(html).toContain('https://tynn.example.com/i/abc');
         expect(html).toContain('data-action="copy-share-link"');
         // Copied through main, the outcome announced beside it (clipboard-buttons.test).
-        expect(html).toMatch(/data-action="copy-share-link"[^>]*>Copy<\/button><span data-copy-announce=""[^>]*role="status"/);
+        expect(control(html, 'data-action="copy-share-link"')).toMatchObject({ tag: 'button', fancy: true, text: 'Copy' });
+        expect(html).toMatch(/data-action="copy-share-link"[\s\S]*?<\/button><span data-copy-announce=""[^>]*role="status"/);
     });
 
     it('the links that reach it, each revocable; a problem in words', () => {

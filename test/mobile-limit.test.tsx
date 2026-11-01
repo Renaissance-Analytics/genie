@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AgentDetail } from '../src/renderer/bridge.js';
 import { MobileAgent } from '../src/renderer/components/MobileShell.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * A HELD AGENT, ON THE PHONE (Tynn #794, story #287; the owner: the phone is "the minimum needed to respond to agents and
@@ -26,7 +27,7 @@ describe('the phone’s agent page, held by the rate limit', () => {
         const html = render(detail({ state: 'paused', resumeAtMs: RESUMES }));
         expect(html).toContain('data-mobile-limit');
         expect(html).toMatch(/title="Resumes [A-Z][a-z]+day, [A-Z][a-z]+ \d{1,2}, \d{4} at \d{1,2}:\d\d [AP]M"[^>]*>Paused · rate limit · resumes \d{1,2}:\d\d [AP]M</);
-        expect(html).toMatch(/data-action="resume-limit"[^>]*>Resume now</);
+        expect(control(html, 'data-action="resume-limit"')).toMatchObject({ tag: 'button', fancy: true, text: 'Resume now' });
     });
 
     it('on the no-reset backoff: the next try; needing the person: says so (COUNTED: one Resume now each)', () => {

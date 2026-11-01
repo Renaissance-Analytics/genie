@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { addTab, agentTabsOf, tabStrip, type TabsState } from '../src/core/workspace-tabs.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
+import { control } from './helpers/control-markup.js';
+import { controlByText } from './helpers/control-markup.js';
 
 /**
  * AGENTS OPEN INSIDE THEIR WORKSPACE (Tynn #805, part 2; the owner chose A, 2026-10-17: "agents open inside the
@@ -59,7 +61,9 @@ describe('the strip, drawn', () => {
         expect(html).not.toMatch(/data-workspace-tab="agent:a2"[^>]*data-current="true"/);
         expect(html.match(/data-current="true"/g)).toHaveLength(1);
         for (const v of ['home', 'settings']) expect(html).toContain(`data-workspace-tab="${v}"`);
-        expect(html).toMatch(/data-workspace-tab="tab:[^"]+"[^>]*>Ops</);
+        const ops = controlByText(html, 'Ops');
+        expect(ops).toMatchObject({ tag: 'button', fancy: true });
+        expect(ops!.open).toMatch(/data-workspace-tab="tab:[^"]+"/);
         // Each agent tab says its state; none is closed away (it is the agent's only door).
         expect(html).not.toContain('data-close-agent-tab');
         expect(html).toMatch(/data-workspace-tab="agent:a1"[\s\S]*?data-agent-state="working"/);
@@ -70,7 +74,8 @@ describe('the strip, drawn', () => {
         expect(html).toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
         expect(html.match(/data-current="true"/g)).toHaveLength(1);
         // The first tab is the workspace DASHBOARD, and says so (the owner: not "Agents").
-        expect(html).toMatch(/data-workspace-tab="home"[^>]*>Dashboard</);
+        expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
         expect(html).not.toMatch(/>Agents</);
     });
 });

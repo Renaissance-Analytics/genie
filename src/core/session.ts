@@ -364,11 +364,13 @@ export class AgentSession {
     /** A tool was refused for want of Claude Design's `/design-login` (core/design-login.ts): the login window fixes it. */
     #designLogin = false;
     /**
-     * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there: the provider queues it (Claude
-     * runs it as its own turn after the current one; Codex refuses a second prompt in flight). Its marker is written
-     * when ITS turn starts — when the one before it ends. Writing it at send time numbered it as the running turn, so
-     * the owner's record read `10, 10, 10, 10, 11, 12, 14, 14…`: the same number per message sent mid-turn, and a gap for
-     * every queued turn that ended without a marker (the owner, 2026-10-14).
+     * ONE PROMPT, ONE TURN. A prompt sent while a turn runs does not start a turn there. Claude Code takes it and usually
+     * FOLDS it into the running turn (measured, the 2026-10-20 note in `onTurnEnd`), so no turn of its own may ever come;
+     * Codex refuses a second prompt in flight, and `deliver` holds it for the turn's end (`#afterTurn`). A marker for it
+     * is written only when a turn of its own starts: its first activity after the running turn ends, or a silent turn
+     * end. Writing it at send time numbered it as the running turn, so the owner's record read `10, 10, 10, 10, 11, 12,
+     * 14, 14…`: the same number per message sent mid-turn, and a gap for every one that never got a turn of its own (the
+     * owner, 2026-10-14).
      */
     #inTurn = false;
     /** Who sent each prompt still waiting for its turn (`by`, as `prompt` takes it), oldest first. */
@@ -538,14 +540,6 @@ export class AgentSession {
     }
 
     /**
-     * Whether the session can take a turn NOW — Genie's own reading, the same for every provider: alive, started (the
-     * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
-     * from output), nothing parked on a person, and not broken or stopped. What the inbox push waits for.
-     *
-     * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
-     * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
-     */
-    /**
      * A TURN IN FLIGHT, by Genie's own record (a prompt went in and its end has not come) — not `turnState: 'working'`,
      * which a session that is still STARTING reads as too. What a Restart asks before it tells the agent its turn was
      * cut (genie#1238): a restart pressed while the run was only coming up cut nothing.
@@ -554,8 +548,27 @@ export class AgentSession {
         return this.#inTurn;
     }
 
+    /**
+     * Whether the session can take a NEW turn now — Genie's own reading, the same for every provider: alive, started (the
+     * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
+     * from output), nothing parked on a person, and not broken or stopped. What the plan keep-alive waits for.
+     *
+     * Deliberately not `turnState === 'idle'`. A session just started reads `working` until a turn of its own ends — with
+     * no turn running — so a notice for an agent started and mailed at once waited for somebody else to prompt it (B26).
+     */
     get promptable(): boolean {
         return this.running && !this.#starting && !this.#inTurn && this.#approval === null && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+    }
+
+    /**
+     * Whether a message handed over now reaches the agent at its NEXT STEP, the way the person's typed message does
+     * (`deliver`): alive, started, not held on a limit, not broken or stopped. A turn in flight does not stop it — Claude
+     * folds the message into the running turn; Codex has it held and sent when the turn ends. What the inbox push waits
+     * for (genie#1411; the owner, 2026-11-01: "inbox nudges should queue up and post to the agent as soon as possible just
+     * like user input"). Held is excluded: a notice is Genie's to tell again, so it waits out the limit untold, not queued.
+     */
+    get deliverable(): boolean {
+        return this.running && !this.#starting && !this.#held && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
     }
 
     /** `null` until the provider reports one. It is what a later resume is keyed on. */
@@ -730,28 +743,31 @@ export class AgentSession {
      * A MESSAGE FOR THE AGENT THAT MUST ARRIVE: sent now when the provider takes it (Claude reads it at its next step);
      * held for the end of the turn when it refuses a prompt mid-turn (Codex), then sent in order. An approval's note
      * (item 16) — from the card here, or from a Genie approval answered on the Deck (main/feature-ipc.ts).
+     *
+     * Answers what became of it: `null` = the provider has it now; an id = it is HELD (`#afterTurn`, `hasQueuedPrompt`)
+     * and goes when a turn ends, the limit resets or the driver is ready.
      */
-    deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+    deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.running) throw new Error('session is not running');
         if (this.#afterTurn.length === 0 && !this.#starting) {
             try {
-                this.prompt(text, by, sent, context);
-                return;
+                return this.prompt(text, by, sent, context);
             } catch (error) {
                 // Only a refusal DURING a turn can wait for its end. An idle driver failure must reach the caller.
                 if (!this.#inTurn) throw error;
             }
         }
-        this.#queuePrompt(text, by, sent, context);
+        return this.#queuePrompt(text, by, sent, context);
     }
 
-    /** One queue holds input waiting for either a turn or a provider pause. */
-    #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): void {
+    /** One queue holds input waiting for either a turn or a provider pause. Answers the held prompt's id. */
+    #queuePrompt(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null, context: PromptContext): string {
         const id = randomUUID();
         this.#afterTurn.push({ id, text, by, sent, context });
         const row = promptRow(text, by, sent, context);
         if (row.kind === 'message') void this.#emitRow({ ...row, pending: { id, content: sent?.content ?? null } });
         this.#changed();
+        return id;
     }
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
@@ -771,6 +787,11 @@ export class AgentSession {
             this.#afterTurn.shift();
             void this.#emitRow({ kind: 'prompt_delivery', id: next.id, status: 'sent' });
         }
+    }
+
+    /** The ids of the prompts held for the turn's end, in order — what the agent host tells a window (the host split). */
+    get queuedPromptIds(): readonly string[] {
+        return this.#afterTurn.map((p) => p.id);
     }
 
     hasQueuedPrompt(id: string): boolean {
@@ -797,10 +818,15 @@ export class AgentSession {
         this.#changed();
     }
 
+    /**
+     * What was held and can no longer go in this run becomes a DRAFT the next Restart owes (`deliverOwed`). Except a
+     * Genie notice (`context.retold`): its sender tells it again on its own, so kept as owed it would arrive twice — it is
+     * discarded instead, and the chat drops it (genie#1411).
+     */
     #leaveQueuedAsDrafts(): void {
         const waiting = this.#afterTurn;
         this.#afterTurn = [];
-        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: 'undelivered' });
+        for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
     }
 
     start(): void {
@@ -1129,14 +1155,13 @@ export class AgentSession {
     /**
      * `by` is who started the turn when the caller knows (`you` from the composer, `genie` for a reminder or a
      * handoff ask, a peer's name) — written into the ledger as the turn's marker, and `null` when nobody said.
+     * Answers `null` when the provider took it, or the id it is held under (held on a limit, or still starting).
      */
-    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): void {
+    prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
-        if (this.#held || this.#starting) {
-            this.#queuePrompt(text, by, sent, context);
-            return;
-        }
+        if (this.#held || this.#starting) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
+        return null;
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
@@ -1775,6 +1800,11 @@ export class AgentSession {
 /** What a prompt's ledger row carries beyond its text: a Genie notice's mail (beta.33 item 18). */
 export interface PromptContext {
     readonly mail?: readonly NoticeMail[] | undefined;
+    /**
+     * Its sender tells it again on its own if it does not go (the inbox push, from its book): held and left undelivered,
+     * it is discarded, never kept as a draft the next Restart owes (`#leaveQueuedAsDrafts`). Never written to the row.
+     */
+    readonly retold?: boolean | undefined;
 }
 
 /**

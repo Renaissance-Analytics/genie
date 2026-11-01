@@ -130,16 +130,20 @@ setInterval(() => {}, 1 << 30);
     const listeners = new Set<(id: AgentId) => void>();
     const hostPort: InboxPushPorts['host'] = {
         subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
-        promptable: (id) => (idle.has(id) ? running.get(id) ?? null : null),
+        // As SessionHost: a running agent takes a notice mid-turn too (genie#1411); this stand-in folds it, as Claude does.
+        deliverable: (id) => running.get(id) ?? null,
         runOf: (id) => running.get(id) ?? null,
         turnsEndedThisRun: (id) => ended.get(id) ?? 0,
+        inTurn: (id) => running.has(id) && !idle.has(id),
+        hasQueuedPrompt: () => false,
         probe: () => null,
-        prompt: (id, text) => { prompts.push([id, text]); idle.delete(id); return true; },
+        handOff: (id, text) => { prompts.push([id, text]); idle.delete(id); return { queued: null }; },
     };
     const start = (id: string) => { running.set(id, (running.get(id) ?? 0) + 1); idle.add(id); for (const l of listeners) l(id as AgentId); };
     wireInboxPush({
         inbox: composed.inbox, host: hostPort,
         reminders: (input) => composed.inboxReminders(input), settled: (id, ok) => composed.inboxNoticeSettled(id, ok),
+        cumulative: true,
         wake: (id) => { woken.push(id); start(id); return true; },
         // Main's own app policy (genie#1379), the same function main calls.
         ...appMailPushPorts({ modeOf: (id) => roster.find((r) => r.id === id)?.mode, now: () => Date.now(), schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }),

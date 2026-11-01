@@ -11,13 +11,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
  *
  * The gauge: a spawner that holds its thread 5 s per call (a CreateProcess that takes 5 s), and main's heartbeat
  * (a 10 ms timer) while Docker's state is read through Genie's real runner and driver. In-process, main stops for the
- * full 5 s per call. Through the spawn host, the 5 s are the child's, and main's heartbeat stays under 50 ms.
+ * full 5 s per call (it read 4,990 ms on the old code). Through the spawn host, the 5 s are the child's.
+ *
+ * THE BAR IS A FIFTH OF THE SPAWN (1 s), not 50 ms. What this test names is main held FOR the spawn: about 5,000 ms.
+ * Under the full suite on omarchy-test (2 vCPU, every worker busy) the gauge read 57 and 122 ms on the fixed code — the
+ * OS running the worker's thread and not main's, which no heartbeat can tell from a hold — and failed a 50 ms bar that
+ * said nothing about a spawn. 1 s is 8x the worst jitter seen and 5x under the failure. The CONTROL below keeps the bar
+ * honest: the same gauge, with the spawn made on main, must read most of the 5 s, in every run.
  *
  * The test wires the spawn host the way main.ts does when the module exists; a tree without it runs in-process (and
  * reads red, for the reason this test names: main held).
  */
 
 const SLOW_MS = 5_000;
+/** Main held for longer than this was held FOR the spawn (a fifth of it); under it is the machine's scheduling. */
+const HELD_BAR_MS = SLOW_MS / 5;
 
 /** Hold this thread `ms`, the way a synchronous CreateProcess does. */
 function hold(ms: number): void {
@@ -91,7 +99,7 @@ afterEach(async () => {
 });
 
 describe('main never waits on a spawn (genie#1397)', () => {
-    it('Docker state read through the runner: main\'s heartbeat stays under 50 ms while each spawn takes 5 s in the spawn host', async () => {
+    it('Docker state read through the runner: main\'s heartbeat is never held for the spawn (under a fifth of it) while each spawn takes 5 s in the spawn host', async () => {
         const host = (await import('../src/main/spawn-host-client.js').catch(() => null)) as HostModule | null;
         const runnerModule = await import('../src/main/toolchain-runner.js');
         if (host) {
@@ -110,10 +118,25 @@ describe('main never waits on a spawn (genie#1397)', () => {
         const worst = await heartbeatDuring(async () => { answer = await driver.status('genie-postgres-17'); });
         // The answer is Docker's (the 5 s spawner's), read through the real driver: the call really went through.
         expect(answer).toEqual({ state: 'running', since: '2026-11-01T00:00:00Z' });
-        expect(worst, `main was held ${worst} ms`).toBeLessThan(50);
+        expect(worst, `main was held ${worst} ms`).toBeLessThan(HELD_BAR_MS);
     }, 30_000);
 
-    it("a supervised process (a site's php-cgi) whose pty takes 5 s to open: main stays under 50 ms; it runs, its pid and output arrive, a stop ends it", async () => {
+    it('CONTROL: the same gauge, with the spawn made on main (the fix removed: the runner in-process), reads the 5 s', async () => {
+        // The positive control for the bar above: what the gauge reads for the failure this file names. If this ever
+        // reads under the bar, a pass above means nothing.
+        const host = (await import('../src/main/spawn-host-client.js').catch(() => null)) as HostModule | null;
+        host?.routeExecThroughSpawnHost(null);
+        const runnerModule = await import('../src/main/toolchain-runner.js');
+        const { ServiceDriver, dockerRunnerOver } = await import('../src/main/service-driver.js');
+        const driver = new ServiceDriver(dockerRunnerOver(runnerModule.execFileRunner));
+        let answer: unknown = null;
+        const worst = await heartbeatDuring(async () => { answer = await driver.status('genie-postgres-17'); });
+        expect(answer).toEqual({ state: 'running', since: '2026-11-01T00:00:00Z' });
+        console.log(`GAUGE: main held ${worst} ms by a ${SLOW_MS} ms spawn made on main (bar ${HELD_BAR_MS} ms)`);
+        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms spawn on main`).toBeGreaterThan(SLOW_MS / 2);
+    }, 30_000);
+
+    it("a supervised process (a site's php-cgi) whose pty takes 5 s to open: main is never held for it (under a fifth of it); it runs, its pid and output arrive, a stop ends it", async () => {
         const host = (await import('../src/main/spawn-host-client.js').catch(() => null)) as HostModule | null;
         const { ProcessSupervisor } = await import('../src/main/process-supervisor.js');
         type Port = ConstructorParameters<typeof ProcessSupervisor>[0];
@@ -147,7 +170,7 @@ describe('main never waits on a spawn (genie#1397)', () => {
         expect(status!.state).toBe('running');
         expect(supervisor.status('site_acme-fcgi')?.pid).toBe(4242);
         expect(output.join('')).toBe('hello\n');
-        expect(worst, `main was held ${worst} ms`).toBeLessThan(50);
+        expect(worst, `main was held ${worst} ms`).toBeLessThan(HELD_BAR_MS);
         supervisor.stop('site_acme-fcgi');
         expect(supervisor.status('site_acme-fcgi')?.state).toBe('stopped');
     }, 30_000);
