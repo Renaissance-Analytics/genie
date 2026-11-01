@@ -11,7 +11,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # main, plus the long-lived integration branches (next/host-split-tms): the owner, 2026-11-01, wants
+    # them checked like main after every merge, Windows unit included.
+    branches: [main, 'next/**']
   pull_request:
 
 permissions:
