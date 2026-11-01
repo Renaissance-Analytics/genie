@@ -138,7 +138,8 @@ try {
     const codexId = await cdp.evaluate('window.genie.snapshot().then((s) => (s.agents.find((a) => a.provider === "codex") ?? {}).id ?? null)');
     check(typeof codexId === 'string', '11b. the seed left a codex agent to run', String(codexId));
     if (typeof codexId === 'string') {
-        await cdp.evaluate(`window.genie.openAgent(${JSON.stringify(codexId)}); true`);
+        // Start (the one restart): opening an agent starts nothing since q_04ce323c.
+        await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
         const end = Date.now() + 30_000;
         let running = null;
         while (Date.now() < end) {

@@ -219,6 +219,11 @@ export function supervisedCommand(deps: SupervisedCommandDeps, run: { processId:
 /** The live sessions, as the runner needs them (main.ts wires the session host). */
 export interface AgentSessionsPort {
     session(agentId: string): { readonly running: boolean; readonly turnState: string; readonly pendingApproval?: unknown } | null;
+    /**
+     * Start an agent that is not running, for a prompt (q_04ce323c: a flow's prompt is work, and work starts it) — main's
+     * start-on-demand, refusing an asleep workspace or the agent cap. `false` = not started. Absent = never started here.
+     */
+    start?(agentId: string): boolean;
     /** This run's ledger rows; their `event` is a stream event. */
     rows(agentId: string): readonly { readonly event: unknown }[];
     prompt(agentId: string, text: string, by: string): boolean;
@@ -250,7 +255,9 @@ export function agentPrompter(deps: AgentPrompterDeps): FlowPorts['promptAgent']
         const who = deps.agent(id);
         const name = who?.name ?? address;
         if (who && deps.asleep(who.workspaceId)) throw new HeldBack(`${name}'s workspace is hibernated; the prompt was not delivered`);
-        const session = deps.sessions.session(id);
+        let session = deps.sessions.session(id);
+        // NOT RUNNING: started for this prompt when the port can (q_04ce323c); its prompt then waits for the start.
+        if ((!session || !session.running) && deps.sessions.start?.(id)) session = deps.sessions.session(id);
         if (!session || !session.running) throw new Error(`${name} is not running; a scheduled prompt has nowhere to go until it is started`);
         if (session.turnState === 'working' || (session.pendingApproval !== null && session.pendingApproval !== undefined)) {
             throw new HeldBack(`${name} is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn`);

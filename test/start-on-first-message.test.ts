@@ -39,8 +39,10 @@ describe('main: opening shows, a message starts', () => {
 
     it('`genie:prompt` (the composer) starts the agent on demand before it delivers', () => {
         const prompt = handler('genie:prompt');
-        expect(prompt).toMatch(/startForWork\(/);
-        expect(prompt.indexOf('startForWork(')).toBeLessThan(prompt.indexOf('promptWith('));
+        expect(prompt).toMatch(/startOnDemand\(record\)/);
+        expect(prompt.indexOf('startOnDemand(')).toBeLessThan(prompt.indexOf('promptWith('));
+        // …and that is the shared rule (main/start-on-demand.ts), not a start of its own.
+        expect(main).toMatch(/const startOnDemand = \(record: AgentRecord\): StartForWork => startForWork\(/);
     });
 
     it('a flow’s prompt can start the agent too (the sessions port flows are given has `start`)', () => {

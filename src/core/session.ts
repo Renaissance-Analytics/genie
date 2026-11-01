@@ -549,6 +549,15 @@ export class AgentSession {
     }
 
     /**
+     * STILL COMING UP: the driver declared a `ready` (Genie's own start always does — the MCP preparation and the
+     * provider's handshake, main/deferred-driver.ts) that has not resolved. What the header and the chat show as
+     * `Starting`, and what a first message waits for (q_04ce323c: start on first message, visibly).
+     */
+    get starting(): boolean {
+        return this.#starting;
+    }
+
+    /**
      * Whether the session can take a NEW turn now — Genie's own reading, the same for every provider: alive, started (the
      * driver's declared `ready`, when it declares one), no turn in flight (Genie's own record, `#inTurn` — never inferred
      * from output), nothing parked on a person, and not broken or stopped. What the plan keep-alive waits for.

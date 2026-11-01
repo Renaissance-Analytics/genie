@@ -55,6 +55,8 @@ export interface LiveSession {
      * turn of the run reads as too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
      */
     inTurn?: boolean | undefined;
+    /** Still coming up (`AgentSession.starting`): `Starting` in the header and the chat. Absent = not reported. */
+    starting?: boolean | undefined;
     /** Epoch ms. `null` when the session never recorded a start. */
     startedAt: number | null;
     /**

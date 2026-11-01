@@ -1846,10 +1846,8 @@ function DesktopApp({ bridge }: AppProps) {
             }}
             onChatAgent={(id) => setDashboardChat(id)}
             onOpenAgent={(id) => {
-                // Start or reattach, THEN navigate. Reattach is the main process's job and is
-                // idempotent, so arriving at an agent that is already running is not a second
-                // session — §6.2 is explicit, and the alternative is two provider processes
-                // answering as one agent.
+                // OPENING SHOWS IT (q_04ce323c, 2026-11-01): main starts nothing here — a running agent's session is the
+                // one shown, a stopped one stays stopped with its Start, and its first message starts it.
                 resolvedBridge?.openAgent(id);
                 navigate(`genie://agent/${id}?tab=stream`);
             }}
