@@ -100,6 +100,15 @@ describe('every phone screen scrolls inside itself (the document is locked by ge
         });
     }
 
+    for (const [name, el] of SCREENS) {
+        it(`${name}: the top bar clears the status bar and notch (black-translucent + viewport-fit=cover draw the page under them)`, () => {
+            // The installed app on an iPhone draws under the status bar; a ← back or Disconnect at 12 px from the top sits
+            // beneath it, where a tap scrolls-to-top instead of pressing the button.
+            const first = parse(el).firstElementChild!;
+            expect(first.getAttribute('class') ?? '', `${name}: first child of the screen`).toContain('env(safe-area-inset-top)');
+        });
+    }
+
     it('agent chat: what waits on you scrolls in its own capped strip, so a pile of approvals never pushes the composer off the screen', () => {
         const root = parse(SCREENS[1]![1]);
         const waiting = root.querySelector('[data-mobile-waiting]');
