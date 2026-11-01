@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { HostingSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { buttonTexts } from './helpers/control-markup.js';
 
 /**
  * HOSTING → PROCESSES, the surface half. The tab could only list what the supervisor happened to
@@ -23,7 +24,7 @@ function buttonsOf(html: string, id: string): string[] {
     const start = html.indexOf(`data-process="${id}"`);
     expect(start).toBeGreaterThan(-1);
     const end = html.indexOf('</li>', start);
-    return [...html.slice(start, end).matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1]!.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim());
+    return buttonTexts(html.slice(start, end));
 }
 
 describe('the Processes tab', () => {

@@ -57,3 +57,7 @@ export function controlByText(html: string, text: string): ControlMarkup | null 
     }
     return null;
 }
+
+/** Every `<button>`'s visible text, in order (labels sit in react-fancy Button's own span; read via `control`). */
+export const buttonTexts = (html: string): string[] =>
+    [...html.matchAll(/<button\b[^>]*>/g)].map((m) => control(html.slice(m.index), m[0])?.text ?? '');
