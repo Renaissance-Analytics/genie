@@ -1143,14 +1143,10 @@ export class AgentSession {
                 this.#starting = false;
                 this.#changed();
             };
-            ready.then(() => {
-                done();
-                // A prompt queued while it started opens its turn here: announced, so a listener (the board, a flow
-                // waiting for that turn) learns it began — `done` announced the session idle a moment before.
-                const before = this.#inTurn;
-                this.#flushAfterTurn();
-                if (!before && this.#inTurn) this.#changed();
-            }, done);
+            // A prompt queued while it started opens its turn in the flush. That needs no announcement of its own: the
+            // rows it writes (its turn marker, its `prompt_delivery`) are each pushed, the last already reading `working`
+            // — a second push for the same moment only costs the window (genie#1418, batch B).
+            ready.then(() => { done(); this.#flushAfterTurn(); }, done);
         }
         // The turns continue from the record's last, so a restarted agent's next turn is not "Turn 1" again beside the
         // turns it already had.
@@ -1720,9 +1716,11 @@ export class AgentSession {
         // BEFORE ANY TURN OF THIS RUN has ended (a session only started reads idle now, not working), activity is shown as
         // working and opens no marker — what a started session always did: no turn is numbered that Genie cannot place.
         const activity = event.kind === 'think' || event.kind === 'tool' || (event.kind === 'message' && event.speaker === 'agent');
+        // Not announced here: this frame's own row (a reply, a thought, a tool call — every one of them a row, emitted
+        // below in this same call) is pushed and already reads `working`. Announcing it as well was a second push per
+        // first frame (genie#1418, batch B: session-host.test's push count).
         if (this.#turnState === 'idle' && activity && this.#lastTurnEnd === null) {
             this.#turnState = 'working';
-            this.#changed();
         } else if (this.#turnState === 'idle' && activity) {
             // A prompt queued while the last turn ran is credited to this one (it ran as its own turn); none = nobody's.
             void this.#emitRow({ kind: 'turn', n: this.#nextTurn(), by: this.#queued.shift() ?? null });
