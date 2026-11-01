@@ -494,15 +494,14 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
                 ) : preview.kind === 'pdf' ? (
                     <div data-preview="pdf" className="flex flex-col items-center gap-3 p-6 text-center text-[13px] text-[var(--fg-3)]">
                         <Icon name="file-text" size="lg" />
-                        {/* A plain <a>, styled as a button: the URL is a blob: object URL, which react-fancy's Button refuses
-                            (sanitizeHref allows http(s)/mailto/tel/sms/ftp/relative), so its link form would draw a dead button. */}
-                        <a href={preview.url} target="_blank" rel="noreferrer" data-action="open-pdf" className={PRIMARY}>Open {name}</a>
+                        {/* A blob: object URL (createObjectURL, the PWA's https origin): react-fancy 5.72.0+ accepts it in Button's link form. */}
+                        <Button size="xs" href={preview.url} target="_blank" rel="noreferrer" data-action="open-pdf" className={PRIMARY}>Open {name}</Button>
                         <span>It opens in this phone’s own PDF viewer.</span>
                     </div>
                 ) : preview.kind === 'other' ? (
                     <div data-preview="other" className="flex flex-col items-center gap-3 p-6 text-center text-[13px] text-[var(--fg-3)]">
                         <span>No preview for this kind of file.</span>
-                        {preview.url ? <a href={preview.url} download={name} data-action="download" className={BUTTON}>Download</a> : null}
+                        {preview.url ? <Button size="xs" href={preview.url} download={name} data-action="download" className={BUTTON}>Download</Button> : null}
                     </div>
                 ) : (
                     <p data-preview="error" className="p-4 text-[13px] text-[var(--danger)]">{preview.reason}</p>
