@@ -17,8 +17,10 @@ import { setExecRoute } from './toolchain-runner.js';
  *   the pid arrives as `onPid`, output and the exit as they happen.
  *
  * WHEN THE CHILD IS GONE: every call in flight fails with code ESPAWNHOST, every stream ends, and every pty it held is
- * ENDED — its helper killed by pid (the helper's job object takes the tree with it), then reported exited (-1), so the
- * supervisor restarts it in the next child on fresh terms instead of beside an orphan holding its port. The next call
+ * ENDED — its helper killed by pid (the helper's job object takes the tree with it) — and reported exited (-1) only once
+ * that helper is GONE (bounded by HELPER_GONE_WAIT_MS), so the supervisor restarts it in the next child on fresh terms,
+ * never racing the dying process for its port (measured on genie-test-windows: reported at once, restarts failed to bind
+ * and backed off for 23 s, once past 120 s). The next call
  * forks a new child. A child that cannot start ({@link MAX_FAILED_STARTS} in a row exit before they are ready) is given
  * up on for this session: calls run in-process (the fallback) and ptys go to the fallback port, said once in the log.
  *
@@ -38,7 +40,12 @@ export interface SpawnHostOptions {
     readonly log?: (line: string) => void;
     /** Kill a pty's helper by pid when the child that held it is gone. Default: process.kill. */
     readonly killPid?: (pid: number) => void;
+    /** Whether a pid still runs (a killed helper is waited for before its pty is reported exited). Default: signal 0. */
+    readonly pidAlive?: (pid: number) => boolean;
 }
+
+/** How long a lost child's killed helpers are waited for before their ptys are reported exited anyway. */
+export const HELPER_GONE_WAIT_MS = 10_000;
 
 type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 
@@ -205,11 +212,24 @@ export class SpawnHostClient {
         for (const [, s] of [...this.#streams]) s.onEnd(`the spawn host ${why}`);
         this.#streams.clear();
         const killPid = this.#options.killPid ?? ((pid: number) => { try { process.kill(pid); } catch { /* already gone */ } });
-        for (const [id, p] of [...this.#ptys]) {
-            this.#ptys.delete(id);
-            if (p.pid !== null && p.pid > 0) killPid(p.pid);
-            for (const l of this.#exit) l(id, -1);
-        }
+        const pidAlive = this.#options.pidAlive ?? ((pid: number) => { try { process.kill(pid, 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } });
+        const lost = [...this.#ptys].map(([id, p]) => ({ id, pid: p.pid }));
+        for (const { pid } of lost) if (pid !== null && pid > 0) killPid(pid);
+        // Still live to the supervisor while they die: reported exited once each helper is gone, then restarted.
+        void (async () => {
+            const deadline = Date.now() + HELPER_GONE_WAIT_MS;
+            const pending = new Set(lost.filter((l) => l.pid !== null && l.pid > 0).map((l) => l.pid!));
+            while (pending.size > 0 && Date.now() < deadline) {
+                for (const pid of [...pending]) if (!pidAlive(pid)) pending.delete(pid);
+                if (pending.size > 0) await new Promise((r) => setTimeout(r, 100));
+            }
+            if (pending.size > 0) this.#log(`spawn host ${child.pid ?? '?'}: ${pending.size} pty helper(s) still running ${HELPER_GONE_WAIT_MS / 1000} s after their kill (${[...pending].join(', ')})`);
+            for (const { id } of lost) {
+                // A pty the supervisor stopped meanwhile was forgotten here already: nothing to report.
+                if (!this.#ptys.delete(id)) continue;
+                for (const l of this.#exit) l(id, -1);
+            }
+        })();
         if (this.#stopping) return;
         if (!wasReady) this.#startFailed(why);
         else this.#failedStarts = 0;

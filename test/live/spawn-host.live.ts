@@ -113,13 +113,32 @@ async function main(): Promise<void> {
             : Number((await execFileRunner('pgrep', ['-c', 'php-cgi'])).stdout.trim() || '0');
         const phpBefore = await phpCount();
         check(phpBefore === 12, 'S4-0. CONTROL: the OS counts the 12 php-cgi workers the sites run', `${phpBefore}`);
-        const before = procs().map((p) => p.pid!).filter((p) => p > 0);
-        const first = host.pid!;
-        process.kill(first);
-        check(await until(() => before.every((p) => !alive(p)), 30_000), 'S4. the spawn host killed hard: every pty helper it made is ended', before.filter(alive).join(',') || 'none left');
-        check(await until(async () => running() && (await answering()), 120_000), 'S4b. …and the supervisor starts every site again in a new spawn host, answering', `${ids.map((id) => composed.sites.get(id)?.state).join(' ')}; spawn host ${first} → ${host.pid}`);
-        const phpAfter = await phpCount();
-        check(phpAfter === 12, 'S4c. …with no orphan left from the first: still 12 php-cgi on the machine, not 24', `${phpAfter}`);
+        // THREE TIMES (a recovery that missed once on genie-test-windows, 2026-11-01, and passed the next run: forced here).
+        for (let round = 1; round <= 3; round += 1) {
+            const before = procs().map((p) => p.pid!).filter((p) => p > 0);
+            const first = host.pid!;
+            const killedAt = Date.now();
+            process.kill(first);
+            check(await until(() => before.every((p) => !alive(p)), 30_000), `S4.${round} the spawn host killed hard: every pty helper it made is ended`, before.filter(alive).join(',') || 'none left');
+            const back = await until(async () => running() && (await answering()), 120_000);
+            if (!back) {
+                // WHAT EACH SITE SAYS, and each process: the evidence for why one did not come back.
+                for (const id of ids) {
+                    const site = composed.sites.get(id)!;
+                    console.log(`    ${site.host} state=${site.state} port=${site.port} answers=${await get(site.port!)} problem=${site.problem ?? '-'}`);
+                    for (const pid of site.processIds) {
+                        const p = composed.supervisor.status(pid);
+                        const tail = (composed.supervisor.log(pid) ?? '').split(/\r?\n/).filter(Boolean).slice(-6).join(' | ');
+                        console.log(`      ${pid} ${p?.state} pid=${p?.pid} restarts=${p?.restarts} exit=${p?.exitCode} :: ${tail.slice(0, 600)}`);
+                    }
+                }
+                const caddies = platform === 'win32' ? (await execFileRunner('tasklist', ['/FI', 'IMAGENAME eq caddy.exe', '/NH'])).stdout.split(/\r?\n/).filter((l) => /caddy\.exe/i.test(l)).length : -1;
+                console.log(`    caddy.exe on the machine: ${caddies}`);
+            }
+            check(back, `S4b.${round} …and the supervisor starts every site again in a new spawn host, answering`, `${Math.round((Date.now() - killedAt) / 1000)} s; ${ids.map((id) => composed.sites.get(id)?.state).join(' ')}; spawn host ${first} → ${host.pid}`);
+            const phpAfter = await phpCount();
+            check(phpAfter === 12, `S4c.${round} …with no orphan left: still 12 php-cgi on the machine`, `${phpAfter}`);
+        }
 
         const last = procs().map((p) => p.pid!).filter((p) => p > 0);
         await composed.shutdown();

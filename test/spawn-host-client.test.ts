@@ -23,7 +23,7 @@ describe('the spawn host goes away (genie#1397)', () => {
     it('a lost child: its ptys are ended (helper killed by pid) and exit -1; the next command runs in a new child', async () => {
         const killed: number[] = [];
         const lines: string[] = [];
-        client = startSpawnHost({ entry: fixture('slow-spawn-host.ts'), execArgv: ['--import', 'tsx'], env: { SLOW_SPAWN_MS: '0' }, killPid: (pid) => killed.push(pid), log: (l) => lines.push(l) });
+        client = startSpawnHost({ entry: fixture('slow-spawn-host.ts'), execArgv: ['--import', 'tsx'], env: { SLOW_SPAWN_MS: '0' }, killPid: (pid) => killed.push(pid), pidAlive: () => false, log: (l) => lines.push(l) });
         const pty = client.ptyPort();
         const exits: Array<[string, number]> = [];
         const pids: number[] = [];
@@ -43,6 +43,32 @@ describe('the spawn host goes away (genie#1397)', () => {
         expect(r.exitCode).toBe(0);
         expect(client.pid).not.toBe(first);
         expect(lines.some((l) => l.startsWith(`spawn host ${first} exited`))).toBe(true);
+    }, 30_000);
+
+    it("a lost child's ptys are reported exited only once their helpers are GONE, so a restart never races the old process for its port", async () => {
+        // genie-test-windows, 2026-11-01: reported at once, the supervisor restarted php-cgi and Caddy on their ports a second
+        // later while the old trees were still dying; each new one failed to bind, backed off (23 s once, past 120 s
+        // another time), and workers gave up. Here the helper takes a while to die after its kill.
+        let polls = 0;
+        const alive = new Set<number>();
+        client = startSpawnHost({
+            entry: fixture('slow-spawn-host.ts'), execArgv: ['--import', 'tsx'], env: { SLOW_SPAWN_MS: '0' },
+            killPid: (pid) => { alive.add(pid); },
+            pidAlive: (pid) => { polls += 1; if (polls >= 5) alive.delete(pid); return alive.has(pid); },
+        });
+        const pty = client.ptyPort();
+        const exits: Array<[string, number, number]> = [];
+        const pids: number[] = [];
+        pty.onExit((id, code) => exits.push([id, code, polls]));
+        pty.onPid?.((_id, pid) => pids.push(pid));
+        const opened = pty.open({ cwd: process.cwd(), command: 'php-cgi -b 127.0.0.1:4102' });
+        expect(await until(() => pids.includes(4242))).toBe(true);
+        process.kill(client.pid!);
+        expect(await until(() => exits.length === 1)).toBe(true);
+        expect(exits[0]![0]).toBe(opened.id);
+        expect(exits[0]![1]).toBe(-1);
+        // Not before the helper was seen gone (the 5th look).
+        expect(exits[0]![2]).toBeGreaterThanOrEqual(5);
     }, 30_000);
 
     it('a call in flight when the child dies fails with code ESPAWNHOST', async () => {
