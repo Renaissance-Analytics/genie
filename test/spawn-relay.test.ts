@@ -30,6 +30,7 @@ function relay() {
     const alive = new Set<number>();
     const timers: Array<() => void> = [];
     let next = 100;
+    const logged: string[] = [];
     const r = startSpawnRelay({
         entry: 'spawn-host.js',
         fork: (_entry, env) => { const c = new FakeChild(next++, env); children.push(c); return c; },
@@ -37,9 +38,9 @@ function relay() {
         killPid: (pid) => { killed.push(pid); },
         pidAlive: (pid) => alive.has(pid),
         schedule: (fn) => { timers.push(fn); return () => {}; },
-        log: () => {},
+        log: (line) => { logged.push(line); },
     });
-    return { r, children, toWindows, killed, alive, runTimers: () => { const t = timers.splice(0); for (const fn of t) fn(); } };
+    return { r, children, toWindows, killed, alive, logged, runTimers: () => { const t = timers.splice(0); for (const fn of t) fn(); } };
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 0));
@@ -48,6 +49,13 @@ describe('the spawn relay in genie-host', () => {
     it('forks one child per profile, each told its profile', () => {
         const { children } = relay();
         expect(children.map((c) => c.env.GENIE_SPAWN_PROFILE)).toEqual(['processes', 'terminals']);
+    });
+
+    it('a child that says it is ready is named in the lifecycle log with its pid and profile (the real-window CI gate reads it)', () => {
+        const { children, logged } = relay();
+        expect(logged.filter((l) => l.startsWith('spawn host ready'))).toEqual([]); // CONTROL: nothing claims ready before the child says so
+        children[0]!.say({ kind: 'event', channel: 'host.ready', payload: {} });
+        expect(logged.filter((l) => l.startsWith('spawn host ready'))).toEqual([`spawn host ready pid=${children[0]!.pid} profile=processes (a child of genie-host)`]);
     });
 
     it('a window\'s frame goes to its profile\'s child; a child\'s frame goes to the window under its profile', () => {

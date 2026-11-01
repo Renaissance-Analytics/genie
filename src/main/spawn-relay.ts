@@ -94,7 +94,11 @@ export function startSpawnRelay(options: SpawnRelayOptions): SpawnRelay {
                 const id = typeof payload['id'] === 'string' ? payload['id'] : null;
                 if (id !== null && frame.channel === 'pty.opened') slot.ptys.set(id, typeof payload['pid'] === 'number' ? payload['pid'] : null);
                 if (id !== null && frame.channel === 'pty.exit') slot.ptys.delete(id);
-                if (frame.channel === 'host.ready') slot.failures = 0;
+                if (frame.channel === 'host.ready') {
+                    slot.failures = 0;
+                    // The same words the window's own spawn host logs when it is ready: "it started" is one line to look for.
+                    log(`spawn host ready pid=${child.pid ?? '?'} profile=${profile} (a child of genie-host)`);
+                }
             }
             options.send(profile, frame);
         });

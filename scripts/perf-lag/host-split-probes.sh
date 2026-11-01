@@ -62,6 +62,10 @@ probe "spawn-host-says-the-shell" src/main/spawn-host-server.ts \
     "event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell });" "event('pty.opened', { id: ptyId, pid: opened.pid });" \
     test/terminal-open-ready.test.ts "pty.opened carries the resolved shell"
 
+probe "relay-logs-ready" src/main/spawn-relay.ts \
+    "                    log(\`spawn host ready pid=" "                    void (\`spawn host ready pid=" \
+    test/spawn-relay.test.ts "named in the lifecycle log"
+
 echo "=== restored: every probed test file (green expected)"
 if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
