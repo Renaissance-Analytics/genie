@@ -198,7 +198,17 @@ describe('the replica reads what the host answers', () => {
 function lineTransportPair(): [LineTransport, LineTransport] {
     class Wire extends EventEmitter {
         peer: Wire | null = null;
-        write(text: string): boolean { const peer = this.peer; queueMicrotask(() => peer?.emit('data', Buffer.from(text, 'utf8'))); return true; }
+        // In pieces, as a pipe delivers a large write (its buffer is 64 KiB on Windows): a whole oversized line arriving in
+        // one chunk would never trip the limit, and the test would pass with the bug in place (it did, 2026-11-01).
+        write(text: string): boolean {
+            const peer = this.peer;
+            const bytes = Buffer.from(text, 'utf8');
+            for (let at = 0; at < bytes.length; at += 16 * 1024) {
+                const piece = bytes.subarray(at, at + 16 * 1024);
+                queueMicrotask(() => peer?.emit('data', piece));
+            }
+            return true;
+        }
         end(): void { const peer = this.peer; queueMicrotask(() => { this.emit('close'); peer?.emit('close'); }); }
         destroy(): void { this.end(); }
     }
