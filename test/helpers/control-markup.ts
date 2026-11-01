@@ -48,3 +48,16 @@ export function control(html: string, attr: string): ControlMarkup | null {
 
 /** Every `<button …>` opening tag in the markup. */
 export const buttonTags = (html: string): string[] => html.match(/<button\b[^>]*>/g) ?? [];
+
+/** The first `<button>` or `<a>` whose VISIBLE text is exactly `text`, or null. */
+export function controlByText(html: string, text: string): ControlMarkup | null {
+    for (const m of html.matchAll(/<(button|a)\b[^>]*>/g)) {
+        const c = control(html.slice(m.index), m[0]);
+        if (c && c.text === text) return c;
+    }
+    return null;
+}
+
+/** Every `<button>`'s visible text, in order (labels sit in react-fancy Button's own span; read via `control`). */
+export const buttonTexts = (html: string): string[] =>
+    [...html.matchAll(/<button\b[^>]*>/g)].map((m) => control(html.slice(m.index), m[0])?.text ?? '');

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { RemoteAccess } from '../src/renderer/components/FeatureSurfaces.js';
 import type { RemoteSection } from '../src/renderer/features.js';
 import type { TailscaleStatus } from '../src/main/tailscale-cli.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * TAILSCALE FROM GENIE (Tynn #821; Genie 1's tailscale.status / install / up + openAuth). Remote access runs over the
@@ -25,7 +26,11 @@ describe('Settings → Remote access → Tailscale', () => {
     it('needs sign-in: Connect; with a sign-in link, Sign in opens it', () => {
         expect(render(ts({ state: 'needs-login' }))).toContain('data-action="tailscale-up"');
         const withLink = render(ts({ state: 'needs-login', authUrl: 'https://login.tailscale.com/a/abc123' }));
-        expect(withLink).toMatch(/data-action="tailscale-signin"[^>]*href="https:\/\/login\.tailscale\.com\/a\/abc123"/);
+        // A LINK, in Button's link form: an <a> to Tailscale's page, opened outside Genie.
+        const signIn = control(withLink, 'data-action="tailscale-signin"');
+        expect(signIn).toMatchObject({ tag: 'a', fancy: true, text: 'Sign in' });
+        expect(signIn!.open).toContain('href="https://login.tailscale.com/a/abc123"');
+        expect(signIn!.open).toContain('target="_blank"');
     });
 
     it('stopped (or needs an operator): the remedy, with its exact command', () => {

@@ -4,6 +4,15 @@ import { validateSiteForm, type SiteForm } from '../src/core/forms.js';
 import { AddSiteForm } from '../src/renderer/components/AddForms.js';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { control } from './helpers/control-markup.js';
+/** The Remove button inside one installed version's row (the markup from its `data-php-version` to the next row's). */
+const removeIn = (html: string, version: string) => {
+    const at = html.indexOf(`data-php-version="${version}"`);
+    const next = html.indexOf('data-php-version="', at + 20);
+    const row = html.slice(at, next < 0 ? undefined : next);
+    const m = /<button\b[^>]*>(?:(?!<\/button>)[^])*?>Remove</.exec(row);
+    return m ? control(row.slice(m.index), '<button') : null;
+};
 
 /**
  * T4 — WHAT A PERSON SEES: the Toolchain surface lists the PHP versions Genie manages (Remove disabled, with the reason,
@@ -30,9 +39,15 @@ describe('Toolchain → PHP versions', () => {
         expect(html).toContain('data-php-versions="2"');
         expect(html).toMatch(/data-php-version="8\.4\.26" data-php-used="1"/);
         expect(html).toMatch(/pinned by shop\.gen/);
-        expect(html).toMatch(/<button[^>]*disabled=""[^>]*title="Pinned by shop\.gen[^"]*"[^>]*>Remove/);
+        // The pinned version's Remove: a real (fancy) button, disabled, saying why on hover.
+        const pinned = removeIn(html, '8.4.26');
+        expect(pinned).toMatchObject({ tag: 'button', fancy: true, text: 'Remove' });
+        expect(pinned!.open).toMatch(/\sdisabled=""/);
+        expect(pinned!.open).toMatch(/\stitle="Pinned by shop\.gen[^"]*"/);
         // Control: the unpinned version's Remove is live.
-        expect(html).toMatch(/data-php-version="8\.3\.35" data-php-used="0"[^]*?<button type="button" class="ml-auto shrink-0 text-\[13px\]">Remove/);
+        const unpinned = removeIn(html, '8.3.35');
+        expect(unpinned).toMatchObject({ tag: 'button', fancy: true, text: 'Remove' });
+        expect(unpinned!.open).not.toMatch(/\sdisabled=""/);
         expect(html).toMatch(/Unpinned php sites run PHP 8\.4\.13 from your PATH/);
         expect(html).toContain('data-php-install="8.5.11"');
         expect(html).not.toContain('data-php-install="8.4.26"');
