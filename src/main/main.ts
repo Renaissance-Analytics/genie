@@ -2936,7 +2936,8 @@ async function boot(): Promise<void> {
         // The ledger sweep at boot ends what this Genie's predecessors RECORDED; this one still ends a provider a Genie
         // from before the ledger (beta.32 and earlier) left on an agent's thread.
         // NEVER from a window that ADOPTED a running agent host: its providers are the host's live agents, not leftovers.
-        if (agentEngineLink?.how !== 'adopted') sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
+        // Only a host this window STARTED (or replaced) has no live agents yet; adopted or unreachable hosts hold live ones.
+        if (agentEngineLink === null || agentEngineLink.how === 'started' || agentEngineLink.how === 'replaced') sweepLeftoverProviders((registry?.listAgents() ?? []).map((a) => ({ name: a.name, threadId: a.threadId })), undefined, lifecycleLog);
         const plan = relaunchPlan({ runningAtQuit: running, interruptedAtQuit: interrupted });
         for (const { agentId, at, resume } of plan) {
             setTimeout(() => {

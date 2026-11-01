@@ -142,6 +142,10 @@ export class SessionEngineClient {
                         return;
                     }
                     welcomed = { protocol: ENGINE_PROTOCOL, build: typeof w.build === 'string' ? w.build : '', pid: typeof w.pid === 'number' ? w.pid : 0 };
+                    // THE HOST IS AUTHENTICATED: its frames may now exceed the pre-auth line limit. Without this the window
+                    // closed its own link the first time a busy agent's update passed 64 KiB, and every reconnect's dump
+                    // closed it again (genie-test-windows, 2026-11-01: 11 agents, the link lost every 8 s).
+                    (transport as ClientTransport & { trusted?: () => void }).trusted?.();
                     this.#transport = transport;
                     this.#welcome = welcomed;
                     this.#seenSinceWelcome = new Set();

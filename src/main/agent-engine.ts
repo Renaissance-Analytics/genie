@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { parseHostRecord } from '../core/engine-protocol.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { linkToHost, pidAlive, type EngineLaunchPorts, type EngineLink } from './engine-launch.js';
 import { SessionEngineClient, type EngineClientOptions } from './session-engine-client.js';
@@ -27,8 +30,11 @@ export interface AgentEngineLinkOptions {
 /** The link's state, for the quit (no reconnect once stopping) and for what the window reports. */
 export interface AgentEngineLink {
     readonly client: SessionEngineClient;
-    /** How the host was found at boot: `adopted` = its agents were already running (the window restarted or crashed). */
-    readonly how: EngineLink['how'];
+    /**
+     * How the host was found at boot: `adopted` = its agents were already running (the window restarted or crashed);
+     * `unreachable` = a LIVE host would not link — the client keeps reconnecting and NOTHING runs agents in this process.
+     */
+    readonly how: EngineLink['how'] | 'unreachable';
     /** Stop gracefully and end the host (a quit, an upgrade): sessions stopped and verified, then the process gone. */
     shutdown(waitMs?: number): Promise<void>;
 }
@@ -96,10 +102,25 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions): Promi
             reconnecting = false;
         })();
     };
-    const how = await link();
-    if (how === null) {
-        stopping = true;
-        return null;
+    // LIVE HOST, NO FALLBACK (genie-test-windows, 2026-11-01): a window that fell back beside a running host ran the
+    // fallback's boot sweep and ended that host's eleven providers. The fallback is for a host that cannot start at all.
+    const liveHostPid = (): number | null => {
+        const read = options.launch.readFile ?? ((file: string) => { try { return readFileSync(file, 'utf8'); } catch { return null; } });
+        const record = parseHostRecord(read(join(options.launch.runtimeDir, 'host.json')));
+        return record !== null && (options.launch.alive ?? pidAlive)(record.pid) ? record.pid : null;
+    };
+    const found = await link();
+    let how: AgentEngineLink['how'];
+    if (found !== null) how = found;
+    else {
+        const live = liveHostPid();
+        if (live === null) {
+            stopping = true;
+            return null;
+        }
+        how = 'unreachable';
+        options.onError('agent-host', new Error(`Genie's agent host (pid ${live}) is running but not answering this window; Genie keeps trying to reach it and runs no agents of its own meanwhile.`));
+        reconnect();
     }
     // A ledger nobody has read for a minute is unwatched: the host stops sending it (cheap, incremental subscriptions).
     const sweep = setInterval(() => client.sweepLedgers(), 30_000);

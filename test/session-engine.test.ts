@@ -3,7 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src/core/identity.js';
-import { memoryPair } from '../src/core/line-transport.js';
+import { EventEmitter } from 'node:events';
+import { lineTransport, memoryPair, UNTRUSTED_LINE_LIMIT, type LineTransport } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import type { DriverEvents, SessionDriverFactory } from '../src/core/session.js';
@@ -187,6 +188,58 @@ describe('the replica reads what the host answers', () => {
         const r = record();
         await started(client, r);
         expect(client.probe(r.id)).toMatchObject({ collaborators: 2, commsAgeSeconds: 5 });
+    });
+});
+
+/**
+ * Two REAL line transports joined back to back, as a named pipe joins them: what one side writes arrives on the other as
+ * chunks, through the same framing and the same pre-auth line limit the window and the host use in production.
+ */
+function lineTransportPair(): [LineTransport, LineTransport] {
+    class Wire extends EventEmitter {
+        peer: Wire | null = null;
+        write(text: string): boolean { const peer = this.peer; queueMicrotask(() => peer?.emit('data', Buffer.from(text, 'utf8'))); return true; }
+        end(): void { const peer = this.peer; queueMicrotask(() => { this.emit('close'); peer?.emit('close'); }); }
+        destroy(): void { this.end(); }
+    }
+    const a = new Wire();
+    const b = new Wire();
+    a.peer = b;
+    b.peer = a;
+    return [lineTransport(a), lineTransport(b)];
+}
+
+describe('over the real line transport (genie-test-windows, 2026-11-01: the link dropped once frames grew)', () => {
+    it('a frame larger than the pre-auth line limit, after the welcome, keeps the link and reaches the replica', async () => {
+        const [hostSide, windowSide] = lineTransportPair();
+        server.accept(hostSide);
+        let closed = false;
+        windowSide.onClose(() => { closed = true; });
+        const client = new SessionEngineClient();
+        expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
+        const r = record();
+        const events = await started(client, r);
+        // One update far over 64 KiB: tool output the size eleven busy agents produce.
+        const big = 'x'.repeat(UNTRUSTED_LINE_LIMIT * 2);
+        events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: 'big', name: 'Bash', title: 'npm test', rawOutput: big });
+        events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: big } });
+        await settle();
+        expect(closed).toBe(false);
+        expect(client.connected).toBe(true);
+        expect(client.rowsFor(r.id)).toEqual(host.rowsFor(r.id));
+    });
+
+    it('before the welcome the limit still holds: an unauthenticated peer cannot make the window buffer without bound', () => {
+        const [, windowSide] = lineTransportPair();
+        // Positive control for the limit itself, on the window's side.
+        let closed = false;
+        windowSide.onClose(() => { closed = true; });
+        const fake = new EventEmitter() as EventEmitter & { write: () => boolean; end: () => void; destroy: () => void };
+        fake.write = () => true; fake.end = () => {}; fake.destroy = () => { closed = true; };
+        const t = lineTransport(fake);
+        t.onClose(() => { closed = true; });
+        fake.emit('data', 'y'.repeat(UNTRUSTED_LINE_LIMIT + 1));
+        expect(closed).toBe(true);
     });
 });
 
