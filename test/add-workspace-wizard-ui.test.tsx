@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import { patchRepo, renameWorkspace, setMonorepoMode, startDraft, type SourceAnalysis } from '../src/core/envelope-plan.js';
 import { AddFromGitForm } from '../src/renderer/components/AddWorkspacePreview.js';
 import {
-import { control } from './helpers/control-markup.js';
     canLeaveStep,
     DispositionStepView,
     ExistingWorkspaceView,
@@ -13,6 +12,7 @@ import { control } from './helpers/control-markup.js';
     WizardStepper,
     WorkspaceStepView,
 } from '../src/renderer/components/AddWorkspaceWizard.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * OPEN EXISTING FOLDER / IMPORT FROM GIT ON SCREEN (Add workspace parity item 7) — Genie 1's four steps, Source → Repos →

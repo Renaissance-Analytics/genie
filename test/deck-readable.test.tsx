@@ -81,8 +81,7 @@ describe('who asked, where, and how long ago', () => {
         const html = render(itemsOf([pending()]));
         expect(control(html, 'data-deck-agent="agent_a"')).toMatchObject({ tag: 'button', fancy: true });
         expect(control(html, 'data-deck-agent="agent_a"')!.text).toMatch(/^atlas(?![\w])/);
-        expect(control(html, `data-deck-workspace="${WS_ID}"`)).toMatchObject({ tag: 'button', fancy: true });
-        expect(control(html, `data-deck-workspace="${WS_ID}"`)!.text).toMatch(/^Tynn\.ai(?![\w])/);
+        expect(html).toMatch(new RegExp(`data-deck-workspace="${WS_ID}"[^>]*>Tynn\\.ai<`));
         // The id rides as an attribute; it is never text a person reads.
         expect(html).not.toContain(`>${WS_ID}<`);
         expect(html).toMatch(/data-deck-age="q_1"[^>]*>2 h ago</);

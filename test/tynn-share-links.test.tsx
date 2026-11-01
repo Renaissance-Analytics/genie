@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { workstationOpenFrom } from '../src/core/tynn-sign-in.js';
 import { listShareLinks, mintShareLink, revokeShareLink, NOT_REGISTERED } from '../src/main/tynn-share-links.js';
 import { ShareWorkspaceForm } from '../src/renderer/components/ShareWorkspaceModal.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * SHARING THROUGH TYNN (Tynn #839; Genie 1's workspace-share-links.ts + ShareWorkspaceModal, v1 inventory rows 111-116).
