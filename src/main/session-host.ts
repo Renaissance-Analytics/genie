@@ -1183,12 +1183,32 @@ export class SessionHost {
     }
 
     /**
-     * The agent's RUN when its session can take a turn now (`AgentSession.promptable`), else `null` — not running,
-     * still starting, mid-turn, waiting on a person, broken. What the inbox push asks before it sends a notice.
+     * The agent's RUN when its session can take a NEW turn now (`AgentSession.promptable`), else `null` — not running,
+     * still starting, mid-turn, waiting on a person, broken.
      */
     promptable(agentId: AgentId): number | null {
         const entry = this.#running.get(agentId);
         return entry && entry.session.promptable ? entry.run : null;
+    }
+
+    /**
+     * The agent's RUN when a message handed over now reaches it at its next step, as typed input does
+     * (`AgentSession.deliverable`; mid-turn included), else `null` — not running, still starting, held on a limit, broken,
+     * stopped. What the inbox push asks before it sends a notice (genie#1411).
+     */
+    deliverable(agentId: AgentId): number | null {
+        const entry = this.#running.get(agentId);
+        return entry && entry.session.deliverable ? entry.run : null;
+    }
+
+    /** A turn is in flight by Genie's own record (`AgentSession.inTurn`); `false` when the agent has no session. */
+    inTurn(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.inTurn ?? false;
+    }
+
+    /** The prompt held under `id` (`deliver`'s answer) is still waiting in the agent's current run. */
+    hasQueuedPrompt(agentId: AgentId, id: string): boolean {
+        return this.#running.get(agentId)?.session.hasQueuedPrompt(id) ?? false;
     }
 
     /** The agent's current RUN while it has a session, promptable or not; `null` when it has none. */
@@ -1221,12 +1241,21 @@ export class SessionHost {
 
     /** `context`: what the prompt's ledger row carries beyond its text — a Genie notice's mail (the inbox push). */
     prompt(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): boolean {
+        return this.handOff(agentId, text, by, context) !== null;
+    }
+
+    /**
+     * `prompt`, answering what became of it (`AgentSession.deliver`): `{ queued: null }` = the provider has it now (a new
+     * turn, or folded into the running one); `{ queued: id }` = held, sent when a turn ends (`hasQueuedPrompt`); `null` =
+     * no session to take it. The inbox push settles a notice by this (genie#1411).
+     */
+    handOff(agentId: AgentId, text: string, by: string | null = null, context: PromptContext = {}): { queued: string | null } | null {
         const entry = this.#running.get(agentId);
-        if (!entry) return false;
-        if (!entry.session.running) return false;
-        entry.session.deliver(text, by, null, context);
+        if (!entry) return null;
+        if (!entry.session.running) return null;
+        const queued = entry.session.deliver(text, by, null, context);
         this.#emit(agentId);
-        return true;
+        return { queued };
     }
 
     /**

@@ -20,7 +20,7 @@ import type { PtyPort } from '../src/main/terminal-host.js';
  * own for an app's message and heard of it only after the person's next turn.
  *
  *  - IDLE: a turn promptly — after a short coalescing window, so a burst is ONE turn that names them all;
- *  - BUSY: told when its current turn ends (a follow-up turn), never dropped, never waiting on the person;
+ *  - BUSY: told at its next step, mid-turn, as typed input arrives (genie#1411), never dropped, never waiting on the person;
  *  - THE APP WAKE CAP: an app can cause only so many turns per agent per window; past it the mail waits for the window,
  *    then one turn — still with nobody typing;
  *  - STOPPED / FAILED: an app's message does not start a manual agent; it waits, and shows as uncollected.
@@ -108,6 +108,7 @@ beforeEach(async () => {
         host,
         reminders: (input) => services.inboxReminders(input),
         settled: (agentId, delivered) => services.inboxNoticeSettled(agentId, delivered),
+        cumulative: true,
         wake: (id) => {
             woken.push(id);
             const record = roster.find((r) => r.id === id);
@@ -185,15 +186,21 @@ describe.each(['manual', 'automated'] as const)('an IDLE %s agent', (mode) => {
 });
 
 describe('a BUSY agent', () => {
-    it('is not interrupted; told when its turn ends, as a follow-up turn — nobody types again', async () => {
+    // genie#1411 (the owner, 2026-11-01: "inbox nudges should queue up and post to the agent as soon as possible just
+    // like user input"): a long turn used to hold the notice until it ended. Now it goes at the agent's next step.
+    it('is told at its next step, mid-turn, the way typed input arrives; no follow-up turn when the turn ends; no cap spent', async () => {
         const agent = register('manual', 'fancy');
         startIdle(agent);
         host.prompt(agent.id, 'the person’s task', 'you');
         await appMail(agent.id);
-        time.advance(COALESCE_MS * 4);
         expect(notices(agent.id)).toEqual([]);
-        endTurn(agent.id);
         time.advance(COALESCE_MS);
+        expect(host.probe(agent.id)?.inTurn).toBe(true);
+        expect(notices(agent.id)).toEqual([reminderText(1, 1)]);
+        // Folded into the running turn: it caused no turn, so the app wake cap is untouched.
+        expect(appTurns.get(agent.id) ?? []).toEqual([]);
+        endTurn(agent.id);
+        time.advance(COALESCE_MS * 4);
         expect(notices(agent.id)).toEqual([reminderText(1, 1)]);
     });
 });
@@ -298,5 +305,11 @@ describe('main wires it', () => {
         expect(call).toContain('...appMailPushPorts({');
         expect(call).toContain('setTimeout(fn, ms)');
         expect(call).not.toContain('appWoke');
+        // genie#1411: the mail notice counts everything unread, so a newer one covers the one before it. IssueWatch's names
+        // only what is new, so its push must not say so.
+        expect(call).toContain('cumulative: true');
+        const issueWatch = code.indexOf('wireInboxPush({\n        inbox: { onSend: (listener) => issueWatchDelivery');
+        expect(issueWatch).toBeGreaterThan(-1);
+        expect(code.slice(issueWatch, code.indexOf('\n    });', issueWatch))).not.toContain('cumulative');
     });
 });

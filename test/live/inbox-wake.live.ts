@@ -10,7 +10,8 @@
  *      receive` and ACTS — it reports to the person through `agentinbox send`.
  *   2. BURST: the site posts three at once — ONE turn, naming three.
  *   3. AGENT MAIL: another agent sends with its real `agentinbox send` — the idle fancy gets a turn.
- *   4. BUSY: the person gives fancy a task; the site posts mid-turn — no interruption; one follow-up turn when it ends.
+ *   4. BUSY: the person gives fancy a task; the site posts mid-turn — the notice reaches fancy at its next step, as typed
+ *      input would (genie#1411), and no follow-up turn comes when the task's turn ends.
  *   5. STOPPED: a script key posts to the manual `scribe`, which is not running — it is NOT started; its mail shows
  *      uncollected.
  *
@@ -142,18 +143,22 @@ setInterval(async () => {
     const driverFor: DriverFor = (record) => {
         const factory: SessionDriverFactory = (options) => {
             events.set(record.id, options.events);
-            const end = () => options.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+            // A turn in flight: a prompt arriving now is FOLDED into it (as Claude Code does), not a turn of its own.
+            let inTurn = false;
+            const end = () => { inTurn = false; options.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null }); };
             return {
                 start: () => {},
                 prompt: (content: unknown) => {
                     const text = String(content);
+                    const folded = inTurn;
+                    inTurn = true;
                     if (!text.includes('unread AgentInbox')) {
                         mark(`${record.name}: the person's prompt — working ${workMs} ms`);
                         setTimeout(() => { mark(`${record.name}: turn ended (idle)`); end(); }, workMs);
                         return;
                     }
                     notices.set(record.id, [...(notices.get(record.id) ?? []), text]);
-                    mark(`${record.name}: Genie gave it a turn — "${text}"`);
+                    mark(folded ? `${record.name}: Genie's notice reached it MID-TURN (folded) — "${text}"` : `${record.name}: Genie gave it a turn — "${text}"`);
                     void (async () => {
                         const got = await agentinbox(record.name, { action: 'receive' });
                         const messages = (got.messages as Array<Record<string, unknown>> | undefined) ?? [];
@@ -162,7 +167,8 @@ setInterval(async () => {
                         const sent = await agentinbox(record.name, { action: 'send', to: 'human', text: `Handled: ${subjects.join(', ')}` });
                         mark(`${record.name}: ACTED — reported to the person (${sent.ok === true ? 'sent' : `refused: ${String(sent.error)}`})`);
                         acted.push({ agent: record.name, subjects });
-                        setTimeout(() => { mark(`${record.name}: turn ended (idle)`); end(); }, 200);
+                        // Folded: the running turn ends it, when its own work is done.
+                        if (!folded) setTimeout(() => { mark(`${record.name}: turn ended (idle)`); end(); }, 200);
                     })();
                 },
                 kill: () => {},
@@ -180,6 +186,7 @@ setInterval(async () => {
     const unwire = wireInboxPush({
         inbox: composed.inbox, host,
         reminders: (input) => composed.inboxReminders(input), settled: (id, ok) => composed.inboxNoticeSettled(id, ok),
+        cumulative: true,
         // main's wake is the open-agent path; the harness starts it the same way.
         wake: (id) => { const r = roster.find((x) => x.id === id); if (!r) return false; started.push(r.name); return host.start(r, fancyDir).ok; },
         ...appMailPushPorts({ modeOf: (id) => roster.find((r) => r.id === id)?.mode, now: () => Date.now(), schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }),
@@ -225,17 +232,20 @@ setInterval(async () => {
         check(sent.ok === true, '3. wren sent through its real agentinbox tool', JSON.stringify(sent).slice(0, 160));
         check(await until(() => acted.length >= 3, 15_000), '3b. the idle fancy got a turn for an agent’s message and acted', JSON.stringify(acted[2] ?? null));
 
-        // 4. BUSY: told when the turn ends.
+        // 4. BUSY: told at its next step, mid-turn, as typed input arrives (genie#1411) — no follow-up turn at the end.
         console.log('\n-- 4. busy agent');
         await until(() => host.promptable(fancy.id) !== null, 5_000);
-        workMs = 6_000;
+        workMs = 10_000;
         host.prompt(fancy.id, 'refactor the council page', 'you');
         await sleep(500);
         post([{ to: 'fancy', subject: 'deploy finished', body: 'flabs deployed' }]);
         await until(() => postsOK(5), 15_000);
-        await sleep(2_500);
-        check(noticeCount(fancy.id) === 3 && host.probe(fancy.id)?.inTurn === true, '4. mid-turn: not interrupted (no notice yet)', `notices ${noticeCount(fancy.id)}, in turn ${String(host.probe(fancy.id)?.inTurn)}`);
-        check(await until(() => acted.length >= 4, 15_000), '4b. its turn ended, then ONE follow-up turn — nobody typed', JSON.stringify(acted[3] ?? null));
+        await sleep(INBOX_COALESCE_MS + 1_000);
+        check(noticeCount(fancy.id) === 4 && host.probe(fancy.id)?.inTurn === true, '4. mid-turn: the notice reached it while its turn ran', `notices ${noticeCount(fancy.id)}, in turn ${String(host.probe(fancy.id)?.inTurn)}`);
+        check(await until(() => acted.length >= 4, 5_000) && host.probe(fancy.id)?.inTurn === true, '4b. it collected and acted mid-turn — nobody typed', JSON.stringify(acted[3] ?? null));
+        await until(() => host.promptable(fancy.id) !== null, 15_000);
+        await sleep(INBOX_COALESCE_MS * 3);
+        check(noticeCount(fancy.id) === 4, '4c. its turn ended: no second turn for the same mail', `notices ${noticeCount(fancy.id)}`);
 
         // 5. STOPPED: not started; shown as uncollected.
         console.log('\n-- 5. a stopped manual agent');

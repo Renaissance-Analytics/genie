@@ -3003,12 +3003,14 @@ async function boot(): Promise<void> {
         return host.start(record, cwdFor(record)).ok;
     };
     // §6.4 THE INBOX PUSH (main/inbox-push.ts): Genie itself puts the notice into the agent's session, for every provider.
-    // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told — an idle one after the coalescing window, a busy
-    // one when its turn ends. An app's message starts a stopped agent only if it is automated and the app wake cap allows;
-    // a turn only apps' mail causes is spent from that cap, and past it the mail waits for the window.
+    // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told after the coalescing window — a busy one at its
+    // next step, as typed input arrives (genie#1411). An app's message starts a stopped agent only if it is automated and
+    // the app wake cap allows; a turn only apps' mail opens is spent from that cap, and past it the mail waits for the window.
     wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
         wake: wakeAgent,
+        // "You have N unread": a newer notice covers the one before, so new mail mid-turn is told at once (genie#1411).
+        cumulative: true,
         ...appMailPushPorts({
             modeOf: (agentId) => registry?.find(agentId)?.mode,
             now: () => Date.now(),
@@ -3068,7 +3070,8 @@ async function boot(): Promise<void> {
     });
     // ISSUEWATCH (Tynn #806): Tynn polls GitHub and pushes each project's entry on the person's own channel; the client
     // listens with the Tynn token Genie already holds, and what changed reaches the agents of the linked workspace through
-    // the SAME delivery as mail — Genie's turn, told only when it ends — each agent by its own setting and in its mode.
+    // the SAME delivery as mail — Genie's notice, at the agent's next step even mid-turn (genie#1411) — each agent by its own
+    // setting and in its mode.
     const issueWatchDelivery = new IssueWatchDelivery({
         agents: () => registry?.listAgents() ?? [],
         defaultAgentOf: (workspaceId) => registry?.defaultAgentOf(workspaceId) ?? null,
