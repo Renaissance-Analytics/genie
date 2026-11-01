@@ -1,4 +1,4 @@
-import { ContentRenderer } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { useState, type FormEvent } from 'react';
 import type { DeckItem } from '../../core/deck.js';
@@ -103,7 +103,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                         {q.options.map((o) => {
                             const on = (selections[i] ?? []).includes(o.label);
                             return (
-                                <button
+                                <Button size="xs" labelClassName="contents"
                                     key={o.label}
                                     type="button"
                                     data-question-option={o.label}
@@ -115,7 +115,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                                 >
                                     <span className="font-medium">{o.label}</span>
                                     {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}
-                                </button>
+                                </Button>
                             );
                         })}
                     </div>
@@ -133,10 +133,10 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                 </fieldset>
             ))}
             <div className="flex flex-wrap items-center gap-2">
-                <button type="submit" data-action="deck-submit" disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">Answer</button>
-                {onCancel ? <button type="button" data-action="question-cancel" onClick={onCancel} {...(cancelKey ? { title: `${cancelLabel} (${cancelKey})`, 'aria-keyshortcuts': cancelKey === 'Esc' ? 'Escape' : cancelKey } : {})} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</button> : null}
+                <Button size="xs" type="submit" data-action="deck-submit" loading={sending} disabled={sending || remaining > 0} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-3 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)] disabled:cursor-not-allowed disabled:opacity-60">Answer</Button>
+                {onCancel ? <Button size="xs" type="button" data-action="question-cancel" onClick={onCancel} {...(cancelKey ? { title: `${cancelLabel} (${cancelKey})`, 'aria-keyshortcuts': cancelKey === 'Esc' ? 'Escape' : cancelKey } : {})} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px]">{cancelLabel}</Button> : null}
                 {onDismiss ? (
-                    <button type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={() => onDismiss([...notes])} title="Put this question aside without an answer; the agent is told, with any note you wrote" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</button>
+                    <Button size="xs" type="button" data-action="question-dismiss" data-deck-dismiss={item.id} disabled={sending} onClick={() => onDismiss([...notes])} title="Put this question aside without an answer; the agent is told, with any note you wrote" className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)] disabled:opacity-60">Dismiss</Button>
                 ) : null}
                 {remaining > 0 ? (
                     <span data-question-remaining={remaining} className="text-[11px] text-[var(--fg-3)]">

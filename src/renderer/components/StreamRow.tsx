@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { memo } from 'react';
 import type { LedgerRow, Tone } from '../../core/stream-view.js';
@@ -67,30 +67,29 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
     countRender('StreamRow');
     const time = timeOf(row.at);
 
-    return (
-        <div
-            data-stream-row={row.id}
-            data-selected={selected ? 'true' : 'false'}
-            {...(cursor ? { 'data-cursor': 'true' } : {})}
-            {...(row.inspectable ? { 'data-inspectable': 'true' } : {})}
-            // Only an inspectable row is a control. An empty cell is not a control, and a row
-            // that highlights on hover and then does nothing on click teaches people that
-            // clicking is pointless here.
-            {...(row.inspectable ? { role: 'button', tabIndex: 0, onClick: () => onSelect(row.id) } : {})}
-            // A thought with text opens to its whole reasoning in place; a second click closes it.
-            {...(!row.inspectable && row.expandable && row.full !== undefined ? { 'data-expandable': 'true', role: 'button', tabIndex: 0, 'aria-expanded': expanded, onClick: () => onToggle?.(row.id) } : {})}
-            className={[
-                'flex items-start gap-3 px-5 py-1 text-[13px] leading-5',
-                cursor ? 'ring-1 ring-inset ring-[var(--border-2)]' : '',
-                // The edit row is tinted so a file change is findable by scanning rather than
-                // by reading, and a SELECTED edit gets the emerald left border from the board.
-                row.tinted ? 'bg-[var(--bg-1)]' : '',
-                selected ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--color-emerald-500)]' : '',
-                row.inspectable ? 'cursor-pointer hover:bg-[var(--bg-2)]' : '',
-            ]
-                .filter(Boolean)
-                .join(' ')}
-        >
+    // Only an inspectable row (an edit: opens the inspector) and a thought with text (opens in place; a second click
+    // closes it) are controls. An empty cell is not a control, and a row that highlights on hover and then does
+    // nothing on click teaches people that clicking is pointless here.
+    const control: 'inspect' | 'expand' | null = row.inspectable ? 'inspect' : row.expandable && row.full !== undefined ? 'expand' : null;
+    const rowClass = [
+        'flex items-start gap-3 px-5 py-1 text-[13px] leading-5',
+        cursor ? 'ring-1 ring-inset ring-[var(--border-2)]' : '',
+        // The edit row is tinted so a file change is findable by scanning rather than
+        // by reading, and a SELECTED edit gets the emerald left border from the board.
+        row.tinted ? 'bg-[var(--bg-1)]' : '',
+        selected ? 'bg-[var(--bg-2)] shadow-[inset_2px_0_0_var(--color-emerald-500)]' : '',
+    ]
+        .filter(Boolean)
+        .join(' ');
+    const shared = {
+        'data-stream-row': row.id,
+        'data-selected': selected ? 'true' : 'false',
+        ...(cursor ? { 'data-cursor': 'true' } : {}),
+        ...(row.inspectable ? { 'data-inspectable': 'true' } : {}),
+    };
+
+    const cells = (
+        <>
             {/*
              * The time column keeps its width whether or not there is a time in it, so rows do
              * not jag left and right down a stream where some came from a thread that stored no
@@ -177,6 +176,25 @@ export const StreamRow = memo(function StreamRow({ row, selected, live = false, 
                     {row.meta}
                 </span>
             ) : null}
-        </div>
+        </>
     );
+
+    // A control row is a REAL button (real buttons, 2026-11-01): react-fancy's Button, ghost so a list row is not boxed,
+    // full width, its cells laid out by the row's own flex (labelClassName="contents"). Its cells are plain text — a
+    // control row never carries prose, so no link ever sits inside the button.
+    if (control === 'inspect') {
+        return (
+            <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} onClick={() => onSelect(row.id)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal hover:bg-[var(--bg-2)]`}>
+                {cells}
+            </Button>
+        );
+    }
+    if (control === 'expand') {
+        return (
+            <Button type="button" variant="ghost" size="xs" labelClassName="contents" {...shared} data-expandable="true" aria-expanded={expanded} onClick={() => onToggle?.(row.id)} className={`${rowClass} w-full justify-start rounded-none text-left font-normal`}>
+                {cells}
+            </Button>
+        );
+    }
+    return <div {...shared} className={rowClass}>{cells}</div>;
 });

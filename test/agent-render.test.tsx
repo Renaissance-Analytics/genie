@@ -4,6 +4,7 @@ import { AgentView } from '../src/renderer/components/AgentView.js';
 import type { LiveSession } from '../src/core/roster.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE AGENT VIEW, RENDERED.
@@ -357,7 +358,7 @@ describe('a parked approval renders in exactly ONE place', () => {
         // The provider is blocked on a SINGLE promise. A second answer resolves nothing, and
         // the second press would look ignored.
         const html = render({ session: parked(), chatSubject: null, answeringApproval: 'allow' });
-        expect(html).toMatch(/data-approval-option="deny"[^>]*disabled=""/);
+        expect(control(html, 'data-approval-option="deny"')!.open).toMatch(/\sdisabled=""/);
 
         // POSITIVE CONTROL: not disabled when nothing is in flight.
         //

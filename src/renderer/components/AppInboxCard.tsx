@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { ago } from '../../core/inbox-threads.js';
 import type { AppSourceKind } from '../../core/app-inbox.js';
 import { copyToClipboard } from '../clipboard.js';
@@ -50,10 +50,10 @@ const BTN = 'inline-flex items-center gap-1 rounded-md border border-[var(--bord
 
 function ActionButton(p: { action: string; busy: boolean; anyBusy: boolean; icon: string; label: string; title: string; onClick: () => void }) {
     return (
-        <button type="button" data-action={p.action} data-busy={p.busy ? 'true' : undefined} disabled={p.anyBusy} title={p.title} onClick={p.onClick} className={BTN}>
-            <Icon name={p.busy ? 'loader-circle' : p.icon} size="xs" {...(p.busy ? { className: 'animate-spin' } : {})} />
-            <span>{p.label}</span>
-        </button>
+        // Button's own icon, which its `loading` swaps for its spinner (and aria-busy) while this action runs.
+        <Button size="xs" type="button" icon={p.icon} data-action={p.action} data-busy={p.busy ? 'true' : undefined} loading={p.busy} disabled={p.anyBusy} title={p.title} onClick={p.onClick} className={BTN}>
+            {p.label}
+        </Button>
     );
 }
 
@@ -82,7 +82,7 @@ export function AppInboxCard(p: AppInboxCardProps) {
                 <p data-app-outcome={p.outcome.ok ? 'ok' : 'failed'} role={p.outcome.ok ? 'status' : 'alert'} className={`flex items-center gap-2 text-xs ${p.outcome.ok ? 'text-[var(--success)]' : 'text-[var(--danger)]'}`}>
                     <Icon name={p.outcome.ok ? 'circle-check' : 'circle-x'} size="xs" />
                     <span>{p.outcome.text}</span>
-                    {!p.outcome.ok && p.outcome.retry ? <button type="button" data-action="app-retry" onClick={p.outcome.retry} className={BTN}><Icon name="rotate-cw" size="xs" /><span>Retry</span></button> : null}
+                    {!p.outcome.ok && p.outcome.retry ? <Button size="xs" labelClassName="contents" type="button" data-action="app-retry" onClick={p.outcome.retry} className={BTN}><Icon name="rotate-cw" size="xs" /><span>Retry</span></Button> : null}
                 </p>
             ) : null}
             {!s.enabled ? (
@@ -137,21 +137,20 @@ export function AppInboxCard(p: AppInboxCardProps) {
                                 <span className="font-medium">{`${p.revealed.name}: shown once — copy it now; Genie keeps only its hash`}</span>
                                 <span className="flex items-center gap-2">
                                     <code className="min-w-0 flex-1 select-all break-all font-mono">{p.revealed.token}</code>
-                                    <button type="button" data-action="script-key-copy" className={BTN} onClick={() => { void copyToClipboard({ plain: p.revealed!.token }).then(setCopied); }}>
+                                    <Button size="xs" labelClassName="contents" type="button" data-action="script-key-copy" className={BTN} onClick={() => { void copyToClipboard({ plain: p.revealed!.token }).then(setCopied); }}>
                                         <Icon name={copied === true ? 'check' : copied === false ? 'x' : 'copy'} size="xs" />
                                         <span>{copied === true ? 'Copied' : copied === false ? 'Copy failed' : 'Copy'}</span>
-                                    </button>
-                                    <button type="button" data-action="script-key-done" className={BTN} onClick={() => { setCopied(null); p.onDismissReveal(); }}>Done</button>
+                                    </Button>
+                                    <Button size="xs" type="button" data-action="script-key-done" className={BTN} onClick={() => { setCopied(null); p.onDismissReveal(); }}>Done</Button>
                                 </span>
                                 <span className="text-[var(--fg-3)]">{`Your script sets GENIE_INBOX_TOKEN to it and posts JSON { "subject", "body" } to ${s.url ?? 'the address above'}/v1/inbox with "Authorization: Bearer $GENIE_INBOX_TOKEN".`}</span>
                             </div>
                         ) : null}
                         <form data-form="script-key-create" className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); if (name.trim()) { p.onCreateKey(name.trim()); setName(''); } }}>
                             <input aria-label="New script key name" value={name} onChange={(e) => setName(e.target.value)} placeholder="nightly-check" className="rounded-md border border-[var(--border-1)] bg-transparent px-2 py-0.5 font-mono text-xs" />
-                            <button type="submit" data-action="script-key-create" data-busy={isBusy('create', 'create') ? 'true' : undefined} disabled={anyBusy || !name.trim()} className={BTN}>
-                                <Icon name={isBusy('create', 'create') ? 'loader-circle' : 'key-round'} size="xs" {...(isBusy('create', 'create') ? { className: 'animate-spin' } : {})} />
-                                <span>Make a key</span>
-                            </button>
+                            <Button size="xs" type="submit" icon="key-round" data-action="script-key-create" data-busy={isBusy('create', 'create') ? 'true' : undefined} loading={isBusy('create', 'create')} disabled={anyBusy || !name.trim()} className={BTN}>
+                                Make a key
+                            </Button>
                         </form>
                     </div>
                 </>

@@ -153,9 +153,9 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
     return (
         <div data-chat-message={m.id} data-who="mail" className="flex max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
             {onOpenMail ? (
-                <button type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)] hover:underline">
+                <Button size="xs" type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)] ">
                     {head}
-                </button>
+                </Button>
             ) : (
                 <div className="flex items-center gap-1.5 font-mono text-[11px] text-[var(--violet-400)]">{head}</div>
             )}
@@ -185,7 +185,7 @@ export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpe
                     return (
                         <li key={ref.id} data-delivery-mail={ref.id}>
                             {onOpenMail ? (
-                                <button type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)]">{body}</button>
+                                <Button size="xs" type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)]">{body}</Button>
                             ) : (
                                 <div className="flex min-w-0 items-baseline gap-2 px-1">{body}</div>
                             )}
@@ -530,14 +530,14 @@ function ChatFlyoutBody({
                 ) : null}
 
                 {onClose ? (
-                    <button
+                    <Button size="xs" labelClassName="contents"
                         type="button"
                         aria-label="Close chat"
                         onClick={onClose}
                         className="flex size-5 shrink-0 items-center justify-center rounded text-[var(--fg-4)] hover:bg-[var(--bg-2)]"
                     >
                         <Icon name="x" size="xs" />
-                    </button>
+                    </Button>
                 ) : null}
             </div>
 
@@ -548,7 +548,7 @@ function ChatFlyoutBody({
                     {thread?.context?.text ?? 'Working'}
                     {onStopTurn ? <TurnStop onStop={onStopTurn} agentName={thread?.name} className="ml-auto" /> : null}
                     {onProviderLogin ? (
-                        <button
+                        <Button size="xs" labelClassName="contents"
                             type="button"
                             data-action="provider-login"
                             title={`Open the ${providerName(onProviderLogin.provider)} login in a window of its own`}
@@ -557,10 +557,10 @@ function ChatFlyoutBody({
                         >
                             <ProviderLogo provider={onProviderLogin.provider} size="xs" className="text-[var(--fg-1)]" />
                             Log in
-                        </button>
+                        </Button>
                     ) : null}
                     {onAccountRetry ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="account-retry"
                             title="Once the account is put right with the provider: every agent it stopped comes back"
@@ -568,10 +568,10 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--danger)] bg-[var(--danger)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--danger)]/20"
                         >
                             Try again
-                        </button>
+                        </Button>
                     ) : null}
                     {onDesignLogin ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="design-login"
                             title="Open Claude Code in a window of its own to run /design-login; this agent is told to retry once it has run"
@@ -579,10 +579,10 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--warning)] bg-[var(--warning)]/10 px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--warning)]/20"
                         >
                             Log in to Claude Design
-                        </button>
+                        </Button>
                     ) : null}
                     {onResumeLimit ? (
-                        <button
+                        <Button size="xs"
                             type="button"
                             data-action="resume-limit"
                             title="Resume now — every agent waiting for this provider's rate limit goes on"
@@ -590,7 +590,7 @@ function ChatFlyoutBody({
                             className="ml-auto flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]"
                         >
                             Resume now
-                        </button>
+                        </Button>
                     ) : null}
                 </div>
             ) : null}
@@ -657,9 +657,9 @@ function ChatFlyoutBody({
                 ) : null}
                 {/* EARLIER HISTORY (core/chat-window.ts): how many messages are behind the window, and the page that brings them in. */}
                 {behind ? (
-                    <button type="button" data-chat-earlier={windowStart > 0 ? windowStart : 'more'} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
+                    <Button size="xs" type="button" data-chat-earlier={windowStart > 0 ? windowStart : 'more'} onClick={showEarlier} className="self-center rounded-full border border-[var(--border-1)] px-3 py-0.5 font-mono text-[11px] text-[var(--fg-3)] hover:bg-[var(--bg-1)]">
                         {windowStart > 0 ? `${windowStart.toLocaleString('en-US')} earlier ${windowStart === 1 ? 'message' : 'messages'} · show more` : 'Earlier messages · show more'}
-                    </button>
+                    </Button>
                 ) : null}
                 {shown.map((m) => {
                     const who = m.who ?? (m.from === 'you' ? 'you' : 'agent');
@@ -731,11 +731,11 @@ function ChatFlyoutBody({
                                     <span className="text-[12px] text-[var(--danger)]">Not delivered. {m.reason ?? (m.promptId ? 'Kept for you to send again.' : m.resend === 'send' ? `${thread?.name ?? 'the agent'} was not running when you sent it.` : `${thread?.name ?? 'the agent'} is not running.`)}</span>
                                     {m.draftProblem ? <span role="alert" className="text-[12px] text-[var(--danger)]">{m.draftProblem}</span> : null}
                                     <div className="flex items-center gap-1.5">
-                                        {onDiscardDraft ? <button type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</button> : null}
+                                        {onDiscardDraft ? <Button size="xs" type="button" data-action="discard-draft" data-draft={m.id} onClick={() => onDiscardDraft(m.id)} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">Discard</Button> : null}
                                         {m.reason ? null : m.resend === 'send'
-                                            ? <button type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</button>
+                                            ? <Button size="xs" type="button" data-action="send-draft" data-draft={m.id} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Send now</Button>
                                             : m.id === restartOn
-                                                ? <button type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</button>
+                                                ? <Button size="xs" type="button" data-action="restart" data-draft={m.id} title={`Restart ${thread?.name ?? 'the agent'}; every message not yet delivered to it is sent, in order, once it is up`} onClick={() => onRestartAndSend?.(m.id)} className="rounded-lg border border-[var(--primary-hover)] bg-[var(--primary)] px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[var(--primary-hover)]">Restart</Button>
                                                 : null}
                                     </div>
                                 </div>

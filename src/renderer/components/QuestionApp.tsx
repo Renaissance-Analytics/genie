@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react';
-import { ContentRenderer } from '@particle-academy/react-fancy';
+import { Button, ContentRenderer } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { FileViewer } from '@particle-academy/fancy-code';
 import { extractFileRefs, splitByExistence, type AskFileRef } from '../../core/ask-file-refs.js';
@@ -91,7 +91,7 @@ function DrawerBody({ path, text, line }: { path: string; text: string; line: nu
         <div className="flex min-h-0 flex-1 flex-col">
             {PROSE.test(path) ? (
                 <div className="flex shrink-0 justify-end px-3 py-1">
-                    <button type="button" data-action="question-drawer-source" onClick={() => setSource((v) => !v)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[11px]">{source ? 'Read' : 'Source'}</button>
+                    <Button size="xs" type="button" data-action="question-drawer-source" onClick={() => setSource((v) => !v)} className="rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[11px]">{source ? 'Read' : 'Source'}</Button>
                 </div>
             ) : null}
             <div className="relative min-h-0 flex-1 overflow-auto px-3 pb-3">
@@ -161,7 +161,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                     {queue.map((q) => {
                         const on = q.id === item.id;
                         return (
-                            <button
+                            <Button size="xs" labelClassName="contents"
                                 key={q.id}
                                 type="button"
                                 data-question-queue-item={q.id}
@@ -174,7 +174,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                                 <span className="min-w-0 flex-1 truncate">{q.title}</span>
                                 {parked.has(q.id) ? <span data-question-parked="" className="shrink-0 text-[11px] text-[var(--fg-4)]">later</span> : null}
                                 {q.at > 0 ? <time dateTime={new Date(q.at).toISOString()} className="shrink-0 text-[11px] text-[var(--fg-4)]">{ageLabel(q.at, now)}</time> : null}
-                            </button>
+                            </Button>
                         );
                     })}
                 </nav>
@@ -203,7 +203,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                 <aside data-question-drawer={drawer.path} className="flex min-h-0 w-[520px] max-w-[60%] shrink-0 flex-col border-l border-[var(--border-1)] bg-[var(--bg-1)]">
                     <div className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-3 py-2 text-[12px]">
                         <span className="min-w-0 flex-1 truncate font-mono" title={drawer.path}>{drawer.path}</span>
-                        <button type="button" data-action="question-drawer-close" onClick={() => onCloseFile?.()} title="Close (Esc)" className="rounded-md border border-[var(--border-1)] px-2 py-0.5">Close</button>
+                        <Button size="xs" type="button" data-action="question-drawer-close" onClick={() => onCloseFile?.()} title="Close (Esc)" className="rounded-md border border-[var(--border-1)] px-2 py-0.5">Close</Button>
                     </div>
                     {drawer.error !== undefined ? (
                         <p data-question-drawer-error="" className="px-3 py-2 text-[12px] text-[var(--danger)]">{drawer.error}</p>
@@ -232,10 +232,10 @@ function QuestionFiles({ item, existing, open, onOpen }: { item: DeckItem; exist
     return (
         <div data-question-files="" className="mb-3 flex flex-wrap items-center gap-1.5 text-[12px]">
             {present.map((ref) => (
-                <button key={ref.path} type="button" data-question-file={ref.path} aria-pressed={open === ref.path} onClick={() => onOpen?.(ref)} title={ref.path}
+                <Button size="xs" key={ref.path} type="button" data-question-file={ref.path} aria-pressed={open === ref.path} onClick={() => onOpen?.(ref)} title={ref.path}
                     className={`rounded-md border px-2 py-0.5 font-mono ${open === ref.path ? 'border-[var(--primary)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
                     {ref.name}{ref.line ? `:${ref.line}` : ''}{ref.section ? ` ${ref.section}` : ''}
-                </button>
+                </Button>
             ))}
             {missing.map((ref) => (
                 <span key={ref.path} data-question-file-missing={ref.path} className="text-[var(--fg-4)]">not found: <span className="font-mono">{ref.path}</span></span>

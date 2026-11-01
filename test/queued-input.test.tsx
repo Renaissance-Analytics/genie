@@ -9,6 +9,7 @@ import type { DriverEvents, TurnOutcomeLike } from '../src/core/session.js';
 import { SessionHost } from '../src/main/session-host.js';
 import { ChatFlyout } from '../src/renderer/components/ChatFlyout.js';
 import { buildHostApi, type HostApiDeps } from '../src/main/host-api.js';
+import { control } from './helpers/control-markup.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -119,7 +120,7 @@ describe('input sent during a Codex turn', () => {
         expect(message).toMatchObject({ who: 'you', delivered: false, resend: 'restart' });
         const html = renderToStaticMarkup(<ChatFlyout thread={{ agentId: s.record.id, name: 'worker', fidelity: 'declared', unread: null, messages: message ? [message] : [], context: null }} onSend={() => {}} onClose={() => {}} onRestartAndSend={() => {}} />);
         // The chat's one Restart (genie#1238): it restarts worker and sends what was not delivered.
-        expect(html).toMatch(/data-action="restart"[^>]*>Restart<\/button>/);
+        expect(control(html, 'data-action="restart"')).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
         expect(s.prompts).toEqual(['first']);
     });
 

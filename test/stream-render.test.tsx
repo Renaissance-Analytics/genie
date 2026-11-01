@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { Stream, initialFollowTail } from '../src/renderer/components/Stream.js';
 import type { StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE STREAM, RENDERED.
@@ -88,7 +89,9 @@ describe('rows', () => {
         // The owner (using beta.19): click the thinking line to see the reasoning. It toggles in place; it is not an
         // Inspector selection.
         expect(row).toContain('data-expandable="true"');
-        expect(row).toContain('role="button"');
+        // A REAL button (react-fancy's), not a div with role="button" (real buttons, 2026-11-01).
+        expect(control(html, 'data-stream-row="th1"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(row).not.toContain('role="button"');
         expect(row).not.toContain('data-inspectable');
     });
 
@@ -98,13 +101,15 @@ describe('rows', () => {
         const tool = html.slice(html.indexOf('data-stream-row="to1"'), html.indexOf('data-stream-row="ed1"'));
 
         expect(edit).toContain('data-inspectable="true"');
-        expect(edit).toContain('role="button"');
+        expect(control(html, 'data-stream-row="ed1"')).toMatchObject({ tag: 'button', fancy: true });
         expect(edit).toContain('src/core/session.ts');
 
         // POSITIVE CONTROL: the non-edit tool call is a row and not a control, so
         // "inspectable" is a reading rather than a constant.
         expect(tool).not.toContain('data-inspectable');
         expect(tool).toContain('data-stream-row="to1"');
+        // ...and is no button at all: a row that does nothing on click does not offer one.
+        expect(html).toMatch(/<div\b[^>]*data-stream-row="to1"/);
     });
 
     it('renders no line counts when no diff was computed', () => {
