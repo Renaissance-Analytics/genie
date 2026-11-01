@@ -16,6 +16,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
+import type { SpawnFrame } from './spawn-host-protocol.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -53,6 +54,11 @@ export interface EngineServerOptions {
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     readonly coalesceMs?: number;
     readonly log?: (line: string) => void;
+    /**
+     * genie-host's spawn-host children (the host split, P2.1): `send` takes a window's frame to the child of its profile;
+     * `windowGone` says a window's link closed (its streams' lines now go nowhere). Absent = `engine.spawn` is refused.
+     */
+    readonly spawn?: { send(profile: string, frame: SpawnFrame): void; windowGone?(): void };
 }
 
 /** The most rows one frame carries: a longer patch is cut into several (see `#updatesFor`). */
@@ -142,6 +148,7 @@ export class SessionEngineServer {
             for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
+            if (was) this.#options.spawn?.windowGone?.();
         });
     }
 
@@ -199,6 +206,8 @@ export class SessionEngineServer {
         }
         // RULE 1: the command's effect, then its answer.
         this.#flush();
+        // A notification (id 0, a spawn frame) wants no answer.
+        if (id === 0) return;
         conn.transport.send(JSON.stringify(reply.ok ? { kind: 'result', id, ok: true, value: reply.value ?? null } : { kind: 'result', id, ok: false, reason: reply.reason }));
     }
 
@@ -303,6 +312,11 @@ export class SessionEngineServer {
                 // Answered first: the shutdown ends this process, and the window waits for the pid, not for this reply.
                 setTimeout(() => this.#options.onShutdown?.(), 0);
                 return true;
+            case 'engine.spawn': {
+                if (!this.#options.spawn) throw new Error('This host runs no spawn host.');
+                this.#options.spawn.send(str(0), args[1] as SpawnFrame);
+                return true;
+            }
             case 'client.prepareMcpServers':
                 throw new Error('client.prepareMcpServers is the window\'s to answer');
         }
@@ -317,6 +331,11 @@ export class SessionEngineServer {
             conn.pending.set(id, { resolve, reject });
             conn.transport.send(JSON.stringify({ kind: 'call', id, method, args }));
         });
+    }
+
+    /** A frame from genie-host's spawn-host child of `profile`, to every window. */
+    spawnFrame(profile: string, frame: SpawnFrame): void {
+        for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'spawn.frame', { profile, frame });
     }
 
     #markDirty(agentId: string): void {

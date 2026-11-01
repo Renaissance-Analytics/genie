@@ -1,5 +1,6 @@
 import { OutputTail, type ProcessLog } from '../core/output-tail.js';
 import type { PtyPort } from './terminal-host.js';
+import type { ListedPty } from './spawn-host-protocol.js';
 
 /**
  * BACKGROUND PROCESSES AND SITE PROCESSES (§6.6) — Genie's supervisor over `PtyPort`.
@@ -125,6 +126,13 @@ export class ProcessSupervisor {
     readonly #liveness: SupervisorLiveness;
     readonly #entries = new Map<string, Entry>();
     readonly #byPty = new Map<string, string>();
+    /**
+     * ADOPTED, NOT YET CLAIMED (the host split, P2.1): a live pty a previous window started, found under genie-host after
+     * this window started. Held by process id until that process's first `start` claims it; its output meanwhile is kept
+     * so the claimed log loses nothing.
+     */
+    readonly #adopted = new Map<string, { ptyId: string; pid: number; output: string }>();
+    readonly #adoptedByPty = new Map<string, string>();
     readonly #changeListeners = new Set<(status: ProcessStatus) => void>();
     readonly #outputListeners = new Set<(id: string, data: string) => void>();
     #confirmPending = false;
@@ -138,6 +146,13 @@ export class ProcessSupervisor {
         this.#clock = clock;
         this.#liveness = liveness;
         pty.onExit((ptyId, exitCode) => {
+            const adoptedId = this.#adoptedByPty.get(ptyId);
+            if (adoptedId !== undefined) {
+                // Ended before anyone claimed it: let go; the process's next start spawns it fresh.
+                this.#adoptedByPty.delete(ptyId);
+                this.#adopted.delete(adoptedId);
+                return;
+            }
             this.#onExit(ptyId, exitCode);
             // One exit seen is the cue to look at the rest: a lost pty host takes every pty at once.
             this.recheck();
@@ -154,7 +169,11 @@ export class ProcessSupervisor {
         });
         pty.onData((ptyId, data) => {
             const id = this.#byPty.get(ptyId);
-            if (id === undefined) return;
+            if (id === undefined) {
+                const pending = this.#adopted.get(this.#adoptedByPty.get(ptyId) ?? '');
+                if (pending) pending.output += data;
+                return;
+            }
             this.#entries.get(id)?.log.append(data);
             for (const l of this.#outputListeners) l(id, data);
         });
@@ -181,8 +200,48 @@ export class ProcessSupervisor {
             suspectAt: null,
         };
         this.#entries.set(spec.id, entry);
-        this.#spawn(entry);
+        const adopted = this.#adopted.get(spec.id);
+        if (adopted) this.#claim(entry, adopted);
+        else this.#spawn(entry);
         return this.#status(entry);
+    }
+
+    /**
+     * A live pty a previous window started, found under genie-host (the host split, P2.1): held for its process's first
+     * `start`, which claims it instead of starting the process twice. A pty that is not a supervised process is ignored.
+     */
+    adopt(pty: ListedPty): void {
+        if (pty.tag?.kind !== 'process') return;
+        if (this.#entries.get(pty.tag.processId)?.state === 'running') return;
+        this.#adopted.set(pty.tag.processId, { ptyId: pty.id, pid: pty.pid, output: pty.scrollback });
+        this.#adoptedByPty.set(pty.id, pty.tag.processId);
+    }
+
+    /**
+     * Every adopted pty nobody claimed — its process is no longer wanted — is ENDED and named (asked once the boot's
+     * restore is done): never left running where no window can see it.
+     */
+    reapUnclaimed(): Array<{ processId: string; pid: number }> {
+        const reaped = [...this.#adopted].map(([processId, a]) => ({ processId, pid: a.pid, ptyId: a.ptyId }));
+        this.#adopted.clear();
+        this.#adoptedByPty.clear();
+        for (const r of reaped) this.#pty.kill(r.ptyId);
+        return reaped.map(({ processId, pid }) => ({ processId, pid }));
+    }
+
+    #claim(entry: Entry, adopted: { ptyId: string; pid: number; output: string }): void {
+        this.#adopted.delete(entry.spec.id);
+        this.#adoptedByPty.delete(adopted.ptyId);
+        entry.ptyId = adopted.ptyId;
+        entry.pid = adopted.pid > 0 ? adopted.pid : null;
+        entry.exitCode = null;
+        entry.startedAt = this.#clock.now();
+        entry.cancelRestart = null;
+        entry.suspectAt = null;
+        this.#byPty.set(adopted.ptyId, entry.spec.id);
+        if (adopted.output) entry.log.append(adopted.output);
+        entry.log.note(`re-attached after a window restart (pid ${adopted.pid}): ${entry.spec.command}`);
+        this.#transition(entry, 'running');
     }
 
     stop(id: string): boolean {
@@ -336,6 +395,8 @@ export class ProcessSupervisor {
             cwd: entry.spec.cwd,
             command: entry.spec.command,
             ...(entry.spec.env ? { env: { ...entry.spec.env } } : {}),
+            // What it is to the window: the NEXT window claims it by this (the host split, P2.1).
+            tag: { kind: 'process', processId: entry.spec.id, workspaceId: entry.spec.workspaceId },
         });
         entry.ptyId = opened.id;
         // 0 = not known yet (the spawn host answers it through onPid): never a pid to ask the OS about.

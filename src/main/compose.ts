@@ -66,6 +66,7 @@ import { InboxStore } from './inbox-store.js';
 import { KnowledgeStore } from './knowledge-store.js';
 import { runtimeDir } from './paths.js';
 import { ProcessSupervisor } from './process-supervisor.js';
+import type { ListedPty } from './spawn-host-protocol.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
 import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
@@ -98,6 +99,12 @@ export interface ComposeInput {
      * host's (main/spawn-host-client.ts, genie#1397), so no supervised process is created on main's thread. Absent = `pty`.
      */
     readonly processPty?: PtyPort;
+    /**
+     * Live supervised ptys a previous window started, still running under genie-host (the host split, P2.1): adopted
+     * as the supervisor is built — BEFORE any site or kept process starts — so each one's first start claims its
+     * running process instead of starting it a second time on the same port.
+     */
+    readonly adoptPtys?: readonly ListedPty[];
     /**
      * `docker events` as a stream of lines, so engine states are read on change instead of on every look (genie#1397).
      * Absent with no `docker` given = the real one, created where `execFileRunner`'s commands are; absent with a `docker`
@@ -716,6 +723,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
 
     const supervisor = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
+    for (const pty of input.adoptPtys ?? []) supervisor.adopt(pty);
     // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
     // RECORDED (services.json, read through the registry every time), not one something else on this machine holds
     // (a bind probe), and the same ports for the same records after a restart (core/port-allocator.ts).

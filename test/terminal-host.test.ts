@@ -77,7 +77,8 @@ describe('opening a terminal', () => {
 
         expect(opened.id).toBe('pty_1');
         expect(host.count).toBe(1);
-        expect(pty.opened).toEqual([{ cwd: '/repo', command: 'npm test' }]);
+        // The tag: what the NEXT window adopts it by under genie-host (the host split, P2.1).
+        expect(pty.opened).toEqual([{ cwd: '/repo', command: 'npm test', tag: { kind: 'terminal', workspaceId: 'tynn', shell: 'npm test' } }]);
     });
 
     it('passes an env through to the pty, and passes NOTHING when none is given', () => {
@@ -101,7 +102,7 @@ describe('opening a terminal', () => {
 
         host.open({ workspaceId: 'tynn', cwd: '/repo' });
 
-        expect(pty.opened).toEqual([{ cwd: '/repo', command: undefined }]);
+        expect(pty.opened).toEqual([{ cwd: '/repo', command: undefined, tag: { kind: 'terminal', workspaceId: 'tynn', shell: '' } }]);
     });
 
     it('passes the initial size through, so the first paint is not the wrong shape', () => {

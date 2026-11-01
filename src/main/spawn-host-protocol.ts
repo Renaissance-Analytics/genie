@@ -16,10 +16,30 @@
  * them and these methods are the genie-host side's to serve; nothing here knows it is talking to Electron.
  */
 
-export const SPAWN_METHODS = ['host.env', 'spawn.exec', 'spawn.stream', 'spawn.unstream', 'pty.open', 'pty.write', 'pty.resize', 'pty.kill', 'host.shutdown'] as const;
+export const SPAWN_METHODS = ['host.env', 'spawn.exec', 'spawn.stream', 'spawn.unstream', 'pty.open', 'pty.write', 'pty.resize', 'pty.kill', 'pty.list', 'spawn.unstreamAll', 'host.shutdown'] as const;
 export type SpawnMethod = (typeof SPAWN_METHODS)[number];
 
-export const SPAWN_EVENTS = ['host.ready', 'pty.opened', 'pty.data', 'pty.exit', 'stream.line', 'stream.end'] as const;
+/**
+ * WHAT A PTY IS TO THE WINDOW that opened it (the host split, P2.1): given at `pty.open` (its third argument) and kept by
+ * the spawn host, so a NEW window — the spawn host outlives the window under genie-host — can find what is still running
+ * and take it back (`pty.list`) instead of starting it twice.
+ */
+export type PtyTag =
+    | { readonly kind: 'process'; readonly processId: string; readonly workspaceId: string }
+    | { readonly kind: 'terminal'; readonly workspaceId: string; readonly shell: string };
+
+/** One live pty, as `pty.list` answers it. `tag` is null for a pty opened without one. */
+export interface ListedPty {
+    readonly id: string;
+    readonly pid: number;
+    readonly tag: PtyTag | null;
+    /** The shell the engine started (resolved: the default shell has its real name here). Absent from an older host. */
+    readonly shell?: string;
+    readonly scrollback: string;
+}
+
+// `pty.cwd {id, cwd}`: an interactive terminal's working directory as its shell reports it (OSC-7), for the cwd resume.
+export const SPAWN_EVENTS = ['host.ready', 'pty.opened', 'pty.data', 'pty.exit', 'pty.cwd', 'stream.line', 'stream.end'] as const;
 export type SpawnEvent = (typeof SPAWN_EVENTS)[number];
 
 export type SpawnFrame =

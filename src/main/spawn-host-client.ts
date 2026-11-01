@@ -1,6 +1,6 @@
 import { fork, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { parseSpawnFrame, type SpawnFrame, type SpawnMethod } from './spawn-host-protocol.js';
+import { parseSpawnFrame, type ListedPty, type SpawnFrame, type SpawnMethod } from './spawn-host-protocol.js';
 import { execInProcess, streamInProcess, type LineStream, type RunOptions, type RunResult } from './spawn-exec.js';
 import type { PtyOpened, PtyPort, PtySpawnOptions } from './terminal-host.js';
 import { setExecRoute } from './toolchain-runner.js';
@@ -42,6 +42,13 @@ export interface SpawnHostOptions {
     readonly killPid?: (pid: number) => void;
     /** Whether a pid still runs (a killed helper is waited for before its pty is reported exited). Default: signal 0. */
     readonly pidAlive?: (pid: number) => boolean;
+    /**
+     * THE SPAWN HOST OVER A LINK (the host split, P2.1, plan §11a): under genie-host the spawn host is the HOST's child,
+     * reached through the engine link. Given, nothing is forked here: frames go out through `link.send` and come in
+     * through `linkFrame`; the link's loss (`linkDown`) is not the child's — nothing is killed or reported exited — and
+     * `linkUp` reconciles with what is still running.
+     */
+    readonly link?: { send(frame: SpawnFrame): void };
 }
 
 /** How long a lost child's killed helpers are waited for before their ptys are reported exited anyway. */
@@ -65,17 +72,58 @@ export class SpawnHostClient {
     readonly #ptys = new Map<string, { pid: number | null }>();
     readonly #data = new Set<(id: string, data: string) => void>();
     readonly #exit = new Set<(id: string, code: number) => void>();
-    readonly #pid = new Set<(id: string, pid: number) => void>();
+    readonly #pid = new Set<(id: string, pid: number, shell?: string) => void>();
+    readonly #cwd = new Set<(id: string, cwd: string) => void>();
+    /** Over a link: whether it is up now (calls and ptys fail, said, while it is not). */
+    #linkUp = false;
 
     constructor(options: SpawnHostOptions) {
         this.#options = options;
         this.#log = options.log ?? (() => {});
-        this.#start();
+        // Over a link the spawn host is somebody else's child: nothing to fork.
+        if (!options.link) this.#start();
     }
 
-    /** The child's pid, or null between children. */
+    /** The child's pid, or null between children (and always over a link: the child is not this process's). */
     get pid(): number | null {
         return this.#child?.pid ?? null;
+    }
+
+    /** A frame from the spawn host, over the link. */
+    linkFrame(frame: SpawnFrame): void {
+        this.#onFrame(frame);
+    }
+
+    /**
+     * The link is up (again): the live ptys are listed, every pty this client knew and the host no longer runs is
+     * reported exited (-1: the host or its child restarted), and the live ones it did not know are answered — the
+     * supervisor's and the terminals' to adopt (`adoptPty`).
+     */
+    async linkUp(): Promise<ListedPty[]> {
+        this.#linkUp = true;
+        this.#sentEnv = null;
+        const listed = (await this.#call('pty.list', [])) as ListedPty[];
+        const live = new Set(listed.map((p) => p.id));
+        for (const id of [...this.#ptys.keys()]) {
+            if (live.has(id)) continue;
+            this.#ptys.delete(id);
+            for (const l of this.#exit) l(id, -1);
+        }
+        return listed.filter((p) => !this.#ptys.has(p.id));
+    }
+
+    /** The link is down: calls in flight fail (ESPAWNHOST) and streams end; NOTHING is killed — the ptys run on. */
+    linkDown(reason: string): void {
+        this.#linkUp = false;
+        for (const [, p] of this.#pending) p.reject(Object.assign(new Error(`the spawn host is unreachable: ${reason}`), { code: 'ESPAWNHOST' }));
+        this.#pending.clear();
+        for (const [, s] of [...this.#streams]) s.onEnd(`the spawn host is unreachable: ${reason}`);
+        this.#streams.clear();
+    }
+
+    /** A live pty found by `linkUp`, taken back: its output, exit and writes are routed as for one opened here. */
+    adoptPty(pty: ListedPty): void {
+        this.#ptys.set(pty.id, { pid: pty.pid > 0 ? pty.pid : null });
     }
 
     /** True once the child gave up starting and everything runs in-process. */
@@ -116,6 +164,14 @@ export class SpawnHostClient {
                     return opened;
                 }
                 const id = `term_${randomUUID()}`;
+                if (this.#options.link && !this.#linkUp) {
+                    // Over a link that is down: not started, and said (a crash with words, never a silent hang).
+                    queueMicrotask(() => {
+                        for (const l of this.#data) l(id, '[genie] the agent host is not connected, so this process was not started\r\n');
+                        for (const l of this.#exit) l(id, -1);
+                    });
+                    return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
+                }
                 if (this.#fallback) {
                     // No child and no engine to fall back on: the process cannot start, and says so (a crash with words).
                     queueMicrotask(() => {
@@ -125,7 +181,9 @@ export class SpawnHostClient {
                     return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
                 }
                 this.#ptys.set(id, { pid: null });
-                this.#send({ kind: 'call', id: 0, method: 'pty.open', args: [id, spawn] });
+                // The tag is the spawn host's to keep, not the engine's: it travels beside the spawn options.
+                const { tag, ...engineSpawn } = spawn;
+                this.#send({ kind: 'call', id: 0, method: 'pty.open', args: [id, engineSpawn, tag ?? null] });
                 return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
             },
             write: (id, data) => {
@@ -152,12 +210,15 @@ export class SpawnHostClient {
             onData: (l) => { this.#data.add(l); return () => this.#data.delete(l); },
             onExit: (l) => { this.#exit.add(l); return () => this.#exit.delete(l); },
             onPid: (l) => { this.#pid.add(l); return () => this.#pid.delete(l); },
+            onCwd: (l) => { this.#cwd.add(l); return () => this.#cwd.delete(l); },
         };
     }
 
     /** Every pty and stream ended, the child asked to exit, and gone (forced after `ms`). */
     async stop(ms = 3_000): Promise<void> {
         this.#stopping = true;
+        // Over a link the child is the host's: the host ends it ("Shut down everything"), never a window.
+        if (this.#options.link) return;
         const child = this.#child;
         if (!child || child.exitCode !== null) return;
         const gone = new Promise<void>((resolve) => child.once('exit', () => resolve()));
@@ -260,11 +321,15 @@ export class SpawnHostClient {
                 const pid = typeof payload['pid'] === 'number' ? payload['pid'] : 0;
                 if (!entry || !(pid > 0)) return;
                 entry.pid = pid;
-                for (const l of this.#pid) l(id, pid);
+                const shell = typeof payload['shell'] === 'string' && payload['shell'] !== '' ? payload['shell'] : undefined;
+                for (const l of this.#pid) l(id, pid, shell);
                 return;
             }
             case 'pty.data':
                 if (this.#ptys.has(id)) for (const l of this.#data) l(id, String(payload['data'] ?? ''));
+                return;
+            case 'pty.cwd':
+                if (this.#ptys.has(id)) for (const l of this.#cwd) l(id, String(payload['cwd'] ?? ''));
                 return;
             case 'pty.exit':
                 if (!this.#ptys.delete(id)) return;
@@ -283,6 +348,15 @@ export class SpawnHostClient {
     }
 
     #call(method: SpawnMethod, args: unknown[]): Promise<unknown> {
+        if (this.#options.link) {
+            if (!this.#linkUp) return Promise.reject(Object.assign(new Error('the agent host is not connected'), { code: 'ESPAWNHOST' }));
+            this.#seq += 1;
+            const id = this.#seq;
+            return new Promise((resolve, reject) => {
+                this.#pending.set(id, { resolve, reject });
+                this.#send({ kind: 'call', id, method, args });
+            });
+        }
         if (!this.#child) this.#start();
         const child = this.#child;
         if (!child) return Promise.reject(Object.assign(new Error('the spawn host is not running'), { code: 'ESPAWNHOST' }));
@@ -295,6 +369,20 @@ export class SpawnHostClient {
     }
 
     #send(frame: SpawnFrame): void {
+        const link = this.#options.link;
+        if (link) {
+            if (!this.#linkUp) return;
+            if (frame.kind === 'call' && frame.method !== 'host.env') {
+                const env = mainEnv();
+                const text = JSON.stringify(env);
+                if (text !== this.#sentEnv) {
+                    this.#sentEnv = text;
+                    link.send({ kind: 'call', id: 0, method: 'host.env', args: [env] });
+                }
+            }
+            link.send(frame);
+            return;
+        }
         if (!this.#child) this.#start();
         const child = this.#child;
         if (!child?.connected) return;

@@ -18,7 +18,11 @@ import { execInProcess, streamInProcess } from './spawn-exec.js';
  * process's log itself).
  */
 
-const settings = { get: (key: string) => (key === 'track_cwd' ? 'off' : key === 'detached_terminals' ? 'off' : undefined) };
+// THE PROFILE (the host split, P2.1): under genie-host this entry runs twice. `terminals` hosts interactive shells, which
+// report their working directory (OSC-7, the cwd resume); `processes` (the default, and #1405's only one) hosts commands,
+// which never get the hook. The engine's settings are global per process, hence one child per profile.
+const terminals = process.env['GENIE_SPAWN_PROFILE'] === 'terminals';
+const settings = { get: (key: string) => (key === 'track_cwd' ? (terminals ? 'on' : 'off') : key === 'detached_terminals' ? 'off' : undefined) };
 configureInProcessBackend({
     settings,
     snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false },
