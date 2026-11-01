@@ -57,7 +57,7 @@ describe("codex's own options reach the card (the board's `Allow composer for th
         for (const [id, label] of [['codex-accept', 'Allow once'], ['codex-accept-session', 'Allow for this session'], ['codex-accept-amendment', 'Allow and remember this command'], ['codex-decline', 'Deny']]) {
             const option = control(html, `data-approval-option="${id}"`);
             expect(option).toMatchObject({ tag: 'button', fancy: true });
-            expect(option!.text.startsWith(label), option!.text).toBe(true);
+            expect(option!.text.startsWith(label!), option!.text).toBe(true);
         }
     });
 });
