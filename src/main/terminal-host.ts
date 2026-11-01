@@ -1,5 +1,5 @@
 import { fanOut } from '../core/fan-out.js';
-import type { PtyTag } from './spawn-host-protocol.js';
+import type { ListedPty, PtyTag } from './spawn-host-protocol.js';
 import { limitRefusal } from '../core/shell-limits.js';
 
 /**
@@ -233,6 +233,8 @@ export class TerminalHost {
             ...(options.cols === undefined ? {} : { cols: options.cols }),
             ...(options.rows === undefined ? {} : { rows: options.rows }),
             ...(options.env === undefined ? {} : { env: options.env }),
+            // What it is to the window: the NEXT window adopts it by this (the host split, P2.1).
+            tag: { kind: 'terminal', workspaceId: options.workspaceId, shell: options.command ?? '' },
         });
 
         this.#terminals = [
@@ -261,7 +263,8 @@ export class TerminalHost {
 
     scrollback(id: string): string | undefined {
         if (!this.#has(id)) return this.#finished.get(id)?.text;
-        return this.#pty.scrollback(id);
+        // A port that runs the pty elsewhere (the spawn host over a link) holds none: this host's own tail is it.
+        return this.#pty.scrollback(id) ?? this.#tails.get(id);
     }
 
     /** A terminal that ENDED: whose it was and how it ended. `null` for a live one and for one this host never had. */
@@ -274,7 +277,18 @@ export class TerminalHost {
     attach(id: string): { id: string; pid: number; shell: string; workspaceId: string; scrollback: string } | null {
         const t = this.#terminals.find((x) => x.id === id);
         if (!t) return null;
-        return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? '' };
+        return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? this.#tails.get(id) ?? '' };
+    }
+
+    /**
+     * A live terminal a previous window opened, found under genie-host (the host split, P2.1): taken back with what it
+     * printed, so the panel reopens on it. A pty that is not a terminal (a supervised process) is the supervisor's.
+     */
+    adopt(pty: ListedPty): void {
+        if (pty.tag?.kind !== 'terminal') return;
+        if (this.#has(pty.id)) return;
+        this.#terminals = [...this.#terminals, { id: pty.id, workspaceId: pty.tag.workspaceId, pid: pty.pid, shell: pty.tag.shell || 'shell' }];
+        this.#tails.set(pty.id, pty.scrollback.length > TAIL_MAX ? pty.scrollback.slice(-TAIL_MAX) : pty.scrollback);
     }
 
     close(id: string): boolean {

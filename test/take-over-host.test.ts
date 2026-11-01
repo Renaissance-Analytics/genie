@@ -75,7 +75,7 @@ describe('taking over', () => {
         const result = s.host.start(s.record, '/repos/tynn', 'claude');
 
         expect(result).toMatchObject({ ok: true, terminalId: 'term_1' });
-        expect(s.pty.opened).toEqual([{ cwd: '/repos/tynn', command: 'claude', cols: undefined, rows: undefined }]);
+        expect(s.pty.opened).toEqual([{ cwd: '/repos/tynn', command: 'claude', cols: undefined, rows: undefined, tag: { kind: 'terminal', workspaceId: 'tynn', shell: 'claude' } }]);
         expect(s.windows).toEqual(['genie://takeover/term_1']);
     });
 
