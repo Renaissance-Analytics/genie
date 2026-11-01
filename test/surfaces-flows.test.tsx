@@ -36,7 +36,7 @@ function rowOf(html: string, id: string): string {
     const next = html.indexOf('data-flow="', start + 1);
     return html.slice(start, next === -1 ? undefined : next);
 }
-const buttonsOf = (row: string) => [...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]!);
+const buttonsOf = (row: string) => [...row.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1]!.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim());
 
 describe('a flow row', () => {
     it('a disarmed flow offers Run now, Arm and Delete, and says it has not run yet', () => {

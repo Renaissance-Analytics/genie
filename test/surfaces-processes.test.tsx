@@ -23,7 +23,7 @@ function buttonsOf(html: string, id: string): string[] {
     const start = html.indexOf(`data-process="${id}"`);
     expect(start).toBeGreaterThan(-1);
     const end = html.indexOf('</li>', start);
-    return [...html.slice(start, end).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]!);
+    return [...html.slice(start, end).matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1]!.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim());
 }
 
 describe('the Processes tab', () => {

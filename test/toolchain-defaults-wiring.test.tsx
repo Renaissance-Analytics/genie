@@ -9,6 +9,7 @@ import { handleFeatureAction, type FeaturePorts, type FeatureState } from '../sr
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { ToolchainSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * CHOOSING A DEFAULT, from the click to what the person sees (plan `.ai/plans/genie-2-toolchain-rest.md`, TC3a): each
@@ -87,7 +88,9 @@ describe('Toolchain → Go versions shows the default', () => {
         expect(html).toMatch(/data-go-version="1\.27\.3"[^>]*data-default="true"/);
         expect(html).toMatch(/data-go-version="1\.26\.10"[^>]*data-default="false"[^]*?data-make-default="go:1\.26\.10"/);
         expect(html).not.toContain('data-make-default="go:1.27.3"');
-        expect(html).toMatch(/<button[^>]*disabled=""[^>]*title="Go 1\.27\.3 is the default[^"]*"[^>]*>Remove/);
+        const defaultRemove = control(html, 'title="Go 1.27.3 is the default');
+        expect(defaultRemove).toMatchObject({ tag: 'button', fancy: true, text: 'Remove' });
+        expect(defaultRemove!.open).toMatch(/\sdisabled=""/);
         expect(html).toContain('data-use-system="go"');
     });
 

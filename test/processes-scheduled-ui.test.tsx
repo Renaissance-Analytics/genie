@@ -5,6 +5,10 @@ import { ProcessesPanel } from '../src/renderer/components/FeatureSurfaces.js';
 import type { FeatureAction } from '../src/renderer/features.js';
 import { Button } from '@particle-academy/react-fancy';
 
+/** Each button's visible text, in order (react-fancy's Button puts its label in a span of its own). */
+const buttonLabels = (html: string): string[] =>
+    [...html.matchAll(/<button\b[^>]*>([\s\S]*?)<\/button>/g)].map((m) => m[1]!.replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim());
+
 /**
  * SCHEDULED TASKS IN HOSTING → PROCESSES (genie#1204), as Genie 1's Processes showed them
  * (renderer/components/Master/WorkspaceProcessManager.tsx and lib/process-manager.ts `processCard` at v0.7.0-beta.342):
@@ -32,7 +36,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Daily at 03:00');
         expect(row).toMatch(/Next run: in 1 hr/);
         expect(row).toMatch(/Last run: Failed 1 hr ago/);
-        expect([...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Run now', 'Pause schedule', 'Remove']);
+        expect(buttonLabels(row)).toEqual(['Run now', 'Pause schedule', 'Remove']);
     });
 
     it('a paused one says so and offers Enable schedule', () => {
@@ -40,7 +44,7 @@ describe('a scheduled task in Processes', () => {
         expect(row).toContain('Paused — not firing');
         expect(row).toContain('Next run: Not scheduled');
         expect(row).toContain('Last run: Never run');
-        expect([...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Run now', 'Enable schedule', 'Remove']);
+        expect(buttonLabels(row)).toEqual(['Run now', 'Enable schedule', 'Remove']);
     });
 
     it('a nudge shows whom it prompts and with what, and no command', () => {
@@ -52,7 +56,7 @@ describe('a scheduled task in Processes', () => {
     it('CONTROL: a process kept running is not scheduled — Stop and Restart as before', () => {
         const row = rowOf(renderToStaticMarkup(<ProcessesPanel processes={[queue]} workspaces={workspaces} onAction={() => {}} now={NOW} />), 'p4');
         expect(row).not.toContain('scheduled');
-        expect([...row.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1])).toEqual(['Stop', 'Restart']);
+        expect(buttonLabels(row)).toEqual(['Stop', 'Restart']);
     });
 
     it('its buttons send Run now, Pause / Enable schedule', () => {
