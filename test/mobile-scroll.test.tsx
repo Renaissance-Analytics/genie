@@ -86,13 +86,15 @@ describe('every phone screen scrolls inside itself (the document is locked by ge
             expect(c.has('flex') && c.has('flex-col'), `${name} root: ${[...c].join(' ')}`).toBe(true);
         });
 
-        it(`${name}: owns exactly one scroll container, the bounded flex child, with overscroll contained and momentum`, () => {
+        it(`${name}: owns exactly one scroll container, the bounded flex child, with overscroll contained and the browser's own touch handling`, () => {
             const root = parse(el);
             const scrollers = [...root.querySelectorAll('[data-mobile-scroll]')];
             expect(scrollers, `${name}: [data-mobile-scroll] count`).toHaveLength(1);
             const s = scrollers[0]!;
             const c = classes(s);
-            for (const k of ['flex-1', 'min-h-0', 'overflow-y-auto', 'overscroll-contain', 'touch-pan-y']) expect(c.has(k), `${name} scroller lacks ${k}: ${[...c].join(' ')}`).toBe(true);
+            for (const k of ['flex-1', 'min-h-0', 'overflow-y-auto', 'overscroll-contain']) expect(c.has(k), `${name} scroller lacks ${k}: ${[...c].join(' ')}`).toBe(true);
+            // The browser keeps its own touch handling (native momentum, pinch, sideways pans).
+            expect([...c].filter((k) => k.startsWith('touch-')), `${name} scroller`).toEqual([]);
             // A DIRECT child of the screen's column: a scroller nested in an unbounded wrapper never gets a height.
             expect(s.parentElement, `${name}: scroller must be a direct child of the screen root`).toBe(root);
         });
