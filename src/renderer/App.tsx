@@ -2028,12 +2028,13 @@ function DesktopApp({ bridge }: AppProps) {
                         if (r.ok) readShares(forWorkspace);
                     });
                 }}
-                onRevoke={(linkId) => {
+                onRevoke={(link) => {
+                    // The row shows where its Revoke stands (ShareWorkspaceForm); the list is read again after it.
                     const forWorkspace = share.workspaceId;
-                    setShare((s) => (s ? { ...s, busy: true, problem: null } : s));
-                    void shares.revoke(linkId).then((r) => {
-                        setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, busy: false, minted: s.minted?.id === linkId ? null : s.minted, problem: r.ok ? null : r.reason } : s));
+                    return shares.revoke(link.id).then((r) => {
+                        if (r.ok) setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, minted: s.minted?.id === link.id ? null : s.minted } : s));
                         readShares(forWorkspace);
+                        return r;
                     });
                 }}
             />

@@ -39,9 +39,21 @@ describe('connectableWorkstations — what this person may reach through Tynn', 
             ok: true,
             workstations: [
                 { id: 'ws_cloud', name: 'cloud box', active: true, connectable: true, local: false, source: 'owner', role: null, online: null },
-                { id: 'ws_pat', name: 'Pat’s laptop', active: true, connectable: false, local: true, source: null, role: null, online: null },
             ],
         });
+    });
+
+    it('a machine Tynn no longer entitles you to (a share link whose one session is over) is not listed (tynn.ai #394, genie#1401)', async () => {
+        // Tynn's list still carries the row (its query sees the claimed link), but its entitlement is gone: no source, not
+        // connectable. "Connect to my workstations" must not offer a spent link machine. CONTROL: your own machine that
+        // is switched off (not connectable, but yours) stays, and a live link guest's row stays.
+        const rows = [
+            { id: 'ws_spent', name: 'Kim’s desk', status: 'active', is_local: true, connectable: false, source: null },
+            { id: 'ws_mine_off', name: 'old box', status: 'inactive', is_local: false, connectable: false, source: 'owner' },
+            { id: 'ws_live_link', name: 'Lee’s desk', status: 'active', is_local: true, connectable: true, source: 'share' },
+        ];
+        const result = await connectableWorkstations(async () => json(200, { workstations: rows }), new Set());
+        expect(result.ok && result.workstations.map((w) => w.id)).toEqual(['ws_mine_off', 'ws_live_link']);
     });
 
     it('signed out (404 since tynn.ai#303, or 401): says so', async () => {

@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type WireMessage } from '../src/core/remote-protocol.js';
 import { listHostDir } from '../src/main/host-fs.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
@@ -104,7 +104,6 @@ describe('host.listDir over the remote protocol', () => {
         api = fakeApi();
         new RemoteHost({ confirm: allowEveryPairing,
             api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: Date.now, random: Math.random }),
-            shares: new ShareLinks({ host: 'alphar.invalid', now: Date.now, random: () => 's' }), devices: await DeviceStore.open(dir, { now: Date.now, random: () => 't' }),
             transport: { onConnection: (cb) => { accept = cb; return () => {}; } },
         });
     });

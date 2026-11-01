@@ -61,7 +61,7 @@ describe('the Tynn list is the main way; host and PIN is the other one', () => {
     });
 
     it('in Settings → Remote access, "Drive another machine" comes before this machine’s pairing and devices', () => {
-        const remote: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: true, firewall: false };
+        const remote: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: false };
         const html = renderToStaticMarkup(<RemoteAccess remote={remote} workspaces={[]} onAction={() => {}} connect={{ ...base, tynnWorkstations: { ok: true, workstations: [] } }} />);
         expect(html.indexOf('Drive another machine')).toBeGreaterThanOrEqual(0);
         expect(html.indexOf('Drive another machine')).toBeLessThan(html.indexOf('data-remote-enabled'));
@@ -70,7 +70,7 @@ describe('the Tynn list is the main way; host and PIN is the other one', () => {
 });
 
 describe('the Remote access switch says it is how your other machines reach this one through Tynn', () => {
-    const remote: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: true, firewall: false };
+    const remote: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: false };
     const render = (r: RemoteSection) => renderToStaticMarkup(<RemoteAccess remote={r} workspaces={[]} onAction={() => {}} />);
     const sentence = (html: string) => /data-remote-enabled="[a-z]+"[^]*?<span>([^<]*)<\/span>/.exec(html)?.[1] ?? '';
 

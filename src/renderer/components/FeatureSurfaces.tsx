@@ -2452,17 +2452,10 @@ function githubCapabilityList(rows: readonly GithubCapability[]) {
     );
 }
 
-const EXPIRIES: ReadonlyArray<{ ms: number; label: string }> = [
-    { ms: 3_600_000, label: '1 hour' },
-    { ms: 86_400_000, label: '1 day' },
-    { ms: 7 * 86_400_000, label: '7 days' },
-];
-
 /**
  * REMOTE ACCESS (§6.8) — the PIN this screen shows, the paired devices (Revoke each), who is connected
- * and who is driving, the lock as one button, and SHARING as a roster FIRST and the mint form SECOND:
- * a link is a credential you cannot unsend, so you see who already holds one before minting another.
- * A just-minted URL is shown once, and says so. No transport → the section says devices cannot connect.
+ * and who is driving, the lock as one button. No transport → the section says devices cannot connect. Sharing is a Tynn
+ * link, made from a workspace's Share (ShareWorkspaceModal); the old local share link here was removed (audit M-d).
  */
 export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date.now() }: { remote: FeatureData['remote']; workspaces: readonly { id: string; path: string; name?: string | undefined }[]; onAction: SurfaceProps['onAction']; connect?: RemoteConnectProps | undefined; now?: number | undefined }) {
     const button = 'rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-[13px]';
@@ -2607,45 +2600,6 @@ export function RemoteAccess({ remote, workspaces, onAction, connect, now = Date
                                 ))}
                             </ul>
                         )}
-                    </div>
-                    <div>
-                        <h3 className="text-xs font-semibold uppercase tracking-wide text-[var(--fg-4)]">Sharing</h3>
-                        {remote.shares.length === 0 ? <p className="text-sm text-[var(--fg-3)]">No share links. A link admits one person to one workspace on {remote.host}.</p> : (
-                            <ul className="divide-y divide-[var(--border-1)]">
-                                {remote.shares.map((s) => (
-                                    <li key={s.id} data-share={s.id} className="flex items-center gap-3 py-1.5 text-sm">
-                                        <span className="font-medium">{s.grantedTo}</span>
-                                        <span className="font-mono text-xs text-[var(--fg-4)]">{workspaceLabel(workspaces, s.workspaceId)}</span>
-                                        <Badge variant="soft" size="sm">{s.revoked ? 'revoked' : s.served ? 'served' : 'not shown yet'}</Badge>
-                                        {!s.revoked ? <button type="button" className={`ml-auto ${button}`} onClick={() => onAction({ kind: 'remote.revokeShare', shareId: s.id })}>Revoke</button> : null}
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                        {remote.servedLink ? (
-                            <div data-served-link className="mt-2 rounded-xl border border-[var(--warning)] p-3 text-sm">
-                                <p>This URL is shown once — copy it now; Genie will not show it again.</p>
-                                <code className="block select-all break-all font-mono text-xs">{remote.servedLink.url}</code>
-                            </div>
-                        ) : null}
-                        <form
-                            data-form="mint-share"
-                            className="mt-2 flex flex-wrap items-end gap-2"
-                            onSubmit={(e) => {
-                                e.preventDefault();
-                                const data = new FormData(e.currentTarget);
-                                const w = pickedWorkspace(e.currentTarget, workspaces, 'workspace');
-                                if (!w) return;
-                                onAction({ kind: 'remote.mintShare', workspaceId: w.id, grantedTo: String(data.get('grantedTo') ?? ''), expiresInMs: Number(data.get('expiresInMs') ?? EXPIRIES[0]!.ms) });
-                            }}
-                        >
-                            <WorkspacePick workspaces={workspaces} name="workspace" />
-                            <Input name="grantedTo" placeholder="who gets it" />
-                            <select name="expiresInMs" defaultValue={String(EXPIRIES[0]!.ms)} className="rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-1 text-sm">
-                                {EXPIRIES.map((x) => <option key={x.ms} value={String(x.ms)}>{x.label}</option>)}
-                            </select>
-                            <button type="submit" disabled={workspaces.length === 0} className={`${button} disabled:opacity-50`}>Mint a link</button>
-                        </form>
                     </div>
                 </>
             )}

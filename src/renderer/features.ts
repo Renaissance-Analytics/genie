@@ -22,7 +22,6 @@ import type { NodeVersionsView } from '../main/node-versions.js';
 import type { PhpVersionsView } from '../main/php-versions.js';
 import type { SiteProcessLog } from '../main/hosting-actions.js';
 import type { FrontDoorStatus } from '../main/compose.js';
-import type { ShareLink } from '../core/remote.js';
 import type { PairRequest } from '../core/pair-confirm.js';
 import type { AnnotatedRow, SyncResult } from '../core/integrations.js';
 import type { GithubView } from '../core/github.js';
@@ -144,7 +143,7 @@ export interface KnowledgeAdded {
     readonly unresolved: readonly { ref: string; reason: 'ambiguous' | 'missing' }[];
 }
 
-/** Remote access (§6.8) as the host sees it. `servedLink` is in the answer to a mint ONLY — never in a pushed snapshot. */
+/** Remote access (§6.8) as the host sees it. Sharing is a Tynn link (tynn-share-links.ts), not part of this section. */
 export interface RemoteSection {
     readonly host: string;
     readonly url: string | null;
@@ -155,9 +154,7 @@ export interface RemoteSection {
     readonly devices: readonly Device[];
     /** "Pair this device?" waiting for Allow on this screen (q_8c07b142); always empty for a remote window. */
     readonly pairRequests?: readonly PairRequest[] | undefined;
-    readonly shares: readonly ShareLink[];
     readonly connections: readonly { id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }[];
-    readonly servedLink: { id: string; url: string } | null;
     /** The `remote_access` switch (Tynn #820): off = nothing listens, whatever Tailscale says. */
     readonly enabled: boolean;
     /** Windows: the firewall rule can be added here (Genie 1's allowFirewall). */
@@ -505,9 +502,6 @@ export type FeatureAction =
     | { kind: 'tailscale.up' }
     /** Install Tailscale: its own signed installer on Windows, its download page elsewhere (Genie 1's tailscale.install). */
     | { kind: 'tailscale.install' }
-    /** Mint a share link for one workspace. Its URL comes back in THIS answer only. */
-    | { kind: 'remote.mintShare'; workspaceId: string; grantedTo: string; expiresInMs: number }
-    | { kind: 'remote.revokeShare'; shareId: string }
     /** Sign in to Tynn with a token; an empty token signs out. */
     | { kind: 'integrations.tynnSignIn' }
     | { kind: 'integrations.tynnCode'; code: string }

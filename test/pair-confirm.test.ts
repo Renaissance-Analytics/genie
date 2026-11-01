@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { PAIR_CONFIRM_MS, PairApprovals, pairRefusal } from '../src/core/pair-confirm.js';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
@@ -114,7 +114,7 @@ function fakeApi() {
     const api: HostApi = {
         invoke: async (method, args) => {
             if (method === 'snapshot') return snapshot;
-            if (method === 'features.snapshot') return { remote: { pin: null, devices: [], shares: [], connections: [], pairRequests: [{ id: 'pair_1', label: 'Pixel 7' }] } };
+            if (method === 'features.snapshot') return { remote: { pin: null, devices: [], connections: [], pairRequests: [{ id: 'pair_1', label: 'Pixel 7' }] } };
             if (method === 'features.act') { acted.push(args[0]); return { ok: true }; }
             return { ok: true };
         },
@@ -164,7 +164,6 @@ describe('RemoteHost — a correct PIN is not enough; Allow on the desktop is', 
             hostName: 'alphar',
             baton: new Baton(),
             pins: new PairingPins({ now: clock.now, random: () => 0.482913 }),
-            shares: new ShareLinks({ host: 'x', now: clock.now, random: () => 's' }),
             devices,
             confirm: approvals,
             transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } },
