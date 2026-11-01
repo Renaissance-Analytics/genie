@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { patchRepo, renameWorkspace, setMonorepoMode, startDraft, type SourceAnalysis } from '../src/core/envelope-plan.js';
 import { AddFromGitForm } from '../src/renderer/components/AddWorkspacePreview.js';
 import {
+import { control } from './helpers/control-markup.js';
     canLeaveStep,
     DispositionStepView,
     ExistingWorkspaceView,
@@ -206,7 +207,7 @@ describe('Import from Git form', () => {
 
     it('while cloning, its button is disabled and says so', () => {
         const html = renderToStaticMarkup(<AddFromGitForm onPreview={noop} onCancel={noop} busy />);
-        expect(html).toMatch(/data-action="clone-and-read" disabled=""/);
+        expect(control(html, 'data-action="clone-and-read"')!.open).toMatch(/\sdisabled=""/);
         expect(html).toMatch(/Cloning…/);
     });
 });

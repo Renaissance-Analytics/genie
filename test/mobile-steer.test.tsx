@@ -5,6 +5,7 @@ import { mobileView } from '../src/core/mobile.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
 import type { AgentDetail } from '../src/renderer/bridge.js';
 import { MobileAgent, MobileShell } from '../src/renderer/components/MobileShell.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE PHONE STEERS AGENTS AND NOTHING ELSE (owner, 2026-10-11: "mobile does not need panel support and no
@@ -100,7 +101,7 @@ describe('MobileAgent', () => {
     });
 
     it('sending disables the button', () => {
-        expect(render({ sending: true })).toMatch(/data-action="send-prompt"[^>]*disabled/);
+        expect(control(render({ sending: true }), 'data-action="send-prompt"')!.open).toMatch(/\sdisabled=""/);
     });
 });
 

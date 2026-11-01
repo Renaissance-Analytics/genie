@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { deckPreview, type DeckItem, type SignalState } from '../src/core/deck.js';
 import { deckItemsFrom } from '../src/core/deck-sources.js';
 import { Deck } from '../src/renderer/components/Deck.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * A LONG DECK ITEM OPENS ON CLICK (the owner, 2026-10-18: "the deck items need to have better rendering, don't display
@@ -46,7 +47,7 @@ describe('the row', () => {
         const html = render(itemsOf([LONG]));
         expect(html).toMatch(/Omarchy test VM, part 1 of 3/);
         expect(html).not.toMatch(/disk-encryption prompt/);
-        expect(html).toMatch(/data-action="deck-expand"[^>]*>Show all</);
+        expect(control(html, 'data-action="deck-expand"')).toMatchObject({ tag: 'button', fancy: true, text: 'Show all' });
     });
 
     it('CONTROL: a short item is drawn whole, with nothing to open (COUNTED: one expand for two items)', () => {

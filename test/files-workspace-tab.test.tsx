@@ -4,6 +4,7 @@ import { tabStrip } from '../src/core/workspace-tabs.js';
 import { NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace } from '../src/renderer/components/Workspace.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * FILES IS ITS OWN WORKSPACE TAB (beta.35 item 41; the owner, 2026-10-21, a screenshot of Moic Suite with the file
@@ -25,7 +26,9 @@ describe('the strip', () => {
     it('a Files tab, labelled; current when the files are open; pressing it asks for the files view', () => {
         const opened: string[] = [];
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'files' }} canDesign hasSettings onView={(v) => opened.push(v)} onAdd={() => {}} onOpenAgent={() => {}} />);
-        expect(html).toMatch(/data-workspace-tab="files"[^>]*data-current="true"[^>]*>Files</);
+        expect(control(html, 'data-workspace-tab="files"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-workspace-tab="files"')!.text).toMatch(/^Files(?![\w])/);
+        expect(control(html, 'data-workspace-tab="files"')!.open).toContain('data-current="true"');
         expect(html).not.toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
         const tabs = WorkspaceTabs({ designed: { tabs: [] }, agents: [], current: { kind: 'view', view: 'home' }, canDesign: true, hasSettings: true, onView: (v) => opened.push(v), onAdd: () => {}, onOpenAgent: () => {} });
         const files = (tabs.props.children as Array<{ props: Record<string, unknown> }>).flat().find((c) => c?.props?.['data-workspace-tab'] === 'files');

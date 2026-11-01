@@ -79,8 +79,10 @@ describe('the title is the header, as plain text', () => {
 describe('who asked, where, and how long ago', () => {
     it('the agent’s name, the workspace’s NAME (never its id) and the age from askedAt', () => {
         const html = render(itemsOf([pending()]));
-        expect(html).toMatch(/data-deck-agent="agent_a"[^>]*>atlas</);
-        expect(html).toMatch(new RegExp(`data-deck-workspace="${WS_ID}"[^>]*>Tynn\\.ai<`));
+        expect(control(html, 'data-deck-agent="agent_a"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-deck-agent="agent_a"')!.text).toMatch(/^atlas(?![\w])/);
+        expect(control(html, `data-deck-workspace="${WS_ID}"`)).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, `data-deck-workspace="${WS_ID}"`)!.text).toMatch(/^Tynn\.ai(?![\w])/);
         // The id rides as an attribute; it is never text a person reads.
         expect(html).not.toContain(`>${WS_ID}<`);
         expect(html).toMatch(/data-deck-age="q_1"[^>]*>2 h ago</);
@@ -142,7 +144,9 @@ describe('Dismiss on the Deck', () => {
         const old = pending({ id: 'q_old', key: 'k2', askedAt: '2026-10-14T09:00:00.000Z' });
         const fresh = pending({ id: 'q_new', key: 'k3', askedAt: '2026-10-15T11:30:00.000Z' });
         const html = render(itemsOf([old, fresh]), { onDismissOlder: () => {} });
-        expect(html).toMatch(/data-action="deck-dismiss-older"[^>]*data-deck-older="1"[^>]*>Dismiss all older than 1 day \(1\)</);
+        expect(control(html, 'data-deck-older="1"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-deck-older="1"')!.text).toMatch(/^Dismiss all older than 1 day \(1\)(?![\w])/);
+        expect(control(html, 'data-deck-older="1"')!.open).toContain('data-action="deck-dismiss-older"');
         // Control: only fresh questions (and an old APPROVAL, which is not dismissable) — no such button.
         expect(render([...itemsOf([fresh]), approval], { onDismissOlder: () => {} })).not.toContain('deck-dismiss-older');
     });

@@ -19,6 +19,7 @@ import { TitleBar } from '../src/renderer/components/TitleBar.js';
 import { WorkspaceColorPicker } from '../src/renderer/components/WorkspaceColorPicker.js';
 import { WorkspaceTabs } from '../src/renderer/components/WorkspaceTabs.js';
 import { WorkspaceColorsContext, workspaceColorMap, type WorkspaceColorMap } from '../src/renderer/workspace-colors.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * A WORKSPACE'S COLOUR, WHEREVER YOU COULD MISTAKE WHO YOU ARE ADDRESSING (genie#1300). The owner: "We need workspace
@@ -83,7 +84,9 @@ describe('the workspace tab strip and its agent tabs', () => {
     it('the strip is edged in the colour, and the agent tab on screen is underlined in it', () => {
         const html = tabs(TEAL);
         expect(marked(html)).toBe(true);
-        expect(html).toMatch(/data-workspace-tab="agent:a1"[^>]*data-current="true"[^>]*class="[^"]*border-\[var\(--ws\)\]/);
+        const tab = control(html, 'data-workspace-tab="agent:a1"');
+        expect(tab!.open).toContain('data-current="true"');
+        expect(tab!.open).toMatch(/\sclass="[^"]*border-\[var\(--ws\)\]/);
         expect(html).toContain('kai');
     });
 

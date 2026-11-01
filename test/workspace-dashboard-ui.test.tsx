@@ -5,6 +5,7 @@ import type { AgentRow } from '../src/core/dashboard-view.js';
 import type { DeckItem } from '../src/core/deck.js';
 import { NO_FILES, NO_TERMINALS } from '../src/renderer/bridge.js';
 import { Workspace, type WorkspaceOpsProps } from '../src/renderer/components/Workspace.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * SELECTING A WORKSPACE OPENS ITS DASHBOARD — A LANE PER AGENT (beta.33 item 10; the owner, 2026-10-20: "this workspace
@@ -130,7 +131,9 @@ describe('the workspace route opens on its dashboard', () => {
     it('the header carries the agents strip and the view tabs (Dashboard … Settings) with the current one marked', () => {
         const html = render({ view: 'home' });
         expect(count(html, 'data-agent-pill')).toBe(3);
-        expect(html).toMatch(/data-workspace-tab="home"[^>]*data-current="true"[^>]*>Dashboard</);
+        expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('data-current="true"');
         expect(html).not.toContain('data-workspace-tab="terminals"');
         expect(html).toContain('data-workspace-tab="add"');
         expect(html).toMatch(/data-workspace-tab="settings"(?![^>]*data-current)/);

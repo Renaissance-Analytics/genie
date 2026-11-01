@@ -106,7 +106,8 @@ describe('the Share dialog (its form; Fancy’s Modal portals, so it is not rend
         expect(html).toContain('https://tynn.example.com/i/abc');
         expect(html).toContain('data-action="copy-share-link"');
         // Copied through main, the outcome announced beside it (clipboard-buttons.test).
-        expect(html).toMatch(/data-action="copy-share-link"[^>]*>Copy<\/button><span data-copy-announce=""[^>]*role="status"/);
+        expect(control(html, 'data-action="copy-share-link"')).toMatchObject({ tag: 'button', fancy: true, text: 'Copy' });
+        expect(html).toMatch(/data-action="copy-share-link"[\s\S]*?<\/button><span data-copy-announce=""[^>]*role="status"/);
     });
 
     it('the links that reach it, each revocable; a problem in words', () => {
