@@ -8,7 +8,9 @@ npm run build *> build.log; "build exit $LASTEXITCODE"; if ($LASTEXITCODE -ne 0)
 npx vitest run test/session-engine.test.ts test/engine-protocol.test.ts test/genie-host-process.test.ts test/genie-host-no-electron.test.ts *> focused.log; "focused exit $LASTEXITCODE"
 Get-Content focused.log | Select-String -Pattern 'Test Files|Tests |FAIL|×' | Select-Object -First 40
 "=== live proof: same heavy load, agents in main (before) vs in genie-host (after), then a window crash"
-node scripts/perf-lag/host-split-proof.mjs 180 0.25 *> proof.log; "proof exit $LASTEXITCODE"
+# Streamed as it runs (Tee), so a VM that freezes mid-proof shows the step it reached; scale 0.1 keeps the load (11 agents
+# streaming nonstop) and shrinks the seeded history, after the NEM freeze of 2026-10-31 21:16 under scale 0.25.
+node scripts/perf-lag/host-split-proof.mjs 150 0.1 2>&1 | Tee-Object -FilePath proof.log; "proof exit $LASTEXITCODE"
 Get-Content proof.log | Select-String -Pattern '^\[proof' | Select-Object -Last 20
 "=== host-split-proof.json"
 Get-Content perf-out\host-split-proof.json
