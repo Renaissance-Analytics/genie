@@ -19,3 +19,10 @@ Get-Content "$HOME\.genie\runtime\lifecycle.log" -ErrorAction SilentlyContinue |
 "=== FULL SUITE on Windows"
 npm test *> full.log; "full suite exit $LASTEXITCODE"
 Get-Content full.log | Select-String -Pattern 'Test Files|Tests |FAIL' | Select-Object -First 40
+"=== UPGRADE PROOF (installed build, agent host running): scripts/vm-windows-update.ps1"
+Remove-Item -Recurse -Force "$HOME\.genie" -ErrorAction SilentlyContinue
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\vm-windows-update.ps1 *> upgrade.log; "upgrade exit $LASTEXITCODE"
+Get-Content upgrade.log | Select-String -Pattern '^=== |PASS|FAIL|ok |not ok|check|Genie.exe|0\.0\.1|report' | Select-Object -Last 50
+"=== agent host in the installed build (lifecycle.log, genie-host.log)"
+Get-Content "$HOME\.genie\runtime\lifecycle.log" -ErrorAction SilentlyContinue | Select-String -Pattern 'agent host|host boot|host shutdown|agent-host' | Select-Object -Last 20
+Get-Content "$HOME\.genie\logs\genie-host.log" -Tail 25 -ErrorAction SilentlyContinue
