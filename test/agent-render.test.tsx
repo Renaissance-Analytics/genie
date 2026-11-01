@@ -94,7 +94,7 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
 
         expect(html).not.toContain('data-tab="stream"');
         expect(html).toContain('data-tab="terminal"');
-        expect(html).not.toContain('disabled');
+        expect(html).not.toMatch(/\sdisabled=""/);
         // Asked for a tab it does not have, it falls back to its first — Activity, per the board — rather than
         // rendering an empty body under a strip that does not contain the selected tab.
         expect(html).toMatch(/data-tab="activity"[^>]*data-active="true"/);

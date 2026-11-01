@@ -38,7 +38,9 @@ describe('group headers', () => {
         // A real button (react-fancy's), reading "Open workspace" with the arrow as its trailing ICON, not a "→" to read.
         const door = control(html, 'data-open-workspace="tynn"');
         expect(door).toMatchObject({ tag: 'button', fancy: true, text: 'Open workspace' });
-        expect(door!.inner).toContain('<svg');
+        // Its trailing icon element. That 'arrow-right' resolves to a glyph is test/icons.test.ts's claim: the icon
+        // registry is not loaded in a static render, so the icon is its empty span here.
+        expect(door!.inner).toMatch(/<span[^>]*data-react-fancy-icon=""[^>]*><\/span>$/);
     });
 });
 

@@ -4,6 +4,17 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 /*
+ * A control LOOKS clickable (the owner, 2026-11-01: "things that are clickable but it doesn't look like they are").
+ * Tailwind v4's preflight gives every button `cursor: default`, and react-fancy's Button adds no cursor of its own, so
+ * every Button and Button-as-link shows the pointer here, once, unless it is disabled.
+ */
+@layer base {
+    [data-react-fancy-button]:not(:disabled) {
+        cursor: pointer;
+    }
+}
+
+/*
  * Tailwind v4 must scan the component library, or every class Fancy ships gets tree-shaken
  * out of the stylesheet and the app renders unstyled. Straight from react-fancy's README.
  */

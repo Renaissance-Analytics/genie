@@ -7,6 +7,7 @@ import { headerActions } from '../src/core/agent-view.js';
 import type { LiveSession } from '../src/core/roster.js';
 import { AgentView, type AgentOpsProps } from '../src/renderer/components/AgentView.js';
 import { ChatFlyout, type ChatThread } from '../src/renderer/components/ChatFlyout.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * ONE RESTART PER SURFACE (genie#1238; the owner, 2026-10-26: "We have so many restart buttons across so many views and
@@ -52,7 +53,11 @@ describe('the Agent view: one Restart (or Start) in every state', () => {
                 expect(html).not.toContain('restart-resume');
             }
             // Labelled `Restart` — the one word every surface uses; in its own label, which a narrow header hides for the icon.
-            if (s.control === 'restart') expect(render(s.session)).toMatch(/data-action="restart"[^>]*>(?:(?!<\/button>)[\s\S])*<span class="@max-\[46rem\]:hidden">Restart<\/span><\/button>/);
+            if (s.control === 'restart') {
+                const restart = control(render(s.session), 'data-action="restart"');
+                expect(restart).toMatchObject({ tag: 'button', fancy: true, text: 'Restart' });
+                expect(restart!.inner).toContain('<span class="@max-[46rem]:hidden">Restart</span>');
+            }
         });
     }
 

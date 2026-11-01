@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { AgentRow } from '../src/core/dashboard-view.js';
@@ -66,6 +68,16 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
         expect(open).not.toBe('');
         expect(open).toMatch(/class="[^"]*\bcursor-pointer\b/);
         expect(open).not.toMatch(/role="button"/);
+    });
+});
+
+describe('every enabled react-fancy Button shows the pointer', () => {
+    it('one base rule in the app stylesheet: Tailwind v4 gives buttons cursor: default and Button adds none', () => {
+        const css = readFileSync(fileURLToPath(new URL('../src/renderer/styles.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+        expect(css).toMatch(/@layer base\s*\{\s*\[data-react-fancy-button\]:not\(:disabled\)\s*\{\s*cursor:\s*pointer;\s*\}\s*\}/);
+        // CONTROL: the selector is the attribute Button actually renders.
+        const html = renderToStaticMarkup(<Dashboard rows={[]} workspaces={[]} onOpenAgent={noop} onAddAgent={noop} onAddWorkspace={noop} />);
+        expect(html).toMatch(/<button\b[^>]*\sdata-react-fancy-button=""/);
     });
 });
 

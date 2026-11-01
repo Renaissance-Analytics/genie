@@ -744,7 +744,7 @@ function RateLimitPill({ provider, limit, now }: { provider: string; limit: Head
                     aria-label={`${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
                     // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
                     onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
-                    className={`gap-1 ${open ? 'bg-[var(--bg-2)]' : ''}`}
+                    className={`gap-1 hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
                 >
                     <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
                     <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span>
