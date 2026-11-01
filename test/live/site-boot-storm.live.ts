@@ -14,6 +14,14 @@
  *      the way a cold framework boot under load does). Past 60 s every port answers (positive control, measured here),
  *      and Genie must read each one running AND route it. On a tree without the fix they stay failed and unrouted.
  *
+ *   C. THE FREEZE (genie#1397): while ten sites come up, Genie's main thread is never held over 1 s BEYOND what the whole
+ *      machine was held. Gauged by main's own stall watchdog and V8's sampler on main, with a worker-thread and a
+ *      separate-process heartbeat beside it (main-block-gauge.ts). Measured on genie-test-windows (2026-11-01): the
+ *      20-43 s blocks this storm shows hold the worker thread and a separate node process exactly as long, and V8's own
+ *      sampler thread has the same gap, so they are the VM not running anything, not Genie's main. A held MAIN THREAD
+ *      shows as main's block standing above the other two. Its positive control first: a deliberate 1.5 s busy block on
+ *      main is seen, with its stack, while the worker thread ticks on.
+ *
  * Exits 1 on any FAIL.
  */
 import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -27,6 +35,7 @@ import type { CommandRunner } from '../../src/main/toolchain-prober.js';
 import { composeServices } from '../../src/main/compose.js';
 import { realFancyTermPort } from '../../src/main/fancy-term-port.js';
 import { siteAnswers } from '../../src/main/port-probe.js';
+import { describeGauge, startMainBlockGauge, type GaugeReport } from './main-block-gauge.js';
 
 const platform = process.platform as PhpPlatform;
 const failures: string[] = [];
@@ -35,6 +44,16 @@ function check(ok: boolean, label: string, detail = ''): void {
     if (!ok) failures.push(label);
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const gauge = startMainBlockGauge();
+/** How far main's worst block stands above the machine's (the worker thread and a separate process, held alike). */
+const ownBlock = (r: GaugeReport): number => r.ownMs;
+/** The gauge's positive control: main held on purpose, by a function whose name the stack must carry. */
+function deliberateMainBlock(ms: number): number {
+    const end = Date.now() + ms;
+    let spins = 0;
+    while (Date.now() < end) spins += 1;
+    return spins;
+}
 
 /** One GET straight at the site's own port (Caddy), as the harness sees it: the status, or 0. */
 const get = (port: number) => new Promise<number>((resolve) => {
@@ -116,7 +135,9 @@ async function main(): Promise<void> {
         }));
         clearInterval(lagTimer);
         console.log(`    starting ${names.length} site(s) held the event loop ${createMs} ms (synchronously, in create); worst event-loop stall while they came up: ${worstLag} ms`);
-        return { ids, t0, firstAnswer, at18: await at18 };
+        const held: GaugeReport = await gauge.report(t0);
+        for (const line of describeGauge(held)) console.log(`    ${line}`);
+        return { ids, t0, firstAnswer, at18: await at18, held };
     };
     const states = (ids: string[]) => ids.map((id) => { const s = composed.sites.get(id)!; return `${s.host.replace(/\.gen$/, '')}=${s.state}${s.step ? `/${s.step}` : ''}`; }).join(' ');
     const routed = (ids: string[]) => { const hosts = new Set(composed.sites.routes().map((r) => r.host)); return ids.filter((id) => hosts.has(composed.sites.get(id)!.host)).length; };
@@ -124,6 +145,17 @@ async function main(): Promise<void> {
 
     try {
         console.log(`\ngenie#1393 live — ${platform}, ${availableParallelism()} CPUs, PHP ${version}, Caddy ${caddyBin}\n`);
+
+        console.log('C0. CONTROL: the gauge sees a deliberate 1.5 s block on main, with its stack');
+        const c0 = Date.now();
+        deliberateMainBlock(1_500);
+        await sleep(400);
+        const control = await gauge.report(c0);
+        for (const line of describeGauge(control)) console.log(`    ${line}`);
+        // The watchdog reports a block as its heartbeat's gap minus the 200 ms beat: 1.5 s reads about 1.3 s.
+        // At least half of it main's own: the VM itself hiccups (measured: 440 ms of machine-wide stall inside this block).
+        check(control.mainMs >= 1_200 && control.ownMs >= 750 && control.blocks.some((b) => (b.stack ?? '').includes('deliberateMainBlock')), "C0. CONTROL: the gauge reads a 1.5 s main block as main's own, and its stack names deliberateMainBlock", `main ${control.mainMs} ms, beyond the machine ${control.ownMs} ms`);
+        check(control.workerMs < 1_000, 'C0b. CONTROL: the worker thread ticked on through it (a held main thread, not a starved process)', `worker ${control.workerMs} ms`);
 
         console.log('A. MEASUREMENT: one site alone, then ten at once (no artificial delay)');
         const alone = await storm(['solo'], 0);
@@ -137,6 +169,7 @@ async function main(): Promise<void> {
         await sleep(Math.max(0, 25_000 - (Date.now() - ten.t0)));
         console.log(`    Genie at ${Math.round((Date.now() - ten.t0) / 1000)} s: ${states(ten.ids)}; routed ${routed(ten.ids)}/10`);
         check(answered.length === 10, 'A2. all ten real sites answer on their ports when started at once', `${answered.length}/10`);
+        check(ownBlock(ten.held) < 1_000, "C1. THE FREEZE: Genie's main thread is never held over 1 s beyond the machine while ten real PHP sites come up", `main ${ten.held.mainMs} ms, worker thread ${ten.held.workerMs} ms, separate process ${ten.held.processMs} ms`);
         check(routed(ten.ids) === 10, 'A3. …and Genie routes all ten', `${routed(ten.ids)}/10`);
         await removeAll(ten.ids);
 
@@ -144,6 +177,7 @@ async function main(): Promise<void> {
         const cold = await storm(Array.from({ length: 10 }, (_, i) => `cold${i + 1}`), 25_000);
         console.log(`    first answers (ms) ${cold.firstAnswer.join(', ')}`);
         console.log(`    Genie at 18 s: ${cold.at18}`);
+        check(ownBlock(cold.held) < 1_000, 'C2. ...nor while ten cold sites come up', `main ${cold.held.mainMs} ms, worker thread ${cold.held.workerMs} ms, separate process ${cold.held.processMs} ms`);
         check(cold.ids.every((_id, i) => !/=failed/.test(cold.at18.split(' ')[i] ?? '')), 'B-1. at 18 s (past the first window) no cold site reads failed: it is still starting', cold.at18);
         await sleep(Math.max(0, 60_000 - (Date.now() - cold.t0)));
         const allAnswer = cold.firstAnswer.every((t) => t !== null);
@@ -156,6 +190,7 @@ async function main(): Promise<void> {
         await removeAll(cold.ids);
     } finally {
         await composed.shutdown();
+        gauge.stop();
         console.log(`\n${failures.length === 0 ? 'ALL PASS' : `${failures.length} FAIL: ${failures.join('; ')}`} (${Math.round((Date.now() - t00) / 1000)} s)`);
     }
 }
