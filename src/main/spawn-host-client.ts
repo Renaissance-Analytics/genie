@@ -72,7 +72,7 @@ export class SpawnHostClient {
     readonly #ptys = new Map<string, { pid: number | null }>();
     readonly #data = new Set<(id: string, data: string) => void>();
     readonly #exit = new Set<(id: string, code: number) => void>();
-    readonly #pid = new Set<(id: string, pid: number) => void>();
+    readonly #pid = new Set<(id: string, pid: number, shell?: string) => void>();
     readonly #cwd = new Set<(id: string, cwd: string) => void>();
     /** Over a link: whether it is up now (calls and ptys fail, said, while it is not). */
     #linkUp = false;
@@ -321,7 +321,8 @@ export class SpawnHostClient {
                 const pid = typeof payload['pid'] === 'number' ? payload['pid'] : 0;
                 if (!entry || !(pid > 0)) return;
                 entry.pid = pid;
-                for (const l of this.#pid) l(id, pid);
+                const shell = typeof payload['shell'] === 'string' && payload['shell'] !== '' ? payload['shell'] : undefined;
+                for (const l of this.#pid) l(id, pid, shell);
                 return;
             }
             case 'pty.data':

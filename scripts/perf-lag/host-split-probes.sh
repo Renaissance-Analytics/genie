@@ -54,8 +54,16 @@ probe "link-reconcile-reports-vanished" src/main/spawn-host-client.ts \
     "            if (live.has(id)) continue;" "            continue;" \
     test/spawn-host-link.test.ts "a pty it knew that is gone is reported exited"
 
+probe "terminal-open-waits-for-pid" src/main/terminal-host.ts \
+    "            if (opened.pid > 0 || !this.#pty.onPid) return opened;" "            return opened;" \
+    test/terminal-open-ready.test.ts "answers once the pid is known"
+
+probe "spawn-host-says-the-shell" src/main/spawn-host-server.ts \
+    "event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell });" "event('pty.opened', { id: ptyId, pid: opened.pid });" \
+    test/terminal-open-ready.test.ts "pty.opened carries the resolved shell"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

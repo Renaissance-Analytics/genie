@@ -37,7 +37,7 @@ export function adoptEnv(next: unknown, env: NodeJS.ProcessEnv = process.env): v
 
 export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { killAll(): void } {
     const ptys = new Map<string, string>(); // main's id → the engine's
-    const known = new Map<string, { pid: number; tag: PtyTag | null }>(); // main's id → what pty.list answers
+    const known = new Map<string, { pid: number; shell: string; tag: PtyTag | null }>(); // main's id → what pty.list answers
     const byEngine = new Map<string, string>(); // the engine's id → main's
     const streams = new Map<string, { stop(): void }>();
     const event = (ch: Extract<SpawnFrame, { kind: 'event' }>['channel'], payload: unknown) => channel.send({ kind: 'event', channel: ch, payload });
@@ -126,8 +126,9 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                     const opened = impl.pty.open(spawn);
                     ptys.set(ptyId, opened.id);
                     byEngine.set(opened.id, ptyId);
-                    known.set(ptyId, { pid: opened.pid, tag: tag ?? null });
-                    event('pty.opened', { id: ptyId, pid: opened.pid });
+                    known.set(ptyId, { pid: opened.pid, shell: opened.shell, tag: tag ?? null });
+                    // The SHELL it resolved, with the pid: the window's open answered before either existed.
+                    event('pty.opened', { id: ptyId, pid: opened.pid, shell: opened.shell });
                 } catch (error) {
                     event('pty.data', { id: ptyId, data: `[genie] could not start ${spawn.command ?? 'the process'}: ${error instanceof Error ? error.message : String(error)}\r\n` });
                     event('pty.exit', { id: ptyId, code: -1 });
@@ -160,6 +161,7 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                     id: ptyId,
                     pid: known.get(ptyId)?.pid ?? 0,
                     tag: known.get(ptyId)?.tag ?? null,
+                    shell: known.get(ptyId)?.shell ?? '',
                     scrollback: impl.pty?.scrollback(engineId) ?? '',
                 }));
                 answer(id, listed);

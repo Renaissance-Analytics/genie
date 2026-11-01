@@ -33,6 +33,8 @@ export interface ListedPty {
     readonly id: string;
     readonly pid: number;
     readonly tag: PtyTag | null;
+    /** The shell the engine started (resolved: the default shell has its real name here). Absent from an older host. */
+    readonly shell?: string;
     readonly scrollback: string;
 }
 

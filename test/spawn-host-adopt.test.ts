@@ -60,8 +60,8 @@ describe('pty.list: what is still running, for the next window', () => {
         const listed = resultOf(window.frames, 7);
         expect(listed?.ok).toBe(true);
         expect((listed as { value: unknown }).value).toEqual([
-            { id: 'term_a', pid: 1001, tag: { kind: 'process', processId: 'site:shop', workspaceId: 'ws1' }, scrollback: 'Server running on http://127.0.0.1:4102\r\n' },
-            { id: 'term_b', pid: 1002, tag: { kind: 'terminal', workspaceId: 'ws1', shell: 'bash' }, scrollback: '' },
+            { id: 'term_a', pid: 1001, tag: { kind: 'process', processId: 'site:shop', workspaceId: 'ws1' }, shell: 'php artisan serve', scrollback: 'Server running on http://127.0.0.1:4102\r\n' },
+            { id: 'term_b', pid: 1002, tag: { kind: 'terminal', workspaceId: 'ws1', shell: 'bash' }, shell: 'sh', scrollback: '' },
         ]);
     });
 
@@ -75,6 +75,6 @@ describe('pty.list: what is still running, for the next window', () => {
         pty.end('e2', 0);
         window.send({ kind: 'call', id: 0, method: 'pty.kill', args: ['c'] });
         window.send({ kind: 'call', id: 9, method: 'pty.list', args: [] });
-        expect((resultOf(window.frames, 9) as { value: unknown }).value).toEqual([{ id: 'a', pid: 1001, tag: null, scrollback: '' }]);
+        expect((resultOf(window.frames, 9) as { value: unknown }).value).toEqual([{ id: 'a', pid: 1001, tag: null, shell: 'x', scrollback: '' }]);
     });
 });

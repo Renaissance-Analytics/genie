@@ -26,6 +26,8 @@ export interface TerminalsPort {
     refusal?(workspaceId: string): string | null;
     list(): ReadonlyArray<{ id: string; workspaceId: string; cwd?: string; pid: number; shell: string }>;
     open(options: { workspaceId: string; cwd: string; command?: string; shell?: boolean; env?: Readonly<Record<string, string>> }): { id: string; pid: number; shell: string; scrollback: string };
+    /** `open`, answered once the pid and shell are known (a pty made under genie-host). Absent = `open`'s answer is it. */
+    openReady?(options: { workspaceId: string; cwd: string; command?: string; shell?: boolean; env?: Readonly<Record<string, string>> }): Promise<{ id: string; pid: number; shell: string; scrollback: string }>;
     /** A terminal that ENDED (its output stays readable): whose it was and its exit code. Absent = nothing kept. */
     finished?(id: string): { workspaceId: string; exitCode: number } | null;
     write(id: string, data: string): boolean;
@@ -174,7 +176,8 @@ export function moreGenieTools(deps: MoreToolsDeps): Registration[] {
                     // The workspace's service env and Genie's endpoint, as the person's own shells get them: a shell an agent
                     // opened once had neither, and could not reach the database the person's could.
                     const env = deps.envFor?.(caller.workspaceId) ?? {};
-                    const opened = deps.terminals.open({ workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command, shell: true } : {}), ...(Object.keys(env).length > 0 ? { env } : {}) });
+                    const wanted = { workspaceId: caller.workspaceId, cwd: str(args.cwd) ?? caller.workspacePath, ...(command ? { command, shell: true } : {}), ...(Object.keys(env).length > 0 ? { env } : {}) };
+                    const opened = deps.terminals.openReady ? await deps.terminals.openReady(wanted) : deps.terminals.open(wanted);
                     return ok({ ok: true, terminal: { id: opened.id, pid: opened.pid, shell: opened.shell } });
                 }
                 case 'write': {

@@ -1873,7 +1873,7 @@ async function boot(): Promise<void> {
         return takeOvers.start(record, workspace.path, tui);
     });
 
-    ipcMain.handle('genie:terminal-open', (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
+    ipcMain.handle('genie:terminal-open', async (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
         if (!terminals || typeof rawWorkspaceId !== 'string') return null;
         const workspace = registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null;
         if (!workspace) return null;
@@ -1889,7 +1889,8 @@ async function boot(): Promise<void> {
             // GENIE_MCP_URL / GENIE_MCP_TOKEN (§6.9); the pty port adds GENIE_TERMINAL_ID itself. The SAME function gives an
             // agent's `manageTerminals create` its env (the `terminalEnv` part below).
             const env = terminalEnvFor(services, workspace.id, mcpEnv());
-            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(env).length > 0 ? { env } : {}) });
+            // Answered with the real pid and shell: under genie-host the pty is made in another process (P2.1).
+            return await terminals.openReady({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(env).length > 0 ? { env } : {}) });
         } catch (error: unknown) {
             // The engine's own words, on the main process's stderr, where a VM run's
             // installed-err.log catches them. The first fancy-pty failure on the installed app

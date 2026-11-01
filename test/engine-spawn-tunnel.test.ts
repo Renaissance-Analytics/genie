@@ -4,6 +4,7 @@ import type { SpawnFrame } from '../src/main/spawn-host-protocol.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,11 +19,14 @@ import { join } from 'node:path';
 const TOKEN = 'b'.repeat(64);
 const tick = () => new Promise((r) => setTimeout(r, 0));
 
+// Never the real process tree in a test (test/no-live-process-tree.test.ts).
+const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+
 async function pair() {
     const toChildren: Array<{ profile: string; frame: SpawnFrame }> = [];
     let windowsGone = 0;
     const server = new SessionEngineServer({ token: TOKEN, build: 't', spawn: { send: (profile, frame) => toChildren.push({ profile, frame }), windowGone: () => { windowsGone += 1; } } });
-    const host = new SessionHost({ userData: await mkdtemp(join(tmpdir(), 'tunnel-')), driverFor: () => null, ...server.hostOptions() });
+    const host = new SessionHost({ userData: await mkdtemp(join(tmpdir(), 'tunnel-')), driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() });
     server.attach(host);
     const [hostSide, windowSide] = memoryPair();
     const sent: string[] = [];

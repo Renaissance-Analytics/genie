@@ -54,6 +54,8 @@ export interface HostApiDeps {
     attention: { finished(): readonly Finished[]; markSeen(id: string): void };
     terminals: {
         open(options: TerminalOptions): PtyOpened;
+        /** `open`, answered once the pid and shell are known (a pty made under genie-host). Absent = `open`'s answer is it. */
+        openReady?(options: TerminalOptions): Promise<PtyOpened>;
         write(id: string, data: string): boolean;
         resize(id: string, cols: number, rows: number): boolean;
         close(id: string): boolean;
@@ -370,7 +372,8 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const options = (args[1] ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
                 const env = deps.serviceEnvFor(workspace.id);
                 const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
-                return deps.terminals.open({ workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, ...(Object.keys(env).length > 0 ? { env } : {}) });
+                const wanted: TerminalOptions = { workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, ...(Object.keys(env).length > 0 ? { env } : {}) };
+                return deps.terminals.openReady ? await deps.terminals.openReady(wanted) : deps.terminals.open(wanted);
             }
             case 'terminals.write':
                 return deps.terminals.write(str(args[0]), str(args[1]));

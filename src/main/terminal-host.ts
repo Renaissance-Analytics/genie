@@ -93,8 +93,11 @@ export interface PtyPort {
      * leaves liveness to the exit event and the pid.
      */
     isLive?(id: string): boolean;
-    /** Subscribe to a pty's pid once it is known, for a port whose `open` answered 0 (the spawn host, genie#1397). */
-    onPid?(listener: (id: string, pid: number) => void): () => void;
+    /**
+     * Subscribe to a pty's pid once it is known, for a port whose `open` answered 0 (the spawn host, genie#1397), with the
+     * shell the engine resolved when it says one (the default shell's real name; `open` could only echo the request).
+     */
+    onPid?(listener: (id: string, pid: number, shell?: string) => void): () => void;
 }
 
 export interface TerminalOptions {
@@ -142,6 +145,8 @@ export interface Terminal {
 const TAIL_MAX = 262_144; // 256 KiB
 /** How many ended terminals keep their output for reading. */
 const FINISHED_KEPT = 50;
+/** How long `openReady` waits for a pty made elsewhere to say its pid before answering what it has. */
+const OPEN_READY_WAIT_MS = 15_000;
 
 export class TerminalHost {
     readonly #pty: PtyPort;
@@ -165,6 +170,11 @@ export class TerminalHost {
             this.#tails.set(id, tail.length > TAIL_MAX ? tail.slice(-TAIL_MAX) : tail);
             // Each listener on its own (core/fan-out.ts): one that throws never reaches the engine's flush (a lost exit).
             fanOut(this.#dataListeners, [id, data], 'terminal data');
+        });
+
+        // A pty made elsewhere (the spawn host under genie-host) says its pid and shell after `open` answered: kept here.
+        this.#pty.onPid?.((id, pid, shell) => {
+            this.#terminals = this.#terminals.map((t) => (t.id === id ? { ...t, pid, ...(shell ? { shell } : {}) } : t));
         });
 
         this.#pty.onCwd?.((id, cwd) => {
@@ -245,6 +255,37 @@ export class TerminalHost {
     }
 
     /**
+     * `open`, answered once the terminal's pid and shell are known (the host split, P2.1). Under genie-host the pty is made
+     * in another process, so `open` answers before it exists (pid 0, the shell only as asked). Whoever ASKS for a terminal
+     * — the person's tab, an agent's `manageTerminals create` — gets the real ones. A pty that ends first answers pid 0,
+     * and one whose pid never comes answers what it has after OPEN_READY_WAIT_MS: never a hang.
+     */
+    async openReady(options: TerminalOptions): Promise<PtyOpened> {
+        const known = new Map<string, { pid: number; shell?: string | undefined }>();
+        const ended = new Set<string>();
+        let wake: (() => void) | null = null;
+        const offPid = this.#pty.onPid?.((id, pid, shell) => { known.set(id, { pid, shell }); wake?.(); }) ?? (() => {});
+        const offExit = this.#pty.onExit((id) => { ended.add(id); wake?.(); });
+        try {
+            const opened = this.open(options);
+            if (opened.pid > 0 || !this.#pty.onPid) return opened;
+            const deadline = Date.now() + OPEN_READY_WAIT_MS;
+            while (!known.has(opened.id) && !ended.has(opened.id) && Date.now() < deadline) {
+                await new Promise<void>((resolve) => {
+                    const timer = setTimeout(resolve, Math.max(0, deadline - Date.now()));
+                    wake = () => { clearTimeout(timer); resolve(); };
+                });
+                wake = null;
+            }
+            const said = known.get(opened.id);
+            return said ? { ...opened, pid: said.pid, shell: said.shell || opened.shell } : opened;
+        } finally {
+            offPid();
+            offExit();
+        }
+    }
+
+    /**
      * Every one of these answers `false` for an id it does not have, rather than throwing.
      *
      * A renderer holding a stale id is ordinary — a window that was open when the terminal
@@ -287,7 +328,7 @@ export class TerminalHost {
     adopt(pty: ListedPty): void {
         if (pty.tag?.kind !== 'terminal') return;
         if (this.#has(pty.id)) return;
-        this.#terminals = [...this.#terminals, { id: pty.id, workspaceId: pty.tag.workspaceId, pid: pty.pid, shell: pty.tag.shell || 'shell' }];
+        this.#terminals = [...this.#terminals, { id: pty.id, workspaceId: pty.tag.workspaceId, pid: pty.pid, shell: pty.shell || pty.tag.shell || 'shell' }];
         this.#tails.set(pty.id, pty.scrollback.length > TAIL_MAX ? pty.scrollback.slice(-TAIL_MAX) : pty.scrollback);
     }
 
