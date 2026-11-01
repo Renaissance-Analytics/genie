@@ -49,7 +49,15 @@ const spawns = () => lifecycleText().split('\n').flatMap((line) => {
     return m ? [{ t: Date.parse(m[1]), owner: m[2], pid: Number(m[3]) }] : [];
 });
 const providerPids = () => spawns().map((x) => x.pid);
-const threadBytes = () => { let n = 0; for (const f of existsSync(join(runtime, 'sessions')) ? readdirSync(join(runtime, 'sessions')) : []) n += statSync(join(runtime, 'sessions', f)).size; return n; };
+// The thread LOGS only: a `.lock` comes and goes with every write, and a file listed then gone counts as nothing.
+const threadBytes = () => {
+    let n = 0;
+    for (const f of existsSync(join(runtime, 'sessions')) ? readdirSync(join(runtime, 'sessions')) : []) {
+        if (f.endsWith('.lock') || f.endsWith('.tmp')) continue;
+        try { n += statSync(join(runtime, 'sessions', f)).size; } catch { /* gone between the list and the stat */ }
+    }
+    return n;
+};
 const killTree = (pid) => {
     if (!pid || !alive(pid)) return;
     if (process.platform === 'win32') { try { execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* gone */ } }

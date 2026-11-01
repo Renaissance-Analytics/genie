@@ -62,7 +62,12 @@ async function providerPids(): Promise<number[]> {
 async function threadBytes(): Promise<number> {
     const dir = join(home, 'runtime', 'sessions');
     let total = 0;
-    for (const name of await readdir(dir).catch(() => [] as string[])) total += (await stat(join(dir, name))).size;
+    // The thread LOGS only. A thread's `.lock` comes and goes with every write: listed, then gone before its stat (CI,
+    // 2026-11-01, ENOENT). A log that vanished between the two reads counts as nothing rather than failing the gauge.
+    for (const name of await readdir(dir).catch(() => [] as string[])) {
+        if (name.endsWith('.lock') || name.endsWith('.tmp')) continue;
+        total += await stat(join(dir, name)).then((s) => s.size, () => 0);
+    }
     return total;
 }
 

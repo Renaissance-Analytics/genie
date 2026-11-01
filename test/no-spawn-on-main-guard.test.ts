@@ -10,6 +10,9 @@ import { describe, expect, it } from 'vitest';
  * This guard holds the line. A main-process module may import `node:child_process` only if it is:
  *  - the spawn host's own implementation (`spawn-exec.ts`: what the child runs; in main only as the logged fallback
  *    when the child cannot start), or the client that forks the child (`spawn-host-client.ts`: one spawn, at boot);
+ *  - the launcher of the agent host (`engine-launch.ts`, the host split #1387: one DETACHED spawn of genie-host at boot,
+ *    again only when the host was lost). It cannot go through the spawn host: that child ends every process it made
+ *    when the window ends, and genie-host must outlive the window;
  *  - on the KNOWN list below: modules that still spawn on main, each with its reason and owner. The list may only
  *    SHRINK. A new module that spawns goes through `execFileRunner` (or the spawn host) instead.
  *
@@ -17,7 +20,7 @@ import { describe, expect, it } from 'vitest';
  * neither list, on purpose.
  */
 
-const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts']);
+const SPAWN_HOST = new Set(['src/main/spawn-exec.ts', 'src/main/spawn-host-client.ts', 'src/main/engine-launch.ts']);
 
 /** Still spawning on main, by name. Remove a line when its module moves; never add one. */
 const KNOWN: Readonly<Record<string, string>> = {
