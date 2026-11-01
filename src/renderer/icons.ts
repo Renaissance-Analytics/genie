@@ -77,6 +77,8 @@ export const ICON_NAMES: readonly string[] = [
     'history',
     // The Dashboard's "From Tynn" door (§6.1).
     'link',
+    // A share link someone has opened: Claimed, in the Share dialog (audit M-c).
+    'user-check',
 
     /*
      * The stream ledger's icons.
