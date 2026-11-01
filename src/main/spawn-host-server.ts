@@ -1,5 +1,5 @@
 import type { PtyPort, PtySpawnOptions } from './terminal-host.js';
-import type { SpawnChannel, SpawnFrame } from './spawn-host-protocol.js';
+import type { ListedPty, PtyTag, SpawnChannel, SpawnFrame } from './spawn-host-protocol.js';
 import type { LineStream, RunOptions, RunResult } from './spawn-exec.js';
 
 /**
@@ -12,6 +12,8 @@ import type { LineStream, RunOptions, RunResult } from './spawn-exec.js';
  *   MAIN's (it answers the supervisor synchronously); the engine's own id stays here. A pty that cannot be started says
  *   why in its output and exits -1, which the supervisor reads as a crash, with the words in the process's log.
  * - `pty.write` / `pty.resize` / `pty.kill` act on main's id. `host.shutdown` kills every pty and stream, then answers.
+ * - `pty.open`'s third argument is the pty's TAG (what it is to the window); `pty.list` answers every live pty with its
+ *   id, pid, tag and scrollback, so a window that restarted takes them back (the host split, P2.1).
  */
 
 export interface SpawnHostImpl {
@@ -35,6 +37,7 @@ export function adoptEnv(next: unknown, env: NodeJS.ProcessEnv = process.env): v
 
 export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { killAll(): void } {
     const ptys = new Map<string, string>(); // main's id → the engine's
+    const known = new Map<string, { pid: number; tag: PtyTag | null }>(); // main's id → what pty.list answers
     const byEngine = new Map<string, string>(); // the engine's id → main's
     const streams = new Map<string, { stop(): void }>();
     const event = (ch: Extract<SpawnFrame, { kind: 'event' }>['channel'], payload: unknown) => channel.send({ kind: 'event', channel: ch, payload });
@@ -49,17 +52,24 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
         const id = byEngine.get(engineId);
         if (id !== undefined) event('pty.data', { id, data });
     });
+    // An interactive terminal's cwd (the `terminals` profile hooks OSC-7; the supervised `processes` one does not).
+    impl.pty?.onCwd?.((engineId, cwd) => {
+        const id = byEngine.get(engineId);
+        if (id !== undefined) event('pty.cwd', { id, cwd });
+    });
     impl.pty?.onExit((engineId, code) => {
         const id = byEngine.get(engineId);
         if (id === undefined) return;
         byEngine.delete(engineId);
         ptys.delete(id);
+        known.delete(id);
         event('pty.exit', { id, code });
     });
 
     const killAll = () => {
         for (const [id, engineId] of [...ptys]) {
             ptys.delete(id);
+            known.delete(id);
             byEngine.delete(engineId);
             try { impl.pty?.kill(engineId); } catch { /* already gone */ }
         }
@@ -92,6 +102,12 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                 }
                 return;
             }
+            case 'spawn.unstreamAll': {
+                // The window that asked for them is gone (genie-host says so when its link drops): their lines go nowhere.
+                for (const [sid, s] of [...streams]) { streams.delete(sid); s.stop(); }
+                answer(id, true);
+                return;
+            }
             case 'spawn.unstream': {
                 const s = streams.get(args[0] as string);
                 streams.delete(args[0] as string);
@@ -100,7 +116,7 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                 return;
             }
             case 'pty.open': {
-                const [ptyId, spawn] = args as [string, PtySpawnOptions];
+                const [ptyId, spawn, tag] = args as [string, PtySpawnOptions, PtyTag | undefined];
                 if (!impl.pty) {
                     event('pty.data', { id: ptyId, data: '[genie] the spawn host makes no ptys\r\n' });
                     event('pty.exit', { id: ptyId, code: -1 });
@@ -110,6 +126,7 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                     const opened = impl.pty.open(spawn);
                     ptys.set(ptyId, opened.id);
                     byEngine.set(opened.id, ptyId);
+                    known.set(ptyId, { pid: opened.pid, tag: tag ?? null });
                     event('pty.opened', { id: ptyId, pid: opened.pid });
                 } catch (error) {
                     event('pty.data', { id: ptyId, data: `[genie] could not start ${spawn.command ?? 'the process'}: ${error instanceof Error ? error.message : String(error)}\r\n` });
@@ -133,8 +150,19 @@ export function serveSpawnHost(channel: SpawnChannel, impl: SpawnHostImpl): { ki
                 if (engineId === undefined) return;
                 // Killed on main's word: main already forgot it, so its exit is not reported back.
                 ptys.delete(ptyId);
+                known.delete(ptyId);
                 byEngine.delete(engineId);
                 impl.pty?.kill(engineId);
+                return;
+            }
+            case 'pty.list': {
+                const listed: ListedPty[] = [...ptys].map(([ptyId, engineId]) => ({
+                    id: ptyId,
+                    pid: known.get(ptyId)?.pid ?? 0,
+                    tag: known.get(ptyId)?.tag ?? null,
+                    scrollback: impl.pty?.scrollback(engineId) ?? '',
+                }));
+                answer(id, listed);
                 return;
             }
             case 'host.shutdown': {

@@ -1,4 +1,5 @@
 import { fanOut } from '../core/fan-out.js';
+import type { PtyTag } from './spawn-host-protocol.js';
 import { limitRefusal } from '../core/shell-limits.js';
 
 /**
@@ -49,6 +50,11 @@ export interface PtySpawnOptions {
      * the engine. Absent for a plain shell.
      */
     env?: Readonly<Record<string, string>> | undefined;
+    /**
+     * What this pty is to the window (the host split, P2.1): kept by a spawn host that outlives the window, so the next
+     * window takes it back. Not the engine's: a port that runs the pty in this process ignores it.
+     */
+    tag?: PtyTag | undefined;
 }
 
 /** A live pty, as the engine reports it. */
