@@ -69,7 +69,7 @@ import { ProcessSupervisor } from './process-supervisor.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
 import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
-import { ServiceDriver, dockerRunnerOver, type DockerRunner } from './service-driver.js';
+import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
 import { DotEnvSync, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
 import { SettingsStore } from './settings-store.js';
@@ -77,7 +77,7 @@ import { SiteManager, type PhpCgiResolution } from './site-manager.js';
 import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
 import { readJson, writeJsonAtomic } from './store.js';
 import type { PtyPort } from './terminal-host.js';
-import { execFileRunner } from './toolchain-runner.js';
+import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -93,6 +93,17 @@ import { execFileRunner } from './toolchain-runner.js';
 export interface ComposeInput {
     readonly userData: string;
     readonly pty: PtyPort;
+    /**
+     * The supervisor's pty engine (sites, queue workers, the front door), when it is not `pty`: in Electron, the spawn
+     * host's (main/spawn-host-client.ts, genie#1397), so no supervised process is created on main's thread. Absent = `pty`.
+     */
+    readonly processPty?: PtyPort;
+    /**
+     * `docker events` as a stream of lines, so engine states are read on change instead of on every look (genie#1397).
+     * Absent with no `docker` given = the real one, created where `execFileRunner`'s commands are; absent with a `docker`
+     * given (a test's fake) = no watch, every look asks.
+     */
+    readonly dockerEvents?: DockerEventsPort;
     /** Reads v1's settings table, or `null` when there is no v1 database. Called once, on first run only. */
     readonly v1Settings: () => Readonly<Record<string, string>> | null;
     /**
@@ -704,7 +715,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
     if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
 
-    const supervisor = new ProcessSupervisor(input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
+    const supervisor = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
     // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
     // RECORDED (services.json, read through the registry every time), not one something else on this machine holds
     // (a bind probe), and the same ports for the same records after a restart (core/port-allocator.ts).
@@ -717,6 +728,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // Only a pull gets the long bound (service-driver.ts); every other docker call keeps the short one.
     const docker: DockerRunner = input.docker ?? dockerRunnerOver(execFileRunner);
     const driver = new ServiceDriver(docker);
+    const dockerEvents: DockerEventsPort | undefined = input.dockerEvents ?? (input.docker ? undefined : (args, onLine, onEnd) => lineStreamRunner('docker', args, onLine, onEnd));
+    if (dockerEvents) driver.watch(dockerEvents);
     const engines = await ServiceRegistry.open(input.userData, driver, { allocatePort, randomPassword: () => randomBytes(18).toString('base64url'), portFree: input.portFree ?? loopbackPortFree });
     registry = engines;
     // Genie 1's engines, taken over in place (and its sandboxes stopped) BEFORE anything reads a workspace's env, primes
@@ -1311,6 +1324,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
                 stopLiveness();
+                driver.unwatch();
                 fileWatches.stop();
                 fileSource.stop();
                 // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
