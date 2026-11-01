@@ -1,4 +1,4 @@
-import type { Baton, PairingPins, ShareLinks, ShareLink } from '../core/remote.js';
+import type { Baton, PairingPins } from '../core/remote.js';
 import {
     AGENT_SCOPED_METHODS,
     WORKSPACE_SCOPED_METHODS,
@@ -20,8 +20,9 @@ import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowSt
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
  *
  * A connection says hello with a PIN read off this screen (pairs a device of the OWNER's and mints
- * a durable token), a token from an earlier pairing, or a share link (admits a GUEST to one
- * workspace). Then every call is gated by the one table in core/remote-protocol.ts: a read is never
+ * a durable token), a token from an earlier pairing, or — on the Tynn relay only — the relay's own proof (the
+ * owner, or a GUEST a Tynn share link admitted, scoped as its grant says).
+ * Then every call is gated by the one table in core/remote-protocol.ts: a read is never
  * gated, a write needs the baton, an upgrade needs ownership, a host-only method is refused with
  * where to do it. Events reach every connection; a guest's are filtered to its workspace. The
  * transport is a port — fancy-ws on a real socket, an in-memory pair in tests.
@@ -95,7 +96,7 @@ function withoutRemoteSecrets(value: unknown): unknown {
     if (typeof value !== 'object' || value === null || !('remote' in value)) return value;
     const remote = (value as { remote: unknown }).remote;
     if (typeof remote !== 'object' || remote === null) return value;
-    return { ...value, remote: { ...remote, pin: null, devices: [], shares: [], connections: [], servedLink: null, pairRequests: [] } };
+    return { ...value, remote: { ...remote, pin: null, devices: [], connections: [], pairRequests: [] } };
 }
 
 /**
@@ -116,7 +117,6 @@ export class RemoteHost {
     readonly #hostName: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
-    readonly #shares: ShareLinks;
     readonly #devices: DeviceStore;
     readonly #confirm: PairConfirm;
     readonly #changeListeners = new Set<() => void>();
@@ -141,12 +141,11 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; shares: ShareLinks; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number }) {
         this.#api = deps.api;
         this.#hostName = deps.hostName;
         this.#baton = deps.baton;
         this.#pins = deps.pins;
-        this.#shares = deps.shares;
         this.#devices = deps.devices;
         this.#confirm = deps.confirm;
         this.#transport = deps.transport;
@@ -243,22 +242,6 @@ export class RemoteHost {
         return true;
     }
 
-    shares(): ShareLink[] {
-        return this.#shares.roster();
-    }
-
-    /** Mint AND serve in one step: the URL leaves here exactly once. */
-    mintShare(input: { workspaceId: string; grantedTo: string; expiresInMs: number }): { link: ShareLink; url: string } {
-        const link = this.#shares.mint(input);
-        const served = this.#shares.serve(link.id);
-        if (!served.ok) throw new Error(served.reason);
-        return { link: this.#shares.roster().find((l) => l.id === link.id) ?? link, url: served.url };
-    }
-
-    revokeShare(id: string): boolean {
-        return this.#shares.revoke(id);
-    }
-
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
@@ -326,11 +309,11 @@ export class RemoteHost {
         if (connection.pendingPair !== null) return this.#refuse(connection, `this device is already waiting for Allow on ${this.#hostName}`, false);
         /*
          * SECURITY (pairing vs share link, H1): a connection the Tynn relay admitted is already somebody, proved by its Tynn
-         * grant; that grant is its only way in. A PIN, a device token or a local link are tailnet/local hellos: said over
-         * the relay they would let a guest admitted by a link pair as the owner. Refused before anything is redeemed, so a
+         * grant; that grant is its only way in. A PIN or a device token are tailnet hellos: said over the relay they would
+         * let a guest admitted by a link pair as the owner. Refused before anything is redeemed, so a
          * refused hello spends no PIN try and raises no "Pair this device?".
          */
-        if (connection.socket.preAuth && auth.kind !== 'relay') return this.#refuse(connection, `this connection came through the Tynn relay: its Tynn grant admits it, never a PIN, a device token or a link`, true);
+        if (connection.socket.preAuth && auth.kind !== 'relay') return this.#refuse(connection, `this connection came through the Tynn relay: its Tynn grant admits it, never a PIN or a device token`, true);
         if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
@@ -360,15 +343,11 @@ export class RemoteHost {
             const device = checked.device;
             connection.deviceId = device.id;
             connection.auth = { label: auth.label ?? message.label ?? device.label, isOwner: true, workspaceId: null, readonly: false };
-        } else if (auth.kind === 'relay') {
+        } else {
             // The transport proved who this is (a Tynn grant and its key); without that proof there is nothing to take.
             const pre = connection.socket.preAuth;
             if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
-        } else {
-            const r = this.#shares.redeem(auth.id, auth.secret);
-            if (!r.ok) return this.#refuse(connection, r.reason, true);
-            connection.auth = { label: auth.label ?? message.label ?? r.grantedTo, isOwner: false, workspaceId: r.workspaceId, readonly: false };
         }
         if (message.profile === 'mobile') connection.profile = 'mobile';
         this.#send(connection, {
@@ -469,7 +448,7 @@ export class RemoteHost {
             const value = await this.#api.invoke(method, materialized.args);
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
-            // paired devices, the share links (their URLs carry the secret) and the connections. Only an owner sees them.
+            // paired devices and the connections. Only an owner sees them.
             if (method === 'features.snapshot' && !auth.isOwner) return ok(withoutRemoteSecrets(value));
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             return ok(value);

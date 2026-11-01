@@ -70,7 +70,7 @@ describe('remoteAccess — the listener follows the switch', () => {
 });
 
 describe('Settings → Remote access', () => {
-    const base: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: true, firewall: true };
+    const base: RemoteSection = { host: 'alphar', url: 'wss://alphar.tail.ts.net:7421/genie', unavailable: null, locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: true };
     const render = (remote: RemoteSection) => renderToStaticMarkup(<RemoteAccess remote={remote} workspaces={[]} onAction={() => {}} />);
 
     it('OFF: the switch says so, nothing is offered to pair, and it says no device can reach this Genie', () => {

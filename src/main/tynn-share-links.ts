@@ -19,6 +19,8 @@ export interface ShareLink {
     readonly whole: boolean;
     readonly workspaceIds: readonly string[];
     readonly expiresAt: string | null;
+    /** Someone has redeemed it and its one session can still be used (tynn.ai #394): revoking it ends that session. */
+    readonly claimed: boolean;
 }
 
 export const NOT_REGISTERED = 'This machine is not registered with Tynn yet, so there is nothing to share it on: sign in to Tynn in Genie and it registers itself';
@@ -42,6 +44,7 @@ function linkFrom(raw: unknown): ShareLink | null {
         whole: l.all_workspaces === true,
         workspaceIds: Array.isArray(l.workspace_ids) ? l.workspace_ids.filter((w): w is string => typeof w === 'string') : [],
         expiresAt: typeof l.expires_at === 'string' ? l.expires_at : null,
+        claimed: l.claimed === true,
     };
 }
 
@@ -88,12 +91,27 @@ export async function listShareLinks(request: SessionRequest, workstationId: str
     }
 }
 
-export async function revokeShareLink(request: SessionRequest, workstationId: string | null, linkId: string): Promise<{ ok: true } | { ok: false; reason: string }> {
+/**
+ * Revoke a link. Tynn deletes it and revokes the grants its claimed session holds (tynn.ai #394); `endSessions` then has
+ * this host re-check its live relay sessions at once, so a guest on that link is dropped now, not at the next 30-second
+ * introspection (audit M-c). A re-check that fails does not undo the revoke: the timer still catches the session.
+ */
+export async function revokeShareLink(
+    request: SessionRequest,
+    workstationId: string | null,
+    linkId: string,
+    endSessions?: () => Promise<void>,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (!workstationId) return { ok: false, reason: NOT_REGISTERED };
+    let res: Awaited<ReturnType<SessionRequest>>;
     try {
-        const res = await request(`${linksPath(workstationId)}/${encodeURIComponent(linkId)}`, { method: 'DELETE' });
-        return res.ok ? { ok: true } : { ok: false, reason: await refusal(res, 'revoke that link') };
+        res = await request(`${linksPath(workstationId)}/${encodeURIComponent(linkId)}`, { method: 'DELETE' });
     } catch (error) {
         return { ok: false, reason: reach(error) };
     }
+    if (!res.ok) return { ok: false, reason: await refusal(res, 'revoke that link') };
+    if (endSessions) {
+        try { await endSessions(); } catch { /* the revoke stands; the host's own 30 s re-check still ends the session */ }
+    }
+    return { ok: true };
 }

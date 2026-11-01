@@ -51,8 +51,9 @@ export interface RelayHostLink extends ServerTransport {
 const MAX_PENDING_FRAMES = 64;
 
 interface Session {
-    readonly grant: HostGrant;
-    readonly token: string;
+    /** The grant in use: replaced by a renewal (genie#1401), re-checked on the timer. */
+    grant: HostGrant;
+    token: string;
     readonly messages: Set<(text: string) => void>;
     readonly closes: Set<() => void>;
     /** Its open site streams, by reqId (relay-site.ts). */
@@ -219,6 +220,35 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         else accept(sid, pending.grant, pending.token);
     };
 
+    /**
+     * A FRESH GRANT FOR A LIVE SESSION (genie#1401): the member renews before its grant expires, and the session goes on
+     * under the new one. It must be valid (Tynn's signature, audience, expiry, still active), for the same person, bound
+     * to the SAME key the member proved at admission (so no new challenge is needed), and map to exactly the same
+     * principal: a renewal never changes who the guest is or what it may reach. Anything else ends the session, in words.
+     */
+    const renew = async (sid: string, token: unknown) => {
+        const session = sessions.get(sid);
+        if (!session) return;
+        if (typeof token !== 'string') {
+            reject(sid, 'grant renewal refused: no grant');
+            return;
+        }
+        let check: GrantCheck;
+        try {
+            check = await deps.validateGrant(token);
+        } catch {
+            check = { ok: false, reason: 'grant validation error' };
+        }
+        if (state !== 'open' || sessions.get(sid) !== session) return;
+        const refusal = !check.ok ? check.reason : renewalRefusal(session.grant, check.grant);
+        if (refusal !== null || !check.ok) {
+            reject(sid, `grant renewal refused: ${refusal ?? 'invalid'}`);
+            return;
+        }
+        session.grant = check.grant;
+        session.token = token;
+    };
+
     const handle = (frame: Frame) => {
         if (frame.channel === 'control') {
             if (frame.kind === 'open') {
@@ -237,6 +267,7 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
             }
             const payload = (frame.payload ?? {}) as Record<string, unknown>;
             if (frame.kind === 'data' && payload.type === 'pop-proof') proof(frame.sid, payload);
+            else if (frame.kind === 'data' && payload.type === 'grant-renew') void renew(frame.sid, payload.grant);
             return;
         }
         if (sessions.has(frame.sid)) {
@@ -359,6 +390,19 @@ export function relayHostLink(deps: RelayHostLinkDeps): RelayHostLink {
         state: () => state,
         revalidate,
     };
+}
+
+/** Why `next` may not replace `current` for a live session, or null when it may: same person, key and principal. */
+function renewalRefusal(current: HostGrant, next: HostGrant): string | null {
+    if (next.sub !== current.sub) return 'it is for someone else';
+    if ((next.confirmationKeyThumbprint ?? null) !== (current.confirmationKeyThumbprint ?? null)) return 'it is bound to a different key';
+    const was = principalOf(current);
+    const now = principalOf(next);
+    if (!now.ok) return now.reason;
+    if (!was.ok || was.principal.isOwner !== now.principal.isOwner || was.principal.workspaceId !== now.principal.workspaceId || was.principal.readonly !== now.principal.readonly) {
+        return 'it changes what this session may reach';
+    }
+    return null;
 }
 
 /** Why a proof fails, or null when it holds: the key is the one the grant is bound to, and it signed this challenge. */

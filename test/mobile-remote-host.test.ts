@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair, parseMessage, type ClientTransport, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
@@ -72,15 +72,15 @@ function client(t: ClientTransport) {
 let dir: string;
 let host: RemoteHost;
 let api: ReturnType<typeof fakeApi>;
-let shares: ShareLinks;
 let devices: DeviceStore;
 let connect: () => ReturnType<typeof client>;
+/** A guest phone a Tynn share link admitted to one workspace, over the relay (the only way a guest comes in). */
+let connectLinkGuest: (workspaceId: string) => ReturnType<typeof client>;
 const now = 1_000_000;
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-mobile-host-'));
     api = fakeApi();
-    shares = new ShareLinks({ host: 'alphar:7421', now: () => now, random: () => 'sekrit' });
     let n = 0;
     devices = await DeviceStore.open(dir, { now: () => now, random: () => `tok${n++}` });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
@@ -89,12 +89,12 @@ beforeEach(async () => {
         hostName: 'alphar',
         baton: new Baton(),
         pins: new PairingPins({ now: () => now, random: () => 0.123456 }),
-        shares,
         devices,
         transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } },
         now: () => now,
     });
     connect = () => { const pair = inMemoryPair(); for (const cb of connections) cb(pair.server); return client(pair.client); };
+    connectLinkGuest = (workspaceId) => { const pair = inMemoryPair(); for (const cb of connections) cb({ ...pair.server, remoteAddress: 'relay:wren', preAuth: { label: 'wren', isOwner: false, workspaceId, readonly: false } }); return client(pair.client); };
 });
 
 afterEach(async () => {
@@ -179,10 +179,8 @@ describe('a phone receives only what a phone shows', () => {
     });
 
     it('a guest phone may not watch an agent outside its workspace', async () => {
-        const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
-        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
-        const g = connect();
-        await g.hello({ kind: 'share', id: link.id, secret }, { profile: 'mobile' });
+        const g = connectLinkGuest('tynn');
+        expect(await g.hello({ kind: 'relay' }, { profile: 'mobile' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
         expect(await g.call('agent.watch', 'agent_b', {})).toMatchObject({ ok: false });
         expect(await g.call('agent.watch', 'agent_a', {})).toMatchObject({ ok: true });
     });
@@ -244,10 +242,8 @@ describe('bytes cross in chunks, staged per connection, taken only by a call tha
     });
 
     it('a guest uploads only into its own workspace, and reads only its own files', async () => {
-        const link = shares.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
-        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
-        const g = connect();
-        await g.hello({ kind: 'share', id: link.id, secret }, { profile: 'mobile' });
+        const g = connectLinkGuest('tynn');
+        expect(await g.hello({ kind: 'relay' }, { profile: 'mobile' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
         await g.call('baton.take');
         expect(await g.call('files.children', 'fancy', '')).toMatchObject({ ok: false });
         expect(await g.call('files.open', 'fancy', 'README.md')).toMatchObject({ ok: false });
@@ -260,7 +256,7 @@ describe('bytes cross in chunks, staged per connection, taken only by a call tha
 
     it('a read-only connection cannot stage bytes at all', async () => {
         const conns: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
-        const ro = new RemoteHost({ confirm: allowEveryPairing, api: api.api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => now, random: () => 0.5 }), shares, devices, transport: { onConnection: (cb) => { conns.push(cb); return () => {}; } } });
+        const ro = new RemoteHost({ confirm: allowEveryPairing, api: api.api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => now, random: () => 0.5 }), devices, transport: { onConnection: (cb) => { conns.push(cb); return () => {}; } } });
         const pair = inMemoryPair();
         const server = { ...pair.server, preAuth: { label: 'viewer', isOwner: false, workspaceId: 'tynn', readonly: true } };
         for (const cb of conns) cb(server);

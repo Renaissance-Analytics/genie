@@ -30,7 +30,7 @@ describe('mintShareLink', () => {
         const t = tynn(() => ({ status: 201, body: { link: LINK } }));
         const r = await mintShareLink(t.request, 'ws_me', { workspaceId: 'w_tynn', capability: 'control', expiresInDays: 14 });
         expect(t.calls).toEqual([{ path: '/api/v1/workstations/ws_me/share-links', method: 'POST', body: { workspace: 'w_tynn', capability: 'control', expires_in_days: 14 } }]);
-        expect(r).toEqual({ ok: true, link: { id: 'inv_1', url: 'https://tynn.example.com/i/abc', capability: 'control', whole: false, workspaceIds: ['w_tynn'], expiresAt: '2026-10-26T00:00:00Z' } });
+        expect(r).toEqual({ ok: true, link: { id: 'inv_1', url: 'https://tynn.example.com/i/abc', capability: 'control', whole: false, workspaceIds: ['w_tynn'], expiresAt: '2026-10-26T00:00:00Z', claimed: false } });
     });
 
     it('the whole workstation: all_workspaces, never with a list', async () => {
@@ -91,7 +91,7 @@ describe('the link, opened: genie://workstation/open', () => {
 });
 
 describe('the Share dialog (its form; Fancy’s Modal portals, so it is not rendered here)', () => {
-    const base = { workspaceName: 'tynn', links: [], minted: null, problem: null, busy: false, onMint: () => {}, onRevoke: () => {}, onClose: () => {} };
+    const base = { workspaceName: 'tynn', links: [], minted: null, problem: null, busy: false, onMint: () => {}, onRevoke: async () => ({ ok: true as const }), onClose: () => {} };
 
     it('offers control / read-only, an expiry, and this workspace or the whole workstation', () => {
         const html = renderToStaticMarkup(<ShareWorkspaceForm {...base} />);
@@ -102,7 +102,7 @@ describe('the Share dialog (its form; Fancy’s Modal portals, so it is not rend
     });
 
     it('a link just made: its URL, once, with Copy', () => {
-        const html = renderToStaticMarkup(<ShareWorkspaceForm {...base} minted={{ id: 'inv_1', url: 'https://tynn.example.com/i/abc', capability: 'control', whole: false, workspaceIds: ['w_tynn'], expiresAt: null }} />);
+        const html = renderToStaticMarkup(<ShareWorkspaceForm {...base} minted={{ id: 'inv_1', url: 'https://tynn.example.com/i/abc', capability: 'control', whole: false, workspaceIds: ['w_tynn'], expiresAt: null, claimed: false }} />);
         expect(html).toContain('https://tynn.example.com/i/abc');
         expect(html).toContain('data-action="copy-share-link"');
         // Copied through main, the outcome announced beside it (clipboard-buttons.test).
@@ -110,7 +110,7 @@ describe('the Share dialog (its form; Fancy’s Modal portals, so it is not rend
     });
 
     it('the links that reach it, each revocable; a problem in words', () => {
-        const html = renderToStaticMarkup(<ShareWorkspaceForm {...base} problem="This workstation does not host that workspace." links={[{ id: 'inv_3', url: null, capability: 'readonly', whole: true, workspaceIds: [], expiresAt: '2026-10-26T00:00:00Z' }]} />);
+        const html = renderToStaticMarkup(<ShareWorkspaceForm {...base} problem="This workstation does not host that workspace." links={[{ id: 'inv_3', url: null, capability: 'readonly', whole: true, workspaceIds: [], expiresAt: '2026-10-26T00:00:00Z', claimed: false }]} />);
         expect(html).toMatch(/data-share-link-row="inv_3"[^]*?data-action="revoke-share-link"/);
         expect(html).toContain('This workstation does not host that workspace.');
     });

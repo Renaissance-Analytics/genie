@@ -8,7 +8,7 @@ import type { RemoteSection, TynnWorkstationState } from '../src/renderer/featur
  * whether this machine is registered with Tynn — the thing a share, the relay and the Tynn workstations list all
  * stand on — and, when it is not, why, in Tynn's or Genie's own words.
  */
-const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'stopped', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: false, firewall: false };
+const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'stopped', locked: false, pin: null, devices: [], connections: [], enabled: false, firewall: false };
 const render = (tynnWorkstation: TynnWorkstationState | null | undefined) => renderToStaticMarkup(<RemoteAccess remote={{ ...base, tynnWorkstation }} workspaces={[]} onAction={() => {}} />);
 
 describe('the Tynn row', () => {

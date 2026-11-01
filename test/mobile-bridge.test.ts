@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
@@ -49,7 +49,7 @@ beforeEach(async () => {
     calls.length = 0;
     connections = [];
     devices = await DeviceStore.open(dir, { now: () => 1, random: () => 'tok' });
-    host = new RemoteHost({ confirm: allowEveryPairing, api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), shares: new ShareLinks({ host: 'x', now: () => 1, random: () => 's' }), devices, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } } });
+    host = new RemoteHost({ confirm: allowEveryPairing, api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: () => 1, random: () => 0.5 }), devices, transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } } });
 });
 afterEach(async () => { await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
 

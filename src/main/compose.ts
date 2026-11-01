@@ -46,7 +46,7 @@ import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
 import { OFFICIAL_PLUGINS } from '../core/official-plugins.js';
-import { Baton, PairingPins, ShareLinks } from '../core/remote.js';
+import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
@@ -882,7 +882,6 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         baton: new Baton(),
         // The PIN from the CSPRNG (PairingPins' default), as Genie 1's crypto.randomInt — not Math.random (genie#1346).
         pins: new PairingPins({ now }),
-        shares: new ShareLinks({ host: hostName, now, random: () => randomBytes(18).toString('base64url') }),
         devices: remoteDevices,
         confirm: pairing,
         transport: input.remoteTransport ?? { onConnection: () => () => {} },

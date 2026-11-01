@@ -253,8 +253,6 @@ export interface FeatureState {
     serviceUpdating?: NonNullable<FeatureData['services']>['updating'];
     knowledgeAdding?: KnowledgeAdding | null;
     knowledgeLastAdd?: KnowledgeAdded | null;
-    /** Transient: the URL of a link minted by THIS action, served once. Never persisted into the next state. */
-    servedLink?: { id: string; url: string } | null;
     /** What the last Allow through the firewall did (Tynn #820), in words. */
     firewallOutcome?: string | null;
     /** What the last Tailscale Connect or Install did (Tynn #821), in words. */
@@ -564,9 +562,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             pin: services.remote.activePin(),
             devices: services.remote.devices(),
             pairRequests: services.pairing.requests(),
-            shares: services.remote.shares(),
             connections: services.remote.connections(),
-            servedLink: state.servedLink ?? null,
             enabled: services.settings.snapshot().remote_access === true,
             firewall: ports.allowFirewall !== undefined,
             firewallOutcome: state.firewallOutcome ?? null,
@@ -1645,12 +1641,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             next.firewallOutcome = r.ok ? 'Allowed: devices on your tailnet can reach this port.' : r.cancelled ? 'Cancelled: Windows asked, and nothing was changed.' : (r.error ?? 'The firewall rule could not be added.');
             break;
         }
-        case 'remote.mintShare': {
-            // Served exactly once: the URL rides this answer and no snapshot after it.
-            const m = services.remote.mintShare({ workspaceId: action.workspaceId, grantedTo: action.grantedTo, expiresInMs: action.expiresInMs });
-            next.servedLink = { id: m.link.id, url: m.url };
-            break;
-        }
         // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.
         case 'integrations.tynnSignIn': {
             const { url } = await tynnAccountOf(ports).startSignIn();
@@ -1693,9 +1683,6 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             // Sync now in a workspace's Settings: THAT workspace's agent files, then its four harness configs — by you.
             await services.syncAgentDocs(action.workspacePath, 'you');
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
-            break;
-        case 'remote.revokeShare':
-            if (!services.remote.revokeShare(action.shareId)) throw new Error(`no share link ${action.shareId}`);
             break;
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());

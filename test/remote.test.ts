@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Baton, PairingPins, ShareLinks, splitSettings, type SettingDefinition } from '../src/core/remote.js';
+import { Baton, PairingPins, splitSettings, type SettingDefinition } from '../src/core/remote.js';
 
 /**
  * REMOTE, PAIRING, SHARING (§6.8) — the pure half. Every rule here was paid for in v1:
@@ -53,42 +53,6 @@ describe('the baton — exactly one driver', () => {
         expect(b.may('conn_a', 'read')).toEqual({ ok: true });
         b.unlock();
         expect(b.may('conn_a', 'write')).toEqual({ ok: true });
-    });
-});
-
-describe('share links — a credential you cannot unsend', () => {
-    let clock = 1_000_000;
-    const now = () => clock;
-
-    it('mints a link for THIS host with a one-time secret, and serves the URL exactly once', () => {
-        const links = new ShareLinks({ host: 'studio.tailnet.invalid', now, random: () => 'r4nd0m' });
-        const link = links.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 3_600_000 });
-        expect(link.id).toMatch(/^share_/);
-        const first = links.serve(link.id);
-        expect(first).toEqual({ ok: true, url: 'https://studio.tailnet.invalid/share/share_r4nd0m#r4nd0m' });
-        // COUNTED: a second serve is refused — the URL is gone from the server the moment it was shown.
-        expect(links.serve(link.id)).toEqual({ ok: false, reason: 'this link was already served once and cannot be shown again; mint a new one' });
-        expect(links.roster().map((r) => [r.id, r.grantedTo, r.served])).toEqual([[link.id, 'wren', true]]);
-    });
-
-    it('redeems with the secret while unexpired and unrevoked; a wrong secret, an expired or a revoked link all refuse', () => {
-        const links = new ShareLinks({ host: 'studio.tailnet.invalid', now, random: () => 's3cret' });
-        const link = links.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 1_000 });
-        expect(links.redeem(link.id, 'wrong')).toEqual({ ok: false, reason: 'not a valid link' });
-        expect(links.redeem(link.id, 's3cret')).toEqual({ ok: true, workspaceId: 'tynn', grantedTo: 'wren' });
-        clock += 2_000;
-        expect(links.redeem(link.id, 's3cret')).toEqual({ ok: false, reason: 'this link expired' });
-        const other = links.mint({ workspaceId: 'tynn', grantedTo: 'kai', expiresInMs: 60_000 });
-        links.revoke(other.id);
-        expect(links.redeem(other.id, 's3cret')).toEqual({ ok: false, reason: 'this link was revoked' });
-    });
-
-    it('a link minted for another host is refused at redemption, by host', () => {
-        const a = new ShareLinks({ host: 'studio.tailnet.invalid', now, random: () => 'x' });
-        const b = new ShareLinks({ host: 'laptop.tailnet.invalid', now, random: () => 'x' });
-        const link = a.mint({ workspaceId: 'tynn', grantedTo: 'wren', expiresInMs: 60_000 });
-        expect(b.redeem(link.id, 'x')).toEqual({ ok: false, reason: 'not a valid link' });
-        expect(ShareLinks.hostOf(a.serve(link.id).ok ? 'https://studio.tailnet.invalid/share/share_x#x' : '')).toBe('studio.tailnet.invalid');
     });
 });
 

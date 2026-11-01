@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
+import { Baton, PairingPins } from '../src/core/remote.js';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
@@ -60,7 +60,6 @@ beforeEach(async () => {
         hostName: 'alphar',
         baton: new Baton(),
         pins: new PairingPins({ now: () => 1, random: () => 0.482913 }),
-        shares: new ShareLinks({ host: 'alphar:7421', now: () => 1, random: () => 's' }),
         devices,
         transport: { onConnection: (cb) => { accept = cb; return () => {}; } },
     });

@@ -10,7 +10,7 @@ import type { TailscaleStatus } from '../src/main/tailscale-cli.js';
  * the one action that moves it on: Install, Connect (which may hand back a sign-in link), Sign in. Running, it names this
  * machine on the tailnet and counts its peers.
  */
-const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'Tailscale is not installed', locked: false, pin: null, devices: [], shares: [], connections: [], servedLink: null, enabled: true, firewall: false };
+const base: RemoteSection = { host: 'alphar', url: null, unavailable: 'Tailscale is not installed', locked: false, pin: null, devices: [], connections: [], enabled: true, firewall: false };
 const ts = (over: Partial<TailscaleStatus>): TailscaleStatus => ({ installed: true, running: false, state: 'needs-login', self: null, peers: [], authUrl: null, remedy: null, ...over });
 const render = (tailscale: TailscaleStatus | null) => renderToStaticMarkup(<RemoteAccess remote={{ ...base, tailscale }} workspaces={[]} onAction={() => {}} />);
 

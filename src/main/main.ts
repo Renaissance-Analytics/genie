@@ -1955,7 +1955,13 @@ async function boot(): Promise<void> {
         if (!grant.ok) return { ...(await wordTynnRefusal(grant, rereadRole)), stage: 'tynn' };
         // Tynn gave the way in: the window moves its step on to reaching the machine.
         if (!event.sender.isDestroyed()) event.sender.send('genie:relay-open-step', workstationId, 'relay');
-        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop });
+        // A fresh grant for the SAME key before each one expires (genie#1401): the session lasts while the window stays.
+        const renew = async () => {
+            const now = tynnAccount;
+            if (!now?.status().signedIn) return { ok: false as const, reason: 'signed out of Tynn' };
+            return mintConnectGrant((path, init) => now.request(path, init), workstationId, pop.publicJwk);
+        };
+        const opened = await openRelayMember({ socket: relaySocket, relayUrl: grant.relayEndpoint, workstationId, grant: grant.token, pop, renew });
         if (!opened.ok) return { ...opened, stage: 'relay' };
         const channel = `relay_${++nextRelayChannel}`;
         const sender = event.sender;
@@ -1984,7 +1990,8 @@ async function boot(): Promise<void> {
             expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7,
         });
     });
-    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId) : { ok: false, reason: 'not a link' }));
+    // Revoking a claimed link ends its guest's live session NOW: this host re-checks its relay sessions at once (audit M-c).
+    ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId, async () => { await relayHostNow?.revalidate(); }) : { ok: false, reason: 'not a link' }));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;

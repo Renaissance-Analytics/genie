@@ -202,7 +202,7 @@ describe('the yellow ! on the Settings row', () => {
 
 describe('the device’s row in Settings → Remote access', () => {
     const remote = (devices: RemoteSection['devices']): RemoteSection => ({
-        host: 'alphar', url: 'wss://alphar:7421/genie', unavailable: null, locked: false, pin: null, devices, shares: [], connections: [], servedLink: null, enabled: true, firewall: false, pairRequests: [],
+        host: 'alphar', url: 'wss://alphar:7421/genie', unavailable: null, locked: false, pin: null, devices, connections: [], enabled: true, firewall: false, pairRequests: [],
     });
     const soon = { id: 'dev_soon', label: 'Pixel 7', pairedAt: new Date(NOW - 80 * DAY_MS).toISOString(), lastSeenAt: new Date(NOW - 80 * DAY_MS).toISOString(), expiresAt: new Date(NOW + 10 * DAY_MS).toISOString() };
     const fresh = { id: 'dev_fresh', label: 'iPad', pairedAt: new Date(NOW).toISOString(), lastSeenAt: new Date(NOW).toISOString(), expiresAt: new Date(NOW + 90 * DAY_MS).toISOString() };

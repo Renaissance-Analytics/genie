@@ -234,7 +234,6 @@ export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'a
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
     | { kind: 'token'; token: string; label?: string }
-    | { kind: 'share'; id: string; secret: string; label?: string }
     /** Already authenticated by the TRANSPORT (the Tynn relay checked a grant and its key, Tynn #838): refused on any
      *  connection that carries no {@link PreAuth}, so a tailnet socket cannot claim it. */
     | { kind: 'relay'; label?: string };
@@ -286,9 +285,8 @@ export function parseMessage(text: string): { ok: true; message: WireMessage } |
             const okAuth =
                 (auth.kind === 'pin' && typeof auth.code === 'string') ||
                 (auth.kind === 'token' && typeof auth.token === 'string') ||
-                (auth.kind === 'share' && typeof auth.id === 'string' && typeof auth.secret === 'string') ||
                 auth.kind === 'relay';
-            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, a share {id, secret} or relay' };
+            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token} or relay' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
             return { ok: true, message: raw as unknown as WireMessage };
