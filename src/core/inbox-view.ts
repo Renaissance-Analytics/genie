@@ -113,3 +113,6 @@ export function questionRef(text: string): { id: string; kind: 'answer' | 'menti
 export function shortQuestionId(id: string): string {
     return id.length > 10 ? `${id.slice(0, 10)}…` : id;
 }
+
+/** The order toggle's icon by the order it shows (registered in renderer/icons.ts from here). */
+export const ORDER_ICON: Readonly<Record<ThreadOrder, string>> = { newest: 'arrow-down-wide-narrow', oldest: 'arrow-up-narrow-wide' };

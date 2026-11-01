@@ -50,7 +50,8 @@ describe('the host serves a window of a thread', () => {
         expect(older.messages.map((x) => x.text)).toEqual(Array.from({ length: 50 }, (_, i) => `#${20 + i}`));
         expect([older.more, older.newer]).toEqual([true, true]);
         const last = threadWindow(mail, key, { limit: 50, beforeSeq: older.messages[0]!.seq });
-        expect(last.messages.map((x) => x.text)).toEqual(Array.from({ length: 20 }, (_, i) => `#${i}`));
+        // #3 carries the search fixture's words (history()).
+        expect(last.messages.map((x) => x.text)).toEqual(Array.from({ length: 20 }, (_, i) => (i === 3 ? '#3 the cache driver is ready' : `#${i}`)));
         expect(last.more).toBe(false);
     });
 
@@ -104,7 +105,7 @@ describe('the renderer merges each answer into a bounded buffer', () => {
         const mail = history();
         const buffer = threadWindow(mail, key, { limit: 50 }).messages;
         const older = threadWindow(mail, key, { limit: 50, beforeSeq: buffer[0]!.seq }).messages;
-        const merged = mergeWindow(buffer, older, { from: older[0]!.seq, to: buffer[0]!.seq - 1 }, 'oldest', 60);
+        const merged = mergeWindow(buffer, older, { from: older[0]!.seq, to: buffer[0]!.seq - 1 }, 'newest', 60);
         expect(merged.messages).toHaveLength(60);
         expect(merged.messages[0]!.text).toBe('#20');
         expect(merged.messages.at(-1)!.text).toBe('#79');

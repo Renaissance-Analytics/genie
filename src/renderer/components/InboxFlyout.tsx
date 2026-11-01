@@ -3,7 +3,7 @@ import { WorkspaceColorsContext, WorkspaceSwatch } from '../workspace-colors.js'
 import { Badge, Button, ContentRenderer, Drawer, Icon, Input, Modal, Select, Textarea } from '@particle-academy/react-fancy';
 import { genieClipboardWriter } from '../clipboard.js';
 import { ago, filterCounts, filterThreads, HUMAN, pairKey, THREAD_FILTERS, type ThreadFilter, type ThreadSummary } from '../../core/inbox-threads.js';
-import { highlightParts, inViewOrder, mergeWindow, questionRef, scrollAfterInsert, searchSnippet, shortQuestionId, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
+import { highlightParts, inViewOrder, mergeWindow, ORDER_ICON, questionRef, scrollAfterInsert, searchSnippet, shortQuestionId, THREAD_BUFFER, type ThreadOrder } from '../../core/inbox-view.js';
 import type { AskedRecord } from '../../main/attention-store.js';
 import type { InboxMessage } from '../../main/inbox-store.js';
 import type { InboxSearchResult, InboxSection, InboxThreadView } from '../features.js';
@@ -153,7 +153,6 @@ export interface InboxFlyoutViewProps {
 
 const FILTER_LABEL: Record<ThreadFilter, string> = { all: 'All', unread: 'Unread', waiting: 'Waiting', stale: 'Stale' };
 const ORDER_LABEL: Record<ThreadOrder, string> = { newest: 'Newest first', oldest: 'Oldest first' };
-const ORDER_ICON: Record<ThreadOrder, string> = { newest: 'arrow-down-wide-narrow', oldest: 'arrow-up-narrow-wide' };
 
 /** The agent in a pair that is not the person (or the first agent of two agents). */
 const otherOf = (a: string, b: string): string => (a === HUMAN ? b : a);
