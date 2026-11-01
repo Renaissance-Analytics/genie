@@ -15,6 +15,7 @@ import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKin
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
 import { agoText } from '../../core/remote-window.js';
@@ -63,6 +64,11 @@ interface SurfaceProps {
     /** Which tab a tabbed surface opens on; the surface’s own default otherwise. */
     readonly tab?: string | undefined;
     readonly data: FeatureData;
+    /**
+     * App.tsx's answers with a Promise<ActOutcome>, so a control that shows its progress can tell success from a refusal
+     * (SiteList, genie#1393); typed `void` so a surface or a test may pass any handler, and read through
+     * `Promise.resolve` by renderer/site-actions.ts, where a plain return counts as done.
+     */
     readonly onAction: (action: FeatureAction) => void;
     readonly onNavigate: (route: string) => void;
 }
@@ -336,6 +342,50 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
 }
 
 /**
+ * THE SITE ROWS, each with its click in flight and its refusal (genie#1393): a Start, Stop or Restart disables that row at
+ * once, is never sent twice, and ends in success or the reason with Retry. The Hosting tab and a workspace's Sites modal
+ * both draw this, so the rule cannot differ between them. The one place the rows hold state; SiteRow stays hook-free.
+ */
+export function SiteList({ sites, editing, onAction }: { sites: readonly HostedSite[]; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
+    const siteActions = useSiteActions(onAction);
+    return (
+        <ul className="divide-y divide-[var(--border-1)]">
+            {sites.map((s) => (
+                <SiteRow key={s.id} site={s} editing={editing?.siteId === s.id ? editing : null} pending={siteActions.pending(s.id)} refusal={siteActions.refusal(s.id)} onAction={(a) => { siteActions.click(a); }} />
+            ))}
+        </ul>
+    );
+}
+
+/** The step a site row says (genie#1393): the click in flight first, then main's own progress; `null` when settled. */
+export type SiteRowStep = 'restarting' | 'stopping' | 'starting' | 'answering' | 'slow';
+
+/** Which action a pending click sent: that control spins, the others are only disabled. */
+const PENDING_ACTION: Readonly<Record<SitePending, FeatureAction['kind']>> = {
+    restart: 'hosting.restartSite',
+    stop: 'hosting.stopSite',
+    start: 'hosting.startSite',
+};
+
+const STEP_WORDS: Readonly<Record<SiteRowStep, string>> = {
+    restarting: 'restarting…',
+    stopping: 'stopping…',
+    starting: 'starting…',
+    answering: 'starting…',
+    slow: 'still starting…',
+};
+
+function siteStep(s: HostedSite, pending: SitePending | null): SiteRowStep | null {
+    if (pending === 'restart') return 'restarting';
+    if (pending === 'stop') return 'stopping';
+    if (pending === 'start') return 'starting';
+    if (s.state === 'starting') return s.step ?? 'answering';
+    // The supervisor bringing a crashed process back by itself.
+    if (s.state === 'restarting') return 'restarting';
+    return null;
+}
+
+/**
  * ONE SITE'S ROW (§6.6) — Genie 1's site row (WorkspaceSiteManager.tsx): the host, its state and port, and what can be
  * done with it. Every control makes the same call an agent's `sites` tool makes (hosting-actions.ts):
  *
@@ -348,40 +398,78 @@ export function FlowsSurface({ data, onAction, workspaces = [] }: SurfaceProps) 
  *
  * A site Genie 2 cannot serve says why and offers nothing to click. Hook-free: what is open is native `<details>` or the
  * main process's form state, so the row renders the same on the server, in a test and on screen.
+ *
+ * EVERY ACTION SHOWS ITS PROGRESS (genie#1393; the owner's rule: obvious actions, visible progress, never silent). A click
+ * is `pending` until main answers (renderer/site-actions.ts): the row's controls are disabled at once and it says the
+ * step, restarting / stopping / starting. Then main's own progress: starting while the port has not answered, still
+ * starting (slow) past the first window, with Retry. It ends green (running) or red (failed or exited: the reason, and
+ * Retry). A refused click says why on the row, with Retry. Icons, not words: each control is an icon named by its label.
  */
-export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction'] }) {
-    // Starting (parity audit #9): its process runs but its port has not answered — Stop, but nothing to Open yet.
-    const starting = s.state === 'starting';
+export function SiteRow({ site: s, editing, onAction, pending = null, refusal = null }: { site: HostedSite; editing: SiteEditing | null; onAction: SurfaceProps['onAction']; pending?: SitePending | null; refusal?: SiteRefusal | null }) {
+    const step = siteStep(s, pending);
+    const busy = pending !== null;
     const up = s.state === 'running' || s.state === 'restarting' || s.state === 'external';
-    // Its port never answered: the processes still run, and Retry starts it again on fresh ports (a restart).
-    const silent = s.state === 'failed' && s.processIds.length > 0;
-    const button = 'text-[13px]';
+    const starting = s.state === 'starting';
+    // Failed (no answer past the ceiling, or the supervisor gave up) or exited: Retry starts it again on fresh ports.
+    const down = (s.state === 'failed' || s.state === 'exited') && s.processIds.length > 0;
+    const status = step !== null ? 'progress' : up ? 'running' : down ? 'failed' : s.state === 'unservable' ? 'unservable' : 'stopped';
+    // Every control is react-fancy's Button (the owner, 2026-11-01): an icon-only circle named by its label. The one whose
+    // action is in flight spins (`loading`); every other lifecycle control is disabled until main answers.
+    const control = (action: string, label: string, icon: string, act: FeatureAction, color?: 'red') => (
+        <Button
+            type="button"
+            variant="circle"
+            size="sm"
+            icon={icon}
+            {...(color ? { color } : {})}
+            data-site-action={action}
+            aria-label={label}
+            title={label}
+            disabled={busy}
+            loading={busy && PENDING_ACTION[pending!] === act.kind && action !== 'retry-refused'}
+            onClick={() => onAction(act)}
+        />
+    );
     return (
         <li data-site={s.id} className="flex flex-wrap items-center gap-3 px-5 py-2">
+            <span
+                data-site-status={status}
+                {...(step !== null ? { 'data-site-step': step } : {})}
+                title={step !== null ? STEP_WORDS[step] : s.state}
+                aria-label={step !== null ? STEP_WORDS[step] : s.state}
+                className="inline-flex items-center gap-1.5"
+            >
+                {step !== null ? (
+                    <span data-site-spinner className={step === 'slow' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}><Icon name="loader-circle" size="sm" className="animate-spin" /></span>
+                ) : status === 'running' ? (
+                    <span className="text-[var(--success)]"><Icon name="circle-check" size="sm" /></span>
+                ) : status === 'failed' ? (
+                    <span className="text-[var(--danger)]"><Icon name="circle-x" size="sm" /></span>
+                ) : (
+                    <span className="text-[var(--fg-4)]"><Icon name="circle" size="sm" /></span>
+                )}
+            </span>
             <span className="font-mono">{s.host}</span>
-            <Badge variant="soft" size="sm">{starting ? 'starting…' : s.state}</Badge>
+            {/* The step in words: only while something is happening, and only the words needed. */}
+            {step !== null ? <span className={`text-xs ${step === 'slow' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'}`}>{STEP_WORDS[step]}</span> : null}
             {s.port !== null ? <span className="font-mono text-xs text-[var(--fg-4)]">127.0.0.1:{s.port}</span> : null}
-            {/* Why it is not served — an unservable declaration, or the refusal its last start met. */}
+            {/* Why it is not served — an unservable declaration, the refusal its last start met, its process's exit. */}
             {s.problem ? <span data-site-problem className="text-sm text-[var(--danger)]">{s.problem}</span> : null}
+            {refusal ? (
+                <span className="inline-flex items-center gap-2 text-sm text-[var(--danger)]">
+                    <span data-site-refusal>{refusal.reason}</span>
+                    {control('retry-refused', 'Retry', 'rotate-ccw', refusal.action, 'red')}
+                </span>
+            ) : null}
             {s.state === 'unservable' ? null : (
-                <span className="ml-auto flex shrink-0 items-center gap-3">
-                    {up ? (
-                        <button type="button" data-site-action="open" className={button} onClick={() => onAction({ kind: 'hosting.openSite', siteId: s.id })}>Open</button>
-                    ) : null}
-                    {up && s.state !== 'external' ? (
-                        <button type="button" data-site-action="restart" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Restart</button>
-                    ) : null}
-                    {silent ? (
-                        <button type="button" data-site-action="retry" className={button} onClick={() => onAction({ kind: 'hosting.restartSite', siteId: s.id })}>Retry</button>
-                    ) : null}
-                    {up || starting || silent ? (
-                        <button type="button" data-site-action="stop" className={button} onClick={() => onAction({ kind: 'hosting.stopSite', siteId: s.id })}>Stop</button>
-                    ) : (
-                        <button type="button" data-site-action="start" className={button} onClick={() => onAction({ kind: 'hosting.startSite', siteId: s.id })}>Start</button>
-                    )}
-                    {editing ? null : (
-                        <button type="button" data-site-action="edit" className={button} onClick={() => onAction({ kind: 'hosting.editSite', siteId: s.id })}>Edit</button>
-                    )}
+                <span className="ml-auto flex shrink-0 items-center gap-1.5">
+                    {up ? control('open', 'Open', 'external-link', { kind: 'hosting.openSite', siteId: s.id }) : null}
+                    {up && s.state !== 'external' ? control('restart', 'Restart', 'rotate-cw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
+                    {down || (starting && s.step === 'slow') ? control('retry', 'Retry', 'rotate-ccw', { kind: 'hosting.restartSite', siteId: s.id }) : null}
+                    {up || starting || (s.state === 'failed' && s.processIds.length > 0)
+                        ? control('stop', 'Stop', 'square', { kind: 'hosting.stopSite', siteId: s.id })
+                        : down ? null : control('start', 'Start', 'play', { kind: 'hosting.startSite', siteId: s.id })}
+                    {editing ? null : control('edit', 'Edit', 'pencil', { kind: 'hosting.editSite', siteId: s.id })}
                 </span>
             )}
             {editing ? (
@@ -426,7 +514,7 @@ export function SiteRow({ site: s, editing, onAction }: { site: HostedSite; edit
                     <summary className="cursor-pointer text-[var(--fg-3)]">Remove…</summary>
                     <div className="mt-1 flex items-center gap-3">
                         <span>Remove {s.host}? It is stopped and taken out of this workspace’s project.json. Its folder and files are not touched.</span>
-                        <button type="button" data-site-action="remove" className="rounded-lg border border-[var(--danger)] px-2.5 py-1 text-[13px] text-[var(--danger)]" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</button>
+                        <Button type="button" size="sm" color="red" data-site-action="remove" onClick={() => onAction({ kind: 'hosting.removeSite', siteId: s.id })}>Remove site</Button>
                     </div>
                 </details>
             )}
@@ -494,11 +582,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                             {hosting.sites.length === 0 ? (
                                 <Empty>No sites yet. Add a site to serve a repo at its own .gen name.</Empty>
                             ) : (
-                                <ul className="divide-y divide-[var(--border-1)]">
-                                    {hosting.sites.map((s) => (
-                                        <SiteRow key={s.id} site={s} editing={hosting.editing?.siteId === s.id ? hosting.editing : null} onAction={onAction} />
-                                    ))}
-                                </ul>
+                                <SiteList sites={hosting.sites} editing={hosting.editing ?? null} onAction={onAction} />
                             )}
                         </Tabs.Panel>
                         <Tabs.Panel value="processes">

@@ -19,8 +19,8 @@ const site = (over: Partial<SiteInfo> & Pick<SiteInfo, 'id' | 'host' | 'state'>)
 const render = (sites: HostedSite[], editing: SiteEditing | null = null) =>
     renderToStaticMarkup(<HostingSurface data={{ ...EMPTY_FEATURES, hosting: { sites, processes: [], adding: null, editing, frontDoor: { running: false, reason: 'off' } } } as FeatureData} onAction={() => {}} onNavigate={() => {}} />);
 
-/** The buttons in a row's markup, by their text, in order. */
-const buttons = (rowHtml: string) => [...rowHtml.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((m) => m[1]!);
+/** The buttons in the markup, in order, by name: an icon control's label, else its text (genie#1393: icons over words). */
+const buttons = (rowHtml: string) => [...rowHtml.matchAll(/<button([^>]*)>([\s\S]*?)<\/button>/g)].map((m) => /aria-label="([^"]*)"/.exec(m[1]!)?.[1] ?? m[2]!.replace(/<[^>]+>/g, '').trim());
 
 const row = (html: string, id: string) => {
     const m = new RegExp(`<li[^>]*data-site="${id}"[^>]*>([\\s\\S]*?)</li>`).exec(html);
@@ -39,13 +39,13 @@ describe('the Sites tab', () => {
         const r = row(html, 'site_shop');
         expect(r).toContain('127.0.0.1:4101');
         expect(buttons(r)).toEqual(['Open', 'Restart', 'Stop', 'Edit', 'Remove site']);
-        expect(r).not.toMatch(/>Start</);
+        expect(buttons(r)).not.toContain('Start');
     });
 
     it('a listed site that is not running offers Start and Edit (nothing to Open or Restart), and no port it does not have', () => {
         const r = row(html, 'site_docs');
         expect(buttons(r)).toEqual(['Start', 'Edit', 'Remove site']);
-        expect(r).not.toMatch(/>Stop</);
+        expect(buttons(r)).not.toContain('Stop');
         expect(r).not.toContain('127.0.0.1:');
     });
 

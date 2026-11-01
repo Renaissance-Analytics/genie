@@ -1,4 +1,5 @@
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
+import type { EngineStatusView } from '../core/engine-reconcile.js';
 import { hostPathRefusal, REMOTE_ORIGIN, type FeatureOrigin } from './host-picks.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { readFile, stat } from 'node:fs/promises';
@@ -60,6 +61,13 @@ import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, Toolc
 
 /** What main wires in that the tests inject: the toolchain prober/updater with its clock, and the kept background processes. */
 export interface FeaturePorts {
+    /**
+     * How long a snapshot waits for Docker's engine statuses before it goes out with the last read (genie#1393); absent =
+     * ENGINE_STATUS_WAIT_MS. The first read ever is always waited for: there is no last one to show.
+     */
+    readonly engineStatusWaitMs?: number | undefined;
+    /** Docker answered after a snapshot stopped waiting for it: push again, so the Services tab catches up (main.ts). */
+    readonly onEngineStatusesLate?: (() => void) | undefined;
     /**
      * A message that must reach a running agent (SessionHost.deliver): an approval's note, after a Genie approval is
      * answered on the Deck or a toast (beta.33 item 16). Absent = no sessions here, and a note is refused, never dropped.
@@ -463,7 +471,46 @@ function tynnIntegration(services: ComposedServices, state: FeatureState, accoun
     };
 }
 
+/**
+ * A SNAPSHOT NEVER WAITS ON A SLOW DOCKER FOR LONG (genie#1393). Every snapshot (a click's answer, every push) read the
+ * engines' statuses from Docker first: `docker version`, then one `docker container inspect` per engine, each allowed
+ * 20 s. So the Hosting tab's state, built before that read, reached the window only when Docker answered, slowest exactly
+ * when Genie has just started a dozen sites and every supervisor transition asked for another snapshot. Now: one read at
+ * a time (a snapshot asked for while one is in flight joins it), and a snapshot waits at most this long for it before it
+ * goes out with the LAST read Docker gave; when the read lands, `onEngineStatusesLate` asks for a fresh push.
+ */
+export const ENGINE_STATUS_WAIT_MS = 1_500;
+const engineReads = new WeakMap<object, { last?: EngineStatusView[]; inFlight?: Promise<EngineStatusView[]> }>();
+
+async function engineStatusesWithin(services: ComposedServices, ports: FeaturePorts): Promise<EngineStatusView[]> {
+    let entry = engineReads.get(services);
+    if (!entry) { entry = {}; engineReads.set(services, entry); }
+    const e = entry;
+    const read = e.inFlight ?? (e.inFlight = services.engineStatuses().then(
+        (views) => { e.last = views; return views; },
+    ).finally(() => { delete e.inFlight; }));
+    const prior = e.last;
+    if (prior === undefined) return read;
+    const late = Symbol('late');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const first = await Promise.race([read.catch(() => late), new Promise<typeof late>((r) => { timer = setTimeout(() => r(late), ports.engineStatusWaitMs ?? ENGINE_STATUS_WAIT_MS); })]);
+    clearTimeout(timer);
+    if (first !== late) return first as EngineStatusView[];
+    // Only when Docker's answer CHANGES what was shown: a push builds a snapshot, which reads Docker again, so a Docker
+    // that is merely slow would otherwise push forever.
+    read.then((views) => { if (JSON.stringify(views) !== JSON.stringify(prior)) ports.onEngineStatusesLate?.(); }, () => {});
+    return prior;
+}
+
+/**
+ * Every snapshot's number, taken when it STARTS (genie#1393). Snapshots race: a click's answer built while a site was
+ * `starting` could land after the push built when it answered, and the window kept whichever came last. The window keeps
+ * the higher number (renderer/features.ts `newestSnapshot`).
+ */
+let snapshotSeq = 0;
+
 export async function featureSnapshot(services: ComposedServices, state: FeatureState, ports: FeaturePorts = {}): Promise<FeatureData> {
+    const seq = ++snapshotSeq;
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
     const hits = state.knowledgeQuery
@@ -475,14 +522,16 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     const mail = services.inbox.all();
     const nameOf = participantNamer(roster, mail);
     return {
+        seq,
         knowledge: { hits, query: state.knowledgeQuery, adding: state.knowledgeAdding ?? null, lastAdd: state.knowledgeLastAdd ?? null },
         // Genie's tools as steps (genie#1204): their kinds go to the editor window, which registers them before its canvas mounts.
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
-        // Status is READ from Docker for every instance on every snapshot — never remembered; with Docker down, each says so.
-        services: { instances: await services.engineStatuses(), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
+        // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
+        // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
+        services: { instances: await engineStatusesWithin(services, ports), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },
         toolchain: toolchainSection(state),
         // `recent`: the human's conversation (both directions, oldest first) — an observed agent's chat is its slice.
         inbox: {
