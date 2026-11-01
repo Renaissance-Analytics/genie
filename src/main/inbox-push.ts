@@ -37,9 +37,10 @@ import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../co
  * spent from it only when it OPENS a turn (an idle agent's, or one Codex holds for its own turn) — one folded into a turn
  * already running causes none. Past the cap the mail waits for the window, then one notice.
  *
- * It was inline in main.ts and keyed on `turnState === 'idle'`. A session just started reads `working` until a turn
- * ends, with no turn running, so an agent started and mailed at once (a sidecar, the moment `runAgent` answered) was
- * told only after somebody else had prompted it and that turn had ended (B26, a Codex sidecar in beta.27).
+ * It was inline in main.ts and keyed on `turnState === 'idle'`. A session just started read `working` until a turn
+ * ended, with no turn running, so an agent started and mailed at once (a sidecar, the moment `runAgent` answered) was
+ * told only after somebody else had prompted it and that turn had ended (B26, a Codex sidecar in beta.27). A started
+ * session reads idle now (2026-11-01), and this still keys on `promptable`: a session still starting is idle too.
  */
 export interface InboxPushPorts {
     readonly inbox: { onSend(listener: (to: string, message?: { readonly from: string }) => void): () => void };
@@ -74,7 +75,7 @@ export interface InboxPushPorts {
     readonly settled: (agentId: string, delivered: boolean) => void;
     /**
      * MAIL WAKES THE AGENT (the owner, 2026-10-17: "agents don't wake up from inbox pushes unless I go to their screen").
-     * Start the session of an agent that has none — main's open-agent path, refusing by name for an asleep workspace or
+     * Start the session of an agent that has none — main's `wakeAgent` (opening an agent no longer starts it, q_04ce323c), refusing by name for an asleep workspace or
      * the agent cap. Answers whether it started; its start event then delivers the notice. Absent = mail waits.
      */
     readonly wake?: ((agentId: AgentId) => boolean) | undefined;

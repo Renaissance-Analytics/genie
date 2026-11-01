@@ -77,6 +77,7 @@ import { readWorkstationRole } from './workstation-role-reader.js';
 import { attachmentsFromRenderer } from '../core/prompt-content.js';
 import { buildHostApi } from './host-api.js';
 import { featureOrigin, HostPicks } from './host-picks.js';
+import { startForWork, type StartForWork } from './start-on-demand.js';
 import { addWorkspace as addWorkspaceOp, createWorkspace as createWorkspaceOp, addWorkspaceFromGit, addWorkspaceFromTynn, createTynnProject, listTynnOwners, listTynnProjects, hibernateWorkspace, previewAddFromGit, previewAddFromTynn, previewAddWorkspace, registeredEnvFile, removeWorkspace, startRefusal, wakeWorkspace, type WorkspaceOpsPorts } from './workspace-ops-host.js';
 import { nodeWorkspaceFs } from './workspace-fs.js';
 import { nodeEnvelopePorts } from './envelope-fs.js';
@@ -1507,24 +1508,31 @@ async function boot(): Promise<void> {
         agentPush.watch(raw, on);
     });
 
+    /*
+     * START ON FIRST MESSAGE (the owner, 2026-11-01, q_04ce323c: "opening an agent must NOT start it"). One rule for every
+     * sender of work — the composer, a remote window's prompt, a flow (main/start-on-demand.ts): a session here is used as
+     * it is; an agent with none is started, unless its workspace is asleep or the agent cap refuses, said by name.
+     */
+    const startOnDemand = (record: AgentRecord): StartForWork => startForWork({
+        probe: (id) => host?.probe(id) ?? null,
+        start: (r, cwd) => (host ? host.start(r, cwd) : { ok: false, reason: 'Genie’s agents are not running yet' }),
+        cwdFor,
+        startRefusal: (r) => startRefusal(workspaceOps, r, {
+            running: registry!.agentsOf(r.workspaceId).filter((a) => host?.probe(a.id)?.running === true).length,
+            cap: agentCapFrom(services?.settings.snapshotFor(r.workspaceId) ?? {}),
+        }),
+    }, record);
+
     ipcMain.handle('genie:open-agent', (_event, raw: unknown) => {
         // The renderer is not trusted to hand over a well-formed id. `asAgentId` returning
         // `null` is a refusal, not a repair: looking up `''` would find nothing and render an
         // empty session forever, which is the §0.4 failure reached through the bridge.
         const record = agentFromRenderer(raw);
         if (!record || !host) return { ok: false, reason: 'unknown agent' };
-
-        // An asleep workspace starts nothing (§6.1) — refused by name, never silently.
-        const asleep = startRefusal(workspaceOps, record, {
-            running: registry!.agentsOf(record.workspaceId).filter((a) => host!.probe(a.id)?.running === true).length,
-            cap: agentCapFrom(services?.settings.snapshotFor(record.workspaceId) ?? {}),
-        });
-        if (asleep) return { ok: false, reason: asleep };
-        // OPENING an agent (navigating to it): start or REATTACH. Starting one that is already running returns the same
-        // session rather than a second — two provider processes answering as one agent is how a user ends up with
-        // something they cannot stop. A Broken one is left as it is, to be read: no control in the window calls this to
-        // start an agent any more — Start and Restart are the one restart (genie#1238, `agent-restart`).
-        return host.start(record, cwdFor(record));
+        // OPENING an agent SHOWS it (q_04ce323c) — its history, its settings, its Start. It starts nothing: a session it
+        // has (running, or Broken to be read) is the one the window shows, as it is; one it has not stays stopped until
+        // something sends it work (`startOnDemand`) or the person presses Start (the one restart, genie#1238).
+        return { ok: true };
     });
 
     ipcMain.handle('genie:stop-agent', (_event, raw: unknown) => {
@@ -1553,6 +1561,10 @@ async function boot(): Promise<void> {
         const record = agentFromRenderer(raw);
         const attachments = attachmentsFromRenderer(files);
         if (!record || !host || typeof text !== 'string' || attachments === null || (text.length === 0 && attachments.length === 0)) return { ok: false };
+        // THE FIRST MESSAGE STARTS IT (q_04ce323c): a stopped or never-started agent is started here, and the message
+        // waits in its session's queue for the start (the chat shows it waiting, then sent). A refused start is said.
+        const started = startOnDemand(record);
+        if (!started.ok) return { ok: false, reason: started.reason };
         // The composer: the turn is started by YOU, and the ledger says so.
         const sent = host.promptWith(record.id, text, attachments, 'you');
         return sent.ok ? { ok: true } : { ok: false, ...(sent.reason ? { reason: sent.reason } : {}) };
@@ -2379,6 +2391,8 @@ async function boot(): Promise<void> {
         // is held back, never queued inside its turn.
         agentSessions: {
             session: (id) => host?.probe(id as AgentId) ?? null,
+            // A flow's prompt is work: an agent not running is started for it (q_04ce323c), under the same refusals.
+            start: (id) => { const record = registry?.find(id as AgentId); return record ? startOnDemand(record).ok : false; },
             rows: (id) => host?.rowsFor(id as AgentId) ?? [],
             prompt: (id, text, by) => host?.prompt(id as AgentId, text, by) ?? false,
             subscribe: (listener) => host?.subscribe((agentId) => listener(agentId)) ?? (() => {}),
@@ -2455,6 +2469,8 @@ async function boot(): Promise<void> {
             find: (id) => registry?.find(id as AgentId) ?? null,
             detailFor: (id) => detailFor(id as AgentId),
             cwdFor,
+            // A remote window's message starts the agent as the composer's does (q_04ce323c).
+            startForWork: (record) => startOnDemand(record),
             host: {
                 start: (record, cwd) => host!.start(record, cwd),
                 stop: (id) => host!.stop(id),
@@ -2990,7 +3006,7 @@ async function boot(): Promise<void> {
     // An agent's gated tool call (processes / services / sites / manageTerminals) parked or answered: the Deck shows it
     // or takes it off at once. Without this a parked request reached the Deck only with some unrelated push, or never.
     composed.approvals.onChange(() => registry?.touch());
-    // MAIL WAKES THE AGENT: the open-agent path — an asleep workspace or the agent cap refuses, and the notice waits.
+    // MAIL WAKES THE AGENT: started as Start would be (opening starts nothing since q_04ce323c) — an asleep workspace or the agent cap refuses, and the notice waits.
     // One path for every source that may wake an agent: mail, and IssueWatch's `push`.
     const wakeAgent = (agentId: string): boolean => {
         const record = registry?.find(agentId as AgentId);

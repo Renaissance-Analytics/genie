@@ -71,8 +71,7 @@ async function estate() {
         expect(host.probe(agents.working.id)?.running).toBe(true);
         expect(host.probe(agents.broken.id)?.turnState).toBe('failed');
     });
-    // IDLE: it answered its last message and waits for the next (a session that was never prompted still reads its
-    // start as `working` — core/session.ts — so the idle agent here has finished a turn, as the owner's had).
+    // IDLE: it answered its last message and waits for the next — it has finished a turn, as the owner's had.
     expect(host.prompt(agents.idle.id, 'hello', 'you')).toBe(true);
     await vi.waitFor(() => expect(host.probe(agents.idle.id)?.inTurn).toBe(true));
     events.get(agents.idle.id)!.onTurnEnd!({ stopReason: 'end_turn', isError: false, raw: 'end_turn' });
