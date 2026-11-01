@@ -129,6 +129,7 @@ describe('an agent opened and never prompted', () => {
         expect(host.probe(r.id)?.turnState).toBe('idle');
 
         const seen: string[] = [];
+        const rowsBefore = host.rowsFor(r.id).length;
         const off = host.subscribe((id) => { if (id === r.id) seen.push(host.probe(r.id)?.turnState ?? 'none'); });
         await fakes.get(r.id)!.becomeReady();
         off();
@@ -136,14 +137,23 @@ describe('an agent opened and never prompted', () => {
         expect(host.probe(r.id)?.turnState).toBe('working');
         // ANNOUNCED: a listener (the board, the inbox push, a flow) learns the turn began, not only that it later ended.
         expect(seen).toContain('working');
+        // …and only ONCE per thing that happened (every push costs the window): the ready itself, and each row the
+        // queued prompt wrote (its turn marker, its delivery). No push of its own for the turn opening.
+        expect(seen).toHaveLength(1 + (host.rowsFor(r.id).length - rowsBefore));
     });
 
-    it('activity before any turn (a provider talking on its own at start) is shown as working, with no turn marker invented', () => {
+    it('activity before any turn (a provider talking on its own at start) is shown as working, with no turn marker invented — in ONE push', () => {
         const r = record();
         host.start(r, dir);
+        const seen: string[] = [];
+        const off = host.subscribe((id) => { if (id === r.id) seen.push(host.probe(r.id)?.turnState ?? 'none'); });
         fakes.get(r.id)!.events.onUpdate?.({ sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Bash', status: 'in_progress' });
+        off();
         expect(host.probe(r.id)?.turnState).toBe('working');
         expect(host.rowsFor(r.id).map((row) => row.event.kind)).toEqual(['tool']);
+        // The row's own push already reads `working`: the state change is not announced a second time (genie#1418, batch B:
+        // session-host.test's "notifies on … every ledger row" counted 3 pushes for start + one chunk).
+        expect(seen).toEqual(['working']);
     });
 });
 
