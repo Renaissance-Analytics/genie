@@ -2,7 +2,7 @@ import { limitTitle, limitWords } from './limit-words.js';
 import type { AgentRow, Fidelity } from './dashboard-view.js';
 import type { LiveSession } from './roster.js';
 import { repeatsCompaction, type TimedEvent } from './stream-view.js';
-import type { StreamEvent } from './stream-event.js';
+import type { StreamEvent, ToolKind } from './stream-event.js';
 import type { Attachment } from './prompt-content.js';
 import { promptDeliveries } from './prompt-delivery.js';
 import { messageLines } from './chat-window.js';
@@ -85,10 +85,28 @@ export interface ChatMessage {
     waiting?: ChatWaitingOn;
 }
 
-/** The step a message waits behind: its title (the command, or the tool), and when it started. */
+/** The step a message waits behind: its title (the command, or the tool), when it started, and its kind (the Stream's icon). */
 export interface ChatWaitingOn {
     readonly step: string;
     readonly since: number | null;
+    readonly kind: ToolKind | null;
+}
+
+/**
+ * THE STEP, IN WORDS A PERSON READS (the owner, 2026-11-01: "I know the agent is busy, why is it showing me the tool call
+ * like that"). Claude titles an MCP call with its raw id, `mcp__<server>__<tool>`; that reads as its server — the name the
+ * server was configured under (`playwright`, `tynn`, `genie`), with a plugin's `plugin_<plugin>_` prefix and claude.ai's
+ * `claude_ai_` dropped. Anything else (a shell command's description, a tool's name) is kept as the provider titled it.
+ * The raw step stays in the queued message's hover, for debugging.
+ */
+export function waitingStepLabel(step: string): string {
+    const mcp = /^mcp__(.+?)__.+$/.exec(step);
+    if (!mcp) return step;
+    let server = mcp[1]!;
+    const plugin = /^plugin_[^_]+_(.+)$/.exec(server);
+    if (plugin) server = plugin[1]!;
+    else if (server.startsWith('claude_ai_')) server = server.slice('claude_ai_'.length);
+    return server.replace(/_/g, ' ');
 }
 
 
@@ -235,7 +253,7 @@ export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, Chat
             }
             const known = open.get(e.toolCallId);
             const step = e.title ?? e.name ?? known?.step ?? 'a step';
-            open.set(e.toolCallId, { step: known && (e.title === null || e.title === '') ? known.step : step, since: known?.since ?? at });
+            open.set(e.toolCallId, { step: known && (e.title === null || e.title === '') ? known.step : step, since: known?.since ?? at, kind: e.toolKind ?? known?.kind ?? null });
             continue;
         }
         if (e.kind === 'message' && e.speaker === 'you' && open.size > 0) {
