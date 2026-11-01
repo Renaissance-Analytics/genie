@@ -1,8 +1,9 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Icon, Tooltip } from '@particle-academy/react-fancy';
+import { ActivityLight, Icon, Popover } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
-import { windowDetail, type Headroom } from '../../core/headroom.js';
+import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
+import { shortDateTime } from '../../core/clock-words.js';
 import type { MailSignal } from '../../core/mail-signals.js';
 import { MailSignalLayer } from './MailSignalLayer.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
@@ -721,44 +722,88 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
 }
 
 /**
- * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its share of the binding window left;
- * on hover EVERY window the provider reported, with its usage and reset (genie#1268). Buffered in main, so this redraws
- * at most once per provider per buffer.
+ * ONE RATE-LIMIT PILL PER PROVIDER in the Dashboard header (the owner, 2026-10-26): its logo and its most constrained
+ * window. A click or Enter opens a POPOVER with every window (the owner, 2026-10-31: "can we make these cleaner? this
+ * should be a popover not a tooltip"). Buffered in main, so this redraws at most once per provider per buffer.
  */
-export function RateLimitPills({ limits }: { limits: Readonly<Record<string, Headroom>> }) {
+export function RateLimitPills({ limits, now }: { limits: Readonly<Record<string, Headroom>>; now?: number }) {
     const providers = Object.keys(limits).sort();
     if (providers.length === 0) return null;
     return (
         <div data-rate-limits="" className="flex items-center gap-1.5">
-            {providers.map((p) => {
-                const h = limits[p]!;
-                const tone = h.over || h.leftPct <= 10 ? 'text-[var(--danger)]' : h.leftPct <= 30 ? 'text-[var(--warning)]' : 'text-[var(--fg-2)]';
-                return (
-                    <Tooltip key={p} content={<RateLimitDetail provider={p} limit={h} />} placement="bottom">
-                        {/* The hover's words are the pill's accessible name: a screen reader never sees a tooltip drawn on hover. */}
-                        <span data-rate-limit={p} role="group" tabIndex={0} aria-label={`${providerName(p)} rate limits: ${h.windows.map(windowDetail).join('; ')}`} className="flex items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs">
-                            <ProviderLogo provider={p} size="xs" className="text-[var(--fg-3)]" />
-                            <span className={`font-mono ${tone}`}>{h.over ? 'over' : `${h.leftPct}%`}</span>
-                            <span className="font-mono text-[11px] text-[var(--fg-4)]">{h.window}</span>
-                        </span>
-                    </Tooltip>
-                );
-            })}
+            {providers.map((p) => <RateLimitPill key={p} provider={p} limit={limits[p]!} now={now} />)}
         </div>
     );
 }
 
-/** The pill's hover (genie#1268): the provider's logo and plan, then every window it reported — only reported figures. */
-export function RateLimitDetail({ provider, limit }: { provider: string; limit: Headroom }) {
+const LEVEL_TEXT: Readonly<Record<LimitLevel, string>> = { ok: 'text-[var(--fg-2)]', warning: 'text-[var(--warning)]', danger: 'text-[var(--danger)]' };
+const LEVEL_FILL: Readonly<Record<LimitLevel, string>> = { ok: 'bg-[var(--success)]', warning: 'bg-[var(--warning)]', danger: 'bg-[var(--danger)]' };
+
+function RateLimitPill({ provider, limit, now }: { provider: string; limit: Headroom; now: number | undefined }) {
+    const [open, setOpen] = useState(false);
+    const tight = tightestWindow(limit);
+    const level = limitLevel(tight);
+    const name = providerName(provider);
     return (
-        <div data-rate-limit-detail={provider} className="flex flex-col gap-1 text-xs">
+        <Popover placement="bottom-end" open={open} onOpenChange={setOpen}>
+            <Popover.Trigger>
+                <button
+                    type="button"
+                    data-rate-limit={provider}
+                    data-level={level}
+                    aria-haspopup="dialog"
+                    aria-expanded={open}
+                    aria-label={`${name} rate limits: ${tight.over ? 'over the limit' : `${tight.leftPct}% left`} ${windowWords(tight.window)}`}
+                    // Enter and Space toggle here and cancel the click the browser would add, so one key press is one toggle.
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen(!open); } }}
+                    className={`flex cursor-pointer items-center gap-1 rounded-lg border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)] ${open ? 'bg-[var(--bg-2)]' : ''}`}
+                >
+                    <ProviderLogo provider={provider} size="xs" className="text-[var(--fg-3)]" />
+                    <span className={`tabular-nums ${LEVEL_TEXT[level]}`}>{tight.over ? 'over' : `${tight.leftPct}%`}</span>
+                    <span className="text-[11px] text-[var(--fg-4)]">{tight.window}</span>
+                </button>
+            </Popover.Trigger>
+            <Popover.Content
+                role="dialog"
+                aria-label={`${name} rate limits`}
+                data-rate-limit-popover={provider}
+                className="w-60 border-[var(--border-1)] bg-[var(--surface-raised)] p-3 text-[var(--fg-1)]"
+            >
+                <RateLimitDetail provider={provider} limit={limit} now={now ?? Date.now()} />
+            </Popover.Content>
+        </Popover>
+    );
+}
+
+/** The popover: the provider's logo (and plan, when reported), then one row per window — only reported figures. */
+export function RateLimitDetail({ provider, limit, now }: { provider: string; limit: Headroom; now: number }) {
+    return (
+        <div data-rate-limit-detail={provider} className="flex flex-col gap-3 text-xs">
             <span className="flex items-center gap-1.5">
-                <ProviderLogo provider={provider} size="sm" />
+                <ProviderLogo provider={provider} size="md" />
                 {limit.plan ? <span className="text-[var(--fg-3)]">{limit.plan}</span> : null}
             </span>
-            {limit.windows.map((w) => (
-                <span key={w.window} data-rate-limit-window={w.window} className="font-mono">{windowDetail(w)}</span>
-            ))}
+            {limitRows(limit).map((w) => ('unknown' in w ? (
+                <div key={w.window} data-rate-limit-window={w.window} data-level="unknown" className="flex items-center gap-2 text-[var(--fg-3)]">
+                    <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                    <Icon name="circle-help" size="xs" />
+                    <span>unknown</span>
+                </div>
+            ) : (
+                <div key={w.window} data-rate-limit-window={w.window} data-level={limitLevel(w)} className="flex flex-col gap-1">
+                    <div className="flex items-center gap-2">
+                        <span className="w-12 shrink-0 text-[var(--fg-2)]">{w.window}</span>
+                        <span role="progressbar" aria-label={`${w.window} left`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={w.leftPct} className="block h-1.5 flex-1 overflow-hidden rounded-full bg-[var(--bg-3)]">
+                            <span data-rate-limit-fill="" className={`block h-full rounded-full ${LEVEL_FILL[limitLevel(w)]}`} style={{ width: `${w.leftPct}%` }} />
+                        </span>
+                        <span data-rate-limit-pct="" className={`w-9 shrink-0 text-right tabular-nums ${LEVEL_TEXT[limitLevel(w)]}`}>{w.over ? 'over' : `${w.leftPct}%`}</span>
+                    </div>
+                    <div className="flex flex-col pl-14">
+                        <span data-rate-limit-reset="" className="text-[var(--fg-2)]">{resetsIn(w.resetsAtMs, now)}</span>
+                        <span data-rate-limit-at="" className="text-[11px] text-[var(--fg-4)]">{shortDateTime(w.resetsAtMs)}</span>
+                    </div>
+                </div>
+            )))}
         </div>
     );
 }
