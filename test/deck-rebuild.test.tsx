@@ -5,6 +5,7 @@ import { deckSections, dismissableStale, needsYouCount, type DeckItem, type Sign
 import { deckItemsFrom, questionStale } from '../src/core/deck-sources.js';
 import type { PendingQuestion } from '../src/main/attention-store.js';
 import { Deck, type DeckProps } from '../src/renderer/components/Deck.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE DECK, REBUILT (the owner, 2026-10-15, answering the Deck's purpose):
@@ -108,7 +109,11 @@ describe('grouped by workspace — on screen', () => {
     });
 
     it('a row has Open (its agent) beside its age; Genie’s own item has no agent to open (control)', () => {
-        expect(html).toMatch(/data-deck-age="q_a1"[^>]*>[^<]*<\/time><button[^>]*data-action="deck-open"[^>]*data-deck-open="q_a1"[^>]*>Open</);
+        // Beside its age: the <time>, then the Open button (react-fancy's), for THAT item.
+        expect(html).toMatch(/data-deck-age="q_a1"[^>]*>[^<]*<\/time><button\b[^>]*data-deck-open="q_a1"/);
+        const open = control(html, 'data-deck-open="q_a1"');
+        expect(open).toMatchObject({ tag: 'button', fancy: true, text: 'Open' });
+        expect(open!.open).toContain('data-action="deck-open"');
         expect((html.match(/data-action="deck-open"/g) ?? []).length).toBe(5);
         expect(html).not.toContain('data-deck-open="genie:main-error:1"');
     });

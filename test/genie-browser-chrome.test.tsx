@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { GenieBrowserChrome } from '../src/renderer/components/GenieBrowserChrome.js';
 import type { BrowserSnapshot } from '../src/main/genie-browser-window.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE GENIE BROWSER WINDOW'S CHROME (beta.35 item 36, step 2 — Genie 1's renderer/pages/testing-browser.tsx): the title
@@ -32,8 +33,8 @@ describe('the tabs', () => {
 describe('the toolbar follows the ACTIVE tab', () => {
     it('back and forward as the page allows; the address is the page’s, in a text field with the lock', () => {
         const html = render(snap({ tabs: [tab('tynn', { canGoBack: true, url: 'https://tynn.gen/deals' })], active: 'tynn' }));
-        expect(html).not.toMatch(/data-browser-nav="back"[^>]*disabled=""/);
-        expect(html).toMatch(/data-browser-nav="forward"[^>]*disabled=""/);
+        expect(control(html, 'data-browser-nav="back"')!.open).not.toMatch(/\sdisabled=""/);
+        expect(control(html, 'data-browser-nav="forward"')!.open).toMatch(/\sdisabled=""/);
         expect(html).toMatch(/<input[^>]*data-browser-address[^>]*/);
         expect(html).toMatch(/data-browser-address[^>]*value="https:\/\/tynn\.gen\/deals"|value="https:\/\/tynn\.gen\/deals"[^>]*data-browser-address/);
         expect(html).not.toMatch(/data-browser-address[^>]*type="url"|type="url"[^>]*data-browser-address/);

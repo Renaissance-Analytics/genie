@@ -11,6 +11,7 @@ import {
 import { parseRoute } from '../src/core/route.js';
 import { ICON_NAMES } from '../src/renderer/icons.js';
 import { ConnectMenu, ShareLinkForm, TynnWorkstationRows } from '../src/renderer/components/ConnectMenu.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE WAY IN TO ANOTHER MACHINE (genie#1278 row C1). One route, one name, one set of steps — shared by the title bar's
@@ -98,7 +99,7 @@ describe('opening a workstation shows its progress, then success or the reason w
         const html = row({ ws_a: { kind: 'working', step: 'Opening its window…' } });
         expect(html).toContain('data-connect-step=""');
         expect(html).toContain('Opening its window…');
-        expect(html).toMatch(/<button[^>]*data-action="open-workstation"[^>]*disabled=""/);
+        expect(control(html, 'data-action="open-workstation"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('done: says so', () => {
@@ -115,7 +116,7 @@ describe('opening a workstation shows its progress, then success or the reason w
 
     it('CONTROL: idle has an enabled Open and no step, no Retry', () => {
         const html = row({});
-        expect(html).toMatch(/<button[^>]*data-action="open-workstation"(?![^>]*disabled="")[^>]*>/);
+        expect(control(html, 'data-action="open-workstation"')!.open).not.toMatch(/\sdisabled=""/);
         expect(html).not.toContain('data-connect-step');
         expect(html).not.toContain('retry-workstation');
     });
@@ -128,17 +129,17 @@ describe('the share-link form: paste, Open, progress, then success or the reason
     it('idle: a field to paste into and an enabled Open button', () => {
         const html = form({ kind: 'idle' });
         expect(html).toMatch(/<input[^>]*data-share-link-input=""/);
-        expect(html).toMatch(/<button[^>]*data-action="open-share-link"(?![^>]*disabled="")[^>]*>/);
+        expect(control(html, 'data-action="open-share-link"')!.open).not.toMatch(/\sdisabled=""/);
     });
 
     it('idle with nothing pasted: Open is disabled', () => {
-        expect(form({ kind: 'idle' }, '')).toMatch(/<button[^>]*data-action="open-share-link"[^>]*disabled=""/);
+        expect(control(form({ kind: 'idle' }, ''), 'data-action="open-share-link"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('working: the step, and Open disabled', () => {
         const html = form({ kind: 'working', step: 'Checking the link…' });
         expect(html).toContain('Checking the link…');
-        expect(html).toMatch(/<button[^>]*data-action="open-share-link"[^>]*disabled=""/);
+        expect(control(html, 'data-action="open-share-link"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('done: what happened', () => {

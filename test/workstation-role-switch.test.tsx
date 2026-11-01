@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { connectableWorkstations, setWorkstationRole } from '../src/main/tynn-network.js';
 import { RoleChangeForm, TynnWorkstationRows } from '../src/renderer/components/ConnectMenu.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE PILOT / DRONE SWITCH (genie#1278 row W6; the owner, 2026-10-27: "this needs to be highly protected with the 2sa
@@ -119,14 +120,14 @@ describe('the code prompt: the code, Confirm, its step, then success or the reas
     });
 
     it('Confirm is enabled only with six digits', () => {
-        expect(form({ kind: 'idle' })).toMatch(/<button[^>]*data-action="confirm-role"(?![^>]*disabled="")[^>]*>/);
-        expect(form({ kind: 'idle' }, '123')).toMatch(/<button[^>]*data-action="confirm-role"[^>]*disabled=""/);
+        expect(control(form({ kind: 'idle' }), 'data-action="confirm-role"')!.open).not.toMatch(/\sdisabled=""/);
+        expect(control(form({ kind: 'idle' }, '123'), 'data-action="confirm-role"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('working: the step, Confirm disabled', () => {
         const html = form({ kind: 'working', step: 'Asking Tynn…' });
         expect(html).toContain('Asking Tynn…');
-        expect(html).toMatch(/<button[^>]*data-action="confirm-role"[^>]*disabled=""/);
+        expect(control(html, 'data-action="confirm-role"')!.open).toMatch(/\sdisabled=""/);
     });
 
     it('done: says so', () => {

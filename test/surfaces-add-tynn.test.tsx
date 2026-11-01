@@ -4,6 +4,7 @@ import type { OnboardingState } from '../src/core/settings.js';
 import { AddWorkspacePreview } from '../src/renderer/components/AddWorkspacePreview.js';
 import { Dashboard } from '../src/renderer/components/Dashboard.js';
 import { Onboarding } from '../src/renderer/components/Onboarding.js';
+import { Button } from '@particle-academy/react-fancy';
 
 /**
  * ADD FROM TYNN ON SCREEN (§6.1). One more door beside "Add a workspace" and "From a git URL" — drawn only
@@ -133,7 +134,7 @@ describe('TynnProjectPicker', () => {
             if (Array.isArray(node)) { node.forEach(walk); return; }
             if (typeof node !== 'object' || node === null || !('props' in node)) return;
             const n = node as { type: unknown; props: Record<string, unknown> };
-            if (n.type === 'button' && n.props['data-tynn-project'] !== undefined) buttons.push(n);
+            if (n.type === Button && n.props['data-tynn-project'] !== undefined) buttons.push(n);
             walk(n.props.children);
         };
         walk(element);

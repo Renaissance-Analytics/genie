@@ -1,4 +1,4 @@
-import { Icon, Input } from '@particle-academy/react-fancy';
+import { Button, Icon, Input } from '@particle-academy/react-fancy';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
@@ -93,7 +93,7 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
                 <span className="size-5 rounded-[5px] bg-gradient-to-br from-[var(--brand-grad-from)] via-[var(--brand-grad-via)] to-[var(--brand-grad-to)]" aria-hidden />
                 <span data-remote-badge className="truncate rounded-md bg-[var(--warning)]/15 px-2 py-0.5 font-mono text-xs font-semibold tracking-wide text-[var(--warning)]">● REMOTE — {host}</span>
                 <span className="flex-1" />
-                <button type="button" data-action="disconnect" onClick={onDisconnect} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs">Disconnect</button>
+                <Button size="xs" type="button" data-action="disconnect" onClick={onDisconnect} className="rounded-lg border border-[var(--border-1)] px-2.5 py-1 text-xs">Disconnect</Button>
             </header>
 
             {reconnecting ? <Reconnecting /> : null}
@@ -110,10 +110,10 @@ export function MobileShell({ host, locked, refusal, items, answering, onAnswer,
 
             <main className="flex flex-1 flex-col gap-3 px-4 py-3">
                 {selectedWorkspace !== null && onOpenFiles ? (
-                    <button type="button" data-action="open-files" onClick={() => onOpenFiles(selectedWorkspace)} className={`${BUTTON} flex items-center gap-2 self-start`}>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="open-files" onClick={() => onOpenFiles(selectedWorkspace)} className={`${BUTTON} flex items-center gap-2 self-start`}>
                         <Icon name="folder-open" size="sm" />
                         Files in {wsLabel(selectedWorkspace)}
-                    </button>
+                    </Button>
                 ) : null}
                 <h1 className="text-sm font-semibold">Needs you</h1>
                 {shownItems === null ? (
@@ -180,17 +180,17 @@ export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect
     const chip = (on: boolean) => `flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${on ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`;
     return (
         <nav data-mobile-workspaces aria-label="Workspaces" className="flex gap-2 overflow-x-auto border-b border-[var(--border-1)] px-4 py-2">
-            <button type="button" data-mobile-ws="all" data-selected={selected === null ? 'true' : 'false'} onClick={() => onSelect(null)} className={chip(selected === null)}>All</button>
+            <Button size="xs" type="button" data-mobile-ws="all" data-selected={selected === null ? 'true' : 'false'} onClick={() => onSelect(null)} className={chip(selected === null)}>All</Button>
             {workspaces.map((w) => {
                 const count = agents.filter((a) => a.workspaceId === w.id).length;
                 const waiting = items.filter((i) => i.workspaceId === w.id).length;
                 return (
-                    <button key={w.id} type="button" data-mobile-ws={w.id} data-selected={selected === w.id ? 'true' : 'false'} onClick={() => onSelect(w.id)} className={chip(selected === w.id)}>
+                    <Button size="xs" labelClassName="contents" key={w.id} type="button" data-mobile-ws={w.id} data-selected={selected === w.id ? 'true' : 'false'} onClick={() => onSelect(w.id)} className={chip(selected === w.id)}>
                         <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
                         <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
                         {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
                         {w.asleep ? <span data-mobile-ws-asleep={w.id} className="text-[11px] text-[var(--fg-4)]">asleep</span> : null}
-                    </button>
+                    </Button>
                 );
             })}
         </nav>
@@ -219,7 +219,7 @@ function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[]
                             const status = statusOf(r);
                             return (
                                 <li key={r.id}>
-                                    <button type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)]">
+                                    <Button size="xs" labelClassName="contents" type="button" data-mobile-agent={r.id} data-state={r.state} onClick={() => onOpen(r.id)} className="flex w-full flex-col gap-1 rounded-xl border border-[var(--border-1)] bg-[var(--bg-1)] p-3 text-left active:bg-[var(--bg-2)]">
                                         <span className="flex items-center gap-2 text-[13px]">
                                             <span className="font-medium">{r.name}</span>
                                             <ProviderLogo provider={r.provider} />
@@ -229,7 +229,7 @@ function AgentsSection({ rows, onOpen, workspaces }: { rows: readonly AgentRow[]
                                             <span className={`font-medium ${TONE[status.tone]}`}>{status.word}</span>
                                             {status.detail ? <span className="truncate text-[var(--fg-3)]" {...(status.title ? { title: status.title } : {})}>{status.detail}</span> : null}
                                         </span>
-                                    </button>
+                                    </Button>
                                 </li>
                             );
                         })}
@@ -269,9 +269,9 @@ export function PendingAttachments({ files, onRemove }: { files: readonly { name
                     <Icon name="paperclip" size="xs" />
                     <span className="max-w-[10rem] truncate">{f.name}</span>
                     <span className="font-mono text-[10px] text-[var(--fg-4)]">{f.size >= 1024 * 1024 ? `${(f.size / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(f.size / 1024))} KB`}</span>
-                    <button type="button" data-action="remove-attachment" aria-label={`Remove ${f.name}`} onClick={() => onRemove(i)} className="rounded-full p-1 active:bg-[var(--bg-3)]">
+                    <Button size="xs" labelClassName="contents" type="button" data-action="remove-attachment" aria-label={`Remove ${f.name}`} onClick={() => onRemove(i)} className="rounded-full p-1 active:bg-[var(--bg-3)]">
                         <Icon name="x" size="xs" />
-                    </button>
+                    </Button>
                 </li>
             ))}
         </ul>
@@ -288,7 +288,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     if (!detail) {
         return (
             <div data-mobile-agent-view="loading" className="flex min-h-dvh flex-col bg-[var(--bg-0)] p-4" aria-busy>
-                <button type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</button>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="self-start text-xs text-[var(--fg-3)]">← back</Button>
                 <div className="mt-4 h-6 w-40 animate-pulse rounded-md bg-[var(--bg-2)]" />
             </div>
         );
@@ -313,7 +313,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
     return (
         <div data-mobile-agent-view={detail.agent.id} className="flex h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-3">
-                <button type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</button>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="text-sm font-semibold">{detail.agent.name}</span>
                 <ProviderLogo provider={detail.agent.provider} />
                 <span data-running={running ? 'true' : 'false'} className={`ml-auto font-mono text-[11px] ${running ? 'text-[var(--success)]' : 'text-[var(--fg-4)]'}`}>{running ? 'running' : 'not running'}</span>
@@ -323,7 +323,7 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
             {held ? (
                 <div data-mobile-limit className="flex items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-xs">
                     <span className="text-[var(--warning)]" {...(limitTitle(detail.session?.limit) ? { title: limitTitle(detail.session?.limit)! } : {})}>Paused · {held}</span>
-                    <button type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</button>
+                    <Button size="xs" type="button" data-action="resume-limit" onClick={onResumeLimit} className="ml-auto rounded-lg border border-[var(--border-1)] px-2.5 py-1 font-medium">Resume now</Button>
                 </div>
             ) : null}
             <main data-mobile-activity className="flex flex-1 flex-col gap-2 overflow-y-auto px-4 py-3">
@@ -380,11 +380,11 @@ export function MobileAgent({ detail, sending, onBack, onSend, onStart, onResume
                                 <input type="file" multiple data-attach="file" className="hidden" onChange={pick} />
                             </label>
                             <span className="flex-1" />
-                            <button type="submit" data-action="send-prompt" disabled={sending} className={PRIMARY}>{sending ? 'Sending…' : 'Send'}</button>
+                            <Button size="xs" type="submit" data-action="send-prompt" disabled={sending} className={PRIMARY}>{sending ? 'Sending…' : 'Send'}</Button>
                         </div>
                     </form>
                 ) : (
-                    <button type="button" data-action="start-agent" onClick={onStart} className={`w-full ${PRIMARY}`}>Start {detail.agent.name}</button>
+                    <Button size="xs" type="button" data-action="start-agent" onClick={onStart} className={`w-full ${PRIMARY}`}>Start {detail.agent.name}</Button>
                 )}
             </footer>
         </div>
@@ -418,13 +418,13 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
     return (
         <div data-mobile-files={path} className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
-                <button type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</button>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="truncate text-sm font-semibold">{workspaceName}</span>
                 <span className="truncate font-mono text-xs text-[var(--fg-3)]">/{path}</span>
             </header>
             <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border-1)] px-4 py-2">
                 {path !== '' ? (
-                    <button type="button" data-action="up" onClick={onUp} className={`${BUTTON} flex items-center gap-1.5`}><Icon name="corner-left-up" size="xs" />Up</button>
+                    <Button size="xs" labelClassName="contents" type="button" data-action="up" onClick={onUp} className={`${BUTTON} flex items-center gap-1.5`}><Icon name="corner-left-up" size="xs" />Up</Button>
                 ) : null}
                 <span className="flex-1" />
                 <label className={`${BUTTON} flex cursor-pointer items-center gap-1.5`}>
@@ -451,11 +451,11 @@ export function MobileFiles({ workspaceName, path, entries, onOpen, onUp, onBack
                     <ul className="flex flex-col">
                         {entries.map((e) => (
                             <li key={e.id}>
-                                <button type="button" data-file-entry={e.id} data-kind={e.type} onClick={() => onOpen(e)} className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-left text-[14px] active:bg-[var(--bg-2)]">
+                                <Button size="xs" labelClassName="contents" type="button" data-file-entry={e.id} data-kind={e.type} onClick={() => onOpen(e)} className="flex min-h-12 w-full items-center gap-3 border-b border-[var(--border-1)] px-4 py-2 text-left text-[14px] active:bg-[var(--bg-2)]">
                                     <Icon name={e.type === 'folder' ? 'folder' : 'file'} size="sm" className={e.type === 'folder' ? 'text-[var(--warning)]' : 'text-[var(--fg-3)]'} />
                                     <span className="min-w-0 flex-1 truncate">{e.label}</span>
                                     {e.type === 'folder' ? <Icon name="chevron-right" size="xs" className="text-[var(--fg-4)]" /> : null}
-                                </button>
+                                </Button>
                             </li>
                         ))}
                     </ul>
@@ -479,7 +479,7 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
     return (
         <div data-mobile-file-view={path} className="flex min-h-dvh flex-col bg-[var(--bg-0)] text-[var(--fg-1)]">
             <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-[var(--border-1)] bg-[var(--bg-0)] px-4 py-3">
-                <button type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</button>
+                <Button size="xs" type="button" data-action="back" onClick={onBack} className="py-1 pr-2 text-sm text-[var(--fg-3)]">← back</Button>
                 <span className="truncate text-sm font-semibold">{name}</span>
             </header>
             <main className="flex-1 overflow-auto">
@@ -494,13 +494,13 @@ export function MobileFileView({ path, preview, onBack }: { path: string; previe
                 ) : preview.kind === 'pdf' ? (
                     <div data-preview="pdf" className="flex flex-col items-center gap-3 p-6 text-center text-[13px] text-[var(--fg-3)]">
                         <Icon name="file-text" size="lg" />
-                        <a href={preview.url} target="_blank" rel="noreferrer" data-action="open-pdf" className={PRIMARY}>Open {name}</a>
+                        <Button size="xs" href={preview.url} target="_blank" rel="noreferrer" data-action="open-pdf" className={PRIMARY}>Open {name}</Button>
                         <span>It opens in this phone’s own PDF viewer.</span>
                     </div>
                 ) : preview.kind === 'other' ? (
                     <div data-preview="other" className="flex flex-col items-center gap-3 p-6 text-center text-[13px] text-[var(--fg-3)]">
                         <span>No preview for this kind of file.</span>
-                        {preview.url ? <a href={preview.url} download={name} data-action="download" className={BUTTON}>Download</a> : null}
+                        {preview.url ? <Button size="xs" href={preview.url} download={name} data-action="download" className={BUTTON}>Download</Button> : null}
                     </div>
                 ) : (
                     <p data-preview="error" className="p-4 text-[13px] text-[var(--danger)]">{preview.reason}</p>
@@ -554,7 +554,7 @@ export function MobilePair({ host, refusal, connecting, onConnect, waiting = nul
                     <p data-mobile-waiting="" role="status" className="text-center text-xs text-[var(--fg-2)]">{`Press Allow on ${host} to finish pairing · ${timeLeftWords(waiting.expiresAt - now)}`}</p>
                 ) : null}
                 {refusal ? <p data-refusal className="text-xs text-[var(--danger)]">{refusal}</p> : null}
-                <button type="submit" disabled={connecting || waiting !== null} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{waiting ? 'Waiting for Allow…' : connecting ? 'Connecting…' : 'Connect'}</button>
+                <Button size="xs" type="submit" disabled={connecting || waiting !== null} className="rounded-lg bg-[var(--primary)] px-3 py-2 text-sm font-medium text-white disabled:opacity-60">{waiting ? 'Waiting for Allow…' : connecting ? 'Connecting…' : 'Connect'}</Button>
             </form>
         </div>
     );

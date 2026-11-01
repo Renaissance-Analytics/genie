@@ -1,4 +1,4 @@
-import { Icon } from '@particle-academy/react-fancy';
+import { Button, Icon } from '@particle-academy/react-fancy';
 import { tabStrip, type TabsState } from '../../core/workspace-tabs.js';
 import { TynnLogo } from './TynnLogo.js';
 import { wsStyle } from '../workspace-colors.js';
@@ -56,31 +56,31 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
             {tabStrip(designed, agents, { github, tynn }).filter((t) => (t.kind === 'add' ? canDesign : t.kind === 'settings' ? hasSettings : true)).map((t) => {
                 if (t.kind === 'add') {
                     return (
-                        <button key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
+                        <Button variant="ghost" size="xs" labelClassName="contents" key="add" type="button" data-workspace-tab="add" aria-label="New tab" title="New tab — design it with panels" onClick={onAdd} className="flex items-center border-b-2 border-transparent px-2 text-[var(--fg-3)] hover:text-[var(--fg-1)]">
                             <Icon name="plus" size="xs" />
-                        </button>
+                        </Button>
                     );
                 }
                 if (t.kind === 'agent') {
                     const on = current.kind === 'agent' && current.id === t.id;
                     const state = agents.find((a) => a.id === t.id)?.state ?? 'idle';
                     return (
-                        <button key={`agent:${t.id}`} type="button" data-workspace-tab={`agent:${t.id}`} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onOpenAgent(t.id)} title={`${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
+                        <Button variant="ghost" size="xs" labelClassName="contents" key={`agent:${t.id}`} type="button" data-workspace-tab={`agent:${t.id}`} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onOpenAgent(t.id)} title={`${t.name} · ${state}`} className={`flex shrink-0 items-center gap-1.5 ${tab(on)}`}>
                             <span data-agent-state={state} className={`size-1.5 rounded-full ${STATE_DOT[state] ?? 'bg-[var(--fg-4)]'}`} />
                             {t.name}
-                        </button>
+                        </Button>
                     );
                 }
                 const view = t.kind === 'dashboard' ? 'home' : t.kind === 'settings' ? 'settings' : t.kind === 'github' ? 'github' : t.kind === 'tynn' ? 'tynn' : t.kind === 'files' ? 'files' : `tab:${t.id}`;
                 const on = current.kind === 'view' && current.view === view;
                 return (
-                    <button key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
+                    <Button variant="ghost" size="xs" labelClassName="contents" key={view} type="button" data-workspace-tab={view} {...(on ? { 'data-current': 'true' } : {})} onClick={() => onView(view)} className={tab(on)}>
                         {t.kind === 'tynn' ? <TynnLogo /> : t.kind === 'designed' ? t.name : t.kind === 'dashboard' ? 'Dashboard' : t.kind === 'github' ? 'GitHub' : t.kind === 'files' ? 'Files' : 'Settings'}
-                    </button>
+                    </Button>
                 );
             })}
             {planToggle ? (
-                <button
+                <Button variant="ghost" size="xs" labelClassName="contents"
                     type="button"
                     data-action="toggle-plan-column"
                     aria-pressed={planToggle.open ? 'true' : 'false'}
@@ -91,7 +91,7 @@ export function WorkspaceTabs({ designed, agents, current, canDesign, hasSetting
                 >
                     <Icon name={planToggle.open ? 'panel-right-close' : 'panel-right-open'} size="xs" />
                     Plan
-                </button>
+                </Button>
             ) : null}
         </nav>
     );

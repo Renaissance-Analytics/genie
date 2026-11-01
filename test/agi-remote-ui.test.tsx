@@ -7,6 +7,7 @@ import { signedOutGithubView, type GithubInstallation, type GithubView } from '.
 import { NewWorkspaceForm } from '../src/renderer/components/AddWorkspaceModal.js';
 import { WorkspaceStepView } from '../src/renderer/components/AddWorkspaceWizard.js';
 import { PublishedView, RemoteChoiceView, type GithubAsk } from '../src/renderer/components/AgiRemoteChoice.js';
+import { control } from './helpers/control-markup.js';
 
 /**
  * THE REMOTE CHOICE ON SCREEN (Add workspace parity items 10 + 11): None / GitHub / Paste URL on New and on the wizard's
@@ -49,8 +50,8 @@ describe('None / GitHub / Paste URL', () => {
     it('signed out of GitHub: None is selected, GitHub is unavailable and says how to sign in — Paste URL still works', () => {
         const { ui, html, asked } = view({ kind: 'none' }, signedOutGithubView(null));
         expect(html).toMatch(/data-remote-kind="none"[^>]*aria-pressed="true"/);
-        expect(html).toMatch(/data-remote-kind="github"[^>]*disabled=""/);
-        expect(html).not.toMatch(/data-remote-kind="paste"[^>]*disabled=""/);
+        expect(control(html, 'data-remote-kind="github"')!.open).toMatch(/\sdisabled=""/);
+        expect(control(html, 'data-remote-kind="paste"')!.open).not.toMatch(/\sdisabled=""/);
         expect(html).toContain('Kept on this machine. You can add a remote later.');
         expect(html).toMatch(/Sign in to GitHub/);
         for (const b of findAll(ui, (p) => p['data-action'] === 'github-sign-in')) (b.onClick as () => void)();
@@ -160,9 +161,9 @@ describe('the choice is on New and on the wizard’s Workspace step', () => {
         const base = { name: 'acme', parent: '/w', sep: '/', busy: false, error: null, onName: () => {}, onBrowse: () => {}, onCreate: () => {}, onCancel: () => {}, github: null, onRemote: () => {}, onGithub: () => {} };
         const bad = renderToStaticMarkup(NewWorkspaceForm({ ...base, remote: { kind: 'paste', url: '' } }));
         expect(bad).toContain('data-remote-kind="none"');
-        expect(bad).toMatch(/data-action="create-workspace"[^>]*disabled=""/);
+        expect(control(bad, 'data-action="create-workspace"')!.open).toMatch(/\sdisabled=""/);
         const good = renderToStaticMarkup(NewWorkspaceForm({ ...base, remote: { kind: 'paste', url: 'https://x/acme.agi.git' } }));
-        expect(good).not.toMatch(/data-action="create-workspace"[^>]*disabled=""/);
+        expect(control(good, 'data-action="create-workspace"')!.open).not.toMatch(/\sdisabled=""/);
     });
 
     it('the wizard’s Workspace step carries the same choice', () => {

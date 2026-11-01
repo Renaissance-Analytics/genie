@@ -153,7 +153,7 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
     return (
         <div data-chat-message={m.id} data-who="mail" className="flex max-w-[94%] flex-col gap-1 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] px-2.5 py-2">
             {onOpenMail ? (
-                <Button size="xs" type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)] ">
+                <Button size="xs" type="button" data-open-mail={mailId} title="Open this message in the AgentInbox" onClick={() => onOpenMail(mailId)} className="flex items-center gap-1.5 self-start font-mono text-[11px] text-[var(--violet-400)]">
                     {head}
                 </Button>
             ) : (

@@ -1,4 +1,4 @@
-import { Checkbox, Icon } from '@particle-academy/react-fancy';
+import { Button, Checkbox, Icon } from '@particle-academy/react-fancy';
 import type { IssueWatchPanelView, IssueWatchRepo, IssueWatchRow, WatchedReposView } from '../../core/issue-watch.js';
 
 /**
@@ -36,13 +36,13 @@ function Severity({ value }: { value: string | null }) {
 function Row({ row }: { row: IssueWatchRow }) {
     return (
         <li>
-            <a data-issue-watch-item="" data-issue-watch-kind={row.kind} href={row.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-[var(--bg-2)]">
+            <Button variant="ghost" size="xs" labelClassName="contents" data-issue-watch-item="" data-issue-watch-kind={row.kind} href={row.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-[var(--bg-2)]">
                 <span className="shrink-0 text-[var(--fg-3)]" title={KIND_LABEL[row.kind]}><Icon name={KIND_ICON[row.kind]} size="xs" /></span>
                 <span className="w-12 shrink-0 font-mono text-[12px] text-[var(--fg-3)]">{row.number !== null ? `#${row.number}` : ''}</span>
                 <Severity value={row.severity} />
                 <span className="min-w-0 flex-1 truncate">{row.title}</span>
                 <span className="shrink-0 text-[11px] text-[var(--fg-4)]">{[row.author, row.age].filter(Boolean).join(' · ')}</span>
-            </a>
+            </Button>
         </li>
     );
 }
@@ -100,9 +100,9 @@ export function IssueWatchPanel({ view, onRefresh, onSetRepo }: { view: IssueWat
                 <h2 className="text-[14px] font-semibold">GitHub</h2>
                 <span data-issue-watch-line={view.line.tone} className={`ml-2 min-w-0 flex-1 truncate text-[12px] ${TONE[view.line.tone]}`}>{view.line.text}</span>
                 {onRefresh ? (
-                    <button type="button" data-issue-watch-refresh="" onClick={onRefresh} className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
+                    <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-issue-watch-refresh="" onClick={onRefresh} className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-[12px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]">
                         <Icon name="refresh-cw" size="xs" /> Refresh
-                    </button>
+                    </Button>
                 ) : null}
             </header>
 
@@ -113,18 +113,18 @@ export function IssueWatchPanel({ view, onRefresh, onSetRepo }: { view: IssueWat
             {view.repos.map((r) => (
                 <div key={r.repo} data-issue-watch-repo={r.repo} className="flex flex-col gap-1">
                     <div className="flex items-baseline gap-2 border-b border-[var(--border-1)] pb-1">
-                        <a href={`https://github.com/${r.repo}`} target="_blank" rel="noreferrer" className="font-semibold hover:underline">{r.repo}</a>
+                        <Button variant="ghost" size="xs" href={`https://github.com/${r.repo}`} target="_blank" rel="noreferrer" className="font-semibold">{r.repo}</Button>
                         <span className="text-[11px] text-[var(--fg-4)]">{counts(r)}</span>
                     </div>
                     <ul className="flex flex-col">
                         {r.dependabot ? (
                             <li>
-                                <a data-issue-watch-dependabot="" href={r.dependabot.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-[var(--bg-2)]">
+                                <Button variant="ghost" size="xs" labelClassName="contents" data-issue-watch-dependabot="" href={r.dependabot.url} target="_blank" rel="noreferrer" className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-[var(--bg-2)]">
                                     <span className="shrink-0 text-[var(--fg-3)]" title="Dependabot alerts"><Icon name="shield-alert" size="xs" /></span>
                                     <span className="w-12 shrink-0" />
                                     <Severity value={r.dependabot.worst} />
                                     <span className="min-w-0 flex-1 truncate">{r.dependabot.count} Dependabot alert{r.dependabot.count === 1 ? '' : 's'}{r.dependabot.worst ? ` — worst ${r.dependabot.worst}` : ''}</span>
-                                </a>
+                                </Button>
                             </li>
                         ) : null}
                         {r.rows.map((row) => <Row key={row.url || `${row.kind}:${row.number}`} row={row} />)}
@@ -145,7 +145,7 @@ export function IssueWatchPanel({ view, onRefresh, onSetRepo }: { view: IssueWat
                     <ul className="flex flex-col gap-0.5 text-[12px] text-[var(--fg-2)]">
                         {view.recent.map((r, n) => (
                             <li key={`${n}:${r.text}`} className="truncate">
-                                {r.url ? <a href={r.url} target="_blank" rel="noreferrer" className="hover:underline">{r.text}</a> : r.text}
+                                {r.url ? <Button variant="ghost" size="xs" href={r.url} target="_blank" rel="noreferrer">{r.text}</Button> : r.text}
                             </li>
                         ))}
                     </ul>

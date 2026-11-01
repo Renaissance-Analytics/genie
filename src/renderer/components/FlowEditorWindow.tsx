@@ -1,3 +1,4 @@
+import { Button } from '@particle-academy/react-fancy';
 import { FlowEditor, FlowViewer, getNodeKind, type FlowEditorApi, type FlowGraph } from '@particle-academy/fancy-flow';
 import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import {
@@ -165,7 +166,7 @@ export function FlowEditorWindow({ flowId, workspaceId, data, workspaces, act, E
                         ))}
                     </select>
                 ) : null}
-                <button type="button" disabled={busy || run !== null} onClick={() => void save()} className="rounded-lg bg-[var(--primary)] px-3 py-1 text-sm text-white disabled:opacity-50">Save</button>
+                <Button size="xs" type="button" disabled={busy || run !== null} onClick={() => void save()} className="rounded-lg bg-[var(--primary)] px-3 py-1 text-sm text-white disabled:opacity-50">Save</Button>
             </div>
             {note ? <p data-flow-note className="shrink-0 border-b border-[var(--border-1)] px-4 py-1 text-xs text-[var(--fg-2)]">{note}</p> : null}
             {problems.length > 0 && run === null ? (
