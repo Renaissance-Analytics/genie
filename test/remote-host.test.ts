@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Baton, PairingPins, ShareLinks } from '../src/core/remote.js';
-import { inMemoryPair, parseMessage, type ClientTransport, type WireMessage } from '../src/core/remote-protocol.js';
+import { inMemoryPair, parseMessage, type ClientTransport, type PreAuth, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
@@ -69,6 +69,10 @@ let shares: ShareLinks;
 let devices: DeviceStore;
 let now = 1_000_000;
 let connect: () => ReturnType<typeof client>;
+/** A connection the Tynn relay admitted: the transport proved who it is (relay-host.ts sets `preAuth`). */
+let connectRelay: (who: PreAuth) => ReturnType<typeof client>;
+/** How many "Pair this device?" prompts were raised on this screen. */
+let pairPrompts = 0;
 
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie2-remote-host-'));
@@ -77,7 +81,8 @@ beforeEach(async () => {
     shares = new ShareLinks({ host: 'alphar.tailnet.invalid:7421', now: () => now, random: () => 'sekrit' });
     devices = await DeviceStore.open(dir, { now: () => now, random: () => 'tok' + (devices?.list().length ?? 0) });
     const connections: Array<(c: ReturnType<typeof inMemoryPair>['server']) => void> = [];
-    host = new RemoteHost({ confirm: allowEveryPairing,
+    pairPrompts = 0;
+    host = new RemoteHost({ confirm: { ask: (input) => { pairPrompts += 1; return allowEveryPairing.ask(input); }, cancel: allowEveryPairing.cancel },
         api: api.api,
         hostName: 'alphar',
         baton: new Baton(),
@@ -87,6 +92,7 @@ beforeEach(async () => {
         transport: { onConnection: (cb) => { connections.push(cb); return () => {}; } },
     });
     connect = () => { const pair = inMemoryPair(); for (const cb of connections) cb(pair.server); return client(pair.client); };
+    connectRelay = (who) => { const pair = inMemoryPair(); for (const cb of connections) cb({ ...pair.server, remoteAddress: 'relay:wren', preAuth: who }); return client(pair.client); };
 });
 
 afterEach(async () => {
@@ -134,6 +140,63 @@ describe('authentication', () => {
     it('a call before hello is refused; a frame that is not a message is refused with the parse reason', async () => {
         const x = connect();
         expect(await x.call('snapshot')).toEqual({ kind: 'refused', reason: 'say hello first' });
+    });
+});
+
+describe('a relay connection says only a relay hello (SECURITY, pairing vs share link H1)', () => {
+    /*
+     * Pairing is the owner's: whole-workstation access, never approved again. A share link is another person's single
+     * session and NEVER pairs. A connection the Tynn relay admitted is already somebody, proved by its Tynn grant; if it
+     * could also say a PIN, device-token or local-link hello, a guest admitted by a link could leave as a paired owner
+     * with a durable token. Over the relay, the grant is the only way in; PIN, token and link are tailnet/local only.
+     */
+    const linkGuest: PreAuth = { label: 'wren', isOwner: false, workspaceId: 'tynn', readonly: false };
+    const hostGuest: PreAuth = { label: 'wren', isOwner: false, workspaceId: null, readonly: false };
+    const refusedAsRelay = { kind: 'refused', reason: expect.stringContaining('Tynn relay') };
+
+    it('a PIN hello on a relay socket is refused, raises no "Pair this device?" and pairs nothing; the same PIN on the tailnet does (CONTROL)', async () => {
+        const { code } = host.issuePin();
+        for (const who of [linkGuest, hostGuest]) {
+            const r = connectRelay(who);
+            expect(await r.hello({ kind: 'pin', code, label: 'wren laptop' })).toMatchObject(refusedAsRelay);
+        }
+        expect(pairPrompts).toBe(0);
+        expect(devices.list()).toEqual([]);
+        expect(host.connections()).toEqual([]);
+        // CONTROL: the PIN was not spent by the refused hellos, and on the tailnet it raises the prompt and pairs.
+        const t = connect();
+        expect(await t.hello({ kind: 'pin', code, label: 'glenn’s phone' })).toMatchObject({ kind: 'welcome', isOwner: true });
+        expect(pairPrompts).toBe(1);
+        expect(devices.list().map((d) => d.label)).toEqual(['glenn’s phone']);
+    });
+
+    it('a device-token hello on a relay socket is refused, not welcomed as the owner; the same token on the tailnet is (CONTROL)', async () => {
+        const { code } = host.issuePin();
+        const phone = connect();
+        const paired = await phone.hello({ kind: 'pin', code, label: 'glenn’s phone' }) as { token: string };
+        const r = connectRelay(linkGuest);
+        expect(await r.hello({ kind: 'token', token: paired.token })).toMatchObject(refusedAsRelay);
+        // Only the phone itself is connected: the relay socket was not admitted under the phone's pairing.
+        expect(host.connections().map((c) => c.label)).toEqual(['glenn’s phone']);
+        const t = connect();
+        expect(await t.hello({ kind: 'token', token: paired.token })).toMatchObject({ kind: 'welcome', isOwner: true });
+    });
+
+    it('a local share-link hello on a relay socket is refused; the same link on the tailnet admits its guest (CONTROL)', async () => {
+        const link = shares.mint({ workspaceId: 'fancy', grantedTo: 'wren', expiresInMs: 60_000 });
+        const secret = new URL((shares.serve(link.id) as { url: string }).url).hash.slice(1);
+        const r = connectRelay(linkGuest);
+        expect(await r.hello({ kind: 'share', id: link.id, secret })).toMatchObject(refusedAsRelay);
+        expect(host.connections()).toEqual([]);
+        const t = connect();
+        expect(await t.hello({ kind: 'share', id: link.id, secret })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'fancy' });
+    });
+
+    it('the relay hello on a relay socket takes the grant’s principal (CONTROL); a relay hello without one is refused', async () => {
+        const r = connectRelay(linkGuest);
+        expect(await r.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: 'tynn' });
+        const t = connect();
+        expect(await t.hello({ kind: 'relay' })).toEqual({ kind: 'refused', reason: 'this connection did not come through the Tynn relay' });
     });
 });
 
@@ -349,5 +412,75 @@ describe('a guest receives ONLY its workspace’s pushes (beta.33 item 26, SECUR
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'agent:agent_a' });
         api.emit('activity', { agentId: 'agent_a', items: [] });
         expect(await g.next()).toMatchObject({ kind: 'event', channel: 'activity', payload: { agentId: 'agent_a' } });
+    });
+});
+
+describe('a whole-workstation guest never receives the remote secrets in a push (SECURITY, pairing vs share link H2)', () => {
+    /*
+     * genie#872 emptied the remote section of the `features.snapshot` CALL for a non-owner, but the same snapshot is also
+     * PUSHED on `features` whenever settings or flows change, and a guest of the whole workstation (a Tynn link with
+     * `host:all`: not the owner, no one workspace) skipped the workspace filter and received it whole: the live PIN,
+     * the paired devices, the local share links and the connections. Every push to a non-owner goes through one
+     * deny-by-default filter now; the owner still receives everything (positive control).
+     */
+    const hostGuest: PreAuth = { label: 'wren', isOwner: false, workspaceId: null, readonly: false };
+    const features = { settings: { values: { theme: 'dark' } }, remote: { url: 'wss://alphar', pin: { code: '771122', expiresAt: 9 }, devices: [{ id: 'd1', label: 'owner phone' }], shares: [{ id: 's1', grantedTo: 'wren', url: 'https://alphar/share/s1#sekrit' }], connections: [{ id: 'c1', label: 'laptop' }], servedLink: 'https://alphar/share/s1#sekrit', pairRequests: [{ id: 'pair_1' }], enabled: true } };
+    const SECRETS = ['771122', 'owner phone', 'sekrit', '"c1"', 'pair_1'];
+
+    async function hostGuestAndOwner() {
+        const g = connectRelay(hostGuest);
+        expect(await g.hello({ kind: 'relay' })).toMatchObject({ kind: 'welcome', isOwner: false, workspaceId: null });
+        host.issuePin();
+        const o = connect();
+        await o.hello({ kind: 'pin', code: '482913', label: 'laptop' });
+        return { g, o };
+    }
+
+    it('the `features` push to a whole-workstation guest carries no PIN, devices, shares, served link or connections; the owner’s push does', async () => {
+        const { g, o } = await hostGuestAndOwner();
+        api.emit('features', features);
+        const owner = JSON.stringify(await o.next());
+        const guest = await g.next();
+        expect(guest).toMatchObject({ kind: 'event', channel: 'features' });
+        const text = JSON.stringify(guest);
+        for (const secret of SECRETS) expect(text).not.toContain(secret);
+        expect(text).toContain('"theme":"dark"'); // CONTROL: the rest of the snapshot still arrives
+        for (const secret of ['771122', 'owner phone', 'sekrit', '"c1"']) expect(owner).toContain(secret);
+        expect(owner).not.toContain('pair_1'); // Allow is pressed on this screen only, for every remote (q_8c07b142)
+    });
+
+    it('the call and the push agree: the guest’s `features.snapshot` call is redacted too (genie#872, unchanged)', async () => {
+        const { g } = await hostGuestAndOwner();
+        const called = JSON.stringify(await g.call('features.snapshot'));
+        for (const secret of ['771122', 'owner phone', '"c1"']) expect(called).not.toContain(secret);
+    });
+
+    // Deny by default: a channel the host has not classified, or one carrying a remote section, is not sent at all.
+    const withheld: Array<[string, string, unknown]> = [
+        ['a channel the host has not classified (even one carrying a remote section)', 'something-new', { remote: { pin: { code: '771122' } } }],
+        ['the host’s update state (a whole-workstation guest may not act on updates)', 'updates', { phase: 'ready' }],
+    ];
+    for (const [what, channel, payload] of withheld) {
+        it(`never: ${what} — while the owner still receives it`, async () => {
+            const { g, o } = await hostGuestAndOwner();
+            api.emit(channel, payload);
+            expect(await o.next()).toMatchObject({ kind: 'event', channel });
+            api.emit('agent:agent_b', { agent: { id: 'agent_b' }, rows: [] });
+            expect(await g.next()).toMatchObject({ kind: 'event', channel: 'agent:agent_b' });
+        });
+    }
+
+    it('still receives the whole workstation: every workspace’s snapshot, agents, activity and terminals (CONTROL)', async () => {
+        const { g } = await hostGuestAndOwner();
+        api.emit('snapshot', snapshot);
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'snapshot', payload: { agents: snapshot.agents } });
+        api.emit('agent:agent_b', { agent: { id: 'agent_b' }, rows: [] });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'agent:agent_b' });
+        api.emit('activity', { agentId: 'agent_b', items: [] });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'activity' });
+        api.emit('terminal-data', { id: 'term_f', data: 'fancy shell output' });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-data' });
+        api.emit('terminal-exit', { id: 'term_f', exitCode: 0 });
+        expect(await g.next()).toMatchObject({ kind: 'event', channel: 'terminal-exit' });
     });
 });

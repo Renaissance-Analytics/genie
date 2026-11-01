@@ -324,6 +324,13 @@ export class RemoteHost {
         const label = auth.label ?? message.label ?? 'a device';
         let token: string | undefined;
         if (connection.pendingPair !== null) return this.#refuse(connection, `this device is already waiting for Allow on ${this.#hostName}`, false);
+        /*
+         * SECURITY (pairing vs share link, H1): a connection the Tynn relay admitted is already somebody, proved by its Tynn
+         * grant; that grant is its only way in. A PIN, a device token or a local link are tailnet/local hellos: said over
+         * the relay they would let a guest admitted by a link pair as the owner. Refused before anything is redeemed, so a
+         * refused hello spends no PIN try and raises no "Pair this device?".
+         */
+        if (connection.socket.preAuth && auth.kind !== 'relay') return this.#refuse(connection, `this connection came through the Tynn relay: its Tynn grant admits it, never a PIN, a device token or a link`, true);
         if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
@@ -547,10 +554,25 @@ export class RemoteHost {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
-            if (c.auth.workspaceId !== null) out = this.#forGuest(channel, out, c.auth.workspaceId);
+            // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
+            if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
             if (out !== NOT_SENT && c.profile === 'mobile') out = this.#forPhone(c, channel, out);
             if (out !== NOT_SENT) this.#send(c, { kind: 'event', channel, payload: out });
         }
+    }
+
+    /**
+     * WHAT A NON-OWNER RECEIVES (SECURITY, pairing vs share link H2). A guest of one workspace: #forGuest. A guest of the
+     * whole workstation (a Tynn link with `host:all`) hears every workspace — the snapshot, agents, activity, terminals —
+     * and the host's features WITHOUT the remote section's secrets (the live PIN, paired devices, local links,
+     * connections), exactly as its `features.snapshot` call is answered (genie#872). It may not act on updates, so it
+     * does not hear them; any channel not classified here is not sent.
+     */
+    #forNonOwner(channel: string, payload: unknown, workspaceId: string | null): unknown {
+        if (workspaceId !== null) return this.#forGuest(channel, payload, workspaceId);
+        if (channel === 'features') return withoutRemoteSecrets(payload);
+        if (channel === 'snapshot' || channel === 'activity' || channel === 'terminal-data' || channel === 'terminal-exit' || channel.startsWith('agent:')) return payload;
+        return NOT_SENT;
     }
 
     /**
