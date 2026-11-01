@@ -1,4 +1,5 @@
 import { fileURLToPath } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /**
@@ -38,16 +39,46 @@ vi.mock('node:child_process', async (original) => {
     };
 });
 
-/** Worst gap of a 10 ms heartbeat over `run`. */
+/**
+ * How long MAIN'S THREAD was held during `run`, beyond what this whole process was held at the same moment: a 10 ms
+ * heartbeat on main, and one on a worker thread of the same process. Every gap of main's is reduced by the worker's gap
+ * that overlaps it. A held main thread (a synchronous spawn) reads its full length; a process the machine did not
+ * schedule (the full suite saturating every CPU: measured 76 and 304 ms on omarchy-test) reads about 0, because the
+ * worker was not run either. The worst remainder is returned.
+ */
 async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
-    let worst = 0;
+    // The worker's gaps over 20 ms, as [end, gap] pairs in a shared ring (slot 0 is the count).
+    const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
+    const worker = new Worker(`
+        const { workerData } = require('node:worker_threads');
+        const ring = new Float64Array(workerData);
+        let last = Date.now();
+        setInterval(() => {
+            const now = Date.now();
+            const gap = now - last - 10;
+            last = now;
+            if (gap > 20) { const i = ring[0] % 4096; ring[1 + 2 * i] = now; ring[2 + 2 * i] = gap; ring[0] += 1; }
+        }, 10);
+    `, { eval: true, workerData: shared.buffer });
+    await new Promise((r) => setTimeout(r, 100));
+    const mine: Array<[number, number]> = [];
     let last = Date.now();
-    const timer = setInterval(() => { const now = Date.now(); worst = Math.max(worst, now - last - 10); last = now; }, 10);
+    const timer = setInterval(() => { const now = Date.now(); const gap = now - last - 10; last = now; if (gap > 20) mine.push([now, gap]); }, 10);
     try {
         await run();
-        await new Promise((r) => setTimeout(r, 30));
+        await new Promise((r) => setTimeout(r, 60));
     } finally {
         clearInterval(timer);
+        await worker.terminate();
+    }
+    const theirs: Array<[number, number]> = [];
+    for (let i = 0; i < Math.min(shared[0]!, 4096); i += 1) theirs.push([shared[1 + 2 * i]!, shared[2 + 2 * i]!]);
+    let worst = 0;
+    for (const [end, gap] of mine) {
+        const start = end - gap;
+        let process = 0;
+        for (const [wEnd, wGap] of theirs) process = Math.max(process, Math.max(0, Math.min(end, wEnd) - Math.max(start, wEnd - wGap)));
+        worst = Math.max(worst, gap - process);
     }
     return worst;
 }
