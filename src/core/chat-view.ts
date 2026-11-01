@@ -57,6 +57,8 @@ export interface ChatMessage {
     queued?: boolean;
     /** The turn has ended, but the provider is still paused. */
     queuedForProvider?: boolean;
+    /** The agent is still starting (q_04ce323c: its first message started it); it goes the moment it is up. */
+    queuedForStart?: boolean;
     /** Its durable queue id, for restarting/sending or discarding an unsent draft. */
     promptId?: string;
     /** A failed Send/Discard press, kept beside the draft so it can be tried again. */
@@ -153,6 +155,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
     const held = limitWords(s.limit);
     if (held) { const title = limitTitle(s.limit); return { text: `Paused · ${held}`, tone: 'warn', ...(title ? { title } : {}) }; }
     if (s.failure !== null) return { text: `Broken · ${s.failure.reason}`, tone: 'bad' };
+    // COMING UP (q_04ce323c): its first message waits for the start, and the line says why.
+    if (s.running && s.starting === true && s.turnState !== 'working') return { text: 'Starting', tone: 'muted' };
     if (s.running && s.turnState === 'working') {
         return { text: s.plan ? `Working · Plan ${s.plan.step}/${s.plan.of} · ${s.plan.doing}` : 'Working', tone: 'ok' };
     }
@@ -221,7 +225,8 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
         const waits = who === 'you' && delivered ? waiting.get(row.id) : undefined;
         out.push({ id: row.id, who, from, text: e.text, delivered, at: row.at,
             ...(e.pending ? { promptId: e.pending.id, queued, resend: detail.session?.running && detail.session.turnState !== 'failed' ? 'send' as const : 'restart' as const } : {}),
-            ...(queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
+            ...(queued && detail.session?.starting === true ? { queuedForStart: true }
+                : queued && detail.session?.turnState === 'idle' ? { queuedForProvider: true } : {}),
             ...(e.attachments && e.attachments.length > 0 ? { attachments: e.attachments } : {}), ...(waits ? { waiting: waits } : {}) });
     }
     return out;

@@ -124,6 +124,8 @@ export function statePill(session: LiveSession | null, now: () => number, ctx: P
         return { word: `Broken · ${session.failure.reason}${when}`, elapsed: null, tone: 'bad' };
     }
 
+    // COMING UP (q_04ce323c: start on first message, and the person sees it start): no turn, no timer, no Stop.
+    if (session.running && session.starting === true && session.turnState !== 'working') return { word: 'Starting', elapsed: null, tone: 'muted' };
     const running = session.running && session.turnState === 'working';
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): once its turn is over; a turn still running reads as running.
     if (!running && session.designLogin) return { word: 'Claude Design login needed', elapsed: null, tone: 'warn' };

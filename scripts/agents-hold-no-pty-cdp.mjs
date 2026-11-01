@@ -122,7 +122,8 @@ try {
     check(typeof codexId === 'string' && typeof workspaceId === 'string', '1. the seed left a codex agent and a workspace', `${codexId} in ${workspaceId}`);
 
     // START AN AGENT, the way a person does.
-    await cdp.evaluate(`window.genie.openAgent(${JSON.stringify(codexId)}); true`);
+    // Start (the one restart): opening an agent starts nothing since q_04ce323c.
+    await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
         running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);

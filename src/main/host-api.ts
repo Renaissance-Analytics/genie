@@ -13,6 +13,7 @@ import type { Finished } from './attention-store.js';
 import type { HostApi } from './remote-host.js';
 import { restartWithHandoff, type RestartPorts } from './restart-with-handoff.js';
 import type { PtyOpened, TerminalOptions } from './terminal-host.js';
+import type { StartForWork as StartForWorkAnswer } from './start-on-demand.js';
 import type { Attachment } from '../core/prompt-content.js';
 import type { BytesResult, FileOpResult, OpenResult } from './files-host.js';
 import type { TreeNode } from '../core/files-panel.js';
@@ -36,6 +37,12 @@ export interface HostApiDeps {
     find(agentId: string): AgentRecord | null;
     detailFor(agentId: string): AgentDetail | null;
     cwdFor(record: AgentRecord): string;
+    /**
+     * START ON FIRST MESSAGE (q_04ce323c; main/start-on-demand.ts): a message to an agent that is not running starts it
+     * first, under the same refusals as Start. Absent = a message to a stopped agent is refused, as before.
+     */
+    /** May answer later: the agent engine in genie-host answers its start asynchronously (main/start-on-demand.ts). */
+    startForWork?(record: AgentRecord): StartForWorkAnswer | Promise<StartForWorkAnswer>;
     host: Pick<RestartPorts, 'prompt'> & {
         start(record: AgentRecord, cwd: string): ({ ok: true } | { ok: false; reason: string }) | Promise<{ ok: true } | { ok: false; reason: string }>;
         stop(agentId: AgentRecord['id']): boolean | Promise<boolean>;
@@ -183,8 +190,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agentDetail':
                 return deps.detailFor(str(args[0]));
             case 'openAgent': {
+                // Opening SHOWS the agent (q_04ce323c): nothing starts. Its first message, or Start, starts it.
                 const r = agent(args[0]);
-                return r ? deps.host.start(r, deps.cwdFor(r)) : { ok: false, reason: 'unknown agent' };
+                return r ? { ok: true } : { ok: false, reason: 'unknown agent' };
             }
             case 'stopAgent': {
                 const r = agent(args[0]);
@@ -203,6 +211,11 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'prompt': {
                 const r = agent(args[0]);
                 const text = str(args[1]);
+                // THE FIRST MESSAGE STARTS IT (q_04ce323c), as the composer's does; a refused start is said, nothing sent.
+                if (r && deps.startForWork && (text.length > 0 || Array.isArray(args[2]))) {
+                    const started = await deps.startForWork(r);
+                    if (!started.ok) return { ok: false, reason: started.reason };
+                }
                 // With files (a phone's photo, genie#1346): the chat's own attach path, by YOU — never sent without them.
                 if (Array.isArray(args[2])) {
                     const attachments = attachmentsOf(args[2]);

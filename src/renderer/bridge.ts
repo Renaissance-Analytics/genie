@@ -207,7 +207,7 @@ export interface GenieBridge {
     /** Each provider's rate limit for the Dashboard header, buffered in main; the current ones at once, then each change. */
     onHeadroom?(onHeadroom: (limits: Readonly<Record<string, Headroom>>) => void): () => void;
 
-    /** Start or REATTACH a session. Never creates a second for the same agent. */
+    /** OPEN (show) the agent: starts nothing (q_04ce323c) — its first message or Start does. */
     openAgent(agentId: string): void;
     /** "Stop agent" — END the session: the provider tree goes, and the capacity slot frees. Not the turn's Stop. */
     stopAgent(agentId: string): void;

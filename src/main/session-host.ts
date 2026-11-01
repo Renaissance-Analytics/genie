@@ -1481,6 +1481,7 @@ export class SessionHost {
             running: session.running,
             turnState: session.turnState,
             inTurn: session.inTurn,
+            starting: session.starting,
             startedAt,
             mcpServers: mcp,
             /*
