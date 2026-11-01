@@ -77,21 +77,53 @@ function mainPushes(agentId: string, payload: AgentPushPayload<typeof detailOf, 
     for (const fn of ipc.listeners.get(`genie:agent-changed:${agentId}`) ?? []) fn({}, payload);
 }
 
+/** What one value handed into the page costs to copy. */
+interface Copied { readonly objects: number; readonly rows: number; readonly bytes: number }
+
+/** Over this many objects a value is a ledger, and its JSON is not built (100,000 rows is 66 MB of it). */
+const JSON_LIMIT = 10_000;
+
 /**
- * What the PAGE's world receives per event, in JSON bytes: every argument the preload passes into a callback the page
- * handed it (each one is a copy across `contextBridge`). Through the subscription the page uses for an agent's live detail.
+ * What `contextBridge` copies for one value handed into the page: every object and array in it (it copies them one by one),
+ * and of those the ledger ROWS (an object with an `id` and an `event`). WALKED, NOT SERIALISED (2026-11-01): this file
+ * built the JSON of every crossing, 66 MB per view for the first push of a 100,000-row ledger, and that alone timed it out
+ * on a loaded omarchy-test — with the byte counts the same in every run, red and green. The bytes are still counted for a
+ * value small enough to be a patch.
  */
-async function crossingPerEvent(agentId: string, n: number): Promise<{ first: number; perEvent: number; views: number }> {
+function copiedInto(value: unknown): Copied {
+    let objects = 0;
+    let rows = 0;
+    const stack: unknown[] = [value];
+    while (stack.length > 0) {
+        const v = stack.pop();
+        if (v === null || typeof v !== 'object') continue;
+        objects += 1;
+        if (Array.isArray(v)) { for (const x of v) stack.push(x); continue; }
+        const o = v as Record<string, unknown>;
+        if ('id' in o && 'event' in o) rows += 1;
+        for (const k in o) stack.push(o[k]);
+    }
+    return { objects, rows, bytes: objects <= JSON_LIMIT ? JSON.stringify(value).length : Infinity };
+}
+
+const sum = (xs: readonly Copied[]): Copied => xs.reduce((a, b) => ({ objects: a.objects + b.objects, rows: a.rows + b.rows, bytes: a.bytes + b.bytes }), { objects: 0, rows: 0, bytes: 0 });
+const per = (c: Copied, n: number): Copied => ({ objects: c.objects / n, rows: c.rows / n, bytes: c.bytes / n });
+
+/**
+ * What the PAGE's world receives: every argument the preload passes into a callback the page handed it (each one is a copy
+ * across `contextBridge`). Through the subscription the page uses for an agent's live detail.
+ */
+async function crossingPerEvent(agentId: string, n: number): Promise<{ first: Copied; perEvent: Copied; views: number }> {
     await import('../src/main/preload.js');
     const api = ipc.exposed.get('genie') as Record<string, unknown>;
     const subscribe = (api['subscribeAgentWire'] ?? api['subscribeAgent']) as (id: string, cb: (value: unknown) => void) => () => void;
-    const crossings: number[] = [];
-    const view = (value: unknown) => { crossings.push(JSON.stringify(value).length); };
+    const crossings: Copied[] = [];
+    const view = (value: unknown) => { crossings.push(copiedInto(value)); };
     // Two views watch the same agent (the Agent view and the chat do, for the agent on screen).
     const offs = [subscribe(agentId, view), subscribe(agentId, view)];
     const rows = ledgerOf(n);
     mainPushes(agentId, { seq: 1, detail: detailOf, rows: { base: null, keep: 0, append: rows } });
-    const first = crossings.splice(0).reduce((a, b) => a + b, 0);
+    const first = sum(crossings.splice(0));
     // 10 events: a new row each (a tool call), the way the host's push sends them.
     let seq = 1;
     for (let i = 0; i < 10; i += 1) {
@@ -99,7 +131,7 @@ async function crossingPerEvent(agentId: string, n: number): Promise<{ first: nu
         mainPushes(agentId, { seq: seq + 1, detail: detailOf, rows: { base: seq, keep: n + i, append: [row] } });
         seq += 1;
     }
-    const perEvent = crossings.reduce((a, b) => a + b, 0) / 10;
+    const perEvent = per(sum(crossings), 10);
     for (const off of offs) off();
     return { first, perEvent, views: 2 };
 }
@@ -116,13 +148,18 @@ describe('what crosses into the page per event of a watched agent', () => {
     it('is the rows that changed — the same at 100,000 rows as at 1,000, not a copy of the ledger', async () => {
         const small = await crossingPerEvent('small', 1_000);
         const large = await crossingPerEvent('large', 100_000);
-        console.log(`PERF: bytes into the page per event: ${Math.round(small.perEvent)} at 1k rows, ${Math.round(large.perEvent)} at 100k rows (first push ${small.first} / ${large.first})`);
-        // POSITIVE CONTROL: the gauge sees a ledger when one crosses — the first push carries all of it.
-        expect(large.first).toBeGreaterThan(50_000_000);
+        console.log(`PERF: into the page per event: ${small.perEvent.rows} rows, ${small.perEvent.objects} objects, ${Math.round(small.perEvent.bytes)} bytes at 1k rows; ${large.perEvent.rows} rows, ${large.perEvent.objects} objects, ${Math.round(large.perEvent.bytes)} bytes at 100k (first push ${small.first.rows} / ${large.first.rows} rows)`);
+        // POSITIVE CONTROL: the gauge sees a ledger when one crosses — the first push carries all of it, to both views.
+        expect(large.first.rows).toBe(100_000 * large.views);
+        expect(small.first.rows).toBe(1_000 * small.views);
+        // Per event, the ONE row that changed, to each view: not a copy of the ledger (which is 100,000 rows to each).
+        expect(large.perEvent.rows, `rows into the page per event at 100k rows: ${large.perEvent.rows}`).toBe(large.views);
+        // And the same copy at 100,000 rows as at 1,000: object for object.
+        expect(large.perEvent.objects, `objects copied per event: ${large.perEvent.objects} at 100k rows, ${small.perEvent.objects} at 1k`).toBe(small.perEvent.objects);
         // One row is ~250 bytes, and the detail around it under 1 KB: 4 KB for both views is a row, not a ledger.
-        expect(large.perEvent, `bytes per event at 100k rows: ${Math.round(large.perEvent)}`).toBeLessThan(4_096);
-        expect(large.perEvent / small.perEvent).toBeLessThan(1.5);
-    });
+        expect(large.perEvent.bytes, `bytes per event at 100k rows: ${Math.round(large.perEvent.bytes)}`).toBeLessThan(4_096);
+        expect(large.perEvent.bytes / small.perEvent.bytes).toBeLessThan(1.5);
+    }, 30_000);
 
     it('the page still sees EXACTLY the ledger, every view the same detail, through ONE subscription per agent; the last view to leave stops the watch', async () => {
         await import('../src/main/preload.js');
