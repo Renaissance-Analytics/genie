@@ -90,7 +90,7 @@ async function diagnose(page, cdp, x, y, label) {
             sc.scrollTop = was;
             probe = { was, setTo: was + 150, readBack: set };
         }
-        return { chain, probe, seen: window.__touchSeen ?? null, scrolls: window.__scrollEvents ?? null };
+        return { chain: out, probe, seen: window.__touchSeen ?? null, scrolls: window.__scrollEvents ?? null };
     }, { x, y });
     const listeners = [];
     for (const expr of ['window', 'document', `document.elementFromPoint(${x}, ${y})`]) {
@@ -124,9 +124,11 @@ const RECORDER = () => {
 
 /**
  * TWO WAYS TO SWIPE, both through the browser's own touch input. A gauge that reads 0 must first be shown to read more
- * than 0 (RULES.md): `controlSwipes` proves each on a plain page before either is trusted on Genie's.
- *  - gesture: Input.synthesizeScrollGesture, gestureSourceType touch (the compositor's synthetic touch scroll, with fling);
- *  - touch-events: Input.dispatchTouchEvent — a finger down, ten moves, up, as a phone's touchscreen delivers them.
+ * than 0 (RULES.md): `controlSwipes` runs both on a plain page.
+ *  - touch-events: Input.dispatchTouchEvent — a finger down, ten moves, up, as a phone's touchscreen delivers them. THE
+ *    GAUGE: measured on the control 0 → 389 (iPhone 13) and 0 → 514 (Pixel 7) in omarchy-test (batch C diag, 2026-11-01).
+ *  - gesture: Input.synthesizeScrollGesture, gestureSourceType touch. Moves NOTHING in this headless Chromium (0 → 0 on
+ *    the control, both profiles, both trees) — every "moved 0 px" in batch B was this, not the page. Kept as a NOTE only.
  */
 const SWIPES = {
     async gesture(cdp, x, y0, y1) {
@@ -142,7 +144,9 @@ const SWIPES = {
         await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
     },
 };
-/** Methods the control proved can scroll a plain page in this browser; only these are trusted on Genie's screens. */
+/** The one method Genie's screens are measured with — only when the control shows it moves a plain page here. */
+const GAUGE = 'touch-events';
+/** [GAUGE] when the control proved it, [] otherwise (then every screen is inconclusive, never passed or failed). */
 let PROVEN = [];
 
 /** One swipe that moves content UP (finger from 70% to 30% of the screen), or DOWN when `down`. */
@@ -167,8 +171,11 @@ async function controlSwipes(context, profile) {
         await page.evaluate(() => { document.getElementById('s').scrollTop = 0; });
         await swipe(cdp, method, vp.width, vp.height);
         const top = await page.evaluate(() => document.getElementById('s').scrollTop);
-        check(`${profile} control: a ${method} swipe scrolls a plain overflow-y:auto box`, top > 100, `scrollTop 0 → ${top}`);
-        if (top > 100) proven.push(method);
+        const what = `${profile} control: a ${method} swipe scrolls a plain overflow-y:auto box`;
+        // Only the gauge's control gates; the other method's result is recorded, since it is known not to work here.
+        if (method === GAUGE) check(what, top > 100, `scrollTop 0 → ${top}`);
+        else note(what, `scrollTop 0 → ${top} (not the gauge)`);
+        if (method === GAUGE && top > 100) proven.push(method);
     }
     await page.screenshot({ path: join(OUT, `${profile}-control.png`) });
     await page.close();
