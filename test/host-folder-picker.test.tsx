@@ -129,6 +129,7 @@ describe('host.mkdir over the remote protocol — the owner’s, like adding a w
         };
         new RemoteHost({ confirm: allowEveryPairing,
             api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: Date.now, random: Math.random }),
+            devices: await DeviceStore.open(dir, { now: Date.now, random: () => 't' }),
             transport: { onConnection: (cb) => { accept = cb; return () => {}; } },
         });
     });

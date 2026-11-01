@@ -104,6 +104,7 @@ describe('host.listDir over the remote protocol', () => {
         api = fakeApi();
         new RemoteHost({ confirm: allowEveryPairing,
             api, hostName: 'alphar', baton: new Baton(), pins: new PairingPins({ now: Date.now, random: Math.random }),
+            devices: await DeviceStore.open(dir, { now: Date.now, random: () => 't' }),
             transport: { onConnection: (cb) => { accept = cb; return () => {}; } },
         });
     });
