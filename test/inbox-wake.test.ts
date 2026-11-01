@@ -289,8 +289,9 @@ describe('main wires it', () => {
 
     it('main.ts spreads appMailPushPorts, with a real timer, into the MAIL push (source guard)', async () => {
         const { readFileSync } = await import('node:fs');
+        // By line on CR LF too: a Windows checkout (autocrlf, the windows CI runner) has CR LF, and '\n' anchors miss it.
         const code = readFileSync(join(__dirname, '../src/main/main.ts'), 'utf8')
-            .split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+            .split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
         const start = code.indexOf('wireInboxPush({\n        inbox: composed.inbox');
         expect(start).toBeGreaterThan(-1);
         const call = code.slice(start, code.indexOf('\n    });', start));
