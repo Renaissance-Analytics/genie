@@ -58,17 +58,57 @@ const LIVE_PROVIDER_ARGS = ['-e', 'setInterval(() => {}, 1000)'];
  * the read is never reported as an image somewhere else.
  */
 function imageOfLive(pid: number): string {
-    const script = [
+    let read: string;
+    try {
+        read = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', imageReadScript(pid)], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    } catch (error) {
+        // PowerShell itself failed (not the process being gone, which the script answers): say what it said.
+        const e = error as { status?: number | null; stdout?: string; stderr?: string };
+        throw new Error(`PowerShell could not read the supervisor's image (pid ${pid}, exit ${e.status ?? '?'}): ${String(e.stderr ?? '').trim() || String(e.stdout ?? '').trim() || String(error)}`);
+    }
+    return imageFromRead(read, pid);
+}
+
+/** The PowerShell that reads a process's image: one line, one answer (`PATH <image>`, `GONE` or `NO-PATH`). */
+function imageReadScript(pid: number): string {
+    return [
         `$p = Get-Process -Id ${pid} -ErrorAction SilentlyContinue`,
         "if ($null -eq $p) { 'GONE' }",
-        "elseif ($p.HasExited) { 'EXITED' }",
         "elseif ([string]::IsNullOrEmpty($p.Path)) { 'NO-PATH' }",
         "else { 'PATH ' + $p.Path }",
     ].join('; ');
-    const read = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true }).trim();
-    if (!read.startsWith('PATH ')) throw new Error(`the supervisor (pid ${pid}) was gone before its image was read: ${read || '(nothing)'}`);
-    return read.slice('PATH '.length);
 }
+
+/** The image the read answered, or the failure that says the process was gone: never an image somewhere else. */
+function imageFromRead(read: string, pid: number): string {
+    const answer = read.trim();
+    if (!answer.startsWith('PATH ')) throw new Error(`the supervisor (pid ${pid}) was gone before its image was read: ${answer || '(nothing)'}`);
+    return answer.slice('PATH '.length);
+}
+
+/*
+ * THE READ ITSELF, ON EVERY PLATFORM (2026-11-01). The first version of `imageReadScript` joined its lines with `; ` —
+ * `if (…) { 'GONE' }; elseif (…)` — and in PowerShell a `;` ENDS the `if`, so `elseif` is a parse error: the read failed
+ * on every call, alive or gone, and both Windows tests went red with the fix in (batch B2's Windows run). Its shape is
+ * held here, where it runs everywhere, not only where PowerShell does.
+ */
+describe('reading a supervisor’s image (the Windows tests’ helper)', () => {
+    it('is ONE PowerShell statement chain: nothing ends the if before its elseif or else', () => {
+        const script = imageReadScript(4242);
+        expect(script).toContain('Get-Process -Id 4242 -ErrorAction SilentlyContinue');
+        expect(script, script).not.toMatch(/;\s*(elseif|else)\b/);
+        // Every block closed, and one if.
+        expect(script.split('{').length).toBe(script.split('}').length);
+        expect(script.match(/\bif\b/g)).toHaveLength(1);
+    });
+
+    it('a read that found the process gives its image; one that did not says it was gone, never an image elsewhere', () => {
+        expect(imageFromRead('PATH C:\\Genie\\runtime\\prism-supervisor\\prism-acp-supervisor.exe\r\n', 1)).toBe('C:\\Genie\\runtime\\prism-supervisor\\prism-acp-supervisor.exe');
+        expect(() => imageFromRead('GONE\r\n', 1108)).toThrow('the supervisor (pid 1108) was gone before its image was read: GONE');
+        expect(() => imageFromRead('NO-PATH', 1108)).toThrow('was gone before its image was read: NO-PATH');
+        expect(() => imageFromRead('', 1108)).toThrow('was gone before its image was read: (nothing)');
+    });
+});
 
 /** The .NET Framework compiler prism-acp builds with. */
 function csc(): string {
