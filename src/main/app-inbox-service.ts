@@ -187,7 +187,7 @@ export class AppInboxService {
         if (msg.dedupeKey !== undefined) this.#dedupe.set(`${from}|${msg.dedupeKey}`, { messageId: message.id, to, at: now });
         await this.#deps.keys.used(source).catch(() => undefined);
         this.#deps.log?.(`[app-inbox] ${label} → ${to}: ${message.id}`);
-        return { status: 201, body: { ok: true, messageId: message.id, to, delivery: appDelivery(record.mode, null, now) === 'next-turn' ? 'next-turn' : 'push' } };
+        return { status: 201, body: { ok: true, messageId: message.id, to, delivery: appDelivery(record.mode, true) } };
     }
 }
 

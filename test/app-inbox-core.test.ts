@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
     APP_LIMITS,
     AppRateLimiter,
+    AppTurnBudget,
     appDelivery,
     appMailNote,
     appSenderId,
@@ -141,12 +142,36 @@ describe('the rate limit', () => {
     });
 });
 
-describe('delivery follows the agent’s mode (the owner’s D1)', () => {
-    it('automated: pushed and woken, at most one app wake per window; manual: next turn', () => {
-        expect(appDelivery('automated', null, 0)).toBe('push');
-        expect(appDelivery('automated', 0, APP_LIMITS.wakeEveryMs - 1)).toBe('push-no-wake');
-        expect(appDelivery('automated', 0, APP_LIMITS.wakeEveryMs)).toBe('push');
-        expect(appDelivery('manual', null, 0)).toBe('next-turn');
+describe('delivery (genie#1379, replacing D1 as built): every agent is told without the person; only WHETHER a stopped one is started differs', () => {
+    it('automated: told, and started if stopped while the app wake cap allows; manual: told, never started by an app', () => {
+        expect(appDelivery('automated', true)).toBe('push');
+        expect(appDelivery('automated', false)).toBe('push-no-wake');
+        expect(appDelivery('manual', true)).toBe('push-no-wake');
+        expect(appDelivery('manual', false)).toBe('push-no-wake');
+    });
+});
+
+describe('the app wake cap (AppTurnBudget): app-caused turns per agent per window', () => {
+    it('allows `wakeTurns` in a window, then answers how long until the oldest ages out', () => {
+        let now = 0;
+        const budget = new AppTurnBudget(() => now);
+        for (let i = 0; i < APP_LIMITS.wakeTurns; i++) {
+            expect(budget.waitMs('a')).toBe(0);
+            budget.spend('a');
+            now += 1_000;
+        }
+        expect(budget.waitMs('a')).toBe(APP_LIMITS.wakeWindowMs - APP_LIMITS.wakeTurns * 1_000);
+        // Another agent's allowance is its own.
+        expect(budget.waitMs('b')).toBe(0);
+        // The oldest ages out: one more is allowed.
+        now = APP_LIMITS.wakeWindowMs;
+        expect(budget.waitMs('a')).toBe(0);
+    });
+
+    it('bounds the spend: at most `wakeTurns` an hour, a handful, never one per message', () => {
+        expect(APP_LIMITS.wakeTurns).toBeGreaterThan(0);
+        expect(APP_LIMITS.wakeTurns).toBeLessThanOrEqual(12);
+        expect(APP_LIMITS.wakeWindowMs).toBe(60 * 60_000);
     });
 });
 

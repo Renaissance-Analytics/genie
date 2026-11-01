@@ -8,7 +8,7 @@
  *   2. a kept BACKGROUND PROCESS posts to a named agent (the manual scribe) the same way, marked `proc:…@fancy`;
  *   3. a SCRIPT outside Genie, holding a key the person made, posts as `script:nightly@fancy`;
  *   4. the agent's own `agentinbox receive` returns each one marked as an app's and fenced as data;
- *   5. delivery follows the mode: the automated clerk is WOKEN, the manual scribe is NOT (and is told on its next turn);
+ *   5. a STOPPED agent: the automated clerk is WOKEN, the manual scribe is NOT (its mail waits; told once it runs) — genie#1379;
  *   6. another workspace's agent cannot be reached — the process tries, and is told 404; nothing lands there;
  *   7. the token is in the site process's own environment and NOT in the workspace's service env (positive control
  *      beside the absence, read from /proc on Linux).
@@ -23,7 +23,6 @@ import { promisify } from 'node:util';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { appDelivery, isAppSender } from '../../src/core/app-inbox.js';
 import { agentRecord, mintAgentId, type AgentId } from '../../src/core/identity.js';
 import { AppInboxKeys } from '../../src/main/app-inbox-keys.js';
 import { AppInboxService, appInboxEnvFor, startAppInboxServer } from '../../src/main/app-inbox-service.js';
@@ -31,7 +30,7 @@ import { AttentionStore } from '../../src/main/attention-store.js';
 import { composeServices } from '../../src/main/compose.js';
 import { realFancyTermPort } from '../../src/main/fancy-term-port.js';
 import { handleFeatureAction, type FeatureState } from '../../src/main/feature-ipc.js';
-import { wireInboxPush, type InboxPushPorts } from '../../src/main/inbox-push.js';
+import { appMailPushPorts, wireInboxPush, type InboxPushPorts } from '../../src/main/inbox-push.js';
 import { genieTools, type GenieToolsDeps } from '../../src/main/mcp-tools.js';
 import { ProcessBook } from '../../src/main/process-book.js';
 
@@ -138,13 +137,12 @@ setInterval(() => {}, 1 << 30);
         prompt: (id, text) => { prompts.push([id, text]); idle.delete(id); return true; },
     };
     const start = (id: string) => { running.set(id, (running.get(id) ?? 0) + 1); idle.add(id); for (const l of listeners) l(id as AgentId); };
-    const appWakes = new Map<string, number>();
     wireInboxPush({
         inbox: composed.inbox, host: hostPort,
         reminders: (input) => composed.inboxReminders(input), settled: (id, ok) => composed.inboxNoticeSettled(id, ok),
         wake: (id) => { woken.push(id); start(id); return true; },
-        appMail: (to, message) => (isAppSender(message.from) ? appDelivery(roster.find((r) => r.id === to)?.mode ?? 'manual', appWakes.get(to) ?? null, Date.now()) : null),
-        appWoke: (id) => { appWakes.set(id, Date.now()); },
+        // Main's own app policy (genie#1379), the same function main calls.
+        ...appMailPushPorts({ modeOf: (id) => roster.find((r) => r.id === id)?.mode, now: () => Date.now(), schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }),
     });
 
     const book = await ProcessBook.open(userData, { supervisor: composed.supervisor, envFor: (ws) => composed.engines.envFor(ws), asleep: () => false, appEnv: (p) => composed.appEnv(p) });
@@ -182,7 +180,7 @@ setInterval(() => {}, 1 << 30);
         check(woken.includes(clerk.id), '5. the automated clerk was WOKEN by the app', `woken: ${woken.map((id) => roster.find((r) => r.id === id)?.name).join(', ')}`);
         check(!woken.includes(scribe.id), '5b. the manual scribe was NOT woken');
         check(prompts.some(([id, t]) => id === clerk.id && /from an app|from apps/.test(t)), '5c. the clerk’s notice counts the app messages and says they are data', prompts.find(([id]) => id === clerk.id)?.[1] ?? 'none');
-        check(!prompts.some(([id]) => id === scribe.id), '5d. the scribe got no turn of its own');
+        check(!prompts.some(([id]) => id === scribe.id), '5d. the stopped scribe got no turn (its mail waits)');
         start(scribe.id); // its next session event (the person starts it / its next turn)
         check(prompts.some(([id]) => id === scribe.id), '5e. …and is told when it next runs', prompts.find(([id]) => id === scribe.id)?.[1] ?? 'none');
 
