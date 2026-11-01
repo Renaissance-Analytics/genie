@@ -32,7 +32,8 @@ import { LAYOUT_MODES, dragSplit, gridTemplate, layoutModeFrom, serializeSplits,
 import type { TerminalPaneProps } from './TerminalPane.js';
 import { workspaceFileOf } from '../../core/terminal-links.js';
 import { FilesPanelContainer } from './FilesPanelContainer.js';
-import { reattachAll } from '../reattach.js';
+import { reattachWithState, type ReattachState } from '../reattach.js';
+import { ReattachBanner } from './ReattachBanner.js';
 import { PluginPane, type PluginPanelView } from './PluginPane.js';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import type { WorkspaceView } from '../../core/route.js';
@@ -278,17 +279,21 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
 
     // Re-attach to terminals already open in this workspace — a reloaded window joins a running
     // build rather than losing it (§6.5). Their scrollback comes with the open.
+    // Under genie-host they survive a window restart too (the host split, P2.1), and the workspace says where it is:
+    // re-attaching…, how many came back, or why none could, with Retry (the owner: every action shows its progress).
+    const [reattach, setReattach] = useState<ReattachState>({ phase: 'idle' });
+    const [reattachRun, setReattachRun] = useState(0);
     useEffect(() => {
         let live = true;
         // JOIN, never open: the old loop spawned one new shell per listed terminal on every reload (§6.5).
-        void reattachAll(terminals, workspace.id).then((joined) => {
+        void reattachWithState(terminals, workspace.id, (next) => { if (live) setReattach(next); }).then((joined) => {
             if (!live) return;
             for (const t of joined) {
                 setState((s) => terminalOpened(s, { id: t.id, pid: t.pid, shell: t.shell, workspaceId: workspace.id, exited: null }, t.scrollback));
             }
         });
         return () => { live = false; };
-    }, [terminals, workspace.id]);
+    }, [terminals, workspace.id, reattachRun]);
 
     const openTerminal = useCallback((): Promise<string> => {
         const previous = seededPrevious.current ? Promise.resolve<string | null>(null) : terminals.previousSession(workspace.id);
@@ -500,6 +505,9 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                     <button type="button" data-action="cancel-close-terminal" onClick={() => setState((s) => closeCancelled(s))} className="rounded-lg border border-[var(--border-1)] px-3 py-1 text-xs">Cancel</button>
                 </div>
             ) : null}
+
+            {/* The terminals coming back after a window restart: re-attaching…, how many, or why not with Retry. */}
+            <ReattachBanner state={reattach} onRetry={() => setReattachRun((n) => n + 1)} />
 
             {/* The pane. One xterm, for the active terminal; an invitation when there is none. */}
             <div className="min-h-0 flex-1 bg-[var(--bg-0)]">

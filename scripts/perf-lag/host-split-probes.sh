@@ -41,8 +41,21 @@ probe "host-has-no-electron" src/main/session-engine-server.ts \
 import { randomUUID, timingSafeEqual } from 'node:crypto';" \
     test/genie-host-no-electron.test.ts "imports electron nowhere"
 
+# P2.1: processes and terminals under genie-host
+probe "relay-waits-for-gone" src/main/spawn-relay.ts \
+    "        while (pending.size > 0 && Date.now() < deadline) {" "        while (false) {" \
+    test/spawn-relay.test.ts "reported exited (-1) once GONE"
+
+probe "supervisor-claims-not-spawns" src/main/process-supervisor.ts \
+    "        if (adopted) this.#claim(entry, adopted);" "        if (false) this.#claim(entry, adopted);" \
+    test/process-supervisor-adopt.test.ts "CLAIMS its pty"
+
+probe "link-reconcile-reports-vanished" src/main/spawn-host-client.ts \
+    "            if (live.has(id)) continue;" "            continue;" \
+    test/spawn-host-link.test.ts "a pty it knew that is gone is reported exited"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
