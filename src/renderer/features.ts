@@ -33,6 +33,7 @@ export type { FrontDoorStatus };
 import type { HostedProcess } from '../main/process-book.js';
 import type { RestartPolicy } from '../main/process-supervisor.js';
 import type { InboxMessage } from '../main/inbox-store.js';
+import type { AskedRecord } from '../main/attention-store.js';
 import type { ThreadSummary } from '../core/inbox-threads.js';
 
 /**
@@ -49,6 +50,10 @@ export interface InboxSection {
     readonly uncollected?: number | undefined;
     readonly thread?: InboxThreadView | null | undefined;
     readonly servedAttachment?: { id: string; name: string; base64: string } | null | undefined;
+    /** A thread search's answer: the newest hits (at most INBOX_SEARCH_MAX) and how many there are. */
+    readonly search?: InboxSearchResult | null | undefined;
+    /** A decided question's record, or `record: null` when none is kept. */
+    readonly question?: { id: string; record: AskedRecord | null } | null | undefined;
 }
 
 /** One thread's history as the `inbox.thread` action answers it: the newest `limit`, and whether older ones exist. */
@@ -59,6 +64,17 @@ export interface InboxThreadView {
     readonly limit: number;
     /** The message the thread was opened on (a chat's mail row), when it was. */
     readonly focus: string | null;
+    /** Newer mail exists after the window (it was asked `fromSeq`/`beforeSeq`, or the buffer's newest end was trimmed). */
+    readonly newer?: boolean | undefined;
+}
+
+/** A thread search, answered host-side over the thread's stored mail: newest hits first. */
+export interface InboxSearchResult {
+    readonly key: string;
+    readonly query: string;
+    readonly hits: readonly InboxMessage[];
+    /** Every match, including those past the hits served. */
+    readonly total: number;
 }
 
 /**
@@ -478,7 +494,11 @@ export type FeatureAction =
     | { kind: 'inbox.send'; to: string; text: string; attachments?: readonly string[] }
     | { kind: 'inbox.markRead'; messageId: string }
     /** A thread's history, by its key or by a message in it; answered in `inbox.thread`, never pushed. */
-    | { kind: 'inbox.thread'; key?: string; messageId?: string; limit: number }
+    | { kind: 'inbox.thread'; key?: string; messageId?: string; limit: number; beforeSeq?: number; fromSeq?: number }
+    /** Search one thread's STORED mail host-side (text, sender, question ids); answered in `inbox.search`, never pushed. */
+    | { kind: 'inbox.search'; key: string; query: string }
+    /** The questions a decided ForceTheQuestion asked, by its id; answered in `inbox.question`, never pushed. */
+    | { kind: 'inbox.question'; questionId: string }
     | { kind: 'inbox.markAllRead' }
     /** An attachment's bytes for the person, answered once in `inbox.servedAttachment`. */
     | { kind: 'inbox.attachment'; attachmentId: string }

@@ -3,6 +3,7 @@ import * as lucide from '@particle-academy/react-fancy/icons';
 import { FEATURE_ICONS } from '../core/rail-view.js';
 import { NAV_GROUPS } from '../core/settings-nav.js';
 import { KIND_COPY } from './components/AddWorkspaceWizard.js';
+import { ORDER_ICON } from '../core/inbox-view.js';
 
 /**
  * ICON REGISTRATION — and the reason it has its own file and its own test.
@@ -135,6 +136,11 @@ export const ICON_NAMES: readonly string[] = [
     'circle',
     // ...and what the folder is (Genie 1's KIND_COPY) — named in data (`name={kind.icon}`), so registered from it.
     ...Object.values(KIND_COPY).map((k) => k.icon),
+    // The AgentInbox thread (owner 2026-11-01): its order toggle (named in data, `ORDER_ICON`), Load older / Newest, and
+    // an FTQ answer's expand — an option chosen or not (circle / square), a note, a dismissal, a record no longer kept.
+    ...Object.values(ORDER_ICON),
+    'chevrons-down', 'chevrons-up', 'arrow-up-to-line', 'arrow-down-to-line',
+    'circle', 'sticky-note', 'circle-slash', 'archive-x', 'search-x',
 ];
 
 /** Lucide exports components in PascalCase; `registerIcons` kebab-cases the keys itself. */

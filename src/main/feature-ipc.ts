@@ -21,7 +21,7 @@ import { flowToolDefinitions } from './flow-tools.js';
 import { flowFormDefaults, knowledgeFormDefaults, serviceFormDefaults, validateFlowForm, validateKnowledgeForm, type Problem } from '../core/forms.js';
 import type { FlowAdding, FlowSaved, HostedSite, KnowledgeAdded, KnowledgeAdding, ServiceAdding, ServiceLogs, SiteAdding, SiteEditing } from '../renderer/features.js';
 import { HUMAN } from '../core/inbox.js';
-import { inboxThreads, pairOf, threadKeyOfMessage, threadOf, uncollected } from '../core/inbox-threads.js';
+import { inboxThreads, pairOf, searchThread, threadKeyOfMessage, threadWindow, uncollected } from '../core/inbox-threads.js';
 import { approvalNoteText } from '../core/approval-note.js';
 import type { ToolStatus } from '../core/toolchain.js';
 import type { RepairReport } from '../core/toolchain-repair.js';
@@ -44,7 +44,8 @@ import {
     type OpenInBrowser,
 } from './hosting-actions.js';
 import type { HostedProcess, ProcessBook } from './process-book.js';
-import type { FeatureAction, FeatureData, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { FeatureAction, FeatureData, InboxSearchResult, InboxThreadView, InstallPreview, ToolchainRefusal, ToolchainSection } from '../renderer/features.js';
+import type { AskedRecord } from './attention-store.js';
 
 /**
  * THE FEATURE SURFACES' MAIN-SIDE HALF.
@@ -263,10 +264,16 @@ export interface FeatureState {
     inboxThread?: InboxThreadView | null;
     /** Transient: an attachment's bytes an `inbox.attachment` action asked for, served once. */
     servedAttachment?: { id: string; name: string; base64: string } | null;
+    /** Transient: a thread search an `inbox.search` action asked for, served in its answer only. */
+    inboxSearch?: InboxSearchResult | null;
+    /** Transient: a decided question's record an `inbox.question` action asked for, served once. */
+    servedQuestion?: { id: string; record: AskedRecord | null } | null;
 }
 
 /** The most of one thread an `inbox.thread` action serves at once. */
 const INBOX_THREAD_MAX = 2_000;
+/** The most hits a thread search serves; its `total` still counts every match. */
+const INBOX_SEARCH_MAX = 200;
 
 /** The Toolchain section: the scan, plus each further fact only when there is one (never an empty placeholder). */
 export function toolchainSection(state: FeatureState): ToolchainSection | null {
@@ -539,6 +546,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
             threads: inboxThreads(mail, nameOf), uncollected: uncollected(mail),
             // Served in the answer to the action that asked, once — never in a pushed snapshot.
             thread: state.inboxThread ?? null, servedAttachment: state.servedAttachment ?? null,
+            search: state.inboxSearch ?? null, question: state.servedQuestion ?? null,
         },
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
@@ -1523,10 +1531,23 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             const key = action.key ?? (action.messageId ? threadKeyOfMessage(mail, action.messageId) : null);
             if (!key) throw new Error(action.messageId ? `no message ${action.messageId}` : 'which thread?');
             const limit = Math.min(Math.max(action.limit, 1), INBOX_THREAD_MAX);
-            const t = threadOf(mail, key, limit);
-            next.inboxThread = { key, messages: t.messages, more: t.more, limit, focus: action.messageId ?? null };
+            // A window by seq (the owner, 2026-11-01: sort and page): older BEFORE a seq, a live refresh FROM one.
+            const t = threadWindow(mail, key, { limit, beforeSeq: action.beforeSeq, fromSeq: action.fromSeq });
+            next.inboxThread = { key, messages: t.messages, more: t.more, newer: t.newer, limit, focus: action.messageId ?? null };
             break;
         }
+        // Search ONE thread over its stored mail (the owner, 2026-11-01): history the flyout has not loaded is found too.
+        case 'inbox.search': {
+            if (!pairOf(action.key)) throw new Error(`${action.key} is not a thread`);
+            const mail = services.inbox.all();
+            const r = searchThread(mail, action.key, action.query, participantNamer(services.agentAddresses(), mail), INBOX_SEARCH_MAX);
+            next.inboxSearch = { key: action.key, query: action.query, hits: r.hits, total: r.total };
+            break;
+        }
+        // The questions an FTQ answer answered (the owner, 2026-11-01), read from the attention store's records.
+        case 'inbox.question':
+            next.servedQuestion = { id: action.questionId, record: services.attention.asked(action.questionId) };
+            break;
         case 'inbox.markAllRead': {
             // The person's own receive, to the end: the only thing that marks mail read.
             const n = services.inbox.unread(HUMAN).length;

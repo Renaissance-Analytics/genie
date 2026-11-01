@@ -167,10 +167,37 @@ interface ListRecord {
     readonly item: ListItem;
 }
 
+/**
+ * A QUESTION THAT WAS DECIDED, kept so its answer in the AgentInbox can show what was asked (the owner, 2026-11-01: "for
+ * FTQ responses in the inbox, the id should be a link that expands to show the questions asked."). Answered or dismissed
+ * by the person — the two that mail the asker an id. Every question with all its options, what was chosen and the notes.
+ */
+export interface AskedRecord {
+    readonly id: string;
+    readonly agentId: AgentId;
+    readonly agentName: string;
+    readonly askedAt: string;
+    /** When the person decided. */
+    readonly at: string;
+    readonly outcome: 'answered' | 'dismissed';
+    readonly questions: readonly Question[];
+    /** One array of chosen labels per question; empty for a dismissal. */
+    readonly selections: readonly (readonly string[])[];
+    /** One note per question ('' where none). */
+    readonly notes: readonly string[];
+    /** The overall note; '' when none. */
+    readonly note: string;
+}
+
+/** How many decided questions are kept (oldest go first): a year of heavy use, a few hundred kB. */
+export const ASKED_KEPT = 2_000;
+
 interface AttentionFile {
     lists: ListRecord[];
     questions: PendingQuestion[];
     finished: Finished[];
+    /** Absent in a file written before records were kept. */
+    asked?: AskedRecord[];
 }
 
 export type ListAddResult =
@@ -312,6 +339,21 @@ export class AttentionStore {
         return { ok: true, questionId: pending.id, userActive: context.userActive, rejoined: false, dndReply };
     }
 
+    /** A decided question's record, by the id its mail names; `null` when none is kept (decided before records were). */
+    asked(questionId: string): AskedRecord | null {
+        return (this.#data.asked ?? []).find((r) => r.id === questionId) ?? null;
+    }
+
+    /** Keep a decided question (written by the caller's flush). */
+    #keep(q: PendingQuestion, outcome: AskedRecord['outcome'], selections: readonly (readonly string[])[], notes: readonly string[], note: string): void {
+        const record: AskedRecord = {
+            id: q.id, agentId: q.agentId, agentName: q.agentName, askedAt: q.askedAt, at: this.#now(), outcome,
+            questions: q.questions, selections, notes: q.questions.map((_, i) => notes[i] ?? ''), note,
+        };
+        const kept = [...(this.#data.asked ?? []).filter((r) => r.id !== q.id), record];
+        this.#data.asked = kept.length > ASKED_KEPT ? kept.slice(kept.length - ASKED_KEPT) : kept;
+    }
+
     pending(): readonly PendingQuestion[] {
         return this.#data.questions;
     }
@@ -325,6 +367,7 @@ export class AttentionStore {
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
         // How it left is known the moment it leaves the queue — before the write — so nothing can look in between.
+        this.#keep(q, 'answered', answer.selections, answer.notes ?? [], answer.note.trim());
         this.#left(questionId, { kind: 'answered', answer });
         await this.#flush();
 
@@ -357,6 +400,7 @@ export class AttentionStore {
         const q = this.#data.questions.find((x) => x.id === questionId);
         if (!q) throw new Error(`no pending question ${questionId}`);
         this.#data.questions = this.#data.questions.filter((x) => x.id !== questionId);
+        this.#keep(q, 'dismissed', [], notes, '');
         this.#left(questionId, { kind: 'dismissed', notes });
         await this.#flush();
         await this.#mailDismissed(q, notes);
@@ -370,6 +414,7 @@ export class AttentionStore {
         const gone = this.#data.questions.filter((q) => questionIds.includes(q.id));
         if (gone.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !gone.includes(q));
+        for (const q of gone) this.#keep(q, 'dismissed', [], [], '');
         for (const q of gone) this.#left(q.id, { kind: 'dismissed', notes: [] });
         await this.#flush();
         for (const q of gone) await this.#mailDismissed(q);
@@ -385,6 +430,7 @@ export class AttentionStore {
         const old = this.#data.questions.filter((q) => Date.parse(q.askedAt) < cutoff);
         if (old.length === 0) return 0;
         this.#data.questions = this.#data.questions.filter((q) => !old.includes(q));
+        for (const q of old) this.#keep(q, 'dismissed', [], [], '');
         for (const q of old) this.#left(q.id, { kind: 'dismissed', notes: [] });
         await this.#flush();
         for (const q of old) await this.#mailDismissed(q);

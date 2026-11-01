@@ -848,6 +848,8 @@ export function Shell({
                         inbox={features.inbox}
                         compose={inboxCompose}
                         loadThread={(req) => featureAsk({ kind: 'inbox.thread', ...req }).then((d) => d.inbox?.thread ?? null)}
+                        searchThread={(key, query) => featureAsk({ kind: 'inbox.search', key, query }).then((d) => d.inbox?.search ?? null)}
+                        loadQuestion={(questionId) => featureAsk({ kind: 'inbox.question', questionId }).then((d) => d.inbox?.question ?? null)}
                         send={(to, text, files) => featureAsk({ kind: 'inbox.send', to, text, ...(files.length > 0 ? { attachments: files } : {}) }).then(() => undefined)}
                         attachment={(attachmentId) => featureAsk({ kind: 'inbox.attachment', attachmentId }).then((d) => d.inbox?.servedAttachment ?? null)}
                         markAllRead={() => onFeature({ kind: 'inbox.markAllRead' })}
