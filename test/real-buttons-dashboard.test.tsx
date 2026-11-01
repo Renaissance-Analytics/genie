@@ -72,12 +72,15 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
 });
 
 describe('every enabled react-fancy Button shows the pointer', () => {
-    it('one base rule in the app stylesheet: Tailwind v4 gives buttons cursor: default and Button adds none', () => {
-        const css = readFileSync(fileURLToPath(new URL('../src/renderer/styles.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
-        expect(css).toMatch(/@layer base\s*\{\s*\[data-react-fancy-button\]:not\(:disabled\)\s*\{\s*cursor:\s*pointer;\s*\}\s*\}/);
-        // CONTROL: the selector is the attribute Button actually renders.
+    it('react-fancy (5.71.3+) puts cursor-pointer on the Button itself; disabled keeps not-allowed', () => {
         const html = renderToStaticMarkup(<Dashboard rows={[]} workspaces={[]} onOpenAgent={noop} onAddAgent={noop} onAddWorkspace={noop} />);
-        expect(html).toMatch(/<button\b[^>]*\sdata-react-fancy-button=""/);
+        const tags = buttonTags(html);
+        expect(tags.length).toBeGreaterThan(0);
+        for (const t of tags) expect(/\sclass="([^"]*)"/.exec(t)?.[1]?.split(' ')).toContain('cursor-pointer');
+        expect(tags[0]).toMatch(/disabled:cursor-not-allowed/);
+        // The temporary app-wide rule that stood in for this (2026-11-01) is gone, so nothing is said twice.
+        const css = readFileSync(fileURLToPath(new URL('../src/renderer/styles.css', import.meta.url)), 'utf8');
+        expect(css).not.toContain('[data-react-fancy-button]');
     });
 });
 

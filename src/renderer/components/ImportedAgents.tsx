@@ -31,7 +31,7 @@ function unregisteredAgentList({ agents, busy, verb, onAct }: { agents: readonly
                         {a.refusal ? <span data-adopt-refusal="" className="text-xs text-[var(--danger)]">{a.refusal}</span> : null}
                     </div>
                     {a.refusal === null ? (
-                        <Button type="button" size="xs" data-action={verb.action} data-agent={a.name} loading={busy === a.name} aria-busy={busy === a.name} disabled={busy !== null} onClick={() => onAct(a.name)}>{busy === a.name ? verb.busyLabel : verb.label}</Button>
+                        <Button type="button" size="xs" data-action={verb.action} data-agent={a.name} loading={busy === a.name} disabled={busy !== null} onClick={() => onAct(a.name)}>{busy === a.name ? verb.busyLabel : verb.label}</Button>
                     ) : null}
                 </li>
             ))}

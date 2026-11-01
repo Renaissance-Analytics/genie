@@ -72,10 +72,9 @@ describe('the pill', () => {
         expect(c.textContent).toBe('40%5h');
         expect(pill('codex').textContent).toBe('12%7d');
         expect(pill('codex').getAttribute('data-level')).toBe('warning');
-        // A react-fancy Button: the app stylesheet's one base rule gives every enabled one the pointer
-        // (test/real-buttons-dashboard.test.tsx), so the pill no longer carries its own cursor class.
+        // A react-fancy Button, which carries the pointer itself (react-fancy 5.71.3+).
         expect(c.hasAttribute('data-react-fancy-button')).toBe(true);
-        expect(c.disabled).toBe(false);
+        expect(c.className).toMatch(/(^|\s)cursor-pointer(\s|$)/);
         expect(c.className).toMatch(/hover:bg-\[var\(--bg-2\)\]/);
     });
 
