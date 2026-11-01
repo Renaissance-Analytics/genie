@@ -37,14 +37,15 @@ describe('the pulse', () => {
 
 describe('the process and site indicators', () => {
     it('both always shown with their tone and Genie 1’s title — greyed (none) when there is nothing', () => {
-        const html = rowHtml(sidebar([row({})]), 'tynn');
+        // Beside the workspace row, not inside its button (test/real-buttons-batch3.test.tsx): the one-row rail.
+        const html = sidebar([row({})]);
         expect(html).toMatch(/data-ws-processes="tynn"[^>]*data-tone="none"/);
         expect(html).toMatch(/data-ws-sites="tynn"[^>]*data-tone="none"/);
         expect(html).toContain('No hosted sites yet — click to open the Site Manager');
     });
 
     it('a running process and a failed site say so', () => {
-        const html = rowHtml(sidebar([row({ processes: 'running', processesTitle: 'Background processes (1) — click to open', sites: 'failed', sitesTitle: '1 hosted site · 1 failed — click to open the Site Manager' })]), 'tynn');
+        const html = sidebar([row({ processes: 'running', processesTitle: 'Background processes (1) — click to open', sites: 'failed', sitesTitle: '1 hosted site · 1 failed — click to open the Site Manager' })]);
         expect(html).toMatch(/data-ws-processes="tynn"[^>]*data-tone="running"/);
         expect(html).toMatch(/data-ws-sites="tynn"[^>]*data-tone="failed"/);
     });
