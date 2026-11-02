@@ -1,0 +1,182 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { existsSync, readdirSync, readFileSync, readlinkSync, writeFileSync } from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { connect, createServer, type Server } from 'node:net';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { parseHostRecord } from '../src/core/engine-protocol.js';
+import type { ClientTransport } from '../src/core/remote-protocol.js';
+import { connectSocket } from '../src/main/engine-launch.js';
+import { SessionEngineClient } from '../src/main/session-engine-client.js';
+
+/**
+ * A TERMINAL'S PROCESSES HOLD NONE OF THE WINDOW'S SOCKETS, AND DIE WITH THEIR OWNER (batch L4, 2026-11-02).
+ *
+ * After vm-smoke ended Genie, port 9222 still accepted and nobody answered. `ss` named the holders: a fancy-pty-helper and
+ * its `bash -l`, re-parented to init, BOTH holding Chromium's DevTools listening socket as fd 65. Two bugs:
+ *   A. the window's socket crossed into a terminal's helper and shell;
+ *   B. that helper and shell outlived the Genie that owned them.
+ *
+ * Measured here on the PRODUCT'S chain and runtime, with real processes: a window-like parent on ELECTRON'S binary as Node,
+ * holding a listening socket on fd 3 without O_CLOEXEC (Chromium's situation), starts the REAL genie-host the product's way
+ * (`spawnHostProcess`); a window client opens a REAL terminal in it (the host's `terminals` spawn host → fancy-term-host →
+ * fancy-pty's helper → the shell). Every process holding the socket is found by its inode in /proc/<pid>/fd — all of them,
+ * not only the expected ones.
+ *
+ *   POSITIVE CONTROLS: the window holds the socket; the terminal's shell is alive and its parent is the fancy-pty helper.
+ *   A: no process but the window holds it.
+ *   B: once the host is gone — SIGKILLed (a crashed Genie), or shut down (`engine.shutdown`, a quit) — the helper and the
+ *      shell are gone too: the spawn host ends every pty it made when its host goes (src/main/spawn-host.ts).
+ *
+ * Linux: POSIX fd inheritance and /proc. Runs in CI and the test VMs (spawns processes), never on the owner's desktop.
+ */
+
+const electron = createRequire(import.meta.url)('electron') as unknown as string;
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
+function cmdline(pid: number): string { try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim(); } catch { return ''; } }
+function ppid(pid: number): number { try { return Number(readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[1]); } catch { return 0; } }
+function children(pid: number): number[] {
+    return readdirSync('/proc').filter((n) => /^\d+$/.test(n)).map(Number).filter((p) => ppid(p) === pid);
+}
+/** Every process holding the socket `inode` (`socket:[N]`), with its command line. */
+function holders(inode: string): Array<{ pid: number; ppid: number; cmd: string }> {
+    const out: Array<{ pid: number; ppid: number; cmd: string }> = [];
+    for (const name of readdirSync('/proc')) {
+        if (!/^\d+$/.test(name)) continue;
+        const pid = Number(name);
+        let fds: string[] = [];
+        try { fds = readdirSync(`/proc/${pid}/fd`); } catch { continue; }
+        if (fds.some((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) === inode; } catch { return false; } })) out.push({ pid, ppid: ppid(pid), cmd: cmdline(pid).slice(0, 160) });
+    }
+    return out;
+}
+function probe(port: number): Promise<'accepts' | 'refused' | 'timeout'> {
+    return new Promise((done) => {
+        const s = connect({ port, host: '127.0.0.1' });
+        const t = setTimeout(() => { s.destroy(); done('timeout'); }, 3_000);
+        s.once('connect', () => { clearTimeout(t); s.destroy(); done('accepts'); });
+        s.once('error', (e: NodeJS.ErrnoException) => { clearTimeout(t); done(e.code === 'ECONNREFUSED' ? 'refused' : 'timeout'); });
+    });
+}
+async function until<T>(what: string, fn: () => T | null | undefined | false, ms: number): Promise<T> {
+    const end = Date.now() + ms;
+    for (;;) {
+        const v = fn();
+        if (v) return v as T;
+        if (Date.now() > end) throw new Error(`timed out: ${what}`);
+        await sleep(200);
+    }
+}
+
+interface Rig {
+    home: string;
+    port: number;
+    inode: string;
+    window: ChildProcess;
+    hostPid: number;
+    client: SessionEngineClient;
+    transport: ClientTransport;
+    shellPid: number;
+    helperPid: number;
+    spawnHosts: number[];
+}
+const rigs: Rig[] = [];
+afterAll(async () => {
+    for (const r of rigs) {
+        try { writeFileSync(join(r.home, 'go'), ''); } catch { /* gone */ }
+        for (const pid of [r.shellPid, r.helperPid, ...r.spawnHosts, r.hostPid]) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+        await rm(r.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
+/** A window on Electron's runtime holding a listening socket starts the real host; a client opens a real terminal in it. */
+async function rig(): Promise<Rig> {
+    const home = await mkdtemp(join(tmpdir(), 'host-pty-fds-'));
+    const server: Server = createServer();
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    const fd = (server as unknown as { _handle: { fd: number } })._handle.fd;
+    const inode = readlinkSync(`/proc/self/fd/${fd}`);
+    let log = '';
+    const window = spawn(electron, ['--import', 'tsx', resolve('test/fixtures/pty-window.ts'), home], {
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts'), GENIE_HOST_IDLE_MS: '600000' },
+        stdio: ['ignore', 'pipe', 'pipe', fd],
+    });
+    window.stderr!.on('data', (c: Buffer) => { log += c.toString(); });
+    // From here only the window (and whatever took it from the window) holds the socket.
+    await new Promise<void>((r) => server.close(() => r()));
+    const said = await new Promise<{ hostPid: number; hostRecord: string | null }>((ok, fail) => {
+        let out = '';
+        window.stdout!.on('data', (c: Buffer) => { out += c.toString(); const line = out.split('\n').find((l) => l.startsWith('{')); if (line) ok(JSON.parse(line)); });
+        window.once('exit', (code) => fail(new Error(`the window exited (${code}) before the host was up\n${log}\n--- host log ---\n${readHostLog(home)}`)));
+    });
+    const record = parseHostRecord(said.hostRecord);
+    if (!record) throw new Error(`no host record\n${readHostLog(home)}`);
+    const token = readFileSync(join(home, 'runtime', 'host.token'), 'utf8').trim();
+    const transport = await connectSocket(record.endpoint);
+    const client = new SessionEngineClient();
+    expect(await client.connect(transport, token)).toMatchObject({ ok: true });
+    const opened = await client.terminals().openReady({ workspaceId: 'ws', cwd: home });
+    // The reported pid is the shell's or the helper's: whichever it is, the other is found by parentage.
+    const reported = opened.pid;
+    const isHelper = /fancy-pty-helper/.test(cmdline(reported));
+    const helperPid = isHelper ? reported : ppid(reported);
+    const shellPid = isHelper ? await until('the shell under the helper', () => children(helperPid)[0] ?? null, 15_000) : reported;
+    const spawnHosts = children(record.pid).filter((p) => /spawn-host/.test(cmdline(p)));
+    const r: Rig = { home, port, inode, window, hostPid: record.pid, client, transport, shellPid, helperPid, spawnHosts };
+    rigs.push(r);
+    return r;
+}
+function readHostLog(home: string): string {
+    const f = join(home, 'logs', 'genie-host.log');
+    return existsSync(f) ? readFileSync(f, 'utf8').slice(-3000) : '(no host log)';
+}
+
+describe.skipIf(process.platform !== 'linux')('a terminal in genie-host, started from a window on Electron', () => {
+    let r: Rig;
+
+    it('A: no process the window started holds its listening socket — not the host, a spawn host, the pty helper or the shell', async () => {
+        r = await rig();
+        // POSITIVE CONTROLS: the window holds the socket (and it accepts); a real shell runs under a real fancy-pty helper.
+        expect(holders(r.inode).map((h) => h.pid)).toContain(r.window.pid);
+        expect(await probe(r.port)).toBe('accepts');
+        expect(alive(r.shellPid)).toBe(true);
+        expect(cmdline(r.helperPid)).toMatch(/fancy-pty-helper/);
+        const others = holders(r.inode).filter((h) => h.pid !== r.window.pid);
+        console.log(`[host-pty-fds] A: window ${r.window.pid}, host ${r.hostPid}, spawn hosts ${JSON.stringify(r.spawnHosts)}, helper ${r.helperPid}, shell ${r.shellPid}; other holders ${JSON.stringify(others)}`);
+        expect(others).toEqual([]);
+    }, 240_000);
+
+    it('B: the host SIGKILLed (a crashed Genie): the helper and the shell it owned are gone too, and nothing holds the port', async () => {
+        expect(r).toBeDefined();
+        r.transport.close();
+        writeFileSync(join(r.home, 'go'), '');
+        await new Promise<void>((done) => { if (r.window.exitCode !== null) done(); else r.window.once('exit', () => done()); });
+        // Control: the host and its terminal are alive with the window gone (that is the host split's point).
+        expect(alive(r.hostPid)).toBe(true);
+        expect(alive(r.helperPid) && alive(r.shellPid)).toBe(true);
+        process.kill(r.hostPid, 'SIGKILL');
+        const gone = await until('the terminal to go with its host', () => (!alive(r.helperPid) && !alive(r.shellPid) ? true : null), 10_000).catch(() => false);
+        const left = { helper: alive(r.helperPid) ? { pid: r.helperPid, ppid: ppid(r.helperPid) } : null, shell: alive(r.shellPid) ? { pid: r.shellPid, ppid: ppid(r.shellPid) } : null, spawnHosts: r.spawnHosts.filter(alive), port: await probe(r.port) };
+        console.log(`[host-pty-fds] B (SIGKILL): ${JSON.stringify(left)}`);
+        expect(gone).toBe(true);
+        expect(left.port).toBe('refused');
+    }, 60_000);
+
+    it('B: the host SHUT DOWN (engine.shutdown, a quit): the helper and the shell are gone too', async () => {
+        const g = await rig();
+        expect(alive(g.helperPid) && alive(g.shellPid)).toBe(true);
+        await g.client.shutdown();
+        g.transport.close();
+        writeFileSync(join(g.home, 'go'), '');
+        const hostGone = await until('the host to exit', () => (!alive(g.hostPid) ? true : null), 30_000).catch(() => false);
+        const gone = await until('the terminal to go with its host', () => (!alive(g.helperPid) && !alive(g.shellPid) ? true : null), 10_000).catch(() => false);
+        console.log(`[host-pty-fds] B (shutdown): host gone ${hostGone}; helper ${alive(g.helperPid) ? `alive (ppid ${ppid(g.helperPid)})` : 'gone'}, shell ${alive(g.shellPid) ? `alive (ppid ${ppid(g.shellPid)})` : 'gone'}`);
+        expect(hostGone).toBe(true);
+        expect(gone).toBe(true);
+    }, 240_000);
+});
