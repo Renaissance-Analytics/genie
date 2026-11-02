@@ -55,7 +55,7 @@ import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.j
 import { mailAction } from '../core/agent-actions.js';
 import { ThingSounds, flowRunSound } from '../core/thing-sounds.js';
 import { agentShells } from '../core/agent-shells.js';
-import { quitPlan, quitSequence } from '../core/quit.js';
+import { quitAnswer, quitPlan, quitSequence, runQuit, type QuitAnswer, type QuitPorts } from '../core/quit.js';
 import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type LaunchDecision } from '../core/quit-flag.js';
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
@@ -358,11 +358,13 @@ function refreshTray(): void {
     const signedOut = host?.signedOutProviders() ?? [];
     // Claude Design's login (#1081): per machine, so one line however many agents wait on it.
     const designLogin = (host?.designLoginAgents().length ?? 0) > 0;
-    const key = JSON.stringify({ held, update, signedOut, paused, designLogin, waiting: trayWaiting });
+    // GENIE-HOST RUNNING (P1b): the tray says so, with how many agents it runs — what a person with no window open sees.
+    const hostAgents = agentEngineLink?.live === true ? (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).length : null;
+    const key = JSON.stringify({ held, update, signedOut, paused, designLogin, waiting: trayWaiting, hostAgents });
     if (key === trayHeldKey) return;
     trayHeldKey = key;
     tray.setContextMenu(Menu.buildFromTemplate(trayMenuTemplate(trayHandlers, held, update, signedOut, paused, designLogin)));
-    tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin, trayWaiting));
+    tray.setToolTip(trayTooltip(held, signedOut, paused, designLogin, trayWaiting, hostAgents));
     // THE DECK NEEDS YOU (the owner, 2026-10-26): the mark with a dot while anything waits on the person.
     if (trayImages) tray.setImage(trayWaiting > 0 ? trayImages.attention : trayImages.plain);
 }
@@ -631,9 +633,11 @@ const quit = quitSequence();
 
 /**
  * THE QUIT a person asks for — the tray's Quit, and `Genie --quit` from outside (core/quit-flag.ts), one entry for both.
- * `app.quit()` runs before-quit, so the confirmation is asked only where it would be, and the shutdown runs once.
+ * `app.quit()` runs before-quit, so the confirmation is asked only where it would be, and the shutdown runs once. The
+ * tray's "Just close the UI" / "Shut down everything" (P1b) come with their answer: chosen here, nothing is asked.
  */
-function requestQuit(): void {
+function requestQuit(answer?: Exclude<QuitAnswer, 'cancel'>): void {
+    if (answer) quit.choose(answer);
     app.quit();
 }
 
@@ -3831,7 +3835,9 @@ async function boot(): Promise<void> {
         onOpen: () => { revealMainWindow('tray: Open'); },
         onSettings: () => { revealMainWindow('Settings'); showToPerson({ activation: 'user-gesture', route: 'genie://settings', reason: 'Settings' }); },
         onCheckUpdates: () => { void updates?.check(); },
-        onQuit: requestQuit,
+        onQuit: () => { requestQuit(); },
+        // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
+        ...(agentEngineLink ? { onCloseUi: () => { requestQuit('close-ui'); }, onShutDown: () => { requestQuit('shut-down'); } } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
@@ -3927,9 +3933,12 @@ app.on('before-quit', (event) => {
         ready: host !== null && registry !== null,
         plan: () => {
             const running = registry!.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name);
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true });
+            // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
+            // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
+            const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept } : null });
         },
-        ask: (plan) => dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 }) !== 0,
+        ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
     if (step === 'cancel') { event.preventDefault(); return; }
     autoCheckStop?.();
@@ -3946,25 +3955,13 @@ app.on('before-quit', (event) => {
     if (step === 'pass') return;
     // HELD until the sessions' last rows are written (bounded): Electron exits WITHOUT running what is still queued, so
     // a reply the stop closes, or a turn's last row still landing, was lost with its thread's lock file left behind
-    // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes from drainWritesThenQuit, as a 'pass'.
+    // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes when runQuit is done, as a 'pass'.
+    // "Just close the UI" (P1b) stops no agent, closes no terminal and never ends the host: core/quit.ts runQuit.
     event.preventDefault();
-    host?.stopAll();
-    // The stops' readings and reaps run off main (genie#1201); drainWritesThenQuit waits for them too, bounded.
-    // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
-    keepaliveNow?.stop();
-    // Every supervised process, the front door, an in-flight flow run, the knowledge database.
-    void services?.shutdown();
-    // Last: the spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
-    // itself. It would also go on its own when main exits (its IPC channel closes).
-    void spawnHostNow?.stop();
-    void remoteSocketNow?.stop();
-    void filesHost?.close();
-    filesWatch?.close();
-    // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
-    // OpenConsole.exe processes with no message, because nothing reaped them.
-    terminals?.closeAll();
-    clearGenieRunning(genieHome());
-    void drainWritesThenQuit();
+    let bound: ReturnType<typeof setTimeout> | undefined;
+    const done = runQuit(step, quitPorts).catch(() => { /* an unwritten row never blocks a quit */ });
+    void Promise.race([done, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
+        .finally(() => { clearTimeout(bound); app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
@@ -3972,17 +3969,31 @@ const QUIT_EXIT_WAIT_MS = 2_000;
 /** The whole wait's bound: a quit is never held past it, written or not. */
 const QUIT_WRITES_MS = 5_000;
 
-/** The shutdown pass's wait (SessionHost.drained), bounded, and then the quit again — which before-quit lets through. */
-function drainWritesThenQuit(): Promise<void> {
-    let bound: ReturnType<typeof setTimeout> | undefined;
-    // With the agent host (the host split, phase 1): its sessions' writes drained, then the host itself ended gracefully —
-    // a quit stops everything, as before (whether the host should outlive a quit is the owner's decision O1).
-    const drained = (host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve())
-        .then(() => agentEngineLink?.shutdown(QUIT_WRITES_MS))
-        .catch(() => { /* an unwritten row never blocks a quit */ });
-    return Promise.race([drained, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
-        .finally(() => { clearTimeout(bound); app.quit(); });
-}
+/** What each quit answer does here (core/quit.ts runQuit decides which, and in what order). */
+const quitPorts: QuitPorts = {
+    // The stops' readings and reaps run off main (genie#1201); the drain below waits for them too, bounded.
+    stopAgents: () => { host?.stopAll(); },
+    closeWindow: (how) => {
+        // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
+        keepaliveNow?.stop();
+        // The front door, an in-flight flow run, the knowledge database — and with `everything`, every supervised process.
+        void services?.shutdown(how);
+        // The spawn host ends whatever is still running in it (the supervisor's stops above went first, in order), then
+        // itself. Over the host's link it is the host's: nothing to end from here.
+        void spawnHostNow?.stop();
+        void remoteSocketNow?.stop();
+        void filesHost?.close();
+        filesWatch?.close();
+        clearGenieRunning(genieHome());
+    },
+    // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
+    // OpenConsole.exe processes with no message, because nothing reaped them.
+    closeTerminals: () => { terminals?.closeAll(); },
+    drained: () => host?.drained(QUIT_EXIT_WAIT_MS) ?? Promise.resolve(),
+    // With the agent host (the host split): its sessions' writes drained, then the host itself ended gracefully.
+    shutDownHost: () => agentEngineLink?.shutdown(QUIT_WRITES_MS) ?? Promise.resolve(),
+    leaveHostRunning: () => agentEngineLink?.leave() ?? Promise.resolve(),
+};
 
 // THE LINUX PASSWORD STORE (Tynn #846; Genie 1's genie#379/#588): Chromium picks its secret store from the desktop's
 // name and does not know Hyprland (Omarchy) — so safeStorage could encrypt nothing there. Chosen from what owns the

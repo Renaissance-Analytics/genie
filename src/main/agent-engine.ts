@@ -37,6 +37,13 @@ export interface AgentEngineLink {
     readonly how: EngineLink['how'] | 'unreachable';
     /** Stop gracefully and end the host (a quit, an upgrade): sessions stopped and verified, then the process gone. */
     shutdown(waitMs?: number): Promise<void>;
+    /**
+     * "Just close the UI" (P1b): the host is told it is left running and the link let go — no reconnect from here, and
+     * never `engine.shutdown`. Its agents, terminals and kept processes go on; the next window adopts the host.
+     */
+    leave(): Promise<void>;
+    /** `true` while this window holds the host: not after `shutdown` or `leave` (an upgrade has ended it; nothing is kept). */
+    readonly live: boolean;
 }
 
 const killPid = (pid: number): void => {
@@ -128,6 +135,14 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions): Promi
     return {
         client,
         how,
+        get live() { return !stopping; },
+        leave: async () => {
+            stopping = true;
+            clearInterval(sweep);
+            const kept = await client.leaveRunning().catch(() => false);
+            options.log(kept ? 'agent host left running: the UI closed' : 'agent host did not take "left running"; it keeps its own idle exit');
+            client.disconnect();
+        },
         shutdown: async (waitMs = 10_000) => {
             stopping = true;
             clearInterval(sweep);

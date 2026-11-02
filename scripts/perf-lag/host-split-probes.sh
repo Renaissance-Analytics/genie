@@ -147,8 +147,41 @@ probe "terminals-dump-before-ready" src/main/session-engine-server.ts \
     "        if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());" "" \
     test/terminals-host-contract.test.ts "OUTLIVES its window"
 
+# P1b: the quit keeps the host
+probe "close-ui-stops-nothing" src/core/quit.ts \
+    "        ports.closeWindow('window');" "        ports.stopAgents(); ports.closeWindow('window');" \
+    test/quit-sequence.test.ts "calls no stopAll and no engine.shutdown"
+
+probe "shut-down-ends-the-host" src/core/quit.ts \
+    "    await ports.shutDownHost();" "" \
+    test/quit-sequence.test.ts "calls stopAll and then engine.shutdown"
+
+probe "close-ui-records-nothing" src/core/quit.ts \
+    "            if (chosen === 'close-ui') {" "            if (chosen === 'close-ui' && recorded) {" \
+    test/quit-sequence.test.ts "nothing recorded"
+
+probe "quit-asks-two-answers" src/core/quit.ts \
+    "    if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses);" "" \
+    test/quit-plan.test.ts "the two answers, Cancel by default"
+
+probe "left-running-never-idles-out" src/core/host-idle.ts \
+    "    if (load.leftRunning) return 'wait';" "" \
+    test/host-idle-exit.test.ts "never exits on the clock"
+
+probe "host-hears-left-running" src/main/session-engine-server.ts \
+    "                this.#options.onLeftRunning();" "" \
+    test/engine-leave-running.test.ts "marks the host left running"
+
+probe "close-ui-keeps-supervised" src/main/compose.ts \
+    "if (how === 'everything') for (const p of supervisor.list()) supervisor.stop(p.id);" "for (const p of supervisor.list()) supervisor.stop(p.id);" \
+    test/compose-quit-stops-first.test.ts "stops no supervised process"
+
+probe "tray-offers-the-answers" src/main/tray.ts \
+    "        ...(handlers.onCloseUi && handlers.onShutDown" "        ...(false && handlers.onCloseUi && handlers.onShutDown" \
+    test/tray.test.ts "gives way to"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/host-idle-exit.test.ts test/engine-leave-running.test.ts test/compose-quit-stops-first.test.ts test/tray.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

@@ -19,6 +19,12 @@ export interface TrayHandlers {
     /** Asks the feed now (the owner, 2026-10-13: "where even is the check for updates button?"). The header chip shows what it finds. */
     readonly onCheckUpdates: () => void;
     readonly onQuit: () => void;
+    /**
+     * QUIT KEEPS THE HOST (P1b; the owner's decision 5): while genie-host runs the agents, the tray offers the quit's two
+     * answers instead of Quit — "Just close the UI" (the host keeps what runs) and "Shut down everything". Both or neither.
+     */
+    readonly onCloseUi?: () => void;
+    readonly onShutDown?: () => void;
     /** `Resume now` for a held provider login (Tynn #794): open it at once, its held agents go on. */
     readonly onResumeLimit?: (provider: string) => void;
     /** `⬆ Update to vX…` (Tynn #761): opens Genie, where the title bar's chip downloads and restarts it. */
@@ -103,13 +109,20 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
         { label: 'Settings…', click: handlers.onSettings },
         ...(handlers.onTaskManager ? [{ label: 'Task Manager…', click: handlers.onTaskManager }] : []),
         { label: 'Check for updates', click: handlers.onCheckUpdates },
-        { label: 'Quit Genie', click: handlers.onQuit },
+        ...(handlers.onCloseUi && handlers.onShutDown
+            ? [{ type: 'separator' as const }, { label: 'Just close the UI', click: handlers.onCloseUi }, { label: 'Shut down everything', click: handlers.onShutDown }]
+            : [{ label: 'Quit Genie', click: handlers.onQuit }]),
     ];
 }
 
-/** The tray's tooltip: how many Deck items wait on the person (first), what is held, or just Genie. */
-export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false, waiting = 0): string {
-    const parts = [...(waiting > 0 ? [`${waiting} waiting on you`] : []), ...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : [])];
+/**
+ * The tray's tooltip: how many Deck items wait on the person (first), what is held, or just Genie. With genie-host
+ * (`hostAgents` not null, P1b) it says the host is running and how many agents it runs — what a person with no window
+ * open can see.
+ */
+export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false, waiting = 0, hostAgents: number | null = null): string {
+    const host = hostAgents === null ? [] : [hostAgents > 0 ? `host running ${hostAgents} ${hostAgents === 1 ? 'agent' : 'agents'}` : 'host running'];
+    const parts = [...(waiting > 0 ? [`${waiting} waiting on you`] : []), ...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : []), ...host];
     return parts.length === 0 ? 'Genie' : `Genie — ${parts.join('; ')}`;
 }
 

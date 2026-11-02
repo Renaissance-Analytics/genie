@@ -764,6 +764,12 @@ export class SessionEngineClient {
         return reply.ok && reply.value === 'pong';
     }
 
+    /** "Just close the UI" (P1b): tell the host it is left running. `false` = refused (an older host): nothing is shut down for it. */
+    async leaveRunning(): Promise<boolean> {
+        const reply = await this.call('engine.leaveRunning', []);
+        return reply.ok && reply.value === true;
+    }
+
     /** Ask the host to stop gracefully and exit (a quit, or a host of another build being replaced). */
     async shutdown(): Promise<boolean> {
         const reply = await this.call('engine.shutdown', []);
