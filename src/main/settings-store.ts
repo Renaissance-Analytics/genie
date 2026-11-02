@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { SETTINGS, carryOverV1, migrateLegacyValue, type CarryOver, type SettingDef } from '../core/settings.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
+import { settingOf, snapshotForOf, snapshotOf, workspaceValuesOf, type SettingsData } from './settings-read.js';
 
 /**
  * THE SETTINGS STORE (§6.9) — values for the registry, durable and typed.
@@ -91,9 +92,12 @@ export class SettingsStore {
     }
 
     get(key: string): Value {
-        const def = BY_KEY.get(key);
-        if (!def) throw new Error(`${key} is not a setting Genie knows`);
-        return this.#values[key] ?? def.default;
+        return settingOf(this.data(), key);
+    }
+
+    /** The data as it is (the host split, P3.2): what genie-host sends every window's replica. Read-only. */
+    data(): SettingsData {
+        return { values: this.#values, workspaces: this.#workspaces, carriedOver: this.#carriedOver };
     }
 
     async set(key: string, value: unknown): Promise<void> {
@@ -134,12 +138,12 @@ export class SettingsStore {
 
     /** The overrides this workspace holds — what the surface marks as "overriding the workstation value". */
     workspaceValues(workspaceId: string): Record<string, Value> {
-        return { ...(this.#workspaces[workspaceId] ?? {}) };
+        return workspaceValuesOf(this.data(), workspaceId);
     }
 
     /** The effective view for one workspace: its override, else the workstation value, else the default. */
     snapshotFor(workspaceId: string): Record<string, Value> {
-        return { ...this.snapshot(), ...(this.#workspaces[workspaceId] ?? {}) };
+        return snapshotForOf(this.data(), workspaceId);
     }
 
     async reset(key: string): Promise<void> {
@@ -158,9 +162,7 @@ export class SettingsStore {
 
     /** Every registry setting with its effective value — the user's or the default. */
     snapshot(): Record<string, Value> {
-        const out: Record<string, Value> = {};
-        for (const def of SETTINGS) out[def.key] = this.#values[def.key] ?? def.default;
-        return out;
+        return snapshotOf(this.data());
     }
 
     carriedOver(): CarriedOver | null {

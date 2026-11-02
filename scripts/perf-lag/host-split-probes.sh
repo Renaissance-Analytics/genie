@@ -102,8 +102,25 @@ probe "dump-before-ready" src/main/session-engine-server.ts \
     "        if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());" "" \
     test/agent-stores-contract.test.ts "connects later starts from the whole mail"
 
+# P3.2: the settings are the host's; every window a replica, hot-swap kept
+probe "settings-data-before-listeners" src/main/agent-stores-replica.ts \
+    "        this.#data = event.data;" "" \
+    test/settings-drafts-contract.test.ts "ALREADY readable"
+
+probe "settings-change-reaches-windows" src/main/agent-stores-host.ts \
+    "        stores.settings?.onChange((key, value, workspaceId) => this.#emit({ store: 'settings', kind: 'changed', key, value, workspaceId: workspaceId ?? null, data: stores.settings!.data() }));" "" \
+    test/settings-drafts-contract.test.ts "a change made ELSEWHERE"
+
+probe "registry-write-reaches-windows" src/main/agent-stores-host.ts \
+    "                    this.#emit({ store: 'registry', kind: 'written' });" "" \
+    test/registry-host-contract.test.ts "two windows see one registry"
+
+probe "host-mail-wake-starts" src/main/host-mail-wake.ts \
+    "        wake," "" \
+    test/host-mail-wake.test.ts "a STOPPED agent is started for its mail"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

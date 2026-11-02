@@ -29,6 +29,7 @@ import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
 import { tynnProjectIdOf } from '../core/issue-watch.js';
 import { ReminderBook } from '../core/inbox-reminders.js';
+import { inboxNotices } from './inbox-notices.js';
 import type { NoticeMail } from '../core/stream-event.js';
 import { isAppSender } from '../core/app-inbox.js';
 import type { AppEnvSource } from './app-inbox-service.js';
@@ -275,6 +276,9 @@ export type FrontDoorStatus =
  * What compose built. `S` is the stores agents write to as this window holds them: genie-host's replicas (engine mode,
  * `WindowServices`) or the stores themselves (`OwnAgentStores`, the default: the emergency path, and every test that composes alone).
  */
+/** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
+type S_Settings = NonNullable<WindowAgentStores['settings']>;
+
 export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
@@ -292,7 +296,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly own: OwnAgentStores | null;
     readonly flows: FlowStore;
     readonly flowScheduler: FlowScheduler;
-    readonly settings: SettingsStore;
+    readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: ProcessSupervisor;
     readonly sites: SiteManager;
     /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
@@ -420,8 +424,6 @@ interface FrontDoorController {
 
 const FRONT_DOOR_ID = 'genie-front-door';
 const TRUST_STEP_ID = 'trust';
-/** How much of each message a notice's row keeps: enough to read it in the chat; the whole message stays in the inbox. */
-const NOTICE_MAIL_CHARS = 4_000;
 
 const NO_CADDY = 'this install has no bundled Caddy; https://<name>.gen in external browsers is off, the in-app browser still works';
 
@@ -716,8 +718,14 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const iso = () => new Date(now()).toISOString();
     await mkdir(runtimeDir(input.userData), { recursive: true });
 
-    const settings = await SettingsStore.open(input.userData, iso);
-    await settings.carryOverFromV1(input.v1Settings());
+    // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
+    // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
+    let ownSettings: SettingsStore | null = null;
+    if (!input.agentStores?.settings) {
+        ownSettings = await SettingsStore.open(input.userData, iso);
+        await ownSettings.carryOverFromV1(input.v1Settings());
+    }
+    const settings: S_Settings = input.agentStores?.settings ?? ownSettings!;
 
     // THE STORES AGENTS WRITE TO (the host split, P3.1): genie-host's, through this window's replicas — or, only when no
     // host could start, this window's own, opened here with Genie 1's history taken once.
@@ -1243,28 +1251,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 }),
             ];
         },
-        inboxReminders: ({ run }) =>
-            [...agents().keys()].flatMap((id) => {
-                // No run, no notice (`reminders.due` answers null for it): its mail is not read on every session event.
-                const runNow = run(id);
-                if (runNow === null) return [];
-                const unread = inbox.unread(id as never);
-                // How many came from APPS (genie#1345): the notice says so, and nothing of what they say.
-                const fromApps = unread.filter((m) => isAppSender(m.from)).length;
-                const text = reminders.due({ agentId: id, unread: unread.length, newestSeq: unread.at(-1)?.seq ?? 0, run: runNow, fromApps });
-                if (!text) return [];
-                // WHAT THE NOTICE IS ABOUT (beta.33 item 18): each unread message, who from and what it says, carried on
-                // the notice's row so the chat shows the context — the prompt itself stays the short instruction.
-                const roster = agents();
-                const mail = unread.map((m): NoticeMail => ({
-                    id: m.id,
-                    from: m.from,
-                    fromName: m.from === HUMAN ? null : m.app ? m.app.label : roster.get(m.from)?.name ?? null,
-                    text: m.text.length > NOTICE_MAIL_CHARS ? `${m.text.slice(0, NOTICE_MAIL_CHARS - 1)}…` : m.text,
-                    sentAt: m.sentAt,
-                }));
-                return [{ agentId: id, text, mail }];
-            }),
+        inboxReminders: ({ run }) => inboxNotices({ agents: agents(), unread: (id) => inbox.unread(id as never), reminders, run }),
         inboxNoticeSettled: (agentId, delivered) => reminders.settled(agentId, delivered),
         appEnv: (source) => appEnvOf(source),
         signals: ({ osAgentWorking, githubBlocked }) => ({

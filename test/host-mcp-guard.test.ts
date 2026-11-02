@@ -36,6 +36,29 @@ describe('compose', () => {
     });
 });
 
+describe('the settings and the chat drafts are genie-host\'s (P3.2)', () => {
+    it('compose opens the settings only when it was given none; genie-host opens them and the drafts; the window\'s drafts are the host\'s', () => {
+        expect(code('src/main/compose.ts')).toMatch(/if \(!input\.agentStores\?\.settings\) \{\s*ownSettings = await SettingsStore\.open\(/);
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/await SettingsStore\.open\(home\)/);
+        expect(host).toMatch(/await ChatDraftStore\.open\(home\)/);
+        expect(code('src/main/main.ts')).toMatch(/const drafts = agentEngineLink \? agentEngineLink\.client\.stores\(\)\.drafts : await ChatDraftStore\.open\(/);
+    });
+});
+
+describe('the registry\'s files and the mail wake are genie-host\'s (P3.2)', () => {
+    it('the window\'s registry reads and writes through the host, and re-reads when another wrote', () => {
+        const main = code('src/main/main.ts');
+        expect(main).toMatch(/theRegistry\.useStore\(new HostRegistryStore\(engineLink\.stores\(\)\)\)/);
+        expect(main).toMatch(/onRegistryChanged\(\(\) => \{ void theRegistry\.refresh\(\); \}\)/);
+    });
+
+    it('the mail wake runs in the host; the window\'s own only on the emergency path', () => {
+        expect(code('src/main/genie-host.ts')).toMatch(/wireHostMailWake\(\{/);
+        expect(code('src/main/main.ts')).toMatch(/if \(!agentEngineLink\) wireInboxPush\(\{\s*inbox: composed\.inbox/);
+    });
+});
+
 describe('genie-host', () => {
     it('opens the stores, serves them, and starts Genie\'s MCP server', () => {
         const host = code('src/main/genie-host.ts');

@@ -3,6 +3,10 @@ import type { ApprovalQueue, AutoApproved } from './approval-queue.js';
 import type { AttentionData, AttentionStore, QuestionLeft } from './attention-store.js';
 import type { InboxMessage, InboxStore, SendInput } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
+import type { ChatDraftStore } from './chat-draft-store.js';
+import type { SettingsStore } from './settings-store.js';
+import type { SettingsData, SettingValue } from './settings-read.js';
+import type { Store } from './store.js';
 
 /**
  * THE STORES AGENTS WRITE TO, OWNED BY GENIE-HOST (the host split, P3.1: plan §11d).
@@ -18,6 +22,12 @@ export interface AgentStores {
     readonly attention: AttentionStore;
     readonly knowledge: KnowledgeStore;
     readonly approvals: ApprovalQueue;
+    /** The settings (P3.2): one file, one writer — this host; every window a replica, hot-swap kept. */
+    readonly settings?: SettingsStore;
+    /** Every chat's unsent draft (P3.2). */
+    readonly drafts?: ChatDraftStore;
+    /** The registry's files and the host's own model of them (P3.2): windows read and write the files through the host. */
+    readonly registry?: { readonly store: Store; readonly model: { refresh(): Promise<void> } };
 }
 
 export interface ApprovalsView {
@@ -30,6 +40,9 @@ export interface StoresDump {
     readonly inbox: { readonly messages: readonly InboxMessage[]; readonly cursors: Readonly<Record<string, number>> };
     readonly attention: AttentionData;
     readonly approvals: ApprovalsView;
+    readonly settings: SettingsData | null;
+    /** What the host's store dropped reading the registry's files (a window shows its faults). */
+    readonly registryDropped: readonly string[];
 }
 
 export type StoresEvent =
@@ -45,9 +58,11 @@ export type StoresEvent =
     | { readonly store: 'inbox'; readonly kind: 'read'; readonly reader: string; readonly ids: readonly string[] | null }
     | { readonly store: 'attention'; readonly kind: 'data'; readonly data: AttentionData }
     | { readonly store: 'attention'; readonly kind: 'left'; readonly questionId: string; readonly outcome: QuestionLeft }
-    | { readonly store: 'approvals'; readonly kind: 'view'; readonly view: ApprovalsView };
+    | { readonly store: 'approvals'; readonly kind: 'view'; readonly view: ApprovalsView }
+    | { readonly store: 'settings'; readonly kind: 'changed'; readonly key: string; readonly value: SettingValue; readonly workspaceId: string | null; readonly data: SettingsData }
+    | { readonly store: 'registry'; readonly kind: 'written' };
 
-export type StoreName = 'inbox' | 'attention' | 'knowledge' | 'approvals';
+export type StoreName = 'inbox' | 'attention' | 'knowledge' | 'approvals' | 'settings' | 'drafts' | 'registry';
 
 /** What a window may call, per store. Everything else is the host's own (an agent's tools run here). */
 export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
@@ -55,6 +70,9 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
     attention: ['answer', 'dismiss', 'dismissMany', 'dismissOlderThan', 'markSeen', 'withdraw', 'lists.add', 'lists.done', 'lists.clear'],
     knowledge: ['add', 'get', 'update', 'remove', 'link', 'search', 'list'],
     approvals: ['resolve', 'gate'],
+    settings: ['set', 'setFor', 'resetFor', 'reset'],
+    drafts: ['all', 'save', 'putFile', 'readFile', 'release', 'prune'],
+    registry: ['readWorkspaces', 'readAgents', 'readRunningAtQuit', 'readInterruptedAtQuit', 'writeWorkspaces', 'writeAgents', 'writeRunningAtQuit', 'writeInterruptedAtQuit'],
 };
 
 export class AgentStoresService {
@@ -75,6 +93,8 @@ export class AgentStoresService {
         stores.attention.onChange(() => this.#emit({ store: 'attention', kind: 'data', data: stores.attention.snapshot() }));
         stores.attention.onLeave((questionId, outcome) => this.#emit({ store: 'attention', kind: 'left', questionId, outcome }));
         stores.approvals.onChange(() => this.#emit({ store: 'approvals', kind: 'view', view: this.#approvalsView() }));
+        // A setting changed, by whoever: every window's replica takes the data, then its listeners fire (hot-swap kept).
+        stores.settings?.onChange((key, value, workspaceId) => this.#emit({ store: 'settings', kind: 'changed', key, value, workspaceId: workspaceId ?? null, data: stores.settings!.data() }));
     }
 
     get stores(): AgentStores {
@@ -84,7 +104,7 @@ export class AgentStoresService {
     /** Everything a window that just connected needs to read before anything else. */
     dump(): StoresDump {
         const mail = this.#stores.inbox.snapshot();
-        return { inbox: { messages: mail.messages, cursors: mail.cursors }, attention: this.#stores.attention.snapshot(), approvals: this.#approvalsView() };
+        return { inbox: { messages: mail.messages, cursors: mail.cursors }, attention: this.#stores.attention.snapshot(), approvals: this.#approvalsView(), settings: this.#stores.settings?.data() ?? null, registryDropped: [...(this.#stores.registry?.store.dropped ?? [])] };
     }
 
     onEvent(listener: (event: StoresEvent) => void): () => void {
@@ -125,6 +145,30 @@ export class AgentStoresService {
             }
             case 'knowledge':
                 return (s.knowledge as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!(...args);
+            case 'settings': {
+                if (!s.settings) throw new Error('this host keeps no settings');
+                return (s.settings as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!(...args);
+            }
+            case 'drafts': {
+                if (!s.drafts) throw new Error('this host keeps no chat drafts');
+                // A draft's file crosses as base64 both ways: JSON has no bytes.
+                if (method === 'putFile') return s.drafts.putFile(new Uint8Array(Buffer.from(String(args[0]), 'base64')));
+                if (method === 'readFile') { const b = await s.drafts.readFile(args[0]); return b ? Buffer.from(b).toString('base64') : null; }
+                if (method === 'prune') return s.drafts.prune(Array.isArray(args[0]) ? (args[0] as string[]) : []);
+                return (s.drafts as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!(...args);
+            }
+            case 'registry': {
+                const reg = s.registry;
+                if (!reg) throw new Error('this host keeps no registry');
+                const result = await (reg.store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
+                if (method.startsWith('write')) {
+                    // The host's own model follows the files (its tools and approvals read it with no window), then every
+                    // window re-reads: two windows, one registry.
+                    await reg.model.refresh();
+                    this.#emit({ store: 'registry', kind: 'written' });
+                }
+                return result;
+            }
             case 'approvals':
                 // A window tool's gated action (forwarded from the host) asks this one queue; no MCP call to watch here.
                 if (method === 'gate') return s.approvals.gate(args[0] as never, String(args[1]), String(args[2]), typeof args[3] === 'string' ? this.#forwardedCall(args[3]) : undefined);
