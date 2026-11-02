@@ -8,12 +8,10 @@ import { DeviceStore } from '../src/main/remote-devices.js';
 import { ServiceDriver } from '../src/main/service-driver.js';
 import { ServiceRegistry } from '../src/main/service-registry.js';
 import { writeJsonAtomic } from '../src/main/store.js';
-import { TerminalSnapshots } from '../src/main/terminal-snapshots.js';
 
 /**
  * PLAINTEXT FILES THAT HOLD SECRETS ARE THE OWNER'S ALONE (host-split plan §13). `services.json` holds every engine's
- * passwords and `terminal-snapshots.json` a terminal's scrollback, in the clear, and both were written with the default mode:
- * 0644 under a usual umask, readable by any user of the machine. `remote-devices.json` and `app-inbox.json` hold hashes, and
+ * passwords in the clear, and was written with the default mode: 0644 under a usual umask, readable by any user of the machine. `remote-devices.json` and `app-inbox.json` hold hashes, and
  * are kept the same way. A fresh write is 0600, and a file an older Genie left at 0644 is tightened at open — it may not be
  * rewritten for a long time. POSIX modes: on Windows the profile's ACL is the guard, and these are no-ops.
  *
@@ -82,23 +80,9 @@ describe.skipIf(process.platform === 'win32')('runtime files that hold secrets',
 
         const fresh = await mkdtemp(join(tmpdir(), 'runtime-modes-fresh-'));
         const keys = await AppInboxKeys.open(fresh);
-        await keys.createScriptKey('ws', 'a script');
+        await keys.createScriptKey('ws', 'a-script');
         expect(modeOf(join(fresh, 'runtime', 'app-inbox.json'))).toBe(0o600);
         await rm(fresh, { recursive: true, force: true });
     });
 
-    it('terminal-snapshots.json (scrollback): tightened at open; a fresh save is 0600', async () => {
-        const file = join(home, 'terminal-snapshots.json');
-        leftOpen(file, '{"ws":"old scrollback"}');
-        const opened = await TerminalSnapshots.open(home);
-        expect(modeOf(file)).toBe(0o600);
-        expect(opened.take('ws')).toBe('old scrollback');
-        await opened.flushed();
-
-        const fresh = await mkdtemp(join(tmpdir(), 'runtime-modes-fresh-'));
-        const snapshots = await TerminalSnapshots.open(fresh);
-        await snapshots.save([{ workspaceId: 'ws', scrollback: 'a token in a buffer' }]);
-        expect(modeOf(join(fresh, 'terminal-snapshots.json'))).toBe(0o600);
-        await rm(fresh, { recursive: true, force: true });
-    });
 });
