@@ -148,7 +148,8 @@ describe('probing — what the Dashboard reads', () => {
         const r = record({ provider: 'codex' });
         host.start(r, dir);
 
-        expect(host.probe(r.id)).toMatchObject({ running: true, turnState: 'working' });
+        // Running, and idle: started is not working — no turn is in flight (test/fresh-session-not-working.test.ts).
+        expect(host.probe(r.id)).toMatchObject({ running: true, turnState: 'idle' });
     });
 
     it('claims NO context, delivery, collaborators or ask until something reports them', () => {

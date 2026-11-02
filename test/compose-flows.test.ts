@@ -47,11 +47,18 @@ let pty: ReturnType<typeof scriptedPty>;
 let services: ComposedServices;
 let turnState = 'idle';
 const prompted: string[] = [];
+const listeners = new Set<(id: string) => void>();
 const sessions: AgentSessionsPort = {
     session: (id) => (id === 'agent_atlas' ? { running: true, turnState, pendingApproval: null } : null),
     rows: () => [],
-    prompt: (_id, text) => { prompted.push(text); return true; },
-    subscribe: () => () => {},
+    // As the session host answers: the prompt opens a turn (working), and the turn ends a moment later, announced.
+    prompt: (id, text) => {
+        prompted.push(text);
+        turnState = 'working';
+        setTimeout(() => { turnState = 'idle'; for (const l of listeners) l(id); }, 0);
+        return true;
+    },
+    subscribe: (l) => { listeners.add(l); return () => { listeners.delete(l); }; },
 };
 const roster = [{ id: 'agent_atlas', workspaceId: 'ws-example', provider: 'claude', name: 'atlas', instructions: null, threadId: null, createdAt: '2026-10-12T00:00:00.000Z', lastUsedAt: null }] as unknown as AgentRecord[];
 let asleep = false;
@@ -95,7 +102,9 @@ describe('a flow run through the composed services', () => {
         expect(await services.flowScheduler.runNow(f.id)).toMatchObject({ outcome: 'held', reason: 'atlas is busy (mid-turn); the prompt was not delivered, so it never lands inside another turn' });
         expect(prompted).toEqual([]);
         turnState = 'idle';
-        // The fake session stays idle after the prompt, so the turn reads as already ended: the run completes.
+        // Idle: prompted, its turn runs and ends, and the run completes. (The fake used to stay idle after the prompt and
+        // count that as the turn's end; a flow now waits for THE PROMPT'S turn to begin and end — a session only started
+        // reads idle, and a prompt it queued for `ready` has not run yet.)
         expect(await services.flowScheduler.runNow(f.id)).toMatchObject({ outcome: 'ran' });
         expect(prompted).toEqual(['post the standup']);
     });
