@@ -17,15 +17,18 @@ import { parseAst } from 'vite';
  *   click-on-non-interactive `onClick`/`onDoubleClick` on an element that is not a control (div, span, li, td, img…)
  *   role-button              `role="button"`/`role="link"` faking a control on a non-control
  *   pointer-without-handler  `cursor-pointer` on an element that has no click handler and is not a control
+ *   menu-as-button           a Button (react-fancy's or raw) that is a MENU or TAB item — `aria-current`/`data-current`, or role
+ *                            tab/menuitem — (the owner, 2026-11-01: "those should not be buttons, it's a menu"): use
+ *                            react-fancy's Sidebar/Navbar/Tabs
  * AUDIT-ONLY rules (reported in the audit; too heuristic to gate on):
  *   link-styled-static       `underline` text on an element with no handler that is not a link or button
  *   button-styled-static     a bordered, rounded, padded div/span with no handler (looks like a button, is not one)
  */
 
-export type GuardedRule = 'raw-button' | 'raw-anchor' | 'click-on-non-interactive' | 'role-button' | 'pointer-without-handler';
+export type GuardedRule = 'raw-button' | 'raw-anchor' | 'click-on-non-interactive' | 'role-button' | 'pointer-without-handler' | 'menu-as-button';
 export type AuditRule = 'link-styled-static' | 'button-styled-static';
 export type Rule = GuardedRule | AuditRule;
-export const GUARDED_RULES: readonly GuardedRule[] = ['raw-button', 'raw-anchor', 'click-on-non-interactive', 'role-button', 'pointer-without-handler'];
+export const GUARDED_RULES: readonly GuardedRule[] = ['raw-button', 'raw-anchor', 'click-on-non-interactive', 'role-button', 'pointer-without-handler', 'menu-as-button'];
 
 export interface Finding {
     /** Path relative to the scanned root, always with `/`. */
@@ -249,6 +252,8 @@ export function scanSource(source: string, file: string): Finding[] {
             disabled: attrs.has('disabled'),
         };
         const add = (rule: Rule) => out.push({ ...base, rule });
+        const MENU_ROLES = new Set(['tab', 'menuitem', 'menuitemradio', 'menuitemcheckbox']);
+        if ((tag === 'Button' || tag === 'button') && (attrs.has('aria-current') || attrs.has('data-current') || MENU_ROLES.has(literal(attrs.get('role'))))) add('menu-as-button');
         if (!intrinsic) {
             // A component with cursor-pointer and no handler still looks clickable and is not.
             if (classes.has('cursor-pointer') && !hasPointerHandler) add('pointer-without-handler');
