@@ -61,8 +61,24 @@ describe('main.ts', () => {
 
     it('the tray offers the host’s verbs while the host is genie-host, and says what it runs', () => {
         const src = main();
-        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ restartGenie\(\); \}, onShutDown: \(\) => \{ requestQuit\('shut-down'\); \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
+        // ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time.
+        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ if \(confirmTray\('restart'\)\) restartGenie\(\); \}, onShutDown: \(\) => \{ if \(confirmTray\('shut-down'\)\) requestQuit\('shut-down'\); \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
         expect(block(src, 'function refreshTray', '\n}\n')).toMatch(/trayTooltip\(held, signedOut, paused, designLogin, trayWaiting, hostNow\)/);
+    });
+
+    it('the tray’s question: what stops, named; Cancel the default and the cancel; only the confirm button goes on', () => {
+        const ask = block(main(), 'function confirmTray(', '\n}\n');
+        expect(ask).toMatch(/const q = trayConfirm\(action, stoppingNow\(\)\);/);
+        expect(ask).toMatch(/return trayConfirmed\(dialog\.showMessageBoxSync\(\{ type: 'question', title: q\.title, message: q\.message, buttons: \[\.\.\.q\.buttons\], defaultId: q\.defaultId, cancelId: q\.cancelId \}\)\);/);
+    });
+
+    it('never asked twice or of nobody: the quit dialog’s own answer, the tray-only exit, the OS ending the session', () => {
+        const src = main();
+        expect(block(src, "app.on('before-quit'")).not.toMatch(/confirmTray/);
+        expect(block(src, 'function watchTrayOnly(', '\n}\n')).not.toMatch(/confirmTray/);
+        expect(block(src, 'function restartGenie(', '\n}\n')).not.toMatch(/confirmTray/);
+        // confirmTray is called from the two tray choices only.
+        expect(src.match(/confirmTray\(/g) ?? []).toHaveLength(3); // its definition and the two tray handlers
     });
 
     it('Restart: recorded, everything shut down, and Genie started again in the tray (`--hidden`)', () => {
