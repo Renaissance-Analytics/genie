@@ -302,7 +302,7 @@ probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
     test/tynn-account-host.test.ts "reads signed in at once"
 
 probe "the-cookie-is-sent-on-the-exchange" src/main/host-tynn-account.ts \
-    "const cookies = credentials === 'include' ? jar.get(new URL(url).origin) : undefined;" "const cookies = undefined as Map<string, string> | undefined;" \
+    "const cookies = init.credentials === 'include' ? jar.get(new URL(url).origin) : undefined;" "const cookies = undefined as Map<string, string> | undefined;" \
     test/tynn-account-host.test.ts "the code goes as a Cookie"
 
 
@@ -320,7 +320,7 @@ probe "a-redirect-is-refused" src/main/host-https-fetch.ts \
     test/host-https-fetch.test.ts "a redirect is REFUSED"
 
 probe "only-https" src/main/host-https-fetch.ts \
-    "        if (target.protocol !== 'https:') {" "        if (target.protocol === 'never:') {" \
+    "        if (target.protocol !== 'https:') throw" "        if (target.protocol === 'never:') throw" \
     test/host-https-fetch.test.ts "it speaks only https"
 
 
