@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -121,8 +121,11 @@ describe('genie-host as its own process', () => {
         const pty = first.spawn.ptyPort();
         const pids: number[] = [];
         pty.onPid?.((_id, pid) => pids.push(pid));
-        const ticker = `setInterval(() => console.log('tick ' + Date.now()), 150)`;
-        const started = pty.open({ cwd: workspace, command: `"${process.execPath}" -e "${ticker}"`, shell: true, tag: { kind: 'process', processId: 'worker:ticks', workspaceId: 'ws' } });
+        // A script file, run WITHOUT a shell: no quoting goes through cmd.exe. On Windows `cmd /d /s /c` strips the line's
+        // first and last quote, so a line that starts and ends quoted ("node" -e "...") is mangled and the shell exits at
+        // once (unit (windows), 2026-11-01: the positive control below read the pid dead at 123 ms).
+        await writeFile(join(workspace, 'ticker.cjs'), `setInterval(() => console.log('tick ' + Date.now()), 150);\n`);
+        const started = pty.open({ cwd: workspace, command: `"${process.execPath}" ticker.cjs`, tag: { kind: 'process', processId: 'worker:ticks', workspaceId: 'ws' } });
         const pid = await until('the process pid', () => pids[0] ?? null, 30_000);
         expect(pidAlive(pid)).toBe(true); // positive control: the gauge sees it alive while its window is there
 
