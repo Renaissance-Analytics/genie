@@ -17,15 +17,17 @@ import { tynnUnavailableNote, type TynnSessionPort } from './tynn-agent-token.js
  */
 export interface HostAgentKeysOptions {
     readonly vaultFile: string;
-    readonly accountFile: string;
-    readonly tynnHost: string;
+    readonly accountFile?: string;
+    readonly tynnHost?: string;
     readonly keychain: AgentSecrets;
+    readonly tynn?: () => TynnSessionPort | null;
+    readonly workspaces?: () => readonly { readonly id: string; readonly path: string; readonly asleep?: boolean }[];
 }
 export interface HostAgentKeysResult {
     readonly servers: readonly McpServer[];
     readonly note: string | null;
 }
-export type HostAgentKeys = (agent: AgentRecord, cwd: string) => Promise<HostAgentKeysResult>;
+export type HostAgentKeys = ((agent: AgentRecord, cwd: string) => Promise<HostAgentKeysResult>) & { recovery(options?: { secretsMoved?: boolean }): Promise<string[]> };
 
 const textOf = (file: string): Promise<string | null> => readFile(file, 'utf8').catch(() => null);
 
@@ -41,10 +43,10 @@ async function savedAccount(file: string, tynnHost: string): Promise<string | nu
 }
 
 export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
-    return async (agent, cwd) => {
+    const read = async (agent: AgentRecord, cwd: string): Promise<HostAgentKeysResult> => {
         const projectId = tynnProjectIdOf(await textOf(join(cwd, 'project.json')));
         if (projectId === null) return { servers: [], note: null };
-        const userId = await savedAccount(options.accountFile, options.tynnHost);
+        const userId = await savedAccount(options.accountFile ?? '', options.tynnHost ?? '');
         const noNetwork: TynnSessionPort = {
             status: () => ({ signedIn: false }),
             savedUserId: () => userId,
@@ -56,4 +58,5 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         if (result.status === 'unlinked') return { servers: [], note: null };
         return { servers: [{ type: 'http', name: 'tynn', url: result.mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${result.mcp.token}` }] }], note: null };
     };
+    return Object.assign(read, { recovery: async () => [] as string[] });
 }
