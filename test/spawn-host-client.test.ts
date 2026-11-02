@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { MAX_FAILED_STARTS, startSpawnHost, type SpawnHostClient } from '../src/main/spawn-host-client.js';
@@ -72,12 +75,26 @@ describe('the spawn host goes away (genie#1397)', () => {
     }, 30_000);
 
     it('a call in flight when the child dies fails with code ESPAWNHOST', async () => {
-        client = startSpawnHost({ entry: fixture('slow-spawn-host.ts'), execArgv: ['--import', 'tsx'], env: { SLOW_SPAWN_MS: '4000' } });
-        const pending = client.exec('docker', ['version']);
-        await until(() => client!.pid !== null);
-        await new Promise((r) => setTimeout(r, 1_500));
-        process.kill(client.pid!);
-        await expect(pending).rejects.toMatchObject({ code: 'ESPAWNHOST' });
+        /*
+         * IN FLIGHT FOR CERTAIN (2026-11-01). This killed the child 1.5 s after it had a pid while the call took 4 s, and
+         * on a loaded genie-test-windows the test's own timers ran late enough for the call to ANSWER first: "promise
+         * resolved … instead of rejecting" (batch D). Now the child's exec never answers, and says when the call reached
+         * it (a marker file); the child is killed only after that, with the call provably still waiting.
+         */
+        const dir = mkdtempSync(join(tmpdir(), 'genie-spawn-inflight-'));
+        try {
+            const marker = join(dir, 'exec-started');
+            client = startSpawnHost({ entry: fixture('slow-spawn-host.ts'), execArgv: ['--import', 'tsx'], env: { SLOW_SPAWN_MS: '0', EXEC_NEVER_ANSWERS: marker } });
+            let settled = false;
+            const pending = client.exec('docker', ['version']);
+            pending.then(() => { settled = true; }, () => { settled = true; });
+            expect(await until(() => existsSync(marker)), 'the call reached the child').toBe(true);
+            expect(settled, 'and it is in flight: the child never answers it').toBe(false);
+            process.kill(client.pid!);
+            await expect(pending).rejects.toMatchObject({ code: 'ESPAWNHOST' });
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
     }, 30_000);
 
     it("a command starts with main's environment NOW (set after the fork), never the fork's ELECTRON_RUN_AS_NODE — the real spawn host", async () => {
