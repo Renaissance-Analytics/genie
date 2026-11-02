@@ -194,6 +194,7 @@ import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import type { TerminalsApi } from './terminals-host.js';
 import type { ProcessBookApi } from './processes-host.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
@@ -571,7 +572,7 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const deliveredAt = projectId === null ? undefined : issueWatchDelivered.get(projectId);
     return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}), ...(deliveredAt !== undefined ? { deliveredAt } : {}) };
 }
-let terminals: TerminalHost | null = null;
+let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let loginHost: LoginHost | null = null;
 let filesHost: FilesHost | null = null;
@@ -1353,18 +1354,14 @@ async function boot(): Promise<void> {
         // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
         theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
         engineLink.stores().onRegistryChanged(() => { void theRegistry.refresh(); });
+        // This window reaches the `processes` child (exec and streams). Supervised processes and terminals are the host's
+        // own (P3.3b, P3.3e): their state comes by replica, so nothing here is taken back after a loss.
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
-        const shells = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('terminals'), log: lifecycleLog });
         engineLink.onSpawnFrame('processes', (frame) => processes.linkFrame(frame));
-        engineLink.onSpawnFrame('terminals', (frame) => shells.linkFrame(frame));
-        const reconcile = async (): Promise<ListedPty[]> => {
-            const [p, t] = await Promise.all([processes.linkUp(), shells.linkUp()]);
-            return [...p, ...t];
-        };
+        const reconcile = (): Promise<ListedPty[]> => processes.linkUp();
         engineLink.onLink(
-            // The link back after a loss: whatever is running that this window does not know is taken back now.
-            () => { void reconcile().then((found) => { for (const pty of found) terminals?.adopt(pty); }, (error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
-            (why) => { processes.linkDown(why); shells.linkDown(why); },
+            () => { void reconcile().catch((error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
+            (why) => { processes.linkDown(why); },
         );
         // The link is already up (it came up in connectAgentEngine): the first reconcile is now, before anything starts.
         adoptablePtys = await reconcile().catch((error: unknown) => {
@@ -1373,7 +1370,6 @@ async function boot(): Promise<void> {
         });
         if (adoptablePtys.length > 0) lifecycleLog(`spawn host found running=${adoptablePtys.length} (${adoptablePtys.map((p) => p.tag?.kind === 'process' ? p.tag.processId : p.tag?.kind ?? 'untagged').join(', ')})`);
         spawnHostNow = processes;
-        spawnTerminalsNow = shells;
     } else {
         spawnHostNow = startSpawnHost({ entry: join(here, 'spawn-host.js'), execPath: process.execPath, log: lifecycleLog });
     }
@@ -1511,8 +1507,14 @@ async function boot(): Promise<void> {
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
     // the open ones a previous window left running are taken back with what they printed.
-    terminals = new TerminalHost(spawnTerminalsNow ? spawnTerminalsNow.ptyPort() : ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
-    for (const pty of adoptablePtys) terminals.adopt(pty);
+    // THE TERMINALS ARE GENIE-HOST'S (P3.3e): their shells and scrollback outlive this window; it drives them by replica.
+    // This window's own only on the emergency path.
+    if (agentEngineLink) terminals = agentEngineLink.client.terminals();
+    else {
+        const own = new TerminalHost(spawnTerminalsNow ? spawnTerminalsNow.ptyPort() : ptyPort, { terminals: (workspaceId) => limitOf(services?.settings.snapshotFor(workspaceId) ?? {}, 'terminals') });
+        for (const pty of adoptablePtys) own.adopt(pty);
+        terminals = own;
+    }
     // §6.5: what the terminals showed at the last quit, handed back once per workspace.
     snapshots = await TerminalSnapshots.open(genieHome());
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.

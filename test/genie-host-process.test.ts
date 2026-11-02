@@ -195,7 +195,8 @@ describe('genie-host as its own process', () => {
         expect((await call('knowledge', { action: 'add', title: 'After', body: 'no window at all', scope: 'workspace' })).isError).toBe(false);
         // A window tool: refused AT ONCE, in words (timed: a hang would be the failure).
         const t0 = Date.now();
-        const refused = await call('manageTerminals', { action: 'list' });
+        // `services`: still the window's (manageTerminals is the host's own since P3.3e).
+        const refused = await call('services', { action: 'list' });
         expect(refused.isError).toBe(true);
         expect(refused.text).toMatch(/Genie's window, which is closed/);
         expect(Date.now() - t0).toBeLessThan(5_000);
@@ -237,6 +238,24 @@ describe('genie-host as its own process', () => {
         const after = second.client.supervisor().status('proc:worker');
         expect(after?.state).toBe('stopped');
         expect(after?.pid === null || after?.pid === secondPid).toBe(true);
+        second.transport.close();
+    }, 120_000);
+
+    it('A TERMINAL OUTLIVES ITS WINDOW (P3.3e): opened from a window, still running with what it printed when the next window joins; closed from it, gone', async () => {
+        await writeFile(join(workspace, 'term-ticker.cjs'), `setInterval(() => console.log('term ticking'), 200);\n`);
+        const first = await window();
+        const opened = await first.client.terminals().openReady({ workspaceId: 'ws', cwd: workspace, command: `"${process.execPath}" term-ticker.cjs`, limited: false });
+        expect(opened.pid).toBeGreaterThan(0);
+        expect(pidAlive(opened.pid)).toBe(true); // CONTROL: the gauge sees the shell alive
+        first.transport.close();
+        await sleep(1_000);
+        expect(pidAlive(opened.pid)).toBe(true); // it did not go with the window
+
+        const second = await window();
+        expect(second.client.terminals().list().map((t) => t.id)).toContain(opened.id);
+        await until('its output, joined', () => /term ticking/.test(second.client.terminals().attach(opened.id)?.scrollback ?? ''), 15_000);
+        expect(second.client.terminals().close(opened.id)).toBe(true);
+        await until('the terminal to end', () => !pidAlive(opened.pid), 15_000);
         second.transport.close();
     }, 120_000);
 

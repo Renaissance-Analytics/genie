@@ -13,8 +13,9 @@ import type { Caller, McpCall, Registration, ToolContext } from './mcp-tools.js'
  */
 
 /** The tools the host answers itself. Everything else is the window's (forwarded). */
-// `processes` since P3.3c (the book, its scheduler and the supervisor are the host's), `flows` since P3.3d.
-export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows']);
+// `processes` since P3.3c (the book, its scheduler and the supervisor are the host's), `flows` since P3.3d,
+// `manageTerminals` since P3.3e (the terminals are the host's).
+export const HOST_NATIVE_TOOLS: ReadonlySet<string> = new Set(['agentinbox', 'ForceTheQuestion', 'imDone', 'lists', 'plan', 'knowledge', 'thumbsUp', 'processes', 'flows', 'manageTerminals']);
 
 /** What the window is handed: the tool, its arguments and headers as the agent sent them, and who the host says is calling. */
 export interface ForwardedToolCall {

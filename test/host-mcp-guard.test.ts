@@ -63,7 +63,8 @@ describe('the process supervisor is genie-host\'s (P3.3b)', () => {
     it('the host runs it on its own `supervised` child; a window drives it through its replica; compose builds one only with none given', () => {
         const host = code('src/main/genie-host.ts');
         expect(host).toMatch(/new ProcessSupervisor\(\s*supervisedClient\.ptyPort\(\)/);
-        expect(host).toMatch(/if \(profile !== 'supervised'\) relay\?\.send\(/); // no window sends into the host's own child
+        // No window sends into the host's own children: a window's engine.spawn reaches `processes` only (since P3.3e).
+        expect(host).toMatch(/if \(profile === 'processes'\) relay\?\.send\('processes', frame\);/);
         expect(code('src/main/main.ts')).toMatch(/supervisor: agentEngineLink\.client\.supervisor\(\)/);
         expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else \{\s*const own = new ProcessSupervisor\(/);
     });
@@ -85,6 +86,15 @@ describe('flows are genie-host\'s (P3.3d)', () => {
         expect(host).toMatch(/startFlowsEngine\(\{/);
         expect(code('src/main/main.ts')).toMatch(/flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \}/);
         expect(code('src/main/compose.ts')).toMatch(/const ownEngine = ownFlows \? startFlowsEngine\(\{/);
+    });
+});
+
+describe('the terminals are genie-host\'s (P3.3e)', () => {
+    it('the host runs them on its own `terminals` child; no window sends into it; a window with a host drives them by replica', () => {
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/new TerminalHost\(terminalsClient\.ptyPort\(\)/);
+        expect(host).toMatch(/send: \(profile, frame\) => \{ if \(profile === 'processes'\) relay\?\.send\('processes', frame\); \}/);
+        expect(code('src/main/main.ts')).toMatch(/if \(agentEngineLink\) terminals = agentEngineLink\.client\.terminals\(\);/);
     });
 });
 

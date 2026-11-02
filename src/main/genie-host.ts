@@ -17,6 +17,8 @@ import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { SpawnHostClient } from './spawn-host-client.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
+import { TerminalHost } from './terminal-host.js';
+import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
@@ -174,6 +176,15 @@ async function main(): Promise<void> {
     processSupervisor.watchLiveness();
     const supervisorService = new SupervisorService(processSupervisor);
     /*
+     * THE TERMINALS (P3.3e): the `terminals` spawn-host child is this host's own now — its shells (and their scrollback)
+     * outlive the window, and an agent's `manageTerminals` works with none. Windows drive them through the service.
+     */
+    const terminalsClient = new SpawnHostClient({ entry: '', link: { send: (frame) => relay?.send('terminals', frame) }, log: lifecycleLog });
+    const terminalHost = new TerminalHost(terminalsClient.ptyPort(), { terminals: (workspaceId) => limitOf(settings.snapshotFor(workspaceId), 'terminals') });
+    const terminalsService = new TerminalsService(terminalHost);
+    /** This host's own spawn-host children (no window reaches them): their frames, and their "ready". */
+    const ownChildren: Record<'supervised' | 'terminals', SpawnHostClient> = { supervised: supervisedClient, terminals: terminalsClient };
+    /*
      * THE PROCESS BOOK AND THE SCHEDULER (P3.3c): what the person keeps running is restored and started here, and a
      * scheduled task fires on this host's clock, with no window. Opened at the first window's v1 import (it names Genie 1's
      * database, whose background processes the book takes once) — the host is only ever started by a window until P6.
@@ -200,7 +211,9 @@ async function main(): Promise<void> {
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
         // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
-        spawn: { send: (profile, frame) => { if (profile !== 'supervised') relay?.send(profile as 'processes' | 'terminals', frame); }, windowGone: () => relay?.windowGone() },
+        // A window reaches the `processes` child only: `supervised` and `terminals` are this host's own (P3.3b, P3.3e).
+        spawn: { send: (profile, frame) => { if (profile === 'processes') relay?.send('processes', frame); }, windowGone: () => relay?.windowGone() },
+        terminals: terminalsService,
         supervisor: supervisorService,
         processes: processesService,
         flows: flowsService,
@@ -370,6 +383,12 @@ async function main(): Promise<void> {
         signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
+        terminals: { list: () => terminalHost.list(), open: (options) => terminalHost.open(options), write: (id, data) => terminalHost.write(id, data), scrollback: (id) => terminalHost.scrollback(id), finished: (id) => terminalHost.finished(id), refusal: (ws) => terminalHost.refusal(ws), scrollbackCap: 1_000_000 },
+        // A shell an agent opens sees the workspace's service variables and Genie's MCP endpoint, as the person's do.
+        terminalEnv: (workspaceId) => {
+            const endpoint = mcp?.endpoint() ?? null;
+            return { ...engine.serviceEnvFor(workspaceId), ...(endpoint ? { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token } : {}) };
+        },
         flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
         flowCallers,
         endpointFile: join(home, 'mcp-endpoint.json'),
@@ -384,15 +403,16 @@ async function main(): Promise<void> {
     relay = startSpawnRelay({
         entry: process.env.GENIE_SPAWN_HOST_ENTRY && process.env.GENIE_SPAWN_HOST_ENTRY.length > 0 ? process.env.GENIE_SPAWN_HOST_ENTRY : join(dirname(fileURLToPath(import.meta.url)), 'spawn-host.js'),
         send: (profile, frame) => {
-            if (profile !== 'supervised') { engine.spawnFrame(profile, frame); return; }
-            // The supervisor's own child: its frames are this host's, and its "ready" is when the supervisor may start.
-            supervisedClient.linkFrame(frame);
+            if (profile === 'processes') { engine.spawnFrame(profile, frame); return; }
+            // This host's own children: their frames are its own, and their "ready" is when their clients may open.
+            const client = ownChildren[profile];
+            client.linkFrame(frame);
             if (frame.kind === 'event' && frame.channel === 'host.ready') {
-                void supervisedClient.linkUp().catch((error: unknown) => lifecycleLog(`supervised spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
+                void client.linkUp().catch((error: unknown) => lifecycleLog(`${profile} spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
             }
         },
-        // Between its lives the supervisor's opens are refused in words (a crash it backs off from), never sent into nothing.
-        onChildExit: (profile) => { if (profile === 'supervised') supervisedClient.linkDown('the supervised spawn host exited'); },
+        // Between their lives, opens are refused in words (a crash the supervisor backs off from), never sent into nothing.
+        onChildExit: (profile) => { if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`); },
         log: (line) => { say(line); lifecycleLog(line); },
     });
 

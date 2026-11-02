@@ -56,6 +56,10 @@ export interface HostMcpPorts {
     readonly flows?: import('./mcp-tools-flows.js').FlowsPort;
     /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
     readonly flowCallers?: { callerFor(key: string): Caller | null };
+    /** The terminals `manageTerminals` acts on (P3.3e): the host's own. Absent = the tool is the window's. */
+    readonly terminals?: import('./mcp-tools-more.js').TerminalsPort;
+    /** A shell an agent opens: the workspace's service variables and Genie's endpoint. */
+    readonly terminalEnv?: (workspaceId: string) => Readonly<Record<string, string>>;
     /** openFileForUser with no window: shown when the next window connects. */
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** A tool's moment for the window: a glow, a thumbs-up, an action signal. Dropped with no window. */
@@ -129,7 +133,8 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             // THE WINDOW'S: these tools are forwarded whole (mcp-host-tools.ts); here they only give the tools their shape.
             issueWatch: { forWorkspace: unavailable('checkIssues') },
             openFile: unavailable('openFileForUser'),
-            terminals: { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
+            terminals: ports.terminals ?? { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
+            ...(ports.terminalEnv ? { terminalEnv: ports.terminalEnv } : {}),
             plugins: { tools: () => view?.pluginTools ?? [], guard: () => null, run: unavailable('a plugin tool') },
             ...(ports.processes ? { processes: ports.processes } : {}),
             ...(ports.flows ? { flows: ports.flows } : {}),
