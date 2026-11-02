@@ -12,7 +12,7 @@
  * "no tynn server"), kills Electron main ONLY, and sends A's real `agentinbox send` to the stopped agent B through the host's real
  * MCP server. The host wakes B. The stub provider records the MCP servers it was really given, the bearer included.
  *
- * Against a tree with the bug (genie#1457, or this PR's red commit) check 8 fails: B starts with no tynn server.
+ * With the bug back (the old no-window `return own` in session-engine-server.ts) check 8 should fail: B starts with no tynn server.
  *
  * Prints a line per step, then `### agent-key <check>=PASS|FAIL` and `### agent-key=PASS|FAIL`. Every wait has a deadline, the run
  * is capped at 4 min, and every exit ends the providers and the host it found. The key is a test word, never a real one.
