@@ -131,6 +131,7 @@ function NavRow({
     children,
     dot,
     dotLabel,
+    dotTooltip = false,
     compact = false,
 }: {
     route: string;
@@ -144,6 +145,8 @@ function NavRow({
     dot?: SidebarDotColor | undefined;
     /** The dot in words, read with the item's name. */
     dotLabel?: string | undefined;
+    /** Show the dot's words on hover and keyboard focus too (react-fancy 6.2.0 `dotTooltip`). */
+    dotTooltip?: boolean | undefined;
     /** Collapsed rail: the icon alone, the label as its tooltip and accessible name. */
     compact?: boolean;
 }) {
@@ -159,7 +162,7 @@ function NavRow({
             onClick={() => onNavigate(route)}
             icon={<Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
             badge={children ?? undefined}
-            {...(dot ? { dot, ...(dotLabel ? { dotLabel } : {}) } : {})}
+            {...(dot ? { dot, ...(dotLabel ? { dotLabel, dotTooltip } : {}) } : {})}
             // Collapsed with a dot, Sidebar names the item by its label AND the dot's words; without one, name it here.
             {...(compact && !dot ? { 'aria-label': label } : {})}
             className={compact ? RAIL_ITEM_COMPACT : RAIL_ITEM}
@@ -251,16 +254,16 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 </Button>
                 <FancySidebar embedded collapsed collapseMode="icons" navLabel="Genie" keyboardNav className="w-full items-center gap-1">
                 {has('deck') ? (
-                    <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} compact {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting` } : {})} />
+                    <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} compact {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})} />
                 ) : null}
                 {has('dashboard') ? (
-                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label } : {})} />
+                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : {})} />
                 ) : null}
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
                 {has('settings') ? (
-                    <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label } : {})} />
+                    <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label, dotTooltip: true } : {})} />
                 ) : null}
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
                 {(has('workspace') ? shown : []).map((w) => {
@@ -325,7 +328,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
             </div>
             <FancySidebar embedded navLabel="Genie" keyboardNav className="gap-0.5">
             {has('deck') ? (
-                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting` } : {})}>
+                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting`, dotTooltip: true } : {})}>
                 {/*
                  * The only badge in the application. Zero renders nothing — a badge that is
                  * sometimes `0` is furniture, and furniture is what people learn not to read.
@@ -349,7 +352,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     icon="layout-list"
                     label="Dashboard"
                     onNavigate={onNavigate}
-                    {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label } : {})}
+                    {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label, dotTooltip: true } : {})}
                 />
             ) : null}
 
@@ -367,7 +370,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
 
             {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
             {has('settings') ? (
-                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label } : {})} />
+                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label, dotTooltip: true } : {})} />
             ) : null}
 
             {/*
@@ -414,6 +417,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
                         onClick={() => onNavigate(route_)}
                         {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : {})}
+                        {...(w.count !== null ? { badgeLabel: `${w.count} agent${w.count === 1 ? '' : 's'}` } : {})}
                         icon={<Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
                         badge={
                             <span className="flex shrink-0 items-center gap-1.5">
