@@ -1,4 +1,5 @@
-import type { TynnAccountPorts, TynnSecrets } from './tynn-account.js';
+import { hostHttpsFetch } from './host-https-fetch.js';
+import type { SessionFetch, TynnAccountPorts, TynnSecrets } from './tynn-account.js';
 
 /**
  * THE TYNN ACCOUNT'S PORTS WHERE THERE IS NO ELECTRON (P3.4 cut c). The sign-in exchange sends the code as a cookie: in the window
@@ -9,13 +10,16 @@ export interface HostTynnOptions {
     readonly file: string;
     readonly host: () => string;
     readonly secrets: TynnSecrets;
-    readonly fetch?: (url: string, init: never) => Promise<Response>;
+    /** Genie's CA, trusted beside the OS store (host-https-fetch.ts). */
+    readonly genieCaFile?: string;
+    /** Tests of the account's logic; the real one speaks TLS. */
+    readonly fetch?: SessionFetch;
     readonly schedule?: TynnAccountPorts['schedule'];
 }
 
 export function hostTynnPorts(options: HostTynnOptions): TynnAccountPorts {
     const jar = new Map<string, Map<string, string>>();
-    const send = options.fetch ?? (globalThis.fetch as unknown as NonNullable<HostTynnOptions['fetch']>);
+    const send = options.fetch ?? hostHttpsFetch(options.genieCaFile ? { genieCaFile: options.genieCaFile } : {});
     return {
         file: options.file,
         host: options.host,
@@ -27,10 +31,9 @@ export function hostTynnPorts(options: HostTynnOptions): TynnAccountPorts {
             clear: async (host) => { jar.delete(host); },
         },
         fetch: (url, init) => {
-            const { credentials, ...rest } = init;
-            const cookies = credentials === 'include' ? jar.get(new URL(url).origin) : undefined;
+            const cookies = init.credentials === 'include' ? jar.get(new URL(url).origin) : undefined;
             const cookie = cookies ? [...cookies].map(([name, value]) => `${name}=${value}`).join('; ') : '';
-            return send(url, { ...rest, headers: { ...init.headers, ...(cookie ? { Cookie: cookie } : {}) } } as never);
+            return send(url, { ...init, headers: { ...init.headers, ...(cookie ? { Cookie: cookie } : {}) } });
         },
     };
 }
