@@ -220,8 +220,38 @@ probe "host-ready-only-when-the-keychain-answers" src/main/host-keychain.ts \
     "        storage: () => ({ backend: 'gnome_libsecret', available: answers })," "        storage: () => ({ backend: 'gnome_libsecret', available: true })," \
     test/keychain.test.ts "whose keychain still refuses"
 
+# P3.4 cut b: the migration. Each of these, broken, loses a sign-in or moves one twice.
+probe "migration-read-back-gates-the-delete" src/main/keychain-migration.ts \
+    "    if (back !== 'same') return 'read-back-differs';" "" \
+    test/keychain-migration.test.ts "kept, not confirmed, and said"
+
+probe "migration-book-before-the-delete" src/main/keychain-migration.ts \
+    "    if (!(await book.write(name, 'verified').then(() => true, () => false))) return 'book-failed';" "" \
+    test/keychain-migration.test.ts "each crash really stopped the run where it says"
+
+probe "migration-never-runs-twice" src/main/keychain-migration.ts \
+    "    if (state === 'done') return 'already';" "" \
+    test/keychain-migration.test.ts "the old copy is not even read"
+
+probe "migration-confirmed-is-not-written-back" src/main/keychain-migration.ts \
+    "    if (state === 'verified') {" "    if ((state as string) === 'never') {" \
+    test/keychain-migration.test.ts "does NOT write it back"
+
+probe "migration-confirmed-needs-an-entry" src/main/keychain-migration.ts \
+    "        if (now === 'missing') return 'confirmed-entry-missing';" "" \
+    test/keychain-migration.test.ts "the old copy is NOT deleted"
+
+probe "migration-unreadable-book-touches-nothing" src/main/keychain-migration.ts \
+    "            return sources.map(({ name }) => ({ name, status: 'book-failed' as const }));" "            states = {};" \
+    test/keychain-migration.test.ts "because it might say this already ran"
+
+probe "migration-host-compares-for-real" src/main/keychain-migration.ts \
+    "            return read.value === value ? 'same' : 'different';" "            return 'same';" \
+    test/keychain-migration.test.ts "compare answers same, different"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
