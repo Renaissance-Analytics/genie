@@ -59,7 +59,8 @@ const HIDDEN = '.hidden-by-keyring-card';
 const SERVICES = '/usr/share/dbus-1/services';
 const DAEMON = '/usr/bin/gnome-keyring-daemon';
 const hiddenFiles = new Set();
-function hide(file) { if (sudo('mv', file, `${file}${HIDDEN}`)) { hiddenFiles.add(file); return true; } return false; }
+const everHidden = new Set();
+function hide(file) { if (sudo('mv', file, `${file}${HIDDEN}`)) { hiddenFiles.add(file); everHidden.add(file); return true; } return false; }
 function putBack() {
     for (const file of [...hiddenFiles]) { if (sudo('mv', `${file}${HIDDEN}`, file)) hiddenFiles.delete(file); else say(`could not put back ${file}`); }
     reloadBus();
@@ -67,7 +68,9 @@ function putBack() {
 const activationFiles = () => { try { return readdirSync(SERVICES).map((name) => `${SERVICES}/${name}`).filter((file) => /^Name=org\.freedesktop\.secrets\s*$/m.test(readFileSync(file, 'utf8'))); } catch { return []; } };
 const keychainAnswers = async () => {
     const { AsyncEntry } = require('@napi-rs/keyring');
-    const read = new AsyncEntry('Genie', 'genie/probe', { linux: { store: 'secret-service' } }).getPassword().then(() => true, () => false);
+    // With no Secret Service the library throws from the constructor, not only from the read (batch V: "The name is not activatable"), so both are a refusal here.
+    let read;
+    try { read = new AsyncEntry('Genie', 'genie/probe', { linux: { store: 'secret-service' } }).getPassword().then(() => true, () => false); } catch { return false; }
     return Promise.race([read, sleep(20_000).then(() => false)]);
 };
 const hostPid = () => { try { return JSON.parse(readFileSync(join(homedir(), '.genie', 'runtime', 'host.json'), 'utf8')).pid; } catch { return null; } };
@@ -84,7 +87,12 @@ async function stopApp() {
 async function finish() {
     await stopApp();
     putBack();
+    // Printed on every way out, a throw and the cap included: this script hides system files.
+    const stillHidden = [DAEMON, ...activationFiles(), ...everHidden].filter((file) => existsSync(`${file}${HIDDEN}`));
+    check(existsSync(DAEMON) && hiddenFiles.size === 0 && stillHidden.length === 0, 'Z1-everything-hidden-was-put-back', `hid ${everHidden.size} file(s); still hidden: ${stillHidden.join(', ') || 'none'}`);
     quiet('systemctl', '--user', 'start', 'gnome-keyring-daemon.socket');
+    const after = bus();
+    check(after.owned || after.activatable, 'Z2-the-bus-can-reach-the-service-again', after.line || 'not listed');
     if (failures.length > 0) {
         try {
             console.log('--- the end of the host log');
@@ -185,8 +193,6 @@ try {
         check(typeof shown?.manual === 'string' && shown.manual.includes('gnome-keyring'), 'C2-and-names-the-command', String(shown?.manual));
         await stopApp();
     }
-    putBack();
-    check(existsSync(DAEMON) && hiddenFiles.size === 0, 'D-everything-hidden-was-put-back');
 } catch (error) {
     check(false, 'the-check-threw', error instanceof Error ? error.message : String(error));
 }

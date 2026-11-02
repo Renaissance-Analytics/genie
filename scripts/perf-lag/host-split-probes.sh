@@ -216,6 +216,10 @@ probe "keychain-pin-is-secret-service" src/main/keychain.ts \
     "export const ENTRY_OPTIONS = { linux: { store: 'secret-service' } } as const;" "export const ENTRY_OPTIONS = { linux: { store: 'keyutils' } } as const;" \
     test/keychain.test.ts "cannot fall back to the kernel keyring"
 
+probe "a-bus-error-from-the-constructor-is-unavailable" src/main/keychain.ts \
+    "            return { kind: 'unavailable', reason: said(error) };" "            throw error;" \
+    test/keychain.test.ts "not missing, which would read as signed out, and not a throw"
+
 probe "keychain-unavailable-is-not-missing" src/main/keychain.ts \
     "            return { kind: 'unavailable', reason: said(error) };" "            return { kind: 'missing' };" \
     test/keychain.test.ts "never as missing"
