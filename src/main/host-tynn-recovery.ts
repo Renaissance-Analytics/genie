@@ -72,11 +72,9 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
         if (!owed.has(id) || restarting.has(id)) return;
         const live = ports.host.probe(id as AgentId);
         if (!live || live.running === false) { owed.delete(id); return; }
-        if (live.inTurn === true) {
-            // Said once per wait: an agent parked on a question the person has not answered waits as long as that takes.
-            if (!toldWaiting.has(id)) { toldWaiting.add(id); log(`tynn recovery: ${id} holds its key and waits for its turn to end before restarting`); }
-            return;
-        }
+        // Said once per wait: an agent parked on a question the person has not answered waits as long as that takes.
+        if (live.inTurn === true && !toldWaiting.has(id)) { toldWaiting.add(id); log(`tynn recovery: ${id} holds its key and waits for its turn to end before restarting`); }
+        if (live.inTurn === true) return;
         toldWaiting.delete(id);
         owed.delete(id);
         restarting.add(id);
