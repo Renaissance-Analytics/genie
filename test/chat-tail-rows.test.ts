@@ -22,6 +22,8 @@ function rng(seed: number) {
 
 function ledger(n: number, seed: number): TimedEvent[] {
     const r = rng(seed);
+    // Its own stream, so marking a call leaves every seed's ledger otherwise as it was.
+    const marks = rng(seed ^ 0x5a5a5a5a);
     const rows: TimedEvent[] = [];
     let turn = 0;
     const openTools: string[] = [];
@@ -38,7 +40,7 @@ function ledger(n: number, seed: number): TimedEvent[] {
             const id = `tc${i}`;
             openTools.push(id);
             // A subagent's call now and then: it never holds a message, in the whole chat or the tail (genie#1473).
-            event = { kind: 'tool', toolCallId: id, name: 'Bash', title: `step ${i}`, status: 'in_progress', ...(r() < 0.3 ? { parentToolCallId: 'tc_spawner' } : {}) };
+            event = { kind: 'tool', toolCallId: id, name: 'Bash', title: `step ${i}`, status: 'in_progress', ...(marks() < 0.3 ? { parentToolCallId: 'tc_spawner' } : {}) };
         } else if (p < 0.35 && openTools.length > 0) {
             const id = openTools.splice(Math.floor(r() * openTools.length), 1)[0]!;
             event = { kind: 'tool', toolCallId: id, name: 'Bash', title: null, status: r() < 0.8 ? 'completed' : 'failed' };

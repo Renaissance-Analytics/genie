@@ -81,8 +81,9 @@ export interface ChatMessage {
     /** A `delivery` row: the messages Genie told the agent about. */
     mail?: readonly ChatMailRef[];
     /**
-     * Your message, sent while the agent was in a step that has not ended (beta.33 item 21): the step it waits behind and
-     * when that step started. Claude reads a message at its next tool boundary; absent = not waiting.
+     * Your message, sent while the agent was in a step of its own that has not ended (beta.33 item 21): the step it waits
+     * behind and when that step started. Claude reads a message at its next tool boundary; absent = not waiting
+     * ({@link waitingMessages}).
      */
     waiting?: ChatWaitingOn;
 }
@@ -236,12 +237,20 @@ export function chatMessages(detail: ChatDetail, rows: readonly AgentRow[] = [])
 
 /**
  * WHICH OF YOUR MESSAGES WAIT, and behind what (beta.33 item 21; the owner's moic, inside one shell command from 14:31,
- * three messages unanswered and nothing saying why). Read from the ledger: a message of yours sent while a step of the
- * running turn had started and not ended waits behind that step, until it completes or fails (the boundary Claude reads
- * queued messages at), or the turn ends or is stopped. A message sent between steps does not wait.
+ * three messages unanswered and nothing saying why). Read from the ledger: a message of yours sent while a step OF THE
+ * AGENT'S OWN had started and not ended waits, until the agent can read it or has shown it did (genie#1473, measured in the
+ * ledgers; test/waiting-answered-1473.test.tsx has the rows):
+ *  - its own steps have all ended: the boundary Claude reads queued messages at. One ending while another of the batch runs
+ *    leaves the message waiting, behind that one;
+ *  - it says something, a reply or a thought: it is past those steps, so whatever still reads open is a step whose end was
+ *    never recorded, and holds nothing, this message or a later one. A later step of its own proves nothing: Claude starts
+ *    a batch's calls while still writing them;
+ *  - the turn ends or is stopped.
+ * A SUBAGENT's steps are neither: the agent runs beside them and reads your message straight away, and their rows say
+ * nothing about it having read anything. A message sent between steps does not wait.
  */
 export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, ChatWaitingOn> {
-    /** Steps started and not ended, in the turn now running: id → what it is and when it started. */
+    /** The agent's own steps started and not ended, in the turn now running: id → what it is and when it started. */
     const open = new Map<string, ChatWaitingOn>();
     /** Messages waiting, and the step each waits behind. */
     const waits = new Map<string, { on: string; waiting: ChatWaitingOn }>();
@@ -251,11 +260,21 @@ export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, Chat
             waits.clear();
             continue;
         }
+        if ((e.kind === 'think' || (e.kind === 'message' && e.speaker === 'agent')) && e.text.trim() !== '') {
+            open.clear();
+            waits.clear();
+            continue;
+        }
         if (e.kind === 'tool') {
-            if (e.toolCallId === '') continue;
+            if (e.toolCallId === '' || e.parentToolCallId !== undefined) continue;
             if (e.status === 'completed' || e.status === 'failed') {
                 open.delete(e.toolCallId);
-                for (const [m, w] of waits) if (w.on === e.toolCallId) waits.delete(m);
+                const running = [...open.entries()].at(-1);
+                for (const [m, w] of waits) {
+                    if (w.on !== e.toolCallId) continue;
+                    if (running) waits.set(m, { on: running[0], waiting: running[1] });
+                    else waits.delete(m);
+                }
                 continue;
             }
             const known = open.get(e.toolCallId);

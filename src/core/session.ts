@@ -3,7 +3,7 @@ import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
-import { PARENT_TOOL_CALL_META, REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
+import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -488,8 +488,8 @@ export class AgentSession {
      * reached the screen.
      */
     #heldBeside: StreamEvent[] = [];
-    /** A subagent's calls not yet answered, so a result is known as theirs even if it comes without the mark. */
-    #subagentCalls = new Set<string>();
+    /** A subagent's calls not yet answered, and the call that spawned each: a row of one is known as theirs even if it comes without the mark. */
+    #subagentCalls = new Map<string, string>();
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -1611,16 +1611,23 @@ export class AgentSession {
      * A usage report is not one of these: it is how a provider says a message is over, and on Codex nothing else may
      * separate two of them.
      */
-    #besideTheOpen(event: StreamEvent, update: Record<string, unknown>): boolean {
-        let subagent = false;
-        if (event.kind === 'tool') {
-            const meta = update['_meta'];
-            const marked = typeof meta === 'object' && meta !== null && typeof (meta as Record<string, unknown>)[PARENT_TOOL_CALL_META] === 'string';
-            subagent = marked || this.#subagentCalls.has(event.toolCallId);
-            if (subagent && event.status !== 'completed' && event.status !== 'failed') this.#subagentCalls.add(event.toolCallId);
-            else this.#subagentCalls.delete(event.toolCallId);
-        }
+    #besideTheOpen(event: StreamEvent): boolean {
+        const subagent = event.kind === 'tool' && event.parentToolCallId !== undefined;
         return this.#openMessage !== null && (subagent || event.kind === 'notice');
+    }
+
+    /**
+     * WHOSE CALL THIS IS, ON THE ROW ITSELF (genie#1473). The ledger's readers see only rows, and the chat took a subagent's
+     * running Bash for the agent's own: a message read at once sat under "Bash 2m" and Interrupt and send, with its reply
+     * below it. prism-acp marks a subagent's call and its result; a row of that call that comes without the mark gets it here.
+     */
+    #markSubagentCall(event: StreamEvent): StreamEvent {
+        if (event.kind !== 'tool') return event;
+        const parent = event.parentToolCallId ?? this.#subagentCalls.get(event.toolCallId);
+        if (parent === undefined) return event;
+        if (event.status === 'completed' || event.status === 'failed') this.#subagentCalls.delete(event.toolCallId);
+        else this.#subagentCalls.set(event.toolCallId, parent);
+        return { ...event, parentToolCallId: parent };
     }
 
     /**
@@ -1749,8 +1756,9 @@ export class AgentSession {
             return;
         }
 
-        const event = toStreamEvent(update);
-        if (!event) return; // Deliberately not a ledger row (e.g. the slash-command menu).
+        const read = toStreamEvent(update);
+        if (!read) return; // Deliberately not a ledger row (e.g. the slash-command menu).
+        const event = this.#markSubagentCall(read);
 
         /*
          * A MESSAGE joins the one being streamed, when it is the same speaker.
@@ -1832,7 +1840,7 @@ export class AgentSession {
             }
         }
 
-        if (this.#besideTheOpen(event, update)) {
+        if (this.#besideTheOpen(event)) {
             this.#heldBeside.push(event);
             return;
         }

@@ -104,6 +104,11 @@ describe('a step whose end never arrives', () => {
         expect(behind([...stale, think('th'), you('m2')], 'm2')).toBeNull();
     });
 
+    it('a step that does run after the words (tynn 105705-105708, the CLI’s "Set model to" inside a batch) holds a message, and never reads as a blank', () => {
+        const rows = [turn(), step('c1', 'toolu_plan', 'pending', 'Plan'), agent('r1', 'Set model to opus'), step('c2', 'toolu_plan', 'in_progress', ''), you('m1')];
+        expect(behind(rows, 'm1')).toBe('a step');
+    });
+
     it('its result arriving late changes nothing', () => {
         expect(behind([...stale, agent('r1'), step('c2', 'toolu_lost', 'completed', null), you('m2')], 'm2')).toBeNull();
     });
