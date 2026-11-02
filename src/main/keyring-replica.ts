@@ -1,8 +1,22 @@
 import type { KeyringView } from './linux-keyring.js';
-/** RED STUB. */
+import type { KeyringDump } from './keyring-service.js';
+
+/** The keyring card as a window sees it (P3.4 cut c): the host's last word, and a button that runs there. With no host yet: no card. */
 export class KeyringReplica {
-    view(): KeyringView | null { return null; }
-    canKeepSecrets(): boolean { return true; }
-    onChange(_listener: () => void): () => void { return () => {}; }
-    async fix(): Promise<void> { throw new Error('not built'); }
+    readonly #call: (method: string, args: readonly unknown[]) => Promise<unknown>;
+    #dump: KeyringDump = { view: null, canKeepSecrets: true };
+    readonly #listeners = new Set<() => void>();
+
+    constructor(call: (method: string, args: readonly unknown[]) => Promise<unknown>) { this.#call = call; }
+
+    rebase(dump: KeyringDump): void {
+        const changed = JSON.stringify(dump) !== JSON.stringify(this.#dump);
+        this.#dump = dump;
+        if (changed) for (const listener of [...this.#listeners]) listener();
+    }
+
+    view(): KeyringView | null { return this.#dump.view; }
+    canKeepSecrets(): boolean { return this.#dump.canKeepSecrets; }
+    onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
+    async fix(): Promise<void> { await this.#call('fix', []); }
 }

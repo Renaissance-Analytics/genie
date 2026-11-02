@@ -1,4 +1,5 @@
 import { KeyringReplica } from './keyring-replica.js';
+import type { KeyringDump } from './keyring-service.js';
 import { GithubAccountReplica } from './github-account-replica.js';
 import type { GithubAccountDump } from './github-account-service.js';
 import { TynnAccountReplica } from './tynn-account-replica.js';
@@ -317,6 +318,9 @@ export class SessionEngineClient {
             case 'stores.event':
                 this.stores().apply(payload as StoresEvent);
                 return;
+            case 'keyring.event':
+                this.keyring().rebase(payload as KeyringDump);
+                return;
             case 'github.event':
                 this.github().rebase(payload as GithubAccountDump);
                 return;
@@ -497,7 +501,11 @@ export class SessionEngineClient {
 
     /** The keyring card, as genie-host found it (P3.4 cut c). */
     keyring(): KeyringReplica {
-        this.#keyring ??= new KeyringReplica();
+        this.#keyring ??= new KeyringReplica(async (method, args) => {
+            const reply = await this.call('engine.keyring', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
         return this.#keyring;
     }
 

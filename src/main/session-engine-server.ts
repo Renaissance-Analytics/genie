@@ -168,6 +168,9 @@ export class SessionEngineServer {
         this.#options = options;
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
         // Every change to the stores agents write to, to every window's replicas (P3.1).
+        options.keyring?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'keyring.event', dump);
+        });
         options.github?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'github.event', dump);
         });
@@ -325,6 +328,7 @@ export class SessionEngineServer {
         // Who is signed in BEFORE ready: a window never reads signed out when it is not.
         if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());
         if (this.#options.github) this.#event(conn, 'github.event', this.#options.github.dump());
+        if (this.#options.keyring) this.#event(conn, 'keyring.event', this.#options.keyring.dump());
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
@@ -497,6 +501,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.keyring':
+                if (!this.#options.keyring) throw new Error('This host keeps no keyring card.');
+                return this.#options.keyring.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.github':
                 if (!this.#options.github) throw new Error('This host keeps no GitHub account.');
                 return this.#options.github.call(str(0), Array.isArray(args[1]) ? args[1] : []);
