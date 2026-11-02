@@ -30,6 +30,8 @@ import { limitRefusal } from '../core/shell-limits.js';
  */
 
 export interface PtySpawnOptions {
+    /** The id to open it under — a window's replica mints it so its pane opens at once (the host split, P3.3e). Absent = the engine mints one. */
+    id?: string | undefined;
     cwd: string;
     /**
      * What to run. **Absent means the user's own login shell**, resolved by the engine.
@@ -101,6 +103,8 @@ export interface PtyPort {
 }
 
 export interface TerminalOptions {
+    /** The id to open it under (P3.3e: a window's replica mints it). Absent = the engine mints one. */
+    id?: string | undefined;
     /**
      * The workspace this terminal belongs to.
      *
@@ -150,7 +154,22 @@ const OPEN_READY_WAIT_MS = 15_000;
 
 export class TerminalHost {
     readonly #pty: PtyPort;
-    #terminals: Terminal[] = [];
+    #list: Terminal[] = [];
+    readonly #changeListeners = new Set<() => void>();
+    // Every change to the list goes through here, so whoever mirrors it (genie-host's windows, P3.3e) is told of each.
+    get #terminals(): Terminal[] { return this.#list; }
+    set #terminals(next: Terminal[]) { this.#list = next; for (const l of [...this.#changeListeners]) l(); }
+
+    /** The list changed: a terminal opened, ended, closed, or its pid, shell or working directory came in. */
+    onChange(listener: () => void): () => void {
+        this.#changeListeners.add(listener);
+        return () => { this.#changeListeners.delete(listener); };
+    }
+
+    /** The workspace's terminal limit; null = none. What a window's replica refuses by before it asks (P3.3e). */
+    limitFor(workspaceId: string): number | null {
+        return this.#limits ? this.#limits.terminals(workspaceId) : null;
+    }
     readonly #dataListeners = new Set<(id: string, data: string) => void>();
     readonly #exitListeners = new Set<(id: string, exitCode: number) => void>();
     #cwdClock = 0;
@@ -237,6 +256,7 @@ export class TerminalHost {
             if (refused) throw new Error(refused);
         }
         const opened = this.#pty.open({
+            ...(options.id ? { id: options.id } : {}),
             cwd: options.cwd,
             command: options.command,
             ...(options.shell ? { shell: true } : {}),

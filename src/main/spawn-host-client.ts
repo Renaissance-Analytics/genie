@@ -163,7 +163,8 @@ export class SpawnHostClient {
                     fallbackOwned.add(opened.id);
                     return opened;
                 }
-                const id = `term_${randomUUID()}`;
+                // The caller's id when it gave one (a window's replica, P3.3e), never one already in use.
+                const id = spawn.id && !this.#ptys.has(spawn.id) ? spawn.id : `term_${randomUUID()}`;
                 if (this.#options.link && !this.#linkUp) {
                     // Over a link that is down: not started, and said (a crash with words, never a silent hang).
                     queueMicrotask(() => {
@@ -182,7 +183,8 @@ export class SpawnHostClient {
                 }
                 this.#ptys.set(id, { pid: null });
                 // The tag is the spawn host's to keep, not the engine's: it travels beside the spawn options.
-                const { tag, ...engineSpawn } = spawn;
+                const { tag, id: _asked, ...engineSpawn } = spawn;
+                void _asked;
                 this.#send({ kind: 'call', id: 0, method: 'pty.open', args: [id, engineSpawn, tag ?? null] });
                 return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
             },

@@ -72,6 +72,9 @@ export const ENGINE_METHODS = [
     'engine.processes',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
     'engine.flows',
+    // The host's terminals (P3.3e): `[method, args]`. Their list and scrollback are sent as `terminals.dump` before
+    // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
+    'engine.terminals',
     // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
     'engine.windowView',
     // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.

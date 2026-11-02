@@ -2,7 +2,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import { type Burst, type TakeOverProbe } from '../core/observed.js';
 import { randomUUID } from 'node:crypto';
 import { takeOverEnv } from '../core/take-over-env.js';
-import type { TerminalHost } from './terminal-host.js';
+import type { TerminalsApi } from './terminals-host.js';
 
 /**
  * TAKE OVER — §1, the only TUI support there is:
@@ -32,7 +32,7 @@ import type { TerminalHost } from './terminal-host.js';
  */
 
 export interface TakeOverOptions {
-    terminals: TerminalHost;
+    terminals: TerminalsApi;
     /** Open (or re-open — the opener decides whether that means focus) a window on a route. */
     openWindow: (route: string) => void;
     clock?: () => number;
@@ -55,7 +55,7 @@ interface Live {
 const BURSTS_KEPT = 600;
 
 export class TakeOverHost {
-    readonly #terminals: TerminalHost;
+    readonly #terminals: TerminalsApi;
     readonly #openWindow: (route: string) => void;
     readonly #clock: () => number;
     readonly #mcp: () => { mcpUrl: string; token: string } | null;

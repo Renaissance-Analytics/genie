@@ -23,7 +23,7 @@ function rig(window: { connected: boolean; answer?: (c: ForwardedToolCall) => Pr
     const ran: string[] = [];
     const forwarded: ForwardedToolCall[] = [];
     const queuedOpens: unknown[] = [];
-    const all = ['agentinbox', 'ForceTheQuestion', 'sites', 'manageTerminals', 'openFileForUser', 'spreadsheet.createWorkbook'].map((n) => local(n, ran));
+    const all = ['agentinbox', 'ForceTheQuestion', 'sites', 'services', 'openFileForUser', 'spreadsheet.createWorkbook'].map((n) => local(n, ran));
     const regs = hostRegistrations(all, {
         resolveCaller: (id) => (id === 'session-1' ? CALLER : null),
         window: {
@@ -38,8 +38,8 @@ function rig(window: { connected: boolean; answer?: (c: ForwardedToolCall) => Pr
 
 describe('the host keeps its own tools; the rest are the window\'s', () => {
     it('the host-native list is the stores-and-sessions tools', () => {
-        // processes joined in P3.3c (the book, its scheduler and the supervisor are the host's), flows in P3.3d.
-        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'flows', 'imDone', 'knowledge', 'lists', 'plan', 'processes', 'thumbsUp'].sort());
+        // processes joined in P3.3c (the book, its scheduler and the supervisor are the host's), flows in P3.3d, manageTerminals in P3.3e.
+        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'flows', 'imDone', 'knowledge', 'lists', 'manageTerminals', 'plan', 'processes', 'thumbsUp'].sort());
     });
 
     it('a host-native tool runs in the host, window or not', async () => {
@@ -50,7 +50,7 @@ describe('the host keeps its own tools; the rest are the window\'s', () => {
 
     it('every tool keeps its definition (same name, schema, title): the agent\'s tool list does not change shape', () => {
         const r = rig({ connected: true });
-        expect(r.regs.map((x) => x.definition.name)).toEqual(['agentinbox', 'ForceTheQuestion', 'sites', 'manageTerminals', 'openFileForUser', 'spreadsheet.createWorkbook']);
+        expect(r.regs.map((x) => x.definition.name)).toEqual(['agentinbox', 'ForceTheQuestion', 'sites', 'services', 'openFileForUser', 'spreadsheet.createWorkbook']);
     });
 });
 
@@ -66,8 +66,8 @@ describe('a window tool', () => {
 
     it('with NO window: refused AT ONCE, in words, as an error the agent reads — and nothing is forwarded', async () => {
         const r = rig({ connected: false });
-        const result = await r.byName('manageTerminals').handler({}, ctx());
-        expect(result).toEqual({ text: windowClosedRefusal('manageTerminals'), isError: true });
+        const result = await r.byName('services').handler({}, ctx());
+        expect(result).toEqual({ text: windowClosedRefusal('services'), isError: true });
         expect(result.text).toMatch(/Genie's window, which is closed/);
         expect(r.forwarded).toEqual([]);
     });

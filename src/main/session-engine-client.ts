@@ -30,6 +30,7 @@ import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
+import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -128,6 +129,7 @@ export class SessionEngineClient {
     #supervisor: SupervisorReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
+    #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -283,6 +285,12 @@ export class SessionEngineClient {
                 if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
                 return;
             }
+            case 'terminals.dump':
+                this.terminals().rebase(payload as TerminalsDump);
+                return;
+            case 'terminals.event':
+                this.terminals().apply(payload as TerminalsEvent);
+                return;
             case 'flows.event':
                 this.flows().apply(payload as FlowsEvent);
                 return;
@@ -464,6 +472,16 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#supervisor;
+    }
+
+    /** genie-host's terminals, as this window opens, types into and shows them (P3.3e). */
+    terminals(): TerminalsReplica {
+        this.#terminals ??= new TerminalsReplica(async (method, args) => {
+            const reply = await this.call('engine.terminals', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#terminals;
     }
 
     /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */

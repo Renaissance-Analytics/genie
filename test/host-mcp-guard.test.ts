@@ -88,6 +88,15 @@ describe('flows are genie-host\'s (P3.3d)', () => {
     });
 });
 
+describe('the terminals are genie-host\'s (P3.3e)', () => {
+    it('the host runs them on its own `terminals` child; no window sends into it; a window with a host drives them by replica', () => {
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/new TerminalHost\(terminalsClient\.ptyPort\(\)/);
+        expect(host).toMatch(/send: \(profile, frame\) => \{ if \(profile === 'processes'\) relay\?\.send\('processes', frame\); \}/);
+        expect(code('src/main/main.ts')).toMatch(/if \(agentEngineLink\) terminals = agentEngineLink\.client\.terminals\(\);/);
+    });
+});
+
 describe('genie-host', () => {
     it('opens the stores, serves them, and starts Genie\'s MCP server', () => {
         const host = code('src/main/genie-host.ts');
