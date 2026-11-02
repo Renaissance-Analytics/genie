@@ -62,7 +62,8 @@ import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-reques
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
 import { tynnPairingSource, TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
-import { GithubAccount } from './github-account.js';
+import { githubSealedSources, GithubAccount } from './github-account.js';
+import type { GithubAccountReplica } from './github-account-replica.js';
 import type { RepoListing } from '../core/github.js';
 import { ensureWorkstation, identityFrom, readGenie1Identity, workstationKeyStore } from './workstation-identity.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
@@ -1070,7 +1071,7 @@ function attractMainWindow(reason: string): void {
  */
 let tynnAccount: TynnAccount | TynnAccountReplica | null = null;
 /** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
-let githubAccount: GithubAccount | null = null;
+let githubAccount: GithubAccount | GithubAccountReplica | null = null;
 /** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
 let keyring: LinuxKeyring | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
@@ -2365,10 +2366,10 @@ async function boot(): Promise<void> {
             // The clone's own stderr is the reason a person reads; a bare exit code is not — see git-ports.ts, measured against a real git.
             // Signed in to GitHub, a repository of an account the app is installed on (with Contents) clones with that sign-in
             // (core/github.ts cloneAuthFor); anything else with the person's own git credentials, as before.
-            gitClone: (url, into, branch) => gitClone(url, into, githubAccount?.cloneAuth(url) ?? undefined, branch),
+            gitClone: (url, into, branch) => (githubAccount ? githubAccount.gitClone(url, into, branch) : gitClone(url, into, undefined, branch)),
             // A Tynn project's repositories as submodules of the envelope Genie makes for it, with the same credential.
             // The envelope wizard's Local sources (a folder on disk) need protocol.file.allow, carried the same way (git-ports.ts).
-            gitAddSubmodule: (envelope, url, at, branch, local) => gitAddSubmodule(envelope, url, at, branch, githubAccount?.cloneAuth(url) ?? undefined, local),
+            gitAddSubmodule: (envelope, url, at, branch, local) => (githubAccount ? githubAccount.gitAddSubmodule(envelope, url, at, branch, local) : gitAddSubmodule(envelope, url, at, branch, undefined, local)),
         },
         registry: {
             workspace: (id) => registry?.workspace(id) ?? null,
@@ -2422,7 +2423,7 @@ async function boot(): Promise<void> {
         remote: {
             git: {
                 setOrigin: (path, url) => gitSetOrigin(path, url),
-                pushMain: (path, url) => gitPushMain(path, githubAccount?.pushAuth(url) ?? undefined),
+                pushMain: (path, url) => (githubAccount ? githubAccount.gitPushMain(path, url) : gitPushMain(path, undefined)),
             },
             github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null),
             // Read at call time: the Tynn account exists once main has opened it.
@@ -2767,8 +2768,14 @@ async function boot(): Promise<void> {
         tynn: () => tynnAccount,
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
-        legacySecrets: async () => [tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform) })],
-        onSecretsMoved: () => { void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents({ secretsMoved: true })); },
+        legacySecrets: async () => [
+            tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform) }),
+            ...await githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }),
+        ],
+        onSecretsMoved: () => {
+            void githubAccount?.reload().catch(() => {});
+            void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents({ secretsMoved: true }));
+        },
         // An agent's key is the host's (genie#1457). A window running its own engine (the host could not start) holds it itself.
         ...(agentEngineLink
             ? { tynnSecrets: linkedAgentSecrets(agentEngineLink.client), tynnVault: linkedVault(agentEngineLink.client) }
@@ -3024,14 +3031,16 @@ async function boot(): Promise<void> {
     // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
     // device flow. Every change reaches Settings and the Deck's signal at once; GitHub is read once now, and again on
     // Check again or after a sign-in (no polling of the API).
-    githubAccount = await GithubAccount.open({
+    // THE ACCOUNT AND ITS TOKENS ARE THE HOST'S (P3.4 cut c): this window reads a replica and asks the host to act. Only a window running its own engine opens one here.
+    githubAccount = agentEngineLink ? agentEngineLink.client.github({ openExternal: (url) => shell.openExternal(url) }) : await GithubAccount.open({
         file: join(genieHome(), 'github.json'),
-        cipher: osCipher(safeStorage, process.platform),
+        secrets: new Keychain(),
         fetch: (url, init) => net.fetch(url, init),
-        v1Settings: () => readV1Settings(v1DatabaseFile()),
         openExternal: (url) => shell.openExternal(url),
     });
     githubAccount.onChange(() => { pushFeatures(); registry?.touch(); });
+    // A move of an older Genie's sign-in that finished before this line had nobody to tell.
+    void githubAccount.reload().catch(() => {});
     void githubAccount.refresh();
     // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a

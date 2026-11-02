@@ -39,6 +39,9 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { openHostKeychain } from './host-keychain.js';
+import { GithubAccount } from './github-account.js';
+import { GithubAccountService } from './github-account-service.js';
+import { hostHttpsFetch } from './host-https-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { hostTynnRecovery } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
@@ -227,6 +230,16 @@ async function main(): Promise<void> {
         log: say,
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
     })));
+    // GITHUB'S ACCOUNT (P3.4 cut c): its tokens and the authenticated git are here, and never cross to a window.
+    const githubOpening = proxyMemory.then((memory) => {
+        const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say });
+        return GithubAccount.open({
+            file: join(home, 'github.json'),
+            secrets: keychain,
+            fetch: (url, init) => send(url, { ...init, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(60_000) } as never) as never,
+        });
+    });
+    void githubOpening.then((account) => account.refresh(), (error: unknown) => say(`the GitHub account could not open: ${error instanceof Error ? error.message : String(error)}`));
     let hostTynn: TynnAccount | null = null;
     void tynnOpening.then((account) => { hostTynn = account; }, (error: unknown) => say(`the Tynn account could not open: ${error instanceof Error ? error.message : String(error)}`));
     // THE HOST PREPARES ITS AGENTS (P3.4 cut c), with a window open or not. A start waits for the account: opening has its own deadline.
@@ -261,6 +274,7 @@ async function main(): Promise<void> {
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
         tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
+        github: new GithubAccountService(githubOpening),
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {

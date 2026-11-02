@@ -378,8 +378,45 @@ probe "a-start-waits-for-the-write" src/main/agent-tynn-prep.ts \
     test/host-tynn-recovery.test.ts "the write has not landed when the start arrives"
 
 
+# P3.4 cut c: GitHub's account is the host's, its tokens never cross to a window, and git runs there.
+probe "no-keychain-refuses-before-github" src/main/github-account.ts \
+    "        if (!(await this.#ports.secrets.probe()).ok) {
+            this.#message = NO_ENCRYPTION;" "        if (false as boolean) {
+            this.#message = NO_ENCRYPTION;" \
+    test/github-account-host.test.ts "BEFORE GitHub is asked"
+
+probe "a-locked-keychain-keeps-the-record" src/main/github-account.ts \
+    "        this.#message = access.kind === 'unavailable'" "        this.#status = 'signed-out'; this.#message = access.kind === 'unavailable'" \
+    test/github-account-host.test.ts "the record stands, the entries stand"
+
+probe "sign-out-removes-the-tokens" src/main/github-account.ts \
+    "        await this.#ports.secrets.delete(ACCESS).catch(() => {});" "" \
+    test/github-account-host.test.ts "a sign-out removes both"
+
+probe "git-carries-the-credential-in-the-host" src/main/github-account-service.ts \
+    "                return this.#git.clone(url, String(args[1] ?? ''), account.cloneAuth(url) ?? undefined, (args[2] ?? null) as string | null);" "                return this.#git.clone(url, String(args[1] ?? ''), undefined, (args[2] ?? null) as string | null);" \
+    test/github-account-host.test.ts "the host carries the credential"
+
+probe "no-method-hands-out-a-credential" src/main/github-account-service.ts \
+    "            case 'startSignIn': return account.startSignIn();" "            case 'startSignIn': return account.startSignIn();
+            case 'cloneAuth': return account.cloneAuth(String(args[0] ?? ''));" \
+    test/github-account-host.test.ts "no method a window can ask for returns a credential"
+
+probe "a-window-opens-only-githubs-pages" src/main/github-account-replica.ts \
+    "        if (!/^https:\\/\\/github\\.com\\//.test(url)) return;" "" \
+    test/github-account-host.test.ts "opens only GitHub"
+
+probe "typed-errors-survive-the-link" src/main/github-account-replica.ts \
+    "        if (carried.error) throw rebuilt(carried.error);" "        if (carried.error) throw new Error(carried.error.message);" \
+    test/github-account-host.test.ts "survives the link as that type"
+
+probe "the-seal-is-left-until-it-opens" src/main/github-account.ts \
+    "        } catch { return { kind: 'unreadable' }; }" "        } catch { return { kind: 'none' }; }" \
+    test/github-account-host.test.ts "a seal that will not open"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

@@ -87,7 +87,7 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
             const status = res.statusCode ?? 0;
             if (status >= 300 && status < 400) {
                 res.destroy();
-                reject(new Error(`Tynn answered with a redirect (${status}), which is refused.`));
+                reject(new Error(`${target.host} answered with a redirect (${status}), which is refused.`));
                 return;
             }
             const chunks: Buffer[] = [];
@@ -99,7 +99,8 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
             });
             // A status-only caller need not read it; its failure must still be handled.
             void body.catch(() => {});
-            resolve({ ok: status >= 200 && status < 300, status, text: () => body });
+            const headers = { get: (name: string): string | null => { const value = res.headers[name.toLowerCase()]; return Array.isArray(value) ? value.join(', ') : value ?? null; } };
+            resolve({ ok: status >= 200 && status < 300, status, headers, text: () => body } as never);
         });
         ask.on('error', reject);
         ask.end(init.body);

@@ -1,4 +1,5 @@
 import { GithubAccountReplica } from './github-account-replica.js';
+import type { GithubAccountDump } from './github-account-service.js';
 import { TynnAccountReplica } from './tynn-account-replica.js';
 import type { TynnAccountDump } from './tynn-account-service.js';
 import type { McpServer, SessionModelState } from '@particle-academy/prism-acp';
@@ -314,6 +315,12 @@ export class SessionEngineClient {
             case 'stores.event':
                 this.stores().apply(payload as StoresEvent);
                 return;
+            case 'github.event':
+                this.github().rebase(payload as GithubAccountDump);
+                return;
+            case 'github.open':
+                this.github().openFromHost(String((payload as { url?: unknown } | null)?.url ?? ''));
+                return;
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
                 return;
@@ -487,8 +494,13 @@ export class SessionEngineClient {
     }
 
     /** genie-host's GitHub account (P3.4 cut c). */
-    github(_options?: { openExternal?: (url: string) => Promise<void> }): GithubAccountReplica {
-        this.#github ??= new GithubAccountReplica();
+    github(options?: { openExternal?: (url: string) => Promise<void> }): GithubAccountReplica {
+        this.#github ??= new GithubAccountReplica(async (method, args) => {
+            const reply = await this.call('engine.github', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        if (options?.openExternal) this.#github.useBrowser(options.openExternal);
         return this.#github;
     }
 

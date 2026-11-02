@@ -4,6 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { GithubNotInstalledError } from '../src/core/github.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { GithubAccount, githubSealedSources, type GithubAccountPorts } from '../src/main/github-account.js';
 import { GithubAccountService, type GithubGitPorts } from '../src/main/github-account-service.js';
@@ -318,6 +319,23 @@ describe('a window reads a replica', () => {
         client.github().openFromHost('https://elsewhere.example/phish');
         client.github().openFromHost('https://github.com/settings/installations');
         expect(opened).toEqual(['https://github.com/settings/installations']);
+    });
+
+    it('an error a window acts on by its type survives the link as that type: the install chooser still appears', async () => {
+        writeFileSync(file, record());
+        const account = await GithubAccount.open(portsWith(keychain({ 'github/access': TOKEN }), fakeGithub()));
+        account.createRepo = async () => { throw new GithubNotInstalledError('Example-Org', 'https://github.com/apps/x/installations/new', 403, 'nope'); };
+        const service = new GithubAccountService(account);
+        const server = new SessionEngineServer({ token: 'a'.repeat(64), build: 'test', github: service });
+        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
+        server.attach(host);
+        const [hostSide, windowSide] = memoryPair();
+        server.accept(hostSide);
+        const client = new SessionEngineClient();
+        await client.connect(windowSide, 'a'.repeat(64));
+        const thrown = await client.github().createRepo({ owner: 'Example-Org', name: 'x', private: true }).catch((error: unknown) => error);
+        expect(thrown).toBeInstanceOf(GithubNotInstalledError);
+        expect(thrown).toMatchObject({ account: 'Example-Org', installUrl: 'https://github.com/apps/x/installations/new', status: 403 });
     });
 
     it('with no link it reads signed out, and git refuses', async () => {

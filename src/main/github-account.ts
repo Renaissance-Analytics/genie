@@ -1,4 +1,7 @@
-import type { MigrationSource } from './keychain-migration.js';
+import type { MigrationSource, OldRead } from './keychain-migration.js';
+import type { SecretName } from './keychain.js';
+import { gitAddSubmodule, gitClone, gitPushMain } from './git-ports.js';
+import type { TynnSecrets } from './tynn-account.js';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import {
@@ -64,13 +67,6 @@ import {
  * install chooser for that account.
  */
 
-/** Electron's safeStorage, as a port. */
-export interface GithubCipher {
-    isAvailable(): boolean;
-    encrypt(text: string): Buffer;
-    decrypt(bytes: Buffer): string;
-}
-
 export type GithubFetch = (url: string, init: { method: 'GET' | 'POST' | 'PATCH'; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; headers?: { get(name: string): string | null }; text(): Promise<string> }>;
 
 /** What `createRepo` makes: a repository under the signed-in person (`owner` = their login) or an organization. */
@@ -82,13 +78,11 @@ export interface CreateRepoOptions {
 }
 
 export interface GithubAccountPorts {
-    /** Genie 2's own file (`~/.genie/github.json`): the login in the clear, the token encrypted. */
+    /** Genie 2's own file (`~/.genie/github.json`): who is signed in, and when its tokens run out. The tokens are in the keychain. */
     readonly file: string;
-    readonly cipher?: GithubCipher;
-    readonly secrets?: unknown;
+    /** The keychain. No keychain refuses a sign-in; it never falls back to a file (decision 3). */
+    readonly secrets: TynnSecrets;
     readonly fetch: GithubFetch;
-    /** Genie 1's settings table, read-only; `null` when there is none. */
-    readonly v1Settings?: () => Readonly<Record<string, string>> | null;
     /** Opens the person's browser. */
     readonly openExternal?: (url: string) => Promise<void>;
     /** Waits between polls; rejects when the signal aborts. */
@@ -98,8 +92,62 @@ export interface GithubAccountPorts {
 
 export type GithubPage = { page: 'install' } | { page: 'device' } | { page: 'authorizations' } | { page: 'installation'; installationId: number };
 
-/** RED STUB. */
-export async function githubSealedSources(_options: { file: string; cipher: { decrypt(bytes: Buffer): string }; v1Settings?: () => Readonly<Record<string, string>> | null }): Promise<MigrationSource[]> { return []; }
+/**
+ * WHAT AN OLDER GENIE SEALED, for the one-time move (keychain-migration.ts). Only a window can open it: this Genie's own file, or, with no file yet, Genie 1's login, as
+ * Genie 1 left it in its database. The delete takes the field out and leaves the rest of the record. With no file, the delete is what writes one, so the record
+ * follows the token into being. After a sign-out there is a file, so Genie 1's is not carried over again.
+ */
+export async function githubSealedSources(options: { file: string; cipher: { decrypt(bytes: Buffer): string }; v1Settings?: () => Readonly<Record<string, string>> | null }): Promise<MigrationSource[]> {
+    const textOf = async (): Promise<string | null> => readFile(options.file, 'utf8').catch(() => null);
+    const write = async (value: unknown): Promise<void> => {
+        await mkdir(dirname(options.file), { recursive: true });
+        const tmp = `${options.file}.tmp`;
+        await writeFile(tmp, JSON.stringify(value, null, 2), { mode: 0o600 });
+        await rename(tmp, options.file);
+    };
+    const open = (blob: string): OldRead => {
+        try {
+            const value = options.cipher.decrypt(Buffer.from(blob, 'base64'));
+            return value ? { kind: 'value', value } : { kind: 'unreadable' };
+        } catch { return { kind: 'unreadable' }; }
+    };
+    const text = await textOf();
+    if (text !== null) {
+        let parsed: Record<string, unknown>;
+        try { parsed = JSON.parse(text) as Record<string, unknown>; } catch { return []; }
+        const field = (name: SecretName, key: 'tokenEnc' | 'refreshEnc'): MigrationSource[] => (typeof parsed[key] !== 'string' || parsed[key] === '' ? [] : [{
+            name,
+            old: {
+                read: async () => {
+                    const now = JSON.parse(await textOf() ?? '{}') as Record<string, unknown>;
+                    return typeof now[key] === 'string' && now[key] !== '' ? open(now[key]) : { kind: 'none' };
+                },
+                remove: async () => {
+                    const now = JSON.parse(await textOf() ?? '{}') as Record<string, unknown>;
+                    const { [key]: _gone, ...kept } = now;
+                    await write(kept);
+                },
+            },
+        }]);
+        return [...field(ACCESS, 'tokenEnc'), ...field(REFRESH, 'refreshEnc')];
+    }
+    let settings: Readonly<Record<string, string>> | null = null;
+    try { settings = options.v1Settings?.() ?? null; } catch { settings = null; }
+    const v1 = v1GithubLogin(settings);
+    if (!v1) return [];
+    const remember = async (): Promise<void> => {
+        if (await textOf() !== null) return;
+        await write({
+            version: 1, state: 'signed-in', login: v1.login ?? PLACEHOLDER_LOGIN, name: null, source: 'genie-1',
+            ...(v1.accessExpiresAt ? { accessExpiresAt: v1.accessExpiresAt } : {}),
+            ...(v1.refreshExpiresAt ? { refreshExpiresAt: v1.refreshExpiresAt } : {}),
+        });
+    };
+    return [
+        { name: ACCESS, old: { read: async () => open(v1.tokenEnc), remove: remember } },
+        ...(v1.refreshEnc ? [{ name: REFRESH, old: { read: async (): Promise<OldRead> => open(v1.refreshEnc!), remove: remember } }] : []),
+    ];
+}
 
 /** What the Settings surface and the IPC need — the account as a port, faked in tests. */
 export interface GithubAccountPort {
@@ -118,15 +166,17 @@ export interface GithubAccountPort {
  */
 type StoredFile =
     | { version: 1; state: 'signed-out' }
-    | { version: 1; state: 'signed-in'; login: string; name: string | null; source: 'genie-1' | 'sign-in'; tokenEnc: string; refreshEnc?: string; accessExpiresAt?: number; refreshExpiresAt?: number };
+    | { version: 1; state: 'signed-in'; login: string; name: string | null; source: 'genie-1' | 'sign-in'; accessExpiresAt?: number; refreshExpiresAt?: number };
 type SignedInFile = Extract<StoredFile, { state: 'signed-in' }>;
-/** The tokens in memory, decrypted: main only, never in a view, a message, an error or a log. */
+/** The tokens in memory: the host only, never in a view, a message, an error or a log. */
 type HeldTokens = { token: string; refreshToken: string | null; accessExpiresAt: number | null; refreshExpiresAt: number | null };
 
 const API = 'https://api.github.com';
 const DEVICE_CODE_URL = 'https://github.com/login/device/code';
 const TOKEN_URL = 'https://github.com/login/oauth/access_token';
-const NO_ENCRYPTION = 'OS encryption is unavailable, so Genie will not keep a GitHub sign-in (it would be in the clear). On Linux, install gnome-keyring / libsecret.';
+const NO_ENCRYPTION = 'This computer has no keyring running, so Genie will not keep a GitHub sign-in (it would be in the clear). On Linux, install or start gnome-keyring.';
+const ACCESS: SecretName = 'github/access';
+const REFRESH: SecretName = 'github/refresh';
 const reach = (error: unknown) => `GitHub could not be reached (${error instanceof Error ? error.message : String(error)})`;
 const NOT_ACCEPTED = 'GitHub no longer accepts this sign-in (it was revoked, or the app was uninstalled from your account). Sign in again.';
 const PLACEHOLDER_LOGIN = 'your GitHub account';
@@ -166,16 +216,21 @@ export class GithubAccount implements GithubAccountPort {
     #flow: { abort: AbortController; done: Promise<void> } | null = null;
     readonly #listeners = new Set<() => void>();
 
+    /** Who opens a page for the person: in the host, a window. */
+    #open: ((url: string) => Promise<void>) | undefined;
+
     private constructor(ports: GithubAccountPorts) {
         this.#ports = ports;
+        this.#open = ports.openExternal;
     }
 
-    /** Reads this Genie's sign-in; with none ever made here, carries Genie 1's over. Does not touch the network. */
+    useBrowser(open: (url: string) => Promise<void>): void { this.#open = open; }
+
+    /** Reads this Genie's sign-in. Does not touch the network. */
     static async open(ports: GithubAccountPorts): Promise<GithubAccount> {
         const account = new GithubAccount(ports);
         const stored = await account.#load();
-        if (stored === null) await account.#importV1();
-        else if (stored.state === 'signed-in') account.#restore(stored);
+        if (stored?.state === 'signed-in') await account.#restore(stored);
         return account;
     }
 
@@ -212,11 +267,10 @@ export class GithubAccount implements GithubAccountPort {
         try {
             const parsed = JSON.parse(text) as Partial<StoredFile> | null;
             if (parsed?.state === 'signed-out') return { version: 1, state: 'signed-out' };
-            if (parsed?.state === 'signed-in' && typeof parsed.login === 'string' && typeof parsed.tokenEnc === 'string') {
+            if (parsed?.state === 'signed-in' && typeof parsed.login === 'string') {
                 const p = parsed as Partial<SignedInFile>;
                 return {
-                    version: 1, state: 'signed-in', login: parsed.login, name: typeof parsed.name === 'string' ? parsed.name : null, source: parsed.source === 'genie-1' ? 'genie-1' : 'sign-in', tokenEnc: parsed.tokenEnc,
-                    ...(typeof p.refreshEnc === 'string' && p.refreshEnc ? { refreshEnc: p.refreshEnc } : {}),
+                    version: 1, state: 'signed-in', login: parsed.login, name: typeof parsed.name === 'string' ? parsed.name : null, source: parsed.source === 'genie-1' ? 'genie-1' : 'sign-in',
                     ...(typeof p.accessExpiresAt === 'number' ? { accessExpiresAt: p.accessExpiresAt } : {}),
                     ...(typeof p.refreshExpiresAt === 'number' ? { refreshExpiresAt: p.refreshExpiresAt } : {}),
                 };
@@ -234,73 +288,47 @@ export class GithubAccount implements GithubAccountPort {
         await rename(tmp, this.#ports.file);
     }
 
-    #decrypt(blob: string): { ok: true; token: string } | { ok: false; reason: 'unavailable' | 'failed' } {
-        if (!this.#ports.cipher!.isAvailable()) return { ok: false, reason: 'unavailable' };
-        try {
-            const token = this.#ports.cipher!.decrypt(Buffer.from(blob, 'base64'));
-            return token ? { ok: true, token } : { ok: false, reason: 'failed' };
-        } catch {
-            return { ok: false, reason: 'failed' };
-        }
-    }
-
-    #restore(stored: SignedInFile): void {
+    async #restore(stored: SignedInFile): Promise<void> {
         this.#user = { login: stored.login, name: stored.name };
-        const t = this.#decrypt(stored.tokenEnc);
-        if (t.ok) {
-            this.#token = t.token;
-            // A refresh token that no longer decrypts is no renewal: the access token is used until GitHub refuses it.
-            const r = stored.refreshEnc ? this.#decrypt(stored.refreshEnc) : null;
-            this.#refreshToken = r?.ok ? r.token : null;
+        const access = await this.#ports.secrets.get(ACCESS);
+        if (access.kind === 'value') {
+            const refresh = await this.#ports.secrets.get(REFRESH);
+            this.#token = access.value;
+            // No refresh token to be had is no renewal: the access token is used until GitHub refuses it.
+            this.#refreshToken = refresh.kind === 'value' ? refresh.value : null;
             this.#accessExpiresAt = stored.accessExpiresAt ?? null;
             this.#refreshExpiresAt = stored.refreshExpiresAt ?? null;
             this.#status = 'signed-in';
+            this.#message = null;
             return;
         }
+        // A locked keychain is not signed out: the record and the entries stand, and a reload picks them up.
         this.#status = 'expired';
-        this.#message = t.reason === 'unavailable'
+        this.#message = access.kind === 'unavailable'
             ? `${NO_ENCRYPTION} The saved sign-in for ${stored.login} cannot be read until it is.`
-            : `This Genie cannot decrypt the saved GitHub sign-in for ${stored.login} (the OS keychain changed, or another OS user saved it). Sign in again.`;
+            : `The saved GitHub sign-in for ${stored.login} is not in this computer's keychain. Sign in again.`;
     }
 
-    /** Genie 1's login, decrypted with this Genie's key and kept encrypted in this Genie's file. Only when none was ever made here. */
-    async #importV1(): Promise<void> {
-        let settings: Readonly<Record<string, string>> | null = null;
-        try {
-            settings = this.#ports.v1Settings?.() ?? null;
-        } catch {
-            settings = null;
-        }
-        const v1 = v1GithubLogin(settings);
-        if (!v1) return;
-        const t = this.#decrypt(v1.tokenEnc);
-        if (!t.ok) {
-            // Nothing written: a later launch (encryption back, the right user) tries again.
-            this.#message = t.reason === 'unavailable'
-                ? `Genie 1’s GitHub sign-in is on this machine, but ${NO_ENCRYPTION}`
-                : 'Genie 1’s GitHub sign-in is on this machine, but this Genie cannot decrypt it (it was saved under another OS user or keychain). Sign in once below.';
-            return;
-        }
-        const login = v1.login ?? PLACEHOLDER_LOGIN;
-        // Genie 1's refresh token and expiries come with it (a refresh token this Genie cannot decrypt is left behind).
-        const r = v1.refreshEnc ? this.#decrypt(v1.refreshEnc) : null;
-        const tokens: HeldTokens = { token: t.token, refreshToken: r?.ok ? r.token : null, accessExpiresAt: v1.accessExpiresAt ?? null, refreshExpiresAt: v1.refreshExpiresAt ?? null };
-        try {
-            await this.#save(this.#fileFor(tokens, login, null, 'genie-1'));
-        } catch (error) {
-            // Used for this run all the same; the next launch carries it over again.
-            this.#message = `Genie 1’s GitHub sign-in is in use, but it could not be saved for next time (${error instanceof Error ? error.message : String(error)}).`;
-        }
-        this.#hold(tokens);
-        this.#user = { login, name: null };
-        this.#status = 'signed-in';
+    /** Read again what is kept: the move of an older Genie's sign-in has finished, or the keychain answers now. */
+    async reload(): Promise<void> {
+        if (this.#status === 'signed-in') return;
+        const stored = await this.#load();
+        if (stored?.state !== 'signed-in') return;
+        await this.#restore(stored);
+        this.#changed();
+    }
+
+    /** The tokens first, then the record that says they are there. */
+    async #keep(t: HeldTokens): Promise<void> {
+        const access = await this.#ports.secrets.set(ACCESS, t.token);
+        if (!access.ok) throw new Error(access.reason);
+        const refresh = t.refreshToken ? await this.#ports.secrets.set(REFRESH, t.refreshToken) : await this.#ports.secrets.delete(REFRESH);
+        if (!refresh.ok) throw new Error(refresh.reason);
     }
 
     #fileFor(t: HeldTokens, login: string, name: string | null, source: SignedInFile['source']): SignedInFile {
-        const encrypt = (text: string) => this.#ports.cipher!.encrypt(text).toString('base64');
         return {
-            version: 1, state: 'signed-in', login, name, source, tokenEnc: encrypt(t.token),
-            ...(t.refreshToken ? { refreshEnc: encrypt(t.refreshToken) } : {}),
+            version: 1, state: 'signed-in', login, name, source,
             ...(t.accessExpiresAt !== null ? { accessExpiresAt: t.accessExpiresAt } : {}),
             ...(t.refreshExpiresAt !== null ? { refreshExpiresAt: t.refreshExpiresAt } : {}),
         };
@@ -402,7 +430,7 @@ export class GithubAccount implements GithubAccountPort {
         this.#hold(tokens);
         const stored = await this.#load();
         try {
-            if (stored?.state === 'signed-in') await this.#save(this.#fileFor(tokens, stored.login, stored.name, stored.source));
+            if (stored?.state === 'signed-in') { await this.#keep(tokens); await this.#save(this.#fileFor(tokens, stored.login, stored.name, stored.source)); }
         } catch (error) {
             // GitHub has already rotated the refresh token: the new pair is used this run, and the person is told it is not kept.
             this.#message = `The GitHub sign-in was renewed, but could not be saved for next time (${error instanceof Error ? error.message : String(error)}).`;
@@ -520,7 +548,7 @@ export class GithubAccount implements GithubAccountPort {
         const previous = this.#flow;
         this.cancelSignIn();
         if (previous) await previous.done;
-        if (!this.#ports.cipher!.isAvailable()) {
+        if (!(await this.#ports.secrets.probe()).ok) {
             this.#message = NO_ENCRYPTION;
             this.#changed();
             return;
@@ -550,7 +578,7 @@ export class GithubAccount implements GithubAccountPort {
         this.#flow = { abort, done };
         this.#changed();
         try {
-            await this.#ports.openExternal?.(code.verificationUri);
+            await this.#open?.(code.verificationUri);
         } catch {
             // No browser here: the page and the code stay on screen to use on any device.
         }
@@ -617,13 +645,14 @@ export class GithubAccount implements GithubAccountPort {
         } catch {
             // Read again by refresh below.
         }
-        if (!this.#ports.cipher!.isAvailable()) {
+        if (!(await this.#ports.secrets.probe()).ok) {
             this.#status = before;
             this.#message = NO_ENCRYPTION;
             this.#changed();
             return;
         }
         try {
+            await this.#keep(tokens);
             await this.#save(this.#fileFor(tokens, login ?? PLACEHOLDER_LOGIN, name, 'sign-in'));
         } catch (error) {
             this.#status = before;
@@ -641,12 +670,13 @@ export class GithubAccount implements GithubAccountPort {
     }
 
     /** Forgets the token here (GitHub keeps the authorization until it is revoked on GitHub's page) and records it. */
-    async reload(): Promise<void> {}
-
     async signOut(): Promise<void> {
         this.cancelSignIn();
         await this.#flow?.done;
         await this.#save({ version: 1, state: 'signed-out' });
+        // Signed out is on disk. A locked keychain's entries are overwritten by the next sign-in.
+        await this.#ports.secrets.delete(ACCESS).catch(() => {});
+        await this.#ports.secrets.delete(REFRESH).catch(() => {});
         this.#token = null;
         this.#refreshToken = null;
         this.#accessExpiresAt = null;
@@ -666,7 +696,7 @@ export class GithubAccount implements GithubAccountPort {
         else if (target.page === 'device') url = this.#device?.verificationUri ?? null;
         else url = this.#installations?.find((i) => i.id === target.installationId)?.settingsUrl ?? null;
         if (!url || !/^https:\/\/github\.com\//.test(url)) return;
-        await this.#ports.openExternal?.(url);
+        await this.#open?.(url);
     }
 
     /**
@@ -828,12 +858,17 @@ export class GithubAccount implements GithubAccountPort {
         throw new GithubApiError(0, `GitHub has not finished making the fork ${fullName} (it is not ready after about two minutes). Try again in a moment — GitHub hands the same fork back.`);
     }
 
-    /** The credential for a clone of `url`, when this sign-in can read it (core/github.ts cloneAuthFor). Main-side only. */
+    /** Authenticated git where the account is. With a host, the host runs it (github-account-service.ts) and a window never sees a credential. */
+    gitClone(url: string, into: string, branch: string | null | undefined): Promise<void> { return gitClone(url, into, this.cloneAuth(url) ?? undefined, branch); }
+    gitAddSubmodule(envelope: string, url: string, at: string, branch: string | null, local: boolean | undefined): Promise<string | null> { return gitAddSubmodule(envelope, url, at, branch, this.cloneAuth(url) ?? undefined, local ?? false); }
+    gitPushMain(path: string, url: string): Promise<void> { return gitPushMain(path, this.pushAuth(url) ?? undefined); }
+
+    /** The credential for a clone of `url`, when this sign-in can read it (core/github.ts cloneAuthFor). Host-side only. */
     cloneAuth(url: string): { url: string; config: Array<[string, string]>; secrets: string[] } | null {
         return this.#status === 'signed-in' ? cloneAuthFor(url, this.#token, this.#installations) : null;
     }
 
-    /** The credential for a push to `url`, when the App may WRITE there (core/github.ts pushAuthFor). Main-side only. */
+    /** The credential for a push to `url`, when the App may WRITE there (core/github.ts pushAuthFor). Host-side only. */
     pushAuth(url: string): { config: Array<[string, string]>; secrets: string[] } | null {
         return this.#status === 'signed-in' ? pushAuthFor(url, this.#token, this.#installations) : null;
     }
