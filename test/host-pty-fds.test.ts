@@ -109,10 +109,18 @@ afterAll(async () => {
 /** The real genie-host on Electron's runtime, given `fd` (if any) on fd 3; its log captured. */
 function startHost(home: string, fd: number | null): { child: ChildProcess; log: () => string } {
     let log = '';
-    const child = spawn(electron, ['--import', 'tsx', resolve('src/main/genie-host.ts')], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', GENIE_HOME: home, GENIE_HOST_BUILD: 'pty-fds-test', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts'), GENIE_HOST_IDLE_MS: '600000', HOST_PTY_FDS_RUN: RUN },
-        stdio: fd === null ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'pipe', 'pipe', fd],
-    });
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', GENIE_HOME: home, GENIE_HOST_BUILD: 'pty-fds-test', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts'), GENIE_HOST_IDLE_MS: '600000', HOST_PTY_FDS_RUN: RUN };
+    const argv = ['--import', 'tsx', resolve('src/main/genie-host.ts')];
+    /*
+     * The socket arrives the way the VM showed the window's do: a PLAIN inherited fd, no close-on-exec (VM job 76: the host
+     * held fds 41–69 with cloexec=no). Handed straight over as stdio[3], libuv's stdio mapping left it flagged
+     * close-on-exec in the host (CI measured flags 02004002) — a shape the product never produces (it spawns the host with
+     * stdio 0–2 only). So a shell takes it on fd 3, moves it to fd 7 (a shell's dup never sets close-on-exec), closes 3,
+     * and execs the host in its own place (same pid): the host inherits fd 7 exactly as genie-host inherits the window's.
+     */
+    const child = fd === null
+        ? spawn(electron, argv, { env, stdio: ['ignore', 'pipe', 'pipe'] })
+        : spawn('/bin/sh', ['-c', 'exec 7<&3 3<&-; exec "$0" "$@"', electron, ...argv], { env, stdio: ['ignore', 'pipe', 'pipe', fd] });
     child.stdout!.on('data', (c: Buffer) => { log += c.toString(); });
     child.stderr!.on('data', (c: Buffer) => { log += c.toString(); });
     return { child, log: () => log };
