@@ -252,7 +252,9 @@ check(named === true, '9. the snapshot came from the real registry, not the empt
 
 // 9. Stylesheet actually applied. A wrong Tailwind `@source` ships a stylesheet with none of
 //    the board's metrics in it, and every surface silently collapses to unstyled blocks.
-const railWidth = await cdp.evaluate('(() => { const n = document.querySelector("nav"); return n ? Math.round(n.getBoundingClientRect().width) : 0; })()');
+// The rail CONTAINER (`data-rail`, w-52): since the rail became react-fancy's Sidebar (#1430) the first <nav> is Sidebar's
+// landmark inside it (191px = 208 − 1px border − 16px padding), so the container is what the 208 is about.
+const railWidth = await cdp.evaluate('(() => { const n = document.querySelector("[data-rail=expanded]"); return n ? Math.round(n.getBoundingClientRect().width) : 0; })()');
 check(railWidth === 208, '10. the rail is 208px — the stylesheet applied', `${railWidth}px`);
 
 const barHeight = await cdp.evaluate('(() => { const n = document.querySelector("[data-route]")?.parentElement; return n ? Math.round(n.getBoundingClientRect().height) : 0; })()');
