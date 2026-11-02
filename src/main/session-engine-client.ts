@@ -1,3 +1,4 @@
+import { WorkstationReplica } from './workstation-replica.js';
 import { KeyringReplica } from './keyring-replica.js';
 import type { KeyringDump } from './keyring-service.js';
 import { GithubAccountReplica } from './github-account-replica.js';
@@ -138,6 +139,7 @@ export class SessionEngineClient {
     #tynn: TynnAccountReplica | null = null;
     #github: GithubAccountReplica | null = null;
     #keyring: KeyringReplica | null = null;
+    #workstation: WorkstationReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -497,6 +499,12 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#terminals;
+    }
+
+    /** This machine as a workstation: genie-host holds the key and signs (P3.4). */
+    workstation(): WorkstationReplica {
+        this.#workstation ??= new WorkstationReplica();
+        return this.#workstation;
     }
 
     /** The keyring card, as genie-host found it (P3.4 cut c). */

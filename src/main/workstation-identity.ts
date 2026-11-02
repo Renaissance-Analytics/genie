@@ -122,6 +122,10 @@ export function readGenie1Identity(settings: Readonly<Record<string, string>> | 
     return { workstationId, privateKeyPem };
 }
 
+/** RED STUB. */
+export type WorkstationSecrets = { probe(): Promise<unknown>; get(name: never): Promise<unknown>; set(name: never, value: string): Promise<unknown> };
+export async function workstationSealedSources(_options: { file: string; cipher: { decrypt(bytes: Buffer): string } }): Promise<import('./keychain-migration.js').MigrationSource[]> { return []; }
+
 /** Electron's safeStorage, as a port. */
 export interface IdentityCipher {
     isAvailable(): boolean;
@@ -132,7 +136,8 @@ export interface IdentityCipher {
 type IdentityFile = Record<string, { workstationId?: string; keyEnc?: string; legacyDone?: string }>;
 
 /** The identities file: the workstation id in the clear, the private key encrypted; fail closed. */
-export function workstationKeyStore(file: string, cipher: IdentityCipher): IdentityStore {
+export function workstationKeyStore(file: string, cipher: IdentityCipher | WorkstationSecrets): IdentityStore & { canWrite(): boolean | Promise<boolean> } {
+    if (!('isAvailable' in cipher)) throw new Error('RED STUB: not built');
     const load = async (): Promise<IdentityFile> => {
         try {
             const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown;

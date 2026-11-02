@@ -1,6 +1,7 @@
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
+import type { WorkstationService } from './workstation-service.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
@@ -67,6 +68,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** This machine as a workstation (P3.4): the host holds its key. */
+    readonly workstation?: WorkstationService;
     /** The keyring card, as the host found it (P3.4 cut c). */
     readonly keyring?: KeyringService;
     /** The host's GitHub account (P3.4 cut c). */
