@@ -54,6 +54,8 @@ describe('integrations in the snapshot', () => {
             mcp: { url: 'http://127.0.0.1:51717/mcp/abc', verified: null, tools: [] },
             // No workspace synced yet: nothing to report, not "current".
             agentFiles: [],
+            // No keyring port (doctor mode): no keyring card.
+            keyring: null,
         });
     });
 

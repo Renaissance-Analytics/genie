@@ -279,15 +279,18 @@ describe('LinuxKeyring — the card and its flow', () => {
     });
 
     it('a click while a step is running starts nothing twice', async () => {
-        let release!: () => void;
+        const gate: { release?: () => void; execs: number } = { execs: 0 };
         const m = machine(NOTHING, PACMAN);
-        const slow: KeyringPorts = { ...m.ports, exec: (argv) => new Promise((r) => { release = () => r({ code: 126, stderr: '' }); void argv; }) };
+        const slow: KeyringPorts = { ...m.ports, exec: () => new Promise((r) => { gate.execs += 1; gate.release = () => r({ code: 126, stderr: '' }); }) };
         const k = await LinuxKeyring.open(slow);
         const first = k.fix();
         const second = k.fix();
-        await Promise.resolve(); await Promise.resolve();
-        release();
+        expect(second).toBe(first);
+        while (!gate.release) await new Promise((r) => setTimeout(r, 0));
+        expect(k.view()?.step).toBe('installing');
+        gate.release();
         await Promise.all([first, second]);
+        expect(gate.execs).toBe(1);
         expect(k.view()?.failure).toMatch(/Cancelled/);
     });
 });
@@ -304,5 +307,57 @@ describe('resume the sign-in after the restart (no secret is written)', () => {
             expect(takeResumeSignIn(dir)).toBe('tynn');
             expect(takeResumeSignIn(dir)).toBeNull();
         } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+    });
+});
+
+/** The real ports, over an injected runner and filesystem: what main.ts wires (and what the host split reuses). */
+import { realKeyringPorts } from '../src/main/linux-keyring.js';
+
+describe('realKeyringPorts — reading the session', () => {
+    const enoent = () => Promise.reject(Object.assign(new Error('spawn ENOENT'), { code: 'ENOENT' }));
+    const base = {
+        storage: () => ({ backend: 'basic_text', available: false }),
+        relaunch: () => {},
+        pathEnv: '/usr/local/bin:/usr/bin',
+    };
+
+    it('facts: busctl says activatable, gnome-keyring-daemon on PATH, this process on basic_text', async () => {
+        const ports = realKeyringPorts({
+            ...base,
+            run: async (bin) => (bin === 'busctl' ? { exitCode: 0, stdout: 'org.freedesktop.secrets - - - (activatable) - - -\n', stderr: '' } : enoent()),
+            exists: (p) => p === '/usr/bin/gnome-keyring-daemon',
+            readFile: () => null,
+        });
+        expect(await ports.facts()).toEqual({ installed: true, owned: false, activatable: true, backend: 'basic_text', available: false });
+    });
+
+    it('facts: no busctl (non-systemd) → dbus-send NameHasOwner; nothing installed', async () => {
+        const ports = realKeyringPorts({
+            ...base,
+            run: async (bin, args) => (bin === 'dbus-send' && args.includes('string:org.freedesktop.secrets') ? { exitCode: 0, stdout: 'method return\n   boolean false\n', stderr: '' } : enoent()),
+            exists: () => false,
+            readFile: () => null,
+        });
+        expect(await ports.facts()).toEqual({ installed: false, owned: false, activatable: false, backend: 'basic_text', available: false });
+    });
+
+    it('plan: /etc/os-release + pkexec on PATH', async () => {
+        const ports = realKeyringPorts({
+            ...base,
+            run: enoent,
+            exists: (p) => p === '/usr/bin/pkexec' || p === '/usr/bin/pacman',
+            readFile: (p) => (p === '/etc/os-release' ? 'NAME="Arch Linux"\nID=arch\n' : null),
+        });
+        expect((await ports.plan()).run).toEqual(['/usr/bin/pkexec', 'pacman', '-S', '--needed', '--noconfirm', 'gnome-keyring', 'libsecret']);
+        const noPkexec = realKeyringPorts({ ...base, run: enoent, exists: () => false, readFile: () => 'ID=ubuntu\n' });
+        expect(await noPkexec.plan()).toEqual({ run: null, manual: 'sudo apt-get install -y gnome-keyring libsecret-1-0', packages: ['gnome-keyring', 'libsecret-1-0'] });
+    });
+
+    it('exec: a missing program is a failed step with its words, never a throw', async () => {
+        const ports = realKeyringPorts({ ...base, run: enoent, exists: () => false, readFile: () => null });
+        const r = await ports.exec(['pkexec', 'pacman']);
+        expect(r.code).not.toBe(0);
+        expect(r.code).not.toBe(126);
+        expect(r.stderr).toMatch(/ENOENT/);
     });
 });

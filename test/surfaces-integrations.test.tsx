@@ -219,7 +219,10 @@ describe('Settings → Tynn: the keyring card', () => {
 
     it('while a step runs: the button is busy and says the step', () => {
         const html = card({ state: 'not-installed', ...base, step: 'installing' });
-        expect(html).toMatch(/data-action="keyring-fix"[^>]*disabled/);
+        const button = html.match(/<button[^>]*data-action="keyring-fix"[^>]*>/)?.[0] ?? '';
+        expect(button).toMatch(/\sdisabled=""/);
+        // CONTROL: the same button, idle, is not disabled.
+        expect(card({ state: 'not-installed', ...base }).match(/<button[^>]*data-action="keyring-fix"[^>]*>/)?.[0]).not.toMatch(/\sdisabled=""/);
         expect(html).toMatch(/Installing…/);
         expect(card({ state: 'not-running', ...base, step: 'starting' })).toMatch(/Starting…/);
         expect(card({ state: 'restart-needed', ...base, step: 'restarting' })).toMatch(/Restarting…/);
@@ -231,5 +234,17 @@ describe('Settings → Tynn: the keyring card', () => {
         expect(html).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Retry</);
         expect(html).toContain('data-keyring-manual="sudo pacman -S --needed --noconfirm gnome-keyring libsecret"');
         expect(html).toContain('data-action="keyring-copy-command"');
+    });
+});
+
+describe('Settings → GitHub: the same keyring card (every sign-in Genie keeps needs one)', () => {
+    it('signed out with no keyring: the card instead of Sign in with GitHub; with a keyring, the sign-in (CONTROL)', () => {
+        const keyring = { state: 'not-installed' as const, step: null, failure: null, manual: null, packages: 'gnome-keyring, libsecret' };
+        const html = render({ ...integrations, keyring }, 'github');
+        expect(html).toContain('data-keyring-card="not-installed"');
+        expect(html).not.toContain('data-action="github-sign-in"');
+        const ok = render({ ...integrations, keyring: null }, 'github');
+        expect(ok).not.toContain('data-keyring-card');
+        expect(ok).toContain('data-action="github-sign-in"');
     });
 });

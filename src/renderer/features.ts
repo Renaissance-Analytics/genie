@@ -1,5 +1,6 @@
 import type { WorkstationRole } from '../core/workstation-role.js';
 import type { TailscaleStatus } from '../main/tailscale-cli.js';
+import type { KeyringView } from '../main/linux-keyring.js';
 import type { IssueWatchPanelView } from '../core/issue-watch.js';
 import type { AgentFilesReport } from '../core/agent-files-health.js';
 import type { FlowForm, KnowledgeForm, Problem, ServiceForm, SiteForm, SiteFormDefaults } from '../core/forms.js';
@@ -210,6 +211,8 @@ export interface IntegrationsSection {
     readonly mcp: { url: string | null; verified: { ok: true; versions: readonly string[] } | { ok: false; reason: string } | null; tools?: readonly { name: string; description: string }[] };
     /** What the sync last did to each workspace's agent files: current, upgraded, or failed (absent before the first sync). */
     readonly agentFiles?: readonly AgentFilesReport[];
+    /** Linux with no keyring: the card (main/linux-keyring.ts), null when the keyring is fine or off Linux. */
+    readonly keyring?: KeyringView | null;
 }
 
 /** §6.7 as Settings sees it: every plugin folder with its state and reason, and whether developer mode admits unsigned ones. */
@@ -525,6 +528,8 @@ export type FeatureAction =
     /** Sign in to Tynn with a token; an empty token signs out. */
     | { kind: 'integrations.tynnSignIn' }
     | { kind: 'integrations.tynnCode'; code: string }
+    /** The keyring card's one button: install, start, restart Genie or check again, whichever comes next. */
+    | { kind: 'keyring.fix' }
     | { kind: 'integrations.tynnSignOut' }
     /** GitHub (beta.33 item 25; Genie 1's): sign in with the device flow, cancel it, read GitHub again, open one of its pages, sign out. */
     | { kind: 'integrations.githubSignIn' }
