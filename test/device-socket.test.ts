@@ -132,8 +132,9 @@ describe('a frame over the limit', () => {
         service.send('w', opened.channel, JSON.stringify({ kind: 'hello', auth: { kind: 'pin', code: '1' } }));
         for (let i = 0; i < 100 && !events.some((e) => e.type === 'closed' || e.type === 'frame'); i += 1) await new Promise((r) => setTimeout(r, 20));
         // A socket still open would hold the server's close: an upgraded socket is not one of its connections any more.
+        const heard = [...events];
         service.dropOwner('w');
-        return { events, lines };
+        return { events: heard, lines };
     }
 
     it('closes with words that name the limit, in the window and in the log: never a drop with no reason', async () => {
