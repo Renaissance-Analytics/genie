@@ -1,4 +1,4 @@
-import { Button, Icon, Sidebar as FancySidebar, Tooltip } from '@particle-academy/react-fancy';
+import { Button, Icon, Sidebar as FancySidebar, type SidebarDotColor } from '@particle-academy/react-fancy';
 import { countRender } from '../render-count.js';
 import { useState } from 'react';
 import type { RateLimitAlert } from '../../core/headroom.js';
@@ -86,37 +86,9 @@ export interface SidebarProps {
     settingsAlert?: { readonly label: string } | null | undefined;
 }
 
-/**
- * The yellow ! on the Settings row: a fact with words on hover (Genie's own tooltip, as the title bar's) and for a screen
- * reader, not a colour alone.
- */
-export function SettingsAlertMark({ label, compact }: { label: string; compact: boolean }) {
-    return (
-        <Tooltip content={label} placement="right" className="max-w-sm">
-            <span
-                data-settings-alert=""
-                role="img"
-                aria-label={label}
-                className={`${compact ? 'absolute right-1 top-0.5' : 'ml-auto'} shrink-0 px-1 text-[14px] font-bold leading-none text-[var(--warning)]`}
-            >
-                !
-            </span>
-        </Tooltip>
-    );
-}
 
-/** The rate-limit dot: static (nothing to reduce for reduced motion), named for a screen reader and on hover. */
-function RateLimitDot({ alert, compact }: { alert: RateLimitAlert; compact: boolean }) {
-    return (
-        <span
-            data-rate-limit-dot={alert.level}
-            role="img"
-            aria-label={alert.label}
-            title={alert.label}
-            className={`${compact ? 'absolute right-1 top-1 size-1.5' : 'ml-auto size-2'} shrink-0 rounded-full ${alert.level === 'danger' ? 'bg-[var(--danger)]' : 'bg-[var(--warning)]'}`}
-        />
-    );
-}
+/** The rate-limit alert as a dot colour: red when the limit is nearly spent, amber before. */
+const limitDot = (alert: RateLimitAlert): SidebarDotColor => (alert.level === 'danger' ? 'red' : 'amber');
 
 /**
  * The row's pulse: a ring that breathes where motion is allowed (Tailwind `motion-safe:`), and holds still for a person who
@@ -143,8 +115,9 @@ function workingLabel(n: number): string {
 /**
  * THE RAIL IS A MENU (the owner, 2026-11-01: "those should not be buttons, it's a menu"): its destinations are react-fancy
  * Sidebar items — `aria-current="page"` and Sidebar's selected style on the current one, a ring on KEYBOARD focus only —
- * inside the rail's `<nav aria-label="Genie">`. An item's attention mark (the Deck's count, the rate-limit dot, the
- * Settings alert, a workspace that needs you) is its `badge`, drawn on the icon when the rail is collapsed.
+ * in Sidebar's own `<nav aria-label="Genie">` (`navLabel`), moved through with the arrow keys (`keyboardNav`). An item's
+ * attention mark (what waits in the Deck, the rate limit, the Settings alert, a workspace that needs you) is Sidebar's
+ * item DOT, at the icon's corner in both modes, with its words for a screen reader (`dotLabel`).
  */
 const RAIL_ITEM = 'relative h-[30px] px-2 py-0 text-[13px] font-normal';
 const RAIL_ITEM_COMPACT = 'relative size-8 p-0';
@@ -156,6 +129,8 @@ function NavRow({
     label,
     onNavigate,
     children,
+    dot,
+    dotLabel,
     compact = false,
 }: {
     route: string;
@@ -163,8 +138,12 @@ function NavRow({
     icon: string;
     label: string;
     onNavigate: (route: string) => void;
-    /** The item's attention mark: its badge. */
+    /** A count to SEE beside the label (expanded only); the dot says it in words. */
     children?: React.ReactNode;
+    /** The attention mark: react-fancy Sidebar's item dot (6.1.0), at the icon's corner in both modes. */
+    dot?: SidebarDotColor | undefined;
+    /** The dot in words, read with the item's name. */
+    dotLabel?: string | undefined;
     /** Collapsed rail: the icon alone, the label as its tooltip and accessible name. */
     compact?: boolean;
 }) {
@@ -180,7 +159,9 @@ function NavRow({
             onClick={() => onNavigate(route)}
             icon={<Icon name={icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
             badge={children ?? undefined}
-            {...(compact ? { 'aria-label': label } : {})}
+            {...(dot ? { dot, ...(dotLabel ? { dotLabel } : {}) } : {})}
+            // Collapsed with a dot, Sidebar names the item by its label AND the dot's words; without one, name it here.
+            {...(compact && !dot ? { 'aria-label': label } : {})}
             className={compact ? RAIL_ITEM_COMPACT : RAIL_ITEM}
         >
             {label}
@@ -264,28 +245,22 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
 
     if (collapsed) {
         return (
-            <nav aria-label="Genie" data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
+            <div data-rail="collapsed" className="flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-1)] bg-[var(--bg-1)] py-2.5">
                 <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-rail-tool="expand" aria-label="Expand sidebar" title="Expand sidebar" onClick={() => setRail(false)} className={ICON_BUTTON}>
                     <Icon name="panel-left-open" size="sm" />
                 </Button>
-                <FancySidebar embedded collapsed collapseMode="icons" className="w-full items-center gap-1">
+                <FancySidebar embedded collapsed collapseMode="icons" navLabel="Genie" keyboardNav className="w-full items-center gap-1">
                 {has('deck') ? (
-                    <NavRow route="genie://deck" current={route} icon="inbox" label={badge !== null ? `Deck · ${badge}` : 'Deck'} onNavigate={onNavigate} compact>
-                        {badge !== null ? <span data-deck-dot="" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : null}
-                    </NavRow>
+                    <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} compact {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting` } : {})} />
                 ) : null}
                 {has('dashboard') ? (
-                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label={rateLimitAlert ? `Dashboard · ${rateLimitAlert.label}` : 'Dashboard'} onNavigate={onNavigate} compact>
-                        {rateLimitAlert ? <RateLimitDot alert={rateLimitAlert} compact /> : null}
-                    </NavRow>
+                    <NavRow route="genie://dashboard" current={route} icon="layout-list" label="Dashboard" onNavigate={onNavigate} compact {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label } : {})} />
                 ) : null}
                 {has('genie') ? <NavRow route="genie://agent/genie" current={route} icon="sparkles" label="genie" onNavigate={onNavigate} compact /> : null}
                 {has('hosting') ? <NavRow route="genie://hosting" current={route} icon="server" label="Hosting" onNavigate={onNavigate} compact /> : null}
                 {has('browser') ? (onOpenBrowser ? <BrowserDoor onOpen={onOpenBrowser} compact /> : <NavRow route="genie://browser" current={route} icon="globe" label="Browser" onNavigate={onNavigate} compact />) : null}
                 {has('settings') ? (
-                    <NavRow route="genie://settings" current={route} icon="settings" label={settingsAlert ? `Settings · ${settingsAlert.label}` : 'Settings'} onNavigate={onNavigate} compact>
-                        {settingsAlert ? <SettingsAlertMark label={settingsAlert.label} compact /> : null}
-                    </NavRow>
+                    <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} compact {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label } : {})} />
                 ) : null}
                 {has('workspace') ? <div className="my-1 h-px w-6 bg-[var(--border-1)]" /> : null}
                 {(has('workspace') ? shown : []).map((w) => {
@@ -306,7 +281,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                             {...(working ? { 'data-agent-active': 'true' } : {})}
                             {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
                             onClick={() => onNavigate(route_)}
-                            aria-label={name}
+                            {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : { 'aria-label': name })}
                             icon={
                                 <span className="font-mono text-[11px] font-semibold uppercase">
                                     {w.asleep === true ? <Icon name="moon" size="sm" /> : name.slice(0, 2)}
@@ -314,7 +289,6 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                                     {w.color ? <span aria-hidden="true" data-workspace-color={w.color} style={wsStyle(w.color)} className="absolute inset-x-2 bottom-0.5 h-0.5 rounded-full bg-[var(--ws)]" /> : null}
                                 </span>
                             }
-                            badge={w.alert === true ? <span aria-label="needs you" className="absolute right-1 top-1 size-1.5 rounded-full bg-[var(--warning)]" /> : undefined}
                             className={`${RAIL_ITEM_COMPACT} ${working ? 'animate-pulse ring-2 ring-[var(--accent)]' : pulsed ? WORKSPACE_PULSE : ''}`}
                         >
                             {name}
@@ -326,13 +300,13 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     {asleepTool}
                     {addTool}
                 </div>
-            </nav>
+            </div>
         );
     }
 
     return (
-        <nav
-            aria-label="Genie"
+        <div
+            data-rail="expanded"
             className="flex w-52 shrink-0 flex-col gap-2 border-r border-[var(--border-1)] bg-[var(--bg-1)] px-2 py-2.5"
         >
             {/* THE TOOLS, all at the top (Genie 1's rail header; the owner, 2026-10-19: "Move these icons to the top"): collapse,
@@ -349,9 +323,9 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     </span>
                 ) : null}
             </div>
-            <FancySidebar embedded className="gap-0.5">
+            <FancySidebar embedded navLabel="Genie" keyboardNav className="gap-0.5">
             {has('deck') ? (
-                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate}>
+                <NavRow route="genie://deck" current={route} icon="inbox" label="Deck" onNavigate={onNavigate} {...(badge !== null ? { dot: 'amber' as const, dotLabel: `${badge} waiting` } : {})}>
                 {/*
                  * The only badge in the application. Zero renders nothing — a badge that is
                  * sometimes `0` is furniture, and furniture is what people learn not to read.
@@ -359,6 +333,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 {badge !== null ? (
                     <span
                         data-deck-badge={badge}
+                        aria-hidden="true"
                         className="ml-auto rounded-sm bg-[var(--warning)]/15 px-1.5 font-mono text-[11px] tabular-nums text-[var(--warning)]"
                     >
                         {badge}
@@ -374,9 +349,8 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                     icon="layout-list"
                     label="Dashboard"
                     onNavigate={onNavigate}
-                >
-                    {rateLimitAlert ? <RateLimitDot alert={rateLimitAlert} compact={false} /> : null}
-                </NavRow>
+                    {...(rateLimitAlert ? { dot: limitDot(rateLimitAlert), dotLabel: rateLimitAlert.label } : {})}
+                />
             ) : null}
 
             {/*
@@ -393,9 +367,7 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
 
             {/* Settings, as a labelled row: the palette is an accelerator, never the only route to a surface. */}
             {has('settings') ? (
-                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate}>
-                    {settingsAlert ? <SettingsAlertMark label={settingsAlert.label} compact={false} /> : null}
-                </NavRow>
+                <NavRow route="genie://settings" current={route} icon="settings" label="Settings" onNavigate={onNavigate} {...(settingsAlert ? { dot: 'amber' as const, dotLabel: settingsAlert.label } : {})} />
             ) : null}
 
             {/*
@@ -441,10 +413,10 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                         {...((w.working ?? 0) > 0 ? { 'data-agent-active': 'true' } : {})}
                         {...(pulsed ? { 'data-workspace-pulse': 'true' } : {})}
                         onClick={() => onNavigate(route_)}
+                        {...(w.alert === true ? { dot: 'amber' as const, dotLabel: 'needs you' } : {})}
                         icon={<Icon name={w.asleep === true ? 'moon' : 'folder'} size="sm" className="shrink-0 text-[var(--fg-4)]" />}
                         badge={
                             <span className="flex shrink-0 items-center gap-1.5">
-                                {w.alert === true ? <span aria-label="needs you" className="size-1.5 rounded-full bg-[var(--warning)]" /> : null}
                                 {/*
                                  * The count, or nothing at all. `null` is "not read yet" and must
                                  * not render — first paint is skeletons, never zeros. A measured
@@ -492,6 +464,6 @@ export function Sidebar({ route, deckCount, workspaces, available, onNavigate, o
                 );
             })}
             </FancySidebar>
-        </nav>
+        </div>
     );
 }
