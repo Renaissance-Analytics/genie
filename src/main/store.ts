@@ -1,4 +1,4 @@
-import { mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { runtimeDir } from './paths.js';
@@ -90,9 +90,26 @@ export function reportFlush(flush: Promise<void>, what: string): void {
     });
 }
 
-export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+/**
+ * A file that holds a secret in the clear (host-split plan §13: services.json, terminal-snapshots.json…): the owner's alone.
+ * POSIX modes; on Windows the profile's ACL is the guard, and a mode does nothing.
+ */
+export const PRIVATE_FILE = { mode: 0o600 } as const;
+
+/**
+ * A private file an older Genie left open is tightened when its store opens: it may not be rewritten for a long time. No
+ * file yet is fine; a failure is said, never fatal (a store that cannot chmod still works, and no worse than before).
+ */
+export async function makePrivate(file: string): Promise<void> {
+    if (process.platform === 'win32') return;
+    await chmod(file, PRIVATE_FILE.mode).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') console.error(`[genie] could not make ${file} private: ${error.message}`);
+    });
+}
+
+export function writeJsonAtomic(file: string, value: unknown, options?: { readonly mode?: number }): Promise<void> {
     const previous = inFlight.get(file) ?? Promise.resolve();
-    const mine = previous.catch(() => undefined).then(() => writeJsonAtomicNow(file, value));
+    const mine = previous.catch(() => undefined).then(() => writeJsonAtomicNow(file, value, options?.mode));
     inFlight.set(file, mine);
     const settle = (): void => { if (inFlight.get(file) === mine) inFlight.delete(file); };
     void mine.then(settle, settle);
@@ -104,10 +121,11 @@ export function writeJsonAtomic(file: string, value: unknown): Promise<void> {
  * power cut the rename could be on disk and the bytes not, and the record came back EMPTY — and on POSIX the directory
  * is synced after, so the rename itself is kept.
  */
-async function writeJsonAtomicNow(file: string, value: unknown): Promise<void> {
+async function writeJsonAtomicNow(file: string, value: unknown, mode?: number): Promise<void> {
     await mkdir(dirname(file), { recursive: true });
     const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
-    const handle = await open(tmp, 'w');
+    // The temp file gets the mode: the rename names it, so the secret is never on disk more open than this.
+    const handle = await open(tmp, 'w', mode);
     try {
         await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
         await handle.sync();

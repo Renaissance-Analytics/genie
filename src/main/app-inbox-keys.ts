@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import type { AppSource, AppSourceKind } from '../core/app-inbox.js';
 import { runtimeDir } from './paths.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { makePrivate, PRIVATE_FILE, readJson, writeJsonAtomic } from './store.js';
 
 /**
  * THE APP KEYS (genie#1345) — the credentials an app presents at the app door, each of which IS an identity.
@@ -78,6 +78,7 @@ export class AppInboxKeys {
 
     static async open(userData: string, options: AppInboxKeysOptions = {}): Promise<AppInboxKeys> {
         const file = join(runtimeDir(userData), FILE);
+        await makePrivate(file);
         const raw = await readJson<Partial<KeysFile>>(file, {});
         const data: KeysFile = {
             scriptKeys: Array.isArray(raw.scriptKeys) ? raw.scriptKeys.filter((k): k is ScriptKeyRecord => typeof k?.sha256 === 'string' && typeof k?.id === 'string' && typeof k?.workspaceId === 'string') : [],
@@ -202,6 +203,6 @@ export class AppInboxKeys {
     }
 
     #flush(): Promise<void> {
-        return writeJsonAtomic(this.#file, this.#data);
+        return writeJsonAtomic(this.#file, this.#data, PRIVATE_FILE);
     }
 }

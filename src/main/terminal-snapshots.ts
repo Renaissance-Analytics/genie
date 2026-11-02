@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { OUTPUT_CAP } from '../core/workspace-view.js';
+import { makePrivate, PRIVATE_FILE } from './store.js';
 
 /**
  * TERMINAL SNAPSHOTS PERSISTED ON QUIT (§6.5). The LAST terminal's scrollback per workspace, saved when
@@ -20,6 +21,7 @@ export class TerminalSnapshots {
 
     static async open(userData: string): Promise<TerminalSnapshots> {
         const file = join(userData, 'terminal-snapshots.json');
+        await makePrivate(file);
         let initial: Record<string, string> = {};
         try {
             const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
@@ -59,7 +61,7 @@ export class TerminalSnapshots {
     async #write(): Promise<void> {
         await mkdir(dirname(this.#file), { recursive: true });
         const tmp = `${this.#file}.${process.pid}.tmp`;
-        await writeFile(tmp, JSON.stringify(this.#byWorkspace), 'utf8');
+        await writeFile(tmp, JSON.stringify(this.#byWorkspace), { encoding: 'utf8', mode: PRIVATE_FILE.mode });
         await rename(tmp, this.#file);
     }
 }

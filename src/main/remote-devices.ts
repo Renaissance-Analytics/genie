@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { DAY_MS, DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { runtimeDir } from './paths.js';
-import { readJson, reportFlush, writeJsonAtomic } from './store.js';
+import { makePrivate, PRIVATE_FILE, readJson, reportFlush, writeJsonAtomic } from './store.js';
 
 /**
  * PAIRED DEVICES (§6.8) — the phones and laptops that read a PIN off this screen once. Each holds a
@@ -64,6 +64,7 @@ export class DeviceStore {
 
     static async open(userData: string, deps: { now: () => number; random: () => string; idleMs?: number }): Promise<DeviceStore> {
         const file = join(runtimeDir(userData), 'remote-devices.json');
+        await makePrivate(file);
         return new DeviceStore(file, deps, await readJson<DevicesFile>(file, { devices: [] }));
     }
 
@@ -128,7 +129,7 @@ export class DeviceStore {
 
     #flush(): Promise<void> {
         const snapshot: DevicesFile = { devices: [...this.#data.devices] };
-        this.#pending = this.#pending.then(() => writeJsonAtomic(this.#file, snapshot));
+        this.#pending = this.#pending.then(() => writeJsonAtomic(this.#file, snapshot, PRIVATE_FILE));
         return this.#pending;
     }
 }

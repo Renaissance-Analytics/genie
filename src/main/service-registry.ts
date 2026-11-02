@@ -8,7 +8,7 @@ import { renderSockudoConfig, websocketAppOf } from '../core/websockets.js';
 import { workspaceDnsName, workspaceSqlIdentifier } from '../core/v1-services.js';
 import { runtimeDir } from './paths.js';
 import type { ServiceDriver } from './service-driver.js';
-import { readJson, writeJsonAtomic } from './store.js';
+import { makePrivate, PRIVATE_FILE, readJson, writeJsonAtomic } from './store.js';
 
 /**
  * THE SERVICE REGISTRY (§6.6) — which engines each workspace holds, durable, driving the Docker driver.
@@ -167,6 +167,7 @@ export class ServiceRegistry {
 
     static async open(userData: string, driver: ServiceDriver, deps: RegistryDeps): Promise<ServiceRegistry> {
         const file = join(runtimeDir(userData), 'services.json');
+        await makePrivate(file);
         return new ServiceRegistry(file, driver, deps, await readJson<RegistryFile>(file, { instances: [] }));
     }
 
@@ -662,7 +663,7 @@ export class ServiceRegistry {
     }
 
     async #flush(): Promise<void> {
-        await writeJsonAtomic(this.#file, this.#data);
+        await writeJsonAtomic(this.#file, this.#data, PRIVATE_FILE);
         this.#changed();
     }
 }
