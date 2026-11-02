@@ -172,9 +172,21 @@ describe('the hold a spawn on main is made of', () => {
         expect(t).toBeLessThanOrEqual(SLOW_MS + 2);
     });
 
-    it('the stalls it reads are the overlap with the worker’s gaps', () => {
-        expect(overlapWith([[200, 150], [1_000, 100]], 0, 950)).toBe(150 + 50);
+    it('the stall it reads is the one the gauge subtracts: the LONGEST worker gap inside it, not their sum', () => {
+        // The gauge reduces main's gap by the longest worker gap overlapping it; a hold that summed them disagreed with it.
+        expect(overlapWith([[200, 150], [1_000, 100]], 0, 950)).toBe(150);
         expect(overlapWith([[200, 150]], 300, 400)).toBe(0);
+    });
+
+    it('a worker merely preempted by the spinning main (many short gaps) does not stretch the hold: only the longest counts', () => {
+        // Batch D: on a loaded 2-vCPU VM the worker logged a 30 ms gap every 40 ms while main spun. Summed, they stretched
+        // a 5 s hold past 8 s and the CONTROL toward its timeout; the gauge counts only the longest of them.
+        const gaps: Array<[number, number]> = [];
+        for (let end = 40; end < 30_000; end += 40) gaps.push([end, 30]);
+        let t = 0;
+        holdFor(SLOW_MS, { now: () => (t += 1), stalled: (from, to) => overlapWith(gaps, from, to) });
+        expect(t, `a ${SLOW_MS} ms hold lasted ${t} ms`).toBeLessThanOrEqual(SLOW_MS + 31);
+        expect(t).toBeGreaterThanOrEqual(SLOW_MS);
     });
 });
 

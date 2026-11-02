@@ -47,7 +47,13 @@ else
         if grep -F -- "FAIL" "$LOG" | grep -qF -- "$t"; then echo "PROBE spawn-on-main: red as expected ($t)"; else echo "PROBE spawn-on-main: NOT red ($t)"; fail=1; fi
     done
     grep -E "main was held [0-9]+ ms" -o "$LOG" | sort -u | sed 's/^/    /'
-    if grep -F -- "FAIL" "$LOG" | grep -qF -- "CONTROL"; then echo "PROBE spawn-on-main: the CONTROL failed too (it must read the 5 s either way)"; fail=1; fi
+    if grep -F -- "FAIL" "$LOG" | grep -qF -- "CONTROL"; then
+        echo "PROBE spawn-on-main: the CONTROL failed too (it must read the 5 s either way):"
+        # Its own error, not only the verdict: the FAIL line and what follows it.
+        grep -F -A4 -- "> CONTROL" "$LOG" | grep -E "FAIL|Error|expected|timed out" | head -6 | sed 's/^/    /'
+        fail=1
+    fi
+    grep -E "GAUGE:" "$LOG" | head -2 | sed 's/^/    /'
 fi
 mv "/tmp/probe-$$.shc" src/main/spawn-host-client.ts
 trap - EXIT
