@@ -41,10 +41,18 @@ function hold(ms: number): void {
     holdFor(ms, { now: () => Date.now(), stalled: (from, to) => processStalled(from, to) });
 }
 
-/** The hold itself, over the clocks it is given. */
+/**
+ * The hold itself, over the clocks it is given: until main has been held `ms` WHILE THE REST OF THE PROCESS RAN. Time the
+ * whole process was stopped (the gauge's worker stopped too) is not main held by a spawn — the gauge does not count it,
+ * so neither does the hold. Capped at five times `ms` of wall time, should the worker never run again.
+ */
 function holdFor(ms: number, clocks: HoldClocks): void {
-    const end = clocks.now() + ms;
-    while (clocks.now() < end) { /* the thread is held */ }
+    const start = clocks.now();
+    const cap = start + 5 * ms;
+    for (;;) {
+        const now = clocks.now();
+        if (now >= cap || now - start - clocks.stalled(start, now) >= ms) return;
+    }
 }
 
 /** The overlap of [from, to] with worker gaps given as [end, gap] pairs. */
