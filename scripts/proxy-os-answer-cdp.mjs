@@ -26,6 +26,9 @@ import { join } from 'node:path';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this changes GNOME settings and a seeded profile; test machines only'); process.exit(2); }
 
+// The desktop session's bus, which an ssh shell has none of: the keychain and the window both need it.
+process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
+process.env.DBUS_SESSION_BUS_ADDRESS ??= `unix:path=${process.env.XDG_RUNTIME_DIR}/bus`;
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 const home = join(homedir(), '.genie');
 const runtime = join(home, 'runtime');
