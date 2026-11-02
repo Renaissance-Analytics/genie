@@ -152,6 +152,9 @@ describe('the agent’s breadcrumb is react-fancy Breadcrumbs', () => {
         expect(crumb.open).not.toContain(BUTTON);
         expect(crumb.open).toContain('data-nav="genie://workspace/tynn"');
         expect(crumb.text).toBe('Tynn.ai');
+        // The title is ON the crumb element: a truncated crumb is read whole only through it.
+        expect(crumb.open).toContain('title="Back to Tynn.ai"');
+        expect(html).toMatch(/<span(?=[^>]*data-agent-name="")[^>]*title="atlas"/);
         expect(html).toMatch(/<span(?=[^>]*data-react-fancy-breadcrumbs-item="")(?=[^>]*aria-current="page")[^>]*data-agent-name=""[^>]*>atlas<\/span>/);
     });
 
