@@ -111,7 +111,7 @@ export function QuestionForm({ item, answering, onSubmit, onCancel, cancelLabel 
                                     aria-pressed={on}
                                     onClick={() => pick(i, o.label, q.multiSelect === true)}
                                     title={o.description ?? undefined}
-                                    className={`max-w-full rounded-lg border px-2.5 py-1 text-left text-[13px] leading-snug ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                                    className={`justify-start max-w-full rounded-lg border px-2.5 py-1 text-left text-[13px] leading-snug ${on ? 'border-[var(--primary)] bg-[color-mix(in_srgb,var(--primary)_18%,transparent)] text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
                                 >
                                     <span className="font-medium">{o.label}</span>
                                     {o.description ? <span className="block text-[12px] text-[var(--fg-3)]">{o.description}</span> : null}

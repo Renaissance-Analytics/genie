@@ -1683,7 +1683,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                                 return (
                                     <Button variant="ghost" size="xs" labelClassName="contents" key={i.id} type="button" data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} {...(on ? { 'aria-current': 'page' as const } : {})}
                                         onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
-                                        className={`flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[13px] ${on ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
+                                        className={`justify-start flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[13px] ${on ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
                                         <Icon name={i.icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
                                         <span className="truncate">{i.label}</span>
                                     </Button>

@@ -601,7 +601,7 @@ function AgentViewBody({
                     path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
                 <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
                 {/* Back to its workspace (Tynn #805): the crumb is a link. */}
-                {workspace ? <Button variant="ghost" size="xs" labelClassName="truncate" data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">{workspace.name ?? workspace.id} /</Button> : null}
+                {workspace ? <Button variant="ghost" size="xs" labelClassName="truncate" data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] justify-start">{workspace.name ?? workspace.id} /</Button> : null}
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium">{agent.name}</span>
                 <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
@@ -902,7 +902,7 @@ function AgentViewBody({
                                             {...(item.live ? { 'data-live': item.live } : {})}
                                             data-nav={door}
                                             onClick={() => onNavigate(door)}
-                                            className={`flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left ${item.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}
+                                            className={`justify-start flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left ${item.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}
                                         >
                                             <span className="flex w-full items-center gap-1.5 text-[12px] text-[var(--fg-1)]">
                                                 {item.live ? <span className={`size-1.5 shrink-0 animate-pulse rounded-full ${INDEX_LIVE[item.live]}`} /> : null}
@@ -1015,7 +1015,7 @@ function AgentViewBody({
                                     <ul className="flex flex-col gap-0.5">
                                         {changes.map((path) => (
                                             <li key={path}>
-                                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
+                                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`justify-start flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
                                                     <Icon name="file-code" className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
                                                     <span className="truncate">{path}</span>
                                                 </Button>

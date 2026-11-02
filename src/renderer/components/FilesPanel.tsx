@@ -291,7 +291,7 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
                                             const plus = d?.plus ?? null;
                                             const minus = d?.minus ?? null;
                                             return (
-                                            <Button variant="ghost" size="xs" labelClassName="contents" key={f} type="button" data-changed-file={f} onClick={() => onSelect(f)} className={`flex w-full items-center gap-1.5 px-3 py-0.5 text-left font-mono text-[11.5px] hover:bg-[var(--bg-2)] ${open?.ok && open.path === f ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
+                                            <Button variant="ghost" size="xs" labelClassName="contents" key={f} type="button" data-changed-file={f} onClick={() => onSelect(f)} className={`justify-start flex w-full items-center gap-1.5 px-3 py-0.5 text-left font-mono text-[11.5px] hover:bg-[var(--bg-2)] ${open?.ok && open.path === f ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)]'}`}>
                                                 <span {...(at !== null ? { 'data-changed-at': at } : {})} className="w-10 shrink-0 text-[10px] text-[var(--fg-4)]">{at !== null ? hhmm(at) : ''}</span>
                                                 <span className="truncate">{f}</span>
                                                 {plus !== null ? <span data-plus={plus} className="shrink-0 text-[10px] text-[var(--success)]">+{plus}</span> : null}

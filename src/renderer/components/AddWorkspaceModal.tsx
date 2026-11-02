@@ -16,7 +16,7 @@ import { TynnProjectLink, type TynnLinkApi } from './TynnProjectLink.js';
  * The two halves are hook-free, so a test can press them; the modal holds the stage and the draft.
  */
 
-const card = 'flex min-h-[132px] flex-col items-start gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-left hover:border-[var(--violet-400)] hover:bg-[var(--bg-2)]';
+const card = 'flex min-h-[132px] flex-col items-start gap-2 rounded-lg border border-[var(--border-1)] bg-[var(--bg-1)] p-4 text-left hover:border-[var(--violet-400)] hover:bg-[var(--bg-2)] justify-start';
 const groupLabel = 'text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-4)]';
 const button = 'rounded-md border border-[var(--border-1)] px-3 py-1 text-xs hover:bg-[var(--bg-2)] disabled:opacity-50';
 const primary = 'flex items-center gap-1.5 rounded-md bg-[var(--violet-500)] px-3 py-1 text-xs font-medium text-white hover:bg-[var(--violet-400)] disabled:opacity-50';
