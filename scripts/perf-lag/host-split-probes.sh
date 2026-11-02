@@ -280,8 +280,70 @@ probe "a-sealed-key-must-match-its-record" src/main/tynn-agent-identities.ts \
     test/host-agent-keys.test.ts "is not moved, and not deleted"
 
 
+# P3.4 cut c: the Tynn account is the host's, and its pairing is in the keychain.
+probe "locked-keychain-keeps-whose-it-is" src/main/tynn-account.ts \
+    "            this.#savedUser = data.userId;" "" \
+    test/tynn-account-host.test.ts "whose it is stays known"
+
+probe "no-keychain-refuses-before-the-exchange" src/main/tynn-account.ts \
+    "        if (!(await this.#ports.secrets.probe()).ok) return { ok: false, reason: NO_KEYRING_FOR_TYNN };" "" \
+    test/tynn-account-host.test.ts "so the code is not spent"
+
+probe "sign-out-removes-the-entry" src/main/tynn-account.ts \
+    "            if (!credential) await this.#ports.secrets.delete(PAIRING).catch(() => {});" "" \
+    test/tynn-account-host.test.ts "a sign-out removes it"
+
+probe "only-a-real-pairing-token-moves" src/main/tynn-account.ts \
+    "                    return tokenValid(token) ? { kind: 'value', value: token } : { kind: 'unreadable' };" "                    return { kind: 'value', value: token };" \
+    test/tynn-account-host.test.ts "is not a pairing token"
+
+probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
+    "        if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());" "" \
+    test/tynn-account-host.test.ts "reads signed in at once"
+
+probe "the-cookie-is-sent-on-the-exchange" src/main/host-tynn-account.ts \
+    "const cookies = init.credentials === 'include' ? jar.get(new URL(url).origin) : undefined;" "const cookies = undefined as Map<string, string> | undefined;" \
+    test/tynn-account-host.test.ts "the code goes as a Cookie"
+
+
+# P3.4 cut c: the host's HTTPS. Broken, each of these sends a token where it should not, or refuses Tynn.
+probe "explicit-verification-beats-the-env-variable" src/main/host-https-fetch.ts \
+    "        const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {" "        const ask = request(target, { method: init.method, headers: init.headers, signal: init.signal, agent: new Agent({ ca: [...rootsOfThisMachine()] }) }, (res) => {" \
+    test/host-https-fetch.test.ts "turns nothing off"
+
+probe "the-trust-set-is-the-machines" src/main/host-https-fetch.ts \
+    "ca: [...(options.machineRoots ?? rootsOfThisMachine)()]," "ca: [...rootsOfThisMachine()]," \
+    test/host-https-fetch.test.ts "a CA in the OS store answers"
+
+probe "a-redirect-is-refused" src/main/host-https-fetch.ts \
+    "            if (status >= 300 && status < 400) {" "            if (status === 999) {" \
+    test/host-https-fetch.test.ts "a redirect is REFUSED"
+
+probe "only-https" src/main/host-https-fetch.ts \
+    "        if (target.protocol !== 'https:') throw" "        if (target.protocol === 'never:') throw" \
+    test/host-https-fetch.test.ts "it speaks only https"
+
+
+# P3.4 cut c: the OS's proxy. Broken, each of these leaks a credential, or goes around a proxy with nothing said.
+probe "a-proxy-credential-is-dropped" src/core/proxy-answer.ts \
+    "    const bare = text.slice(text.lastIndexOf('@') + 1);" "    const bare = text;" \
+    test/host-proxy.test.ts "CREDENTIALS NEVER SURVIVE"
+
+probe "the-proxy-file-is-0600" src/main/proxy-memory.ts \
+    " origins: Object.fromEntries(this.#origins) }, PRIVATE_FILE);" " origins: Object.fromEntries(this.#origins) });" \
+    test/host-proxy.test.ts "the file is the owner"
+
+probe "no-route-left-is-an-error-not-direct" src/main/host-https-fetch.ts \
+    "            if (!next) throw failure;" "            if (!next) return send(target, init, agentFor({ kind: 'direct' }));" \
+    test/host-proxy.test.ts "is refused by name, not sent direct"
+
+probe "an-unresolved-host-keeps-its-answer" src/main/proxy-report.ts \
+    "            options.log?.(" "            answers[host] = 'DIRECT'; options.log?.(" \
+    test/host-proxy.test.ts "never sent as direct"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

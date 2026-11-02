@@ -457,7 +457,9 @@ describe('each secret switches on with its reader', () => {
         }
         const compose = strip(readFileSync('src/main/compose.ts', 'utf8'));
         expect(compose.match(/migrateSecrets\(/g)).toHaveLength(1);
-        expect(compose).toMatch(/migrateSecrets\(await tynnTokens\.legacyKeys\(tynnCipher\)/);
+        expect(compose).toMatch(/const sources = \[\.\.\.await tynnTokens\.legacyKeys\(tynnCipher\), \.\.\.\(await input\.legacySecrets\?\.\(\) \?\? \[\]\)\];/);
+        // The pairing joins in main.ts, with its reader in the host.
+        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/legacySecrets: async \(\) => \[tynnPairingSource\(/);
     });
 
     it('it has no fallback to write to: the engine touches no file but its book', () => {

@@ -50,7 +50,7 @@ const killPid = (pid: number): void => {
  * to the EMERGENCY in-process engine and says so on the Deck — never a quiet downgrade, and never a mode anyone chooses
  * (the owner, 2026-11-01: "we split host from UI for good"; plan §4.1).
  */
-export async function connectAgentEngine(options: AgentEngineLinkOptions): Promise<AgentEngineLink | null> {
+export async function connectAgentEngine(options: AgentEngineLinkOptions & { readonly onLinked?: (client: SessionEngineClient) => void }): Promise<AgentEngineLink | null> {
     const sleep = options.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
     let stopping = false;
     let reconnecting = false;
@@ -81,6 +81,7 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions): Promi
             const connected = await client.connect(found.transport, found.token);
             if (!connected.ok) { options.log(`agent host refused this window: ${connected.reason}`); found.transport.close(); return null; }
             options.log(`agent host ${found.how} pid=${found.record.pid} build=${found.record.build}`);
+            options.onLinked?.(client);
             return found.how;
         } catch (error) {
             options.log(`agent host unavailable: ${error instanceof Error ? error.message : String(error)}`);

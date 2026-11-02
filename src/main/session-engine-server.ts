@@ -1,5 +1,6 @@
 import type { HostAgentKeys } from './host-agent-keys.js';
 import { hostVault } from './keychain-migration.js';
+import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -46,7 +47,14 @@ import type { TerminalsService } from './terminals-host.js';
 
 type HostOptions = ConstructorParameters<typeof SessionHost>[0];
 
-/** What a window may ask the keychain for: an agent's key. The accounts' entries are refused until their reader moves (cut c). */
+/**
+ * What a window may ask the keychain for: an agent's key. The pairing token only goes the other way, in the one-time move: a
+ * window can hand it over and have it compared, and it cannot read it back.
+ */
+function movableName(name: string): `tynn/agent/${string}` | 'tynn/pairing' {
+    return name === 'tynn/pairing' ? name : agentKeyName(name);
+}
+/** An agent's key, by name. */
 function agentKeyName(name: string): `tynn/agent/${string}` {
     if (!/^tynn\/agent\/[0-9A-HJKMNP-TV-Z]{26}$/i.test(name)) throw new Error('A window can ask only for an agent\'s key.');
     return name as `tynn/agent/${string}`;
@@ -57,6 +65,10 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** What the OS said about proxies, as a window hands it over. */
+    readonly proxy?: { remember(answers: Record<string, string>): Promise<void> };
+    /** The host's Tynn account (P3.4 cut c). */
+    readonly tynn?: TynnAccountService;
     /** The host's keychain (P3.4), which a window reaches for an agent's key. Absent = refused, which a window reads as unavailable. */
     readonly keychain?: AgentSecrets;
     /** An agent's Tynn key with no window connected (genie#1457: host-agent-keys.ts). */
@@ -150,6 +162,9 @@ export class SessionEngineServer {
         this.#options = options;
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
         // Every change to the stores agents write to, to every window's replicas (P3.1).
+        options.tynn?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'tynn.event', dump);
+        });
         options.stores?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'stores.event', event);
         });
@@ -297,6 +312,8 @@ export class SessionEngineServer {
         const host = this.#host;
         if (host) for (const id of host.startedIds()) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
         this.#sendGlobal(conn);
+        // Who is signed in BEFORE ready: a window never reads signed out when it is not.
+        if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
@@ -469,14 +486,20 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.proxyRemember':
+                if (!this.#options.proxy) throw new Error('This host keeps no proxy answers.');
+                return this.#options.proxy.remember((args[0] ?? {}) as Record<string, string>);
+            case 'engine.tynn':
+                if (!this.#options.tynn) throw new Error('This host keeps no Tynn account.');
+                return this.#options.tynn.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.secretProbe':
                 return this.#keychain().probe();
             case 'engine.secretRead':
                 return this.#keychain().get(agentKeyName(str(0)));
             case 'engine.secretStore':
-                return this.#keychain().set(agentKeyName(str(0)), str(1));
+                return this.#keychain().set(movableName(str(0)), str(1));
             case 'engine.secretCompare':
-                return hostVault(this.#keychain()).compare(agentKeyName(str(0)), str(1));
+                return hostVault(this.#keychain()).compare(movableName(str(0)), str(1));
             case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');

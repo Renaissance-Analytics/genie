@@ -7,7 +7,7 @@ import { classifyNavigation } from '../core/browser-policy.js';
 import { isAlertSoundKey } from '../core/alerts.js';
 import { MAX_SOUND_BYTES, soundFileMime } from '../core/custom-sound.js';
 import { tynnGate, type SyncResult } from '../core/integrations.js';
-import type { TynnAccountPort } from './tynn-account.js';
+import { unreachableThroughMessage, type TynnAccountPort } from './tynn-account.js';
 import type { GithubAccountPort } from './github-account.js';
 import { signedOutGithubView } from '../core/github.js';
 import { resolveDeckAnswer, resolveDeckForm } from '../core/deck-resolve.js';
@@ -474,9 +474,11 @@ function tynnIntegration(services: ComposedServices, state: FeatureState, accoun
     const status = account?.status() ?? { signedIn: false as const };
 
     const host = account ? account.host() : TYNN_HOST;
+    // Out of reach through a proxy reads as that: the sign-in stands, whatever the status says for now.
+    const through = account?.unreachableThrough?.() ?? null;
     return {
         tynnSignedIn: status.signedIn,
-        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? null },
+        tynn: { host, user: status.signedIn ? status.user : null, signInUrl: status.signedIn ? null : state.tynnSignInUrl ?? null, message: state.tynnMessage ?? (through ? unreachableThroughMessage(through) : null) },
         gated: tynnGate([{ id: 'tynn-sync', label: 'Sync work items with Tynn', tynn: true }], { signedIn: status.signedIn }),
     };
 }

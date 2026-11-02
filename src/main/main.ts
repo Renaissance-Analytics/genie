@@ -60,7 +60,7 @@ import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type Launc
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
-import { TynnAccount } from './tynn-account.js';
+import { tynnPairingSource, TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { GithubAccount } from './github-account.js';
 import type { RepoListing } from '../core/github.js';
@@ -71,6 +71,9 @@ import { readRememberedPasswordStore, rememberPasswordStore } from './password-s
 import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
 import { osCipher } from './os-cipher.js';
 import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
+import { reportProxyAnswers } from './proxy-report.js';
+import type { SessionEngineClient } from './session-engine-client.js';
+import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { Keychain } from './keychain.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
@@ -695,6 +698,19 @@ let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
 let agentEngineLink: AgentEngineLink | null = null;
+/** Electron reports no change of proxy settings: asked when a window links and when the machine wakes. */
+let handProxyAnswers: (() => Promise<void>) | null = null;
+function reportProxies(client: SessionEngineClient, log: (line: string) => void): Promise<void> {
+    return reportProxyAnswers({
+        hosts: [TYNN_HOST, 'https://github.com', 'https://api.github.com'],
+        resolve: (url) => (url === TYNN_HOST ? session.fromPartition('persist:tynn') : session.defaultSession).resolveProxy(url),
+        send: async (answers) => {
+            const reply = await client.call('engine.proxyRemember', [answers]);
+            if (!reply.ok) throw new Error(reply.reason);
+        },
+        log,
+    });
+}
 /** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
 let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
@@ -1048,7 +1064,7 @@ function attractMainWindow(reason: string): void {
  * browser's genie://oauth/callback?token=… arrives as a second launch's argv (Windows, Linux), as `open-url` (macOS), or
  * as THIS launch's argv when Genie was not running. A URL that arrives before the account is open waits for it.
  */
-let tynnAccount: TynnAccount | null = null;
+let tynnAccount: TynnAccount | TynnAccountReplica | null = null;
 /** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
 let githubAccount: GithubAccount | null = null;
 /** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
@@ -1419,6 +1435,8 @@ async function boot(): Promise<void> {
      */
     {
         agentEngineLink = await connectAgentEngine({
+            // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
+            onLinked: (client) => { handProxyAnswers = () => reportProxies(client, lifecycleLog); void handProxyAnswers(); },
             callbacks: engineCallbacks,
             launch: {
                 runtimeDir: runtimeDir(genieHome()),
@@ -2745,6 +2763,8 @@ async function boot(): Promise<void> {
         tynn: () => tynnAccount,
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
+        legacySecrets: async () => [tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform) })],
+        onSecretsMoved: () => { void tynnAccount?.reload().catch(() => {}); },
         // An agent's key is the host's (genie#1457). A window running its own engine (the host could not start) holds it itself.
         ...(agentEngineLink
             ? { tynnSecrets: linkedAgentSecrets(agentEngineLink.client), tynnVault: linkedVault(agentEngineLink.client) }
@@ -2955,11 +2975,13 @@ async function boot(): Promise<void> {
     // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
     // the one-time pairing exchange; ordinary API requests explicitly omit it.
     const tynnSession = session.fromPartition('persist:tynn');
-    tynnAccount = await TynnAccount.open({
+    // THE ACCOUNT IS THE HOST'S (P3.4 cut c); this window reads a replica. Only a window running its own engine (the host could not
+    // start) opens one here, and it keeps its pairing in the keychain just the same.
+    tynnAccount = agentEngineLink ? agentEngineLink.client.tynn({ openExternal: (url) => shell.openExternal(url) }) : await TynnAccount.open({
         host: () => TYNN_HOST,
         file: join(genieHome(), 'credentials', 'tynn.json'),
         legacyFile: join(genieHome(), 'tynn.json'),
-        cipher: osCipher(safeStorage, process.platform),
+        secrets: new Keychain(),
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {
@@ -2981,6 +3003,8 @@ async function boot(): Promise<void> {
         fetch: (url, init) => tynnSession.fetch(url, init),
         openExternal: (url) => shell.openExternal(url),
     });
+    // A move of an older Genie's pairing that finished before this line had nobody to tell.
+    void tynnAccount.reload().catch(() => {});
     tynnAccount.onChange(pushFeatures);
     // Signing in brings back the Tynn tools of the agents that started without them (genie#1234) — and once now, for an
     // account that signed in while it opened, before anyone was listening.
@@ -4157,7 +4181,7 @@ app.on('window-all-closed', () => { /* Genie stays in the tray */ });
 
 // macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
 // Waking from sleep: a Genie that shows signed out to Tynn asks again (the network is often what was missing).
-powerMonitor.on('resume', () => { if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
+powerMonitor.on('resume', () => { void handProxyAnswers?.(); if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
 powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
     event?.preventDefault();
     quit.force();
