@@ -51,7 +51,7 @@ describe('quitPlan with genie-host', () => {
             confirm: true,
             defaultChoice: 'cancel',
             title: 'Quit Genie?',
-            message: '2 agents are running (atlas, bolt), 3 terminals are open and 2 kept processes are running. Just close the UI and they keep running in Genie’s host; the next Genie window picks them up. Shut down everything ends the agents’ sessions, closes the terminals and stops the processes.',
+            message: '2 agents are running (atlas, bolt), 3 terminals are open and 2 kept processes are running. Just close the UI and they keep running, and Genie stays in the tray. Shut down everything ends the agents’ sessions, closes the terminals and stops the processes.',
             buttons: three,
         });
     });
@@ -59,12 +59,12 @@ describe('quitPlan with genie-host', () => {
     it('a kept process alone asks too (the host keeps a site running), and terminals are kept whatever the detached setting', () => {
         expect(quitPlan({ runningAgents: [], liveTerminals: 0, detachedTerminals: false, host: { keptProcesses: 1 } })).toMatchObject({
             confirm: true,
-            message: '1 kept process is running. Just close the UI and it keeps running in Genie’s host; the next Genie window picks it up. Shut down everything stops it.',
+            message: '1 kept process is running. Just close the UI and it keeps running, and Genie stays in the tray. Shut down everything stops it.',
             buttons: three,
         });
         expect(quitPlan({ runningAgents: ['atlas'], liveTerminals: 1, detachedTerminals: true, host: { keptProcesses: 0 } })).toMatchObject({
             confirm: true,
-            message: '1 agent is running (atlas) and 1 terminal is open. Just close the UI and they keep running in Genie’s host; the next Genie window picks them up. Shut down everything ends its session and closes it.',
+            message: '1 agent is running (atlas) and 1 terminal is open. Just close the UI and they keep running, and Genie stays in the tray. Shut down everything ends its session and closes it.',
             buttons: three,
         });
     });

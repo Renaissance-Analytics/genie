@@ -36,29 +36,41 @@ describe('tray', () => {
     });
 
     /**
-     * THE TRAY WITH GENIE-HOST (the host split, P1b; the owner's decision 5): Quit becomes the two answers the quit asks — "Just close the
-     * UI" (the host keeps what runs) and "Shut down everything" — and the tooltip says the host is running, with how many
-     * agents, so a person with no window open can see it.
+     * THE TRAY WHILE GENIE-HOST RUNS (P1b; the owner, 2026-11-02: "as long as any genie services are running, that tray
+     * should be there so users can shut them down or restart if needed"). With a window open it offers "Just close the UI";
+     * with none (tray-only), Open Genie rebuilds one. Restart and Shut down everything are always there. The tooltip says the
+     * host is running and WHAT it runs.
      */
-    it('with the host’s answers wired, Quit Genie gives way to “Just close the UI” and “Shut down everything”', async () => {
+    it('with a window open: Just close the UI, Restart, Shut down everything — each wired to its own handler, Quit gone', async () => {
         const { trayMenuTemplate } = await import('../src/main/tray.js');
         const onQuit = vi.fn();
         const onCloseUi = vi.fn();
+        const onRestart = vi.fn();
         const onShutDown = vi.fn();
-        const menu = trayMenuTemplate({ onOpen: vi.fn(), onSettings: vi.fn(), onCheckUpdates: vi.fn(), onQuit, onCloseUi, onShutDown });
-        expect(menu.map((m) => m.label ?? m.type)).toEqual(['Open Genie', 'Settings…', 'Check for updates', 'separator', 'Just close the UI', 'Shut down everything']);
+        const menu = trayMenuTemplate({ onOpen: vi.fn(), onSettings: vi.fn(), onCheckUpdates: vi.fn(), onQuit, onCloseUi, onRestart, onShutDown, uiOpen: () => true });
+        expect(menu.map((m) => m.label ?? m.type)).toEqual(['Open Genie', 'Settings…', 'Check for updates', 'separator', 'Just close the UI', 'Restart', 'Shut down everything']);
         menu[4]!.click!();
-        expect(onCloseUi).toHaveBeenCalledTimes(1);
         menu[5]!.click!();
-        expect(onShutDown).toHaveBeenCalledTimes(1);
+        menu[6]!.click!();
+        expect([onCloseUi, onRestart, onShutDown].map((f) => f.mock.calls.length)).toEqual([1, 1, 1]);
         expect(onQuit).not.toHaveBeenCalled();
     });
 
-    it('the tooltip says the host is running, and how many agents it runs; without a host it is unchanged', async () => {
+    it('tray-only (no window): no Just close the UI — Open Genie leads, and Restart and Shut down everything stay', async () => {
+        const { trayMenuTemplate } = await import('../src/main/tray.js');
+        const onOpen = vi.fn();
+        const menu = trayMenuTemplate({ onOpen, onSettings: vi.fn(), onCheckUpdates: vi.fn(), onQuit: vi.fn(), onCloseUi: vi.fn(), onRestart: vi.fn(), onShutDown: vi.fn(), uiOpen: () => false });
+        expect(menu.map((m) => m.label ?? m.type)).toEqual(['Open Genie', 'Settings…', 'Check for updates', 'separator', 'Restart', 'Shut down everything']);
+        menu[0]!.click!();
+        expect(onOpen).toHaveBeenCalledTimes(1);
+    });
+
+    it('the tooltip says the host is running and WHAT it runs; without a host it is unchanged', async () => {
         const { trayTooltip } = await import('../src/main/tray.js');
-        expect(trayTooltip([], [], [], false, 0, 0)).toBe('Genie — host running');
-        expect(trayTooltip([], [], [], false, 0, 1)).toBe('Genie — host running 1 agent');
-        expect(trayTooltip([], [], [], false, 2, 3)).toBe('Genie — 2 waiting on you; host running 3 agents');
+        const none = { agents: 0, terminals: 0, processes: 0, services: 0 };
+        expect(trayTooltip([], [], [], false, 0, none)).toBe('Genie — host running');
+        expect(trayTooltip([], [], [], false, 0, { ...none, agents: 1 })).toBe('Genie — host running: 1 agent');
+        expect(trayTooltip([], [], [], false, 2, { agents: 3, terminals: 2, processes: 1, services: 1 })).toBe('Genie — 2 waiting on you; host running: 3 agents, 2 terminals, 1 process, 1 service');
         expect(trayTooltip([], [], [], false, 0, null)).toBe('Genie');
         expect(trayTooltip([], [], [], false, 0)).toBe('Genie');
     });

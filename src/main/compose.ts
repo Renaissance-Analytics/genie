@@ -401,11 +401,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     setFlowToolCaller(call: FlowToolCall): void;
     /** The registered workspaces' ids, now — what a flow's save checks a step's workspace against (genie#1204). */
     workspaceIds(): string[];
-    /**
-     * `everything` (the default: a full quit, an upgrade) stops every supervised process too. `window` (P1b, "Just close the
-     * UI") closes this process's own work and leaves the supervised processes to genie-host's supervisor, which keeps them.
-     */
-    shutdown(how?: 'everything' | 'window'): Promise<void>;
+    shutdown(): Promise<void>;
 }
 
 /**
@@ -1315,7 +1311,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
         setFlowToolCaller: (call) => { ownEngine?.setToolCaller(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
-        shutdown: (how = 'everything') => {
+        shutdown: () => {
             down ??= (async () => {
                 ownApprovals?.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
@@ -1328,8 +1324,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`
                 // pass below, a slow or stuck git kept every dev server, worker and the front door running — and a quit
                 // that does not wait that long left them running for good.
-                // Not when only the UI closes (P1b): genie-host's supervisor keeps the sites and workers running then.
-                if (how === 'everything') for (const p of supervisor.list()) supervisor.stop(p.id);
+                for (const p of supervisor.list()) supervisor.stop(p.id);
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
                 await envFiles.close();
                 await new Promise<void>((r) => frontDoor.close(r));

@@ -38,7 +38,6 @@ import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
-import { hostIdle } from '../core/host-idle.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
@@ -74,7 +73,7 @@ import { repoStatus } from './repo-git.js';
  *  - `host.sock`  — the endpoint (not Windows, where it is a per-user named pipe).
  *
  * It exits when told to (`engine.shutdown`, SIGTERM), or once nothing has run and no window has been connected for
- * `GENIE_HOST_IDLE_MS` (10 minutes) — unless a window left it running ("Just close the UI", P1b): then only a shutdown ends it.
+ * `GENIE_HOST_IDLE_MS` (10 minutes). Whether it should stay up longer is the owner's decision O1 in the plan.
  */
 
 const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : genieHome();
@@ -134,8 +133,6 @@ async function main(): Promise<void> {
     const token = randomBytes(32).toString('hex');
     let shuttingDown = false;
     let lastBusy = Date.now();
-    // "Just close the UI" (P1b): a window left this host running, so the idle exit never ends it (core/host-idle.ts).
-    let leftRunning = false;
     // The spawn-host children (the host split, P2.1), bound late: they and the engine server refer to each other.
     let relay: SpawnRelay | null = null;
     /*
@@ -215,7 +212,6 @@ async function main(): Promise<void> {
         pid: process.pid,
         log: say,
         onShutdown: () => void shutdown('a window asked'),
-        onLeftRunning: () => { leftRunning = true; say('left running: a window closed and kept this host'); },
         onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
         // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
         // A window reaches the `processes` child only: `supervised` and `terminals` are this host's own (P3.3b, P3.3e).
@@ -469,12 +465,10 @@ async function main(): Promise<void> {
     process.on('SIGTERM', () => void shutdown('SIGTERM'));
     process.on('SIGINT', () => void shutdown('SIGINT'));
 
-    // IDLE EXIT: nothing running and no window for IDLE_MS. While an agent runs, the host stays — that is the point; and a
-    // host the person left running ("Just close the UI") stays with nothing running too.
+    // IDLE EXIT: nothing running and no window for IDLE_MS. While an agent runs, the host stays — that is the point.
     setInterval(() => {
-        const idle = hostIdle({ sessions: host.count, windows: engine.clients, livePtys: relay?.live() ?? 0, leftRunning }, lastBusy, Date.now(), IDLE_MS);
-        if (idle === 'busy') { lastBusy = Date.now(); return; }
-        if (idle === 'exit') void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with no agent and no window`);
+        if (host.count > 0 || engine.clients > 0 || (relay?.live() ?? 0) > 0) { lastBusy = Date.now(); return; }
+        if (Date.now() - lastBusy >= IDLE_MS) void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with no agent and no window`);
     }, Math.min(30_000, Math.max(1_000, Math.floor(IDLE_MS / 4)))).unref?.();
     // Kept alive by the server; the interval above is unref'd so it never holds a host that is otherwise done.
 }

@@ -2,10 +2,12 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 /**
- * QUIT KEEPS THE HOST — the wiring (the host split, P1b). The behaviour behind each wire is driven elsewhere: the plan and
- * the answers in quit-plan.test.ts, the steps and their effects in quit-sequence.test.ts, the window-only shutdown in
- * compose-quit-stops-first.test.ts, the host's side in engine-leave-running.test.ts and host-idle-exit.test.ts, the tray
- * in tray.test.ts. Source guards, comments stripped by line (CRLF-safe), so prose cannot satisfy them.
+ * QUIT KEEPS THE HOST, AND THE TRAY KEEPS GENIE (the host split, P1b; the owner, 2026-11-02: "Keep the tray up … as long as
+ * any genie services are running, that tray should be there so users can shut them down or restart if needed").
+ *
+ * The behaviour behind each wire is driven elsewhere: the plan and the answers in quit-plan.test.ts, the steps in
+ * quit-sequence.test.ts, the tray-only rule in tray-only.test.ts, the tray in tray.test.ts. Source guards, comments
+ * stripped by line (CRLF-safe), so prose cannot satisfy them.
  */
 
 const strip = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
@@ -20,49 +22,75 @@ describe('main.ts', () => {
         expect(quit).toMatch(/ask: \(plan\) => quitAnswer\(plan, dialog\.showMessageBoxSync\(/);
     });
 
-    it('both answers run through runQuit; the before-quit handler stops nothing itself', () => {
+    it('"Just close the UI" is not a quit: the quit is prevented, the windows close, the process stays as the tray', () => {
         const quit = block(main(), "app.on('before-quit'");
-        expect(quit).toMatch(/runQuit\(step, quitPorts\)/);
+        expect(quit).toMatch(/if \(step === 'close-ui'\) \{ event\.preventDefault\(\); closeUi\('the quit’s answer'\); return; \}/);
+        const close = block(main(), 'function closeUi(', '\n}\n');
+        // Every window goes — the main one and every other (Take Over, files, remote, the Genie browser).
+        expect(close).toMatch(/for \(const w of BrowserWindow\.getAllWindows\(\)\) if \(!w\.isDestroyed\(\)\) w\.destroy\(\);/);
+        expect(close).toMatch(/window = null;/);
+        // Nothing of the host is touched: no stop, no shutdown, no leave.
+        expect(close).not.toMatch(/stopAll|shutdown|leave/);
+    });
+
+    it('the shutdown pass runs runQuit; the before-quit handler stops nothing itself', () => {
+        const quit = block(main(), "app.on('before-quit'");
+        expect(quit).toMatch(/runQuit\(quitPorts\)/);
         expect(quit).not.toMatch(/host\?\.stopAll\(\)/);
-        expect(quit).not.toMatch(/terminals\?\.closeAll\(\)/);
         const ports = block(main(), 'const quitPorts: QuitPorts = {', '\n};');
         expect(ports).toMatch(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/);
         expect(ports).toMatch(/closeTerminals: \(\) => \{ terminals\?\.closeAll\(\); \}/);
-        expect(ports).toMatch(/void services\?\.shutdown\(how\);/);
+        expect(ports).toMatch(/void services\?\.shutdown\(\);/);
         expect(ports).toMatch(/shutDownHost: \(\) => agentEngineLink\?\.shutdown\(QUIT_WRITES_MS\)/);
-        expect(ports).toMatch(/leaveHostRunning: \(\) => agentEngineLink\?\.leave\(\)/);
     });
 
-    it('a quit with an answer chosen up front (the tray) chooses it, then quits; the plain quit still asks', () => {
+    it('the main window is REBUILT where there is none: Open Genie and a second launch reach mountMainWindow', () => {
+        const src = main();
+        expect(block(src, 'function revealMainWindow', '\n}\n')).toMatch(/if \(!window \|\| window\.isDestroyed\(\)\) \{ mountMainWindow\(true, reason\); return; \}/);
+        // Everything bound to ONE window is bound in mountMainWindow, every time: the close, the session end, the browser pane, the site panels.
+        const mount = block(src, 'function mountMainWindow(', '\n}\n');
+        expect(mount).toMatch(/window = createWindow\(show\);/);
+        expect(mount).toMatch(/wireCloseToTray\(window, \{/);
+        expect(mount).toMatch(/window\.on\('session-end', \(\) => \{ quit\.force\(\); app\.quit\(\); \}\);/);
+        expect(mount).toMatch(/browserPane = new BrowserPane\(electronBrowserView\(window, /);
+        expect(mount).toMatch(/livePanels\?\.attach\(window\);/);
+        expect(src).toMatch(/onOpen: \(\) => \{ revealMainWindow\('tray: Open'\); \},/);
+        expect(block(src, "app.on('second-instance'")).toMatch(/reveal: \(\) => \{ revealMainWindow\('second launch'\); \}/);
+    });
+
+    it('the tray offers the host’s verbs while the host is genie-host, and says what it runs', () => {
+        const src = main();
+        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ restartGenie\(\); \}, onShutDown: \(\) => \{ requestQuit\('shut-down'\); \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
+        expect(block(src, 'function refreshTray', '\n}\n')).toMatch(/trayTooltip\(held, signedOut, paused, designLogin, trayWaiting, hostNow\)/);
+    });
+
+    it('Restart: recorded, everything shut down, and Genie started again in the tray (`--hidden`)', () => {
+        const restart = block(main(), 'function restartGenie(', '\n}\n');
+        expect(restart).toMatch(/app\.relaunch\(\{ args: \[\.\.\.process\.argv\.slice\(1\)\.filter\(\(a\) => a !== HIDDEN_ARG\), HIDDEN_ARG\] \}\);/);
+        expect(restart).toMatch(/requestQuit\('shut-down'\);/);
+    });
+
+    it('tray-only, nothing left running for the grace: Genie shuts everything down and exits', () => {
+        const src = main();
+        const watch = block(src, 'function watchTrayOnly(', '\n}\n');
+        expect(watch).toMatch(/trayOnlyStep\(\{ uiOpen: window !== null && !window\.isDestroyed\(\), activity: hostActivityNow\(\) \}, trayQuietSince, Date\.now\(\)\)/);
+        expect(watch).toMatch(/if \(step\.exit\) \{[\s\S]*?requestQuit\('shut-down'\);/);
+    });
+
+    it('a quit with an answer chosen up front (the tray, Restart, the tray-only exit) chooses it, then quits', () => {
         const request = block(main(), 'function requestQuit', '\n}\n');
         expect(request).toMatch(/if \(answer\) quit\.choose\(answer\);\s*\n\s*app\.quit\(\);/);
     });
 
-    it('the tray offers the two answers while the host is genie-host, and says the host is running', () => {
-        const src = main();
-        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ requestQuit\('close-ui'\); \}, onShutDown: \(\) => \{ requestQuit\('shut-down'\); \} \} : \{\}\),/);
-        expect(block(src, 'function refreshTray', '\n}\n')).toMatch(/trayTooltip\(held, signedOut, paused, designLogin, trayWaiting, hostAgents\)/);
+    it('the tray’s state is readable from the main process (a read-only probe: present, tooltip, its menu), for the VM proof', () => {
+        expect(main()).toMatch(/\(globalThis as Record<symbol, unknown>\)\[Symbol\.for\('genie\.tray'\)\] = \{/);
     });
 });
 
-describe('agent-engine.ts', () => {
-    it('leave(): no reconnect from here, the host told it is left running, then the link let go — never engine.shutdown', () => {
-        const leave = block(strip('src/main/agent-engine.ts'), 'leave: async () => {', '\n        },');
-        expect(leave).toMatch(/stopping = true;/);
-        expect(leave).toMatch(/await client\.leaveRunning\(\)/);
-        expect(leave).toMatch(/client\.disconnect\(\);/);
-        expect(leave).not.toMatch(/shutdown/);
-    });
-});
-
-describe('genie-host.ts', () => {
-    const src = () => strip('src/main/genie-host.ts');
-
-    it('a window saying leaveRunning marks the host left running', () => {
-        expect(src()).toMatch(/onLeftRunning: \(\) => \{ leftRunning = true;/);
-    });
-
-    it('the idle exit is hostIdle, with the left-running mark', () => {
-        expect(src()).toMatch(/hostIdle\(\{ sessions: host\.count, windows: engine\.clients, livePtys: relay\?\.live\(\) \?\? 0, leftRunning \}, lastBusy, Date\.now\(\), IDLE_MS\)/);
+describe('the host and the link carry no "left running" any more', () => {
+    it('genie-host has no leaveRunning; the link has no leave; the protocol has no engine.leaveRunning', () => {
+        expect(strip('src/main/genie-host.ts')).not.toMatch(/leftRunning|onLeftRunning/);
+        expect(strip('src/main/agent-engine.ts')).not.toMatch(/leave: async/);
+        expect(strip('src/core/engine-protocol.ts')).not.toMatch(/engine\.leaveRunning/);
     });
 });

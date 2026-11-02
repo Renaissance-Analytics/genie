@@ -83,23 +83,22 @@ describe('quitSequence', () => {
         expect(ask).not.toHaveBeenCalled();
     });
 
-    it('JUST CLOSE THE UI: nothing recorded (the agents go on running), one close-ui step, quitting from the answer on', () => {
+    it('JUST CLOSE THE UI is not a quit: nothing recorded, nothing confirmed — Genie stays in the tray, and a later quit asks again', () => {
         const seq = quitSequence();
         const { ask, steps } = drive(seq, 'close-ui');
         expect(ask).toHaveBeenCalledTimes(1);
         expect(steps).toEqual(['close-ui']);
-        expect(seq.quitting).toBe(true);
-        // The quit resumes once the window let go of the host: it passes, the host is not shut down after all.
-        expect(seq.beforeQuit({ ready: true, plan: () => asking, ask })).toBe('pass');
+        // The process lives on as the tray (the owner, 2026-11-02: "Keep the tray up"): not quitting, nothing recorded.
+        expect(seq.quitting).toBe(false);
+        const later = drive(seq, 'shut-down');
+        expect(later.ask).toHaveBeenCalledTimes(1);
+        expect(later.steps).toEqual(['record', 'shut-down']);
     });
 
-    it('the tray’s answers are chosen up front: no question, the chosen step', () => {
-        const ui = quitSequence();
-        ui.choose('close-ui');
-        expect(ui.quitting).toBe(true);
-        expect(drive(ui, 'cancel').steps).toEqual(['close-ui']);
+    it('the tray’s Shut down everything (and Restart, and the tray-only exit) is chosen up front: no question', () => {
         const all = quitSequence();
         all.choose('shut-down');
+        expect(all.quitting).toBe(true);
         const { ask, steps } = drive(all, 'cancel');
         expect(ask).not.toHaveBeenCalled();
         expect(steps).toEqual(['record', 'shut-down']);
@@ -113,43 +112,32 @@ describe('quitSequence', () => {
 });
 
 /**
- * WHAT EACH ANSWER DOES (P1b's red). "Just close the UI" ends this window's own work and lets go of the host: no agent is
- * stopped and the host is never told to shut down. "Shut down everything" is the graceful stop it always was: the agents
- * stopped, the window's work and the terminals closed, the stops drained, and only then the host ended.
+ * WHAT A QUIT DOES ("Shut down everything"): the graceful stop it always was — the agents stopped, the window's work and the
+ * terminals closed, the stops drained, and only then the host ended. "Just close the UI" is not a quit at all (main.ts
+ * closeUi: the windows close, this process stays as the tray), so it has no effects here.
  */
 describe('runQuit', () => {
     function ports() {
         const calls: string[] = [];
         const p: QuitPorts = {
             stopAgents: () => { calls.push('stopAll'); },
-            closeWindow: (how) => { calls.push(`window:${how}`); },
+            closeWindow: () => { calls.push('window'); },
             closeTerminals: () => { calls.push('terminals'); },
             drained: async () => { calls.push('drained'); },
             shutDownHost: async () => { calls.push('engine.shutdown'); },
-            leaveHostRunning: async () => { calls.push('leave'); },
         };
         return { calls, p };
     }
 
-    it('"Just close the UI" calls no stopAll and no engine.shutdown: the window closes and leaves the host running', async () => {
-        const { calls, p } = ports();
-        await runQuit('close-ui', p);
-        expect(calls).toEqual(['window:window', 'leave']);
-        expect(calls).not.toContain('stopAll');
-        expect(calls).not.toContain('engine.shutdown');
-        expect(calls).not.toContain('terminals');
-    });
-
     it('"Shut down everything" calls stopAll and then engine.shutdown, in order, after the drain', async () => {
         const { calls, p } = ports();
-        await runQuit('shut-down', p);
-        expect(calls).toEqual(['stopAll', 'window:everything', 'terminals', 'drained', 'engine.shutdown']);
-        expect(calls).not.toContain('leave');
+        await runQuit(p);
+        expect(calls).toEqual(['stopAll', 'window', 'terminals', 'drained', 'engine.shutdown']);
     });
 
     it('a drain that fails still ends the host: a quit is never left half done', async () => {
         const { calls, p } = ports();
-        await runQuit('shut-down', { ...p, drained: async () => { calls.push('drained'); throw new Error('lost'); } });
+        await runQuit({ ...p, drained: async () => { calls.push('drained'); throw new Error('lost'); } });
         expect(calls.at(-1)).toBe('engine.shutdown');
     });
 });

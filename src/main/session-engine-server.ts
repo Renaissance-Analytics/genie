@@ -54,8 +54,6 @@ export interface EngineServerOptions {
     readonly pid?: number;
     /** `engine.shutdown`: stop gracefully and exit. The host entry's to implement; absent = refused. */
     readonly onShutdown?: () => void;
-    /** `engine.leaveRunning` (P1b, "Just close the UI"): the window is closing and the person keeps this host running. Absent = refused. */
-    readonly onLeftRunning?: () => void;
     /** The number of authenticated windows changed (the host's idle exit watches it). */
     readonly onClients?: (count: number) => void;
     /** How state pushes are coalesced: the timer. Default 16 ms, one frame — a streamed reply's chunks travel together. */
@@ -406,10 +404,6 @@ export class SessionEngineServer {
                 if (!this.#options.onShutdown) throw new Error('This host cannot be shut down from a window.');
                 // Answered first: the shutdown ends this process, and the window waits for the pid, not for this reply.
                 setTimeout(() => this.#options.onShutdown?.(), 0);
-                return true;
-            case 'engine.leaveRunning':
-                if (!this.#options.onLeftRunning) throw new Error('This host cannot be left running.');
-                this.#options.onLeftRunning();
                 return true;
             case 'engine.spawn': {
                 if (!this.#options.spawn) throw new Error('This host runs no spawn host.');

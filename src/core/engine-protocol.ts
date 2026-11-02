@@ -54,8 +54,6 @@ export const ENGINE_METHODS = [
     // Liveness, and the graceful end (sessions stopped and verified, writes drained, then the process exits).
     'engine.ping',
     'engine.shutdown',
-    // "Just close the UI" (P1b): the window is closing and this host stays up — its idle exit no longer ends it.
-    'engine.leaveRunning',
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
