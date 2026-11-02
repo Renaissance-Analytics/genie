@@ -43,7 +43,14 @@ function recordMethod(method, unhandled = false) {
     }
 }
 
-const THREAD_ID = 'stub_thread_0001';
+/**
+ * TICKER MODE (scripts/quit-keeps-host-cdp.mjs, the host split P1b): while `<tmpdir>/genie-stub-codex-ticker` exists when this
+ * stub STARTS, a turn asks nothing and streams `tick <n> pid <pid>` four times a second, for ever — an agent that is
+ * visibly streaming, whose ledger names the very process that streams for it. Each process gets its own thread id, so
+ * three ticker agents are three threads. Without the file nothing below changes (smoke-cdp's one reply, its approval).
+ */
+const TICKER = existsSync(join(tmpdir(), 'genie-stub-codex-ticker'));
+const THREAD_ID = TICKER ? `stub_thread_${process.pid}` : 'stub_thread_0001';
 const TURN_ID = 'stub_turn_0001';
 
 let nextId = 1000;
@@ -249,6 +256,13 @@ function handle(frame) {
 
         case 'turn/start': {
             respond(id, { turn: { id: TURN_ID } });
+
+            if (TICKER) {
+                let tick = 0;
+                note(`ticker: streaming as pid ${process.pid}`);
+                setInterval(() => { tick += 1; delta(`tick ${tick} pid ${process.pid}\n`); }, 250);
+                return;
+            }
 
             // Ask ONCE. A stub that re-asks every turn would make "answering did nothing" and
             // "answering worked and it asked again" indistinguishable on screen.
