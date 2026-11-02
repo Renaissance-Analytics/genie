@@ -49,6 +49,8 @@ export class Keychain {
         this.#load = load;
     }
 
+    onAnswerChange(_listener: (answers: boolean) => void): () => void { return () => {}; }
+
     async #entry(name: string) {
         // A load that failed is tried again next time (a package just installed, a module that was briefly unreadable).
         this.#module ??= this.#load().catch((error: unknown) => { this.#module = null; throw error; });
