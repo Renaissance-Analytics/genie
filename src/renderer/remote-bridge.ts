@@ -344,8 +344,6 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
         uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
         terminals: {
-            // Another machine's previous session is not this window's to seed.
-            previousSession: async () => null,
             open: (workspaceId, options) => read('terminals.open', workspaceId, options),
             write: (id, data) => fire('terminals.write', id, data),
             resize: (id, cols, rows) => fire('terminals.resize', id, cols, rows),

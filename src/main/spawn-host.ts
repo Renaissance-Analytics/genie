@@ -1,7 +1,7 @@
 import './close-inherited-fds.js';
 // ^ FIRST (bug A, VM job 76): whatever its parent held (a window's, on the emergency path) never reaches a pty helper or a shell.
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
-import { fancyTermPort } from './fancy-term-port.js';
+import { fancyTermPort, NO_SNAPSHOTS } from './fancy-term-port.js';
 import { processChannel } from './spawn-host-protocol.js';
 import { serveSpawnHost } from './spawn-host-server.js';
 import { execInProcess, streamInProcess } from './spawn-exec.js';
@@ -27,7 +27,7 @@ const terminals = process.env['GENIE_SPAWN_PROFILE'] === 'terminals';
 const settings = { get: (key: string) => (key === 'track_cwd' ? (terminals ? 'on' : 'off') : key === 'detached_terminals' ? 'off' : undefined) };
 configureInProcessBackend({
     settings,
-    snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false },
+    snapshots: NO_SNAPSHOTS,
 } as unknown as Parameters<typeof configureInProcessBackend>[0]);
 
 const channel = processChannel(process);

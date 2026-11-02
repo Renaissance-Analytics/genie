@@ -55,16 +55,16 @@ describe('osCipher — refuse to store a secret without a keyring', () => {
 /**
  * EVERY SECRET GENIE KEEPS goes through the same gate: the Tynn pairing key, the agents' Tynn keys, the GitHub token and
  * this machine's workstation key. Before this, GitHub and the workstation key asked only `isEncryptionAvailable()`, which
- * does not know about basic_text. (The terminal snapshot engine is not a credential store and keeps its own documented rule.)
+ * does not know about basic_text. 
  */
 describe('main.ts: every credential cipher is the gated osCipher', () => {
     const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
     it('no credential cipher is built from safeStorage directly', () => {
         const direct = [...main.matchAll(/isAvailable: \(\) => safeStorage\.isEncryptionAvailable\(\)[^\n]*/g)].map((m) => m[0]);
-        // Exactly one: the terminal engine's snapshot cipher (fancy-term), whose plaintext fallback is the engine's own call.
-        expect(direct).toHaveLength(1);
+        // None: the terminal engine's snapshot cipher was the last one, and it went with saved scrollback (the owner, 2026-11-02).
+        expect(direct).toHaveLength(0);
+        // Positive control: what the gauge looks for, as text, can match (a cipher built that way would be found).
+        expect('isAvailable: () => safeStorage.isEncryptionAvailable(),'.match(/isAvailable: \(\) => safeStorage\.isEncryptionAvailable\(\)/)).not.toBeNull();
         expect(main).toMatch(/osCipher\(safeStorage, process\.platform\)/);
-        // Positive control: the gauge does find the terminal engine's one.
-        expect(main).toMatch(/realFancyTermPort\(genieHome\(\), \{\s*isAvailable: \(\) => safeStorage\.isEncryptionAvailable\(\)/);
     });
 });

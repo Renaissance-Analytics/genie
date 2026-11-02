@@ -189,6 +189,20 @@ probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \
     "    return button === 1;" "    return button !== 0;" \
     test/tray-confirm.test.ts "only the confirm button goes on"
 
+# §13: plaintext files that hold secrets are the owner's alone
+probe "private-files-are-0600" src/main/store.ts \
+    "    const handle = await open(tmp, 'w', mode);" "    const handle = await open(tmp, 'w');" \
+    test/runtime-file-modes.test.ts "a fresh write is 0600"
+
+probe "open-files-are-tightened" src/main/store.ts \
+    "    await chmod(file, PRIVATE_FILE.mode).catch(" "    await Promise.resolve().catch(" \
+    test/runtime-file-modes.test.ts "tightened at open"
+
+# Decision 2: scrollback is not saved; an upgrade deletes what an older Genie left
+probe "upgrade-deletes-saved-scrollback" src/main/saved-scrollback.ts \
+    "            await rm(path, { recursive: true, force: true });" "" \
+    test/no-saved-scrollback.test.ts "are GONE"
+
 # P3.4 cut a: the keychain. The pin is the core: unpinned, a secret is silently lost at the next reboot.
 probe "keychain-every-entry-is-pinned" src/main/keychain.ts \
     "        return new AsyncEntry(KEYCHAIN_SERVICE, name, ENTRY_OPTIONS);" "        return new AsyncEntry(KEYCHAIN_SERVICE, name);" \
@@ -207,7 +221,7 @@ probe "host-ready-only-when-the-keychain-answers" src/main/host-keychain.ts \
     test/keychain.test.ts "whose keychain still refuses"
 
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/keychain.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

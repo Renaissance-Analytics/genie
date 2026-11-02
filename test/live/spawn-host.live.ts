@@ -66,8 +66,7 @@ async function main(): Promise<void> {
     const ws = join(base, 'acme');
     mkdirSync(ws, { recursive: true });
     writeFileSync(join(ws, 'project.json'), `${JSON.stringify({ name: 'acme', repos: [] }, null, 2)}\n`);
-    const encryptor = { isAvailable: () => true, encrypt: (b: Buffer) => b, decrypt: (b: Buffer) => b };
-    const mainPty = realFancyTermPort(userData, encryptor as never);
+    const mainPty = realFancyTermPort();
     const composed = await composeServices({
         userData, pty: mainPty, processPty: host.ptyPort(mainPty), v1Settings: () => null, caddyBin, frontDoorPort: 0,
         portFree: async () => true, workspaces: () => [{ id: 'acme', path: ws }],
