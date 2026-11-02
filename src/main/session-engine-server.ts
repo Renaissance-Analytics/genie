@@ -1,3 +1,4 @@
+import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
@@ -48,11 +49,11 @@ import type { TerminalsService } from './terminals-host.js';
 type HostOptions = ConstructorParameters<typeof SessionHost>[0];
 
 /**
- * What a window may ask the keychain for: an agent's key. The pairing token only goes the other way, in the one-time move: a
- * window can hand it over and have it compared, and it cannot read it back.
+ * What a window may ask the keychain for: an agent's key. The accounts' tokens only go the other way, in the one-time move: a
+ * window can hand one over and have it compared, and it cannot read it back.
  */
-function movableName(name: string): `tynn/agent/${string}` | 'tynn/pairing' {
-    return name === 'tynn/pairing' ? name : agentKeyName(name);
+function movableName(name: string): `tynn/agent/${string}` | 'tynn/pairing' | 'github/access' | 'github/refresh' {
+    return name === 'tynn/pairing' || name === 'github/access' || name === 'github/refresh' ? name : agentKeyName(name);
 }
 /** An agent's key, by name. */
 function agentKeyName(name: string): `tynn/agent/${string}` {
@@ -65,6 +66,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** The host's GitHub account (P3.4 cut c). */
+    readonly github?: GithubAccountService;
     /** What the OS said about proxies, as a window hands it over. */
     readonly proxy?: { remember(answers: Record<string, string>): Promise<void> };
     /** The host's Tynn account (P3.4 cut c). */
@@ -162,6 +165,14 @@ export class SessionEngineServer {
         this.#options = options;
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
         // Every change to the stores agents write to, to every window's replicas (P3.1).
+        options.github?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'github.event', dump);
+        });
+        // A page for the person, and it opens once: on the newest window.
+        options.github?.onOpen((url) => {
+            const conn = [...this.#connections].filter((c) => c.authed).at(-1);
+            if (conn) this.#event(conn, 'github.open', { url });
+        });
         options.tynn?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'tynn.event', dump);
         });
@@ -310,6 +321,7 @@ export class SessionEngineServer {
         this.#sendGlobal(conn);
         // Who is signed in BEFORE ready: a window never reads signed out when it is not.
         if (this.#options.tynn) this.#event(conn, 'tynn.event', this.#options.tynn.dump());
+        if (this.#options.github) this.#event(conn, 'github.event', this.#options.github.dump());
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
@@ -482,6 +494,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.github':
+                if (!this.#options.github) throw new Error('This host keeps no GitHub account.');
+                return this.#options.github.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.proxyRemember':
                 if (!this.#options.proxy) throw new Error('This host keeps no proxy answers.');
                 return this.#options.proxy.remember((args[0] ?? {}) as Record<string, string>);

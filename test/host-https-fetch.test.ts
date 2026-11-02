@@ -164,6 +164,97 @@ describe('it answers as the window’s fetch did', () => {
     });
 });
 
+describe('same-origin redirects, for GitHub: a renamed repository is ordinary', () => {
+    /** One server, answering by path; `seen` holds what each path was really sent. */
+    async function routed(routes: Record<string, { status: number; location?: string; body?: unknown }>, ca: IssuedPem = GENIE_CA) {
+        const seen: Array<{ path: string; method: string; auth: string | null; body: string }> = [];
+        const url = await tlsServer(ca, (req, res) => {
+            let body = '';
+            req.on('data', (chunk) => { body += chunk; });
+            req.on('end', () => {
+                seen.push({ path: req.url ?? '', method: req.method ?? '', auth: req.headers.authorization ?? null, body });
+                const route = routes[req.url ?? ''] ?? { status: 404, body: {} };
+                res.writeHead(route.status, route.location ? { Location: route.location } : {});
+                res.end(JSON.stringify(route.body ?? {}));
+            });
+        });
+        return { url, seen };
+    }
+    const following = () => hostHttpsFetch({ machineRoots: trusted, env: {}, followSameOrigin: 5 });
+    const AUTH = { ...GET, headers: { Authorization: 'Bearer t' } };
+
+    it('a moved repository is followed on the same origin, with the token, and the answer is the final one', async () => {
+        const { url, seen } = await routed({ '/repos/old': { status: 301, location: '/repos/new' }, '/repos/new': { status: 200, body: { name: 'new' } } });
+        const res = await following()(`${url}/repos/old`, AUTH);
+        expect(res.status).toBe(200);
+        expect(JSON.parse(await res.text())).toEqual({ name: 'new' });
+        expect(seen.map((c) => [c.path, c.auth])).toEqual([['/repos/old', 'Bearer t'], ['/repos/new', 'Bearer t']]);
+    });
+
+    it('an absolute Location on the same origin is the same thing', async () => {
+        const routes: Record<string, { status: number; location?: string }> = { '/b': { status: 200 } };
+        const { url, seen } = await routed(routes);
+        routes['/a'] = { status: 302, location: `${url}/b` };
+        expect((await following()(`${url}/a`, AUTH)).status).toBe(200);
+        expect(seen.map((c) => c.path)).toEqual(['/a', '/b']);
+    });
+
+    it('a 307 keeps the method and the body', async () => {
+        const { url, seen } = await routed({ '/a': { status: 307, location: '/b' }, '/b': { status: 201 } });
+        const res = await following()(`${url}/a`, { ...AUTH, method: 'POST', body: '{"x":1}', headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' } });
+        expect(res.status).toBe(201);
+        expect(seen[1]).toMatchObject({ path: '/b', method: 'POST', body: '{"x":1}', auth: 'Bearer t' });
+    });
+
+    it('a 301 or 302 to a POST becomes a GET with no body, as a browser does', async () => {
+        const { url, seen } = await routed({ '/a': { status: 302, location: '/b' }, '/b': { status: 200 } });
+        await following()(`${url}/a`, { ...AUTH, method: 'POST', body: '{"x":1}', headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' } });
+        expect(seen[1]).toMatchObject({ path: '/b', method: 'GET', body: '' });
+    });
+
+    it('A CROSS-ORIGIN REDIRECT IS REFUSED, SAYS SO, AND THE TOKEN NEVER GOES THERE', async () => {
+        const other = await routed({ '/stolen': { status: 200 } });
+        const { url } = await routed({ '/a': { status: 301, location: `${other.url}/stolen` } });
+        await expect(following()(`${url}/a`, AUTH)).rejects.toThrow(/another (origin|host)/i);
+        expect(other.seen).toEqual([]);
+    });
+
+    it('another port is another origin', async () => {
+        const other = await routed({ '/x': { status: 200 } });
+        const { url } = await routed({ '/a': { status: 302, location: `https://localhost:${new URL(other.url).port}/x` } });
+        await expect(following()(`${url}/a`, AUTH)).rejects.toThrow(/another (origin|host)/i);
+        expect(other.seen).toEqual([]);
+    });
+
+    it('down to http is another origin, so a token is never sent in the clear', async () => {
+        const { url } = await routed({ '/a': { status: 301, location: `http://localhost:${1}/x` } });
+        await expect(following()(`${url}/a`, AUTH)).rejects.toThrow(/another (origin|host)/i);
+    });
+
+    it('a loop stops at the limit and says so', async () => {
+        const { url, seen } = await routed({ '/a': { status: 302, location: '/a' } });
+        await expect(following()(`${url}/a`, AUTH)).rejects.toThrow(/too many redirects/i);
+        expect(seen).toHaveLength(6);
+    });
+
+    it('a redirect with no Location is refused', async () => {
+        const { url } = await routed({ '/a': { status: 302 } });
+        await expect(following()(`${url}/a`, AUTH)).rejects.toThrow(/redirect/i);
+    });
+
+    it('CONTROL: WITHOUT THE OPTION A REDIRECT IS STILL REFUSED, on the same origin too: Tynn stays as it is', async () => {
+        const { url, seen } = await routed({ '/a': { status: 301, location: '/b' }, '/b': { status: 200 } });
+        await expect(hostHttpsFetch({ machineRoots: trusted, env: {} })(`${url}/a`, AUTH)).rejects.toThrow(/redirect/i);
+        expect(seen).toHaveLength(1);
+    });
+
+    it('only GitHub’s port asks for it', () => {
+        const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+        expect(strip(readFileSync('src/main/genie-host.ts', 'utf8'))).toMatch(/followSameOrigin: 5/);
+        expect(strip(readFileSync('src/main/host-tynn-account.ts', 'utf8'))).not.toMatch(/followSameOrigin/);
+    });
+});
+
 describe('env proxies', () => {
     async function connectProxy() {
         const tunnels: string[] = [];
