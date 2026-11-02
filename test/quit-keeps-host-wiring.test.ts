@@ -22,7 +22,7 @@ describe('main.ts', () => {
 
     it('both answers run through runQuit; the before-quit handler stops nothing itself', () => {
         const quit = block(main(), "app.on('before-quit'");
-        expect(quit).toMatch(/runQuit\(step, \{/);
+        expect(quit).toMatch(/runQuit\(step, quitPorts\)/);
         expect(quit).not.toMatch(/host\?\.stopAll\(\)/);
         expect(quit).not.toMatch(/terminals\?\.closeAll\(\)/);
         const ports = block(main(), 'const quitPorts: QuitPorts = {', '\n};');
