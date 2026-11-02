@@ -71,7 +71,8 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
         const html = render();
 
         expect(html).toContain('data-tab="stream"');
-        expect(html).toMatch(/data-tab="stream"[^>]*data-active="true"/);
+        expect(control(html, 'data-tab="stream"')).toMatchObject({ tag: 'button', tab: true });
+        expect(control(html, 'data-tab="stream"')!.open).toContain('aria-selected="true"');
         expect(html).toContain('data-stream="rows"');
         // The edit is activity; the message `m1` is a chat message and lives in the chat, not the Stream (the owner).
         expect(html).toContain('data-stream-row="ed1"');
@@ -98,7 +99,7 @@ describe('a declared agent gets the Stream, and it is SHOWING', () => {
         expect(html).not.toMatch(/\sdisabled=""/);
         // Asked for a tab it does not have, it falls back to its first — Activity, per the board — rather than
         // rendering an empty body under a strip that does not contain the selected tab.
-        expect(html).toMatch(/data-tab="activity"[^>]*data-active="true"/);
+        expect(control(html, 'data-tab="activity"')!.open).toContain('aria-selected="true"');
     });
 
     it('counts which fidelities render a Stream, rather than spot-checking the one that should', () => {

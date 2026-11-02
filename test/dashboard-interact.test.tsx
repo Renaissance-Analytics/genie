@@ -47,8 +47,9 @@ describe('group headers', () => {
 describe('By workspace | By status', () => {
     it('the segmented control is in the header with the current grouping marked, and the status grouping draws one group per state in the board’s order', () => {
         const byWs = render({ group: 'workspace' });
-        expect(byWs).toMatch(/data-group-toggle="workspace"[^>]*data-current="true"/);
-        expect(byWs).toMatch(/data-group-toggle="status"(?![^>]*data-current)/);
+        expect(byWs).toMatch(/<div(?=[^>]*data-group-toggle="")[^>]*role="radiogroup"/);
+        expect(byWs).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="true"[^>]*>By workspace</);
+        expect(byWs).toMatch(/<button[^>]*role="radio"[^>]*aria-checked="false"[^>]*>By status</);
         const byStatus = render({ group: 'status' });
         expect(byStatus).toContain('data-group-by="status"');
         const order = [...byStatus.matchAll(/data-status-group="([a-z]+)"/g)].map((m) => m[1]);

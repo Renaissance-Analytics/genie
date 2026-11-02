@@ -50,7 +50,8 @@ describe('the Settings nav is a react-fancy Sidebar, not Buttons', () => {
         const general = control(html, 'data-settings-nav="general"')!;
         expect(general.open).toContain('data-react-fancy-sidebar-item=""');
         expect(general.open).not.toContain('aria-current');
-        expect(html.match(/aria-current="page"/g)).toHaveLength(1);
+        const nav = html.slice(html.indexOf('data-settings-sidebar'), html.indexOf('</nav>', html.indexOf('data-settings-sidebar')));
+        expect(nav.match(/aria-current="page"/g)).toHaveLength(1);
     });
 
     it('items are LEFT-aligned (never centred) and ring only on keyboard focus', () => {
@@ -96,18 +97,23 @@ describe('the workspace view tabs are react-fancy Tabs', () => {
 });
 
 describe('the agent view tabs and its settings sub-tabs are react-fancy Tabs', () => {
-    const session = { running: true, turnState: 'idle', startedAt: 0, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, plan: null, model: null, mcpServers: [] } as unknown as LiveSession;
-    const AGENT = { id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared' as const, cwd: '/w' };
+    // The fixture of test/agent-settings-subtabs-ui.test.tsx, which renders this same Settings tab.
+    const session = {
+        running: true, turnState: 'idle', startedAt: 0, pendingApproval: null, failure: null, contextUsed: 120_000, contextSize: 200_000,
+        plan: null, model: null, mcpServers: ['genie'], extensions: { commands: [{ name: 'review', description: 'Review a PR' }], skills: [], plugins: [] },
+    } as unknown as LiveSession;
+    const AGENT = { id: 'kai', name: 'kai', provider: 'claude', fidelity: 'declared' as const, cwd: '/w', instructions: '.agents/kai/AGENT.md' };
     const OPS = {
         deletePreview: null, diagnosis: null, lastOutcome: null, budgetUsd: null, mode: 'automated', accessScope: 'self',
         onSetMode: () => {}, onSetAccessScope: () => {}, autoApprove: false, onSetAutoApprove: () => {}, manageTabs: false, onSetManageTabs: () => {},
         drivePages: false, onSetDrivePages: () => {}, permissions: 'all', onSetPermissions: () => {},
-        issueWatch: { delivery: 'push', kinds: [], chosen: false }, onSetIssueWatch: () => {}, model: null, onSetModel: () => {}, models: null,
+        issueWatch: { delivery: 'push', kinds: ['issue.new', 'pr.new', 'security.new', 'feedback.new'], chosen: false }, onSetIssueWatch: () => {},
+        model: null, onSetModel: () => {}, models: { ok: true, source: 'provider', current: null, models: [{ modelId: 'opus', name: 'Opus', isDefault: true }] },
         onRestart: () => {}, onSwitchDriver: () => {}, onDiagnose: () => {}, onPreviewDelete: () => {}, onConfirmDelete: () => {}, onCancelDelete: () => {}, onSetBudget: () => {},
     };
     const html = renderToStaticMarkup(
         <AgentView agent={AGENT} session={session} rows={[]} tab="settings" lanes={null} at={null} selectedId={null} turns={0} cost={null}
-            onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={OPS as never} personaText="" onStop={() => {}} />,
+            onNavigate={() => {}} onSelect={() => {}} now={() => 0} ops={OPS as never} personaText="You are kai." onStop={() => {}} />,
     );
 
     it('the view tabs: role="tab", the one on screen aria-selected="true"', () => {

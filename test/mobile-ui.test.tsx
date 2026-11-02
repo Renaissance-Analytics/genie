@@ -31,8 +31,9 @@ describe('1. the workspace selector', () => {
     it('All, then each workspace by NAME with how many agents and how many wait on you; the selected one is marked; asleep is said', () => {
         const html = renderToStaticMarkup(<MobileWorkspaces workspaces={ws} agents={agents} items={[item()]} selected="tynn" onSelect={() => {}} />);
         expect(html).toContain('data-mobile-ws="all"');
-        expect(html).toMatch(/data-mobile-ws="tynn"[^>]*data-selected="true"/);
-        expect(html).toMatch(/data-mobile-ws="fancy"[^>]*data-selected="false"/);
+        expect(control(html, 'data-mobile-ws="tynn"')).toMatchObject({ tag: 'button', tab: true });
+        expect(control(html, 'data-mobile-ws="tynn"')!.open).toContain('aria-selected="true"');
+        expect(control(html, 'data-mobile-ws="fancy"')!.open).toContain('aria-selected="false"');
         expect(html).toContain('Tynn');
         expect(html).toMatch(/data-mobile-ws-waiting="tynn"[^>]*>1</);
         expect(html).toMatch(/data-mobile-ws-asleep="fancy"/);

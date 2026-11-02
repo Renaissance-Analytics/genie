@@ -3,7 +3,7 @@ import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
@@ -1673,24 +1673,27 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
             <Header title="Settings" />
             <div className="flex min-h-0 flex-1">
                 {/* GENIE 1'S SIDEBAR: grouped sections, one page each (core/settings-nav.ts). */}
-                <nav data-settings-sidebar="" aria-label="Settings sections" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
+                {/* A MENU, NOT BUTTONS (the owner, 2026-11-01: "those should not be buttons, it's a menu"): react-fancy's
+                    Sidebar, embedded in the page; its items sit left, the page on screen is aria-current="page", and they ring on
+                    keyboard focus only. */}
+                <nav data-settings-sidebar="" aria-label="Settings" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
                     <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" leading={<Icon name="search" size="xs" />} />
-                    {NAV_GROUPS.map((g) => (
-                        <div key={g.label} data-settings-nav-group={g.label} className="flex flex-col gap-0.5">
-                            <div className="px-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-4)]">{g.label}</div>
-                            {g.items.map((i) => {
-                                const on = i.id === active && results === null;
-                                return (
-                                    <Button variant="ghost" size="xs" labelClassName="contents" key={i.id} type="button" data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} {...(on ? { 'aria-current': 'page' as const } : {})}
-                                        onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
-                                        className={`justify-start flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[13px] ${on ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
-                                        <Icon name={i.icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
-                                        <span className="truncate">{i.label}</span>
-                                    </Button>
-                                );
-                            })}
-                        </div>
-                    ))}
+                    <Sidebar embedded className="gap-3">
+                        {NAV_GROUPS.map((g) => (
+                            <div key={g.label} data-settings-nav-group={g.label}>
+                                <Sidebar.Group label={g.label} className="flex flex-col gap-0.5 py-0">
+                                    {g.items.map((i) => (
+                                        <Sidebar.Item key={i.id} data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} active={i.id === active && results === null}
+                                            icon={<Icon name={i.icon} size="sm" className="text-[var(--fg-4)]" />}
+                                            onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
+                                            className="h-[30px] px-2 text-[13px]">
+                                            {i.label}
+                                        </Sidebar.Item>
+                                    ))}
+                                </Sidebar.Group>
+                            </div>
+                        ))}
+                    </Sidebar>
                 </nav>
                 <div className="min-w-0 flex-1 overflow-auto">
                     {results !== null ? (
