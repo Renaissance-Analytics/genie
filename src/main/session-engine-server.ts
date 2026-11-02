@@ -123,6 +123,10 @@ export class SessionEngineServer {
     constructor(options: EngineServerOptions) {
         this.#options = options;
         this.#schedule = options.schedule ?? ((ms, fn) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
+        // Every change to the stores agents write to, to every window's replicas (P3.1).
+        options.stores?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'stores.event', event);
+        });
     }
 
     /** The session host's options that this server answers. Built BEFORE the host (it is handed to its constructor). */

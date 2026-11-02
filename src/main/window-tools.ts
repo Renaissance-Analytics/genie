@@ -46,6 +46,6 @@ export function windowToolRunner(registrations: () => readonly Registration[], v
         if (!r) return { text: `${call.name} is not a tool this Genie window has`, isError: true };
         const id = call.headers['genie-session'] ?? (typeof call.args.terminalId === 'string' ? call.args.terminalId : call.headers.terminalid);
         if (call.caller && id) vouched.set(id, call.caller);
-        return r.handler(call.args, { server: 'genie', tool: call.name, headers: { ...call.headers } });
+        return r.handler(call.args, { server: 'genie', tool: call.name, headers: { ...call.headers }, ...(call.callId ? { forwardedCallId: call.callId } : {}) });
     };
 }

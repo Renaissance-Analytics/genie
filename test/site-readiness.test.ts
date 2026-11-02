@@ -116,7 +116,8 @@ describe('a started site waits for its port', () => {
     it('Genie wires the real probe into its site manager (main.ts -> compose.ts -> SiteManager)', () => {
         const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
         const compose = readFileSync(new URL('../src/main/compose.ts', import.meta.url), 'utf8');
-        expect(main).toMatch(/composeServices\(\{[\s\S]{0,6000}?siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
+        // composeWith: composeServices, or composeWindowServices against genie-host's stores (the host split, P3.1).
+        expect(main).toMatch(/composeWith\(\{[\s\S]{0,6000}?siteProbe: \(port, options\) => siteAnswers\(port, options\)/);
         expect(compose).toMatch(/new SiteManager\(\{[\s\S]{0,4000}?\.\.\.\(input\.siteProbe \? \{ probeReady: input\.siteProbe \} : \{\}\)/);
     });
 });

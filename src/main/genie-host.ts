@@ -123,7 +123,9 @@ async function main(): Promise<void> {
             return flag !== undefined && (engineRef?.records() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
         },
     });
-    const stores = new AgentStoresService({ ...own, approvals });
+    // The agent's calls while a window runs them (P3.1): a window tool's approval in this queue ends with its call (genie#1360).
+    const forwardedCalls = new Map<string, import('./mcp-tools.js').McpCall>();
+    const stores = new AgentStoresService({ ...own, approvals }, { forwardedCall: (id) => forwardedCalls.get(id) });
     let mcp: HostMcp | null = null;
     let v1Done = false;
     const engine = new SessionEngineServer({
@@ -194,6 +196,7 @@ async function main(): Promise<void> {
         window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
+        forwardedCalls,
         endpointFile: join(home, 'mcp-endpoint.json'),
         log: (line) => { say(line); lifecycleLog(line); },
     });

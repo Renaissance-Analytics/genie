@@ -59,13 +59,15 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
 
 export class AgentStoresService {
     readonly #stores: AgentStores;
+    readonly #forwardedCall: (id: string) => import('./mcp-tools.js').McpCall | undefined;
     readonly #listeners = new Set<(event: StoresEvent) => void>();
     /** The mail as the windows were last told it: what the next delta is taken against. */
     #known = new Map<string, InboxMessage>();
     #knownCursors = '{}';
 
-    constructor(stores: AgentStores) {
+    constructor(stores: AgentStores, options: { forwardedCall?: (id: string) => import('./mcp-tools.js').McpCall | undefined } = {}) {
         this.#stores = stores;
+        this.#forwardedCall = options.forwardedCall ?? (() => undefined);
         this.#rememberMail();
         stores.inbox.onChanged(() => this.#mailChanged());
         stores.inbox.onSend((to, message) => this.#emit({ store: 'inbox', kind: 'sent', to, messageId: message.id }));
@@ -125,7 +127,7 @@ export class AgentStoresService {
                 return (s.knowledge as unknown as Record<string, (...a: unknown[]) => unknown>)[method]!(...args);
             case 'approvals':
                 // A window tool's gated action (forwarded from the host) asks this one queue; no MCP call to watch here.
-                if (method === 'gate') return s.approvals.gate(args[0] as never, String(args[1]), String(args[2]));
+                if (method === 'gate') return s.approvals.gate(args[0] as never, String(args[1]), String(args[2]), typeof args[3] === 'string' ? this.#forwardedCall(args[3]) : undefined);
                 return s.approvals.resolve(String(args[0]), args[1] === 'allow' ? 'allow' : 'deny');
             default:
                 throw new Error(`no store ${store}`);

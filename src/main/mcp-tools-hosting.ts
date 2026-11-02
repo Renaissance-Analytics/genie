@@ -1,4 +1,4 @@
-import { OS_WORKSPACE } from './registry.js';
+import { OS_WORKSPACE } from '../core/os-agent.js';
 import { resolve as resolvePath } from 'node:path';
 import { confinePathSync, OutsideWorkspaceError } from './workspace-confine.js';
 import { ToolDefinition, type JsonObject, type McpToolResult } from '@particle-academy/prism-mcp';

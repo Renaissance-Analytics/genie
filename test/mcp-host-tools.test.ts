@@ -58,7 +58,8 @@ describe('a window tool', () => {
         const r = rig({ connected: true, answer: async (c) => ({ text: `window ran ${c.name}`, isError: false }) });
         const result = await r.byName('sites').handler({ action: 'list' } as JsonObject, ctx());
         expect(result).toEqual({ text: 'window ran sites', isError: false });
-        expect(r.forwarded).toEqual([{ name: 'sites', args: { action: 'list' }, headers: { 'genie-session': 'session-1' }, caller: CALLER }]);
+        // With its id in the host while forwarded: an approval the window's tool asks is tied to this very call (genie#1360).
+        expect(r.forwarded).toEqual([{ name: 'sites', args: { action: 'list' }, headers: { 'genie-session': 'session-1' }, caller: CALLER, callId: expect.stringMatching(/^fwd-/) }]);
         expect(r.ran).toEqual([]); // not run in the host
     });
 
@@ -66,7 +67,7 @@ describe('a window tool', () => {
         const r = rig({ connected: false });
         const result = await r.byName('manageTerminals').handler({}, ctx());
         expect(result).toEqual({ text: windowClosedRefusal('manageTerminals'), isError: true });
-        expect(result.text).toMatch(/Genie's window is closed/);
+        expect(result.text).toMatch(/Genie's window, which is closed/);
         expect(r.forwarded).toEqual([]);
     });
 

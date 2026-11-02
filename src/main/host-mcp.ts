@@ -50,6 +50,8 @@ export interface HostMcpPorts {
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** A tool's moment for the window: a glow, a thumbs-up, an action signal. Dropped with no window. */
     readonly signal: (signal: { kind: 'glow'; terminalId: string } | { kind: 'action'; agentId: string; action: string; tool?: string; reason?: string }) => void;
+    /** The agent's calls while forwarded to the window (shared with the stores' approval gate, genie#1360). */
+    readonly forwardedCalls?: Map<string, import('./mcp-tools.js').McpCall>;
     /** Where the endpoint is remembered (`<genieHome>/mcp-endpoint.json`). */
     readonly endpointFile: string;
     readonly log: (line: string) => void;
@@ -123,7 +125,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
-        const served = hostRegistrations(all, { resolveCaller, window: ports.window, openFileLater: ports.openFileLater });
+        const served = hostRegistrations(all, { resolveCaller, window: ports.window, openFileLater: ports.openFileLater, ...(ports.forwardedCalls ? { forwardedCalls: ports.forwardedCalls } : {}) });
         tools = served.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         // The action signal (the Dashboard row's "what it just did") for the HOST's own tools only: a forwarded tool runs in
         // the window, which signals it there — signalled here too, it would show twice.

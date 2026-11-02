@@ -1,6 +1,6 @@
 import type { JsonObject, McpToolResult } from '@particle-academy/prism-mcp';
 import { callerFrom } from './mcp-callers.js';
-import type { Caller, Registration, ToolContext } from './mcp-tools.js';
+import type { Caller, McpCall, Registration, ToolContext } from './mcp-tools.js';
 
 /**
  * WHICH OF GENIE'S TOOLS RUN IN GENIE-HOST, AND WHAT THE REST DO (the host split, P3.1: plan §11d).
@@ -21,6 +21,8 @@ export interface ForwardedToolCall {
     readonly args: JsonObject;
     readonly headers: Readonly<Record<string, string>>;
     readonly caller: Caller | null;
+    /** The call's id in the host while it is forwarded: the window's approval asks under it (genie#1360). */
+    readonly callId?: string;
 }
 
 export interface HostToolsOptions {
@@ -32,6 +34,8 @@ export interface HostToolsOptions {
     };
     /** openFileForUser with no window: kept, and shown when the next window connects. */
     readonly openFileLater: (call: ForwardedToolCall) => void;
+    /** The agent's calls while they are forwarded, by id: an approval the window's tool asks is tied to its call. */
+    readonly forwardedCalls?: Map<string, McpCall>;
 }
 
 /** What a window tool answers when there is no window. The agent reads it; nothing was done. */
@@ -45,6 +49,7 @@ function windowLostRefusal(name: string, why: string): string {
 
 /** Every registration as the host serves it: the host's own tools as they are, every other one forwarded to the window. */
 export function hostRegistrations(all: readonly Registration[], options: HostToolsOptions): Registration[] {
+    let seq = 0;
     return all.map((r) => {
         const name = r.definition.name;
         if (HOST_NATIVE_TOOLS.has(name)) return r;
@@ -58,10 +63,14 @@ export function hostRegistrations(all: readonly Registration[], options: HostToo
                 }
                 return { text: windowClosedRefusal(name), isError: true };
             }
+            const callId = `fwd-${++seq}`;
+            options.forwardedCalls?.set(callId, { signal: context.signal, progress: context.progress });
             try {
-                return await options.window.call(call);
+                return await options.window.call({ ...call, callId });
             } catch (error) {
                 return { text: windowLostRefusal(name, error instanceof Error ? error.message : String(error)), isError: true };
+            } finally {
+                options.forwardedCalls?.delete(callId);
             }
         };
         return { ...r, handler };

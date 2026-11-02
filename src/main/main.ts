@@ -3083,7 +3083,7 @@ async function boot(): Promise<void> {
             knowledge: own?.knowledge ?? hostOnly<KnowledgeStore>('the knowledge graph'),
             settings: composed.settings,
             // ONE approval queue: genie-host's (a window tool's ask goes there), or this window's own on the emergency path.
-            approve: (caller, action, detail, call) => (own ? own.approvals.gate(caller, action, detail, call) : composed.approvals.gate(caller, action, detail)),
+            approve: (caller, action, detail, call) => (own ? own.approvals.gate(caller, action, detail, call) : composed.approvals.gate(caller, action, detail, call)),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             resolveCaller,
