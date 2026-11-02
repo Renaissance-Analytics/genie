@@ -274,6 +274,8 @@ describe('genie-host as its own process', () => {
         expect(first.client.refusals.has(agent.id)).toBe(false);
         expect(JSON.stringify(first.client.rowsFor(agent.id))).not.toMatch(/workspace or Tynn project link is unavailable/);
         await first.client.stop(agent.id);
+        // Gone from the ledger before the next test reads it: a provider on its way out would read as one that died.
+        await until('its provider to leave the spawn ledger', async () => (await providerPids()).length === 0, 30_000);
         first.transport.close();
         await rm(added, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     }, 120_000);
