@@ -39,6 +39,20 @@ const rail = (collapsed: boolean, rateLevel: 'warning' | 'danger' = 'warning') =
 );
 const DESTINATIONS = ['data-nav="genie://deck"', 'data-nav="genie://dashboard"', 'data-nav="genie://agent/genie"', 'data-nav="genie://hosting"', 'data-open-browser-window=""', 'data-nav="genie://settings"', 'data-workspace="tynn"', 'data-workspace="fancy"'];
 const classes = (open: string) => (/\sclass="([^"]*)"/.exec(open)?.[1] ?? '').split(/\s+/);
+/** The text a screen reader reads from markup: every aria-hidden element (and what is inside it) left out. */
+const heard = (inner: string): string => {
+    let out = '';
+    let hiddenDepth = 0;
+    for (const m of inner.matchAll(/<(\/?)([a-z0-9]+)([^>]*?)(\/?)>|([^<]+)/gi)) {
+        if (m[5] !== undefined) { if (hiddenDepth === 0) out += m[5]; continue; }
+        const closing = m[1] === '/';
+        const selfClosing = m[4] === '/';
+        if (closing) { if (hiddenDepth > 0) hiddenDepth--; continue; }
+        if (selfClosing) continue;
+        if (hiddenDepth > 0 || /\saria-hidden="true"/.test(m[3] ?? '')) hiddenDepth++;
+    }
+    return out.replace(/\s+/g, ' ').trim();
+};
 /** The item's dot: its colour, and the words a screen reader hears with the item's name. */
 const dotOf = (html: string, attr: string): { color: string; words: string } | null => {
     const inner = control(html, attr)!.inner;
@@ -109,7 +123,9 @@ describe('the expanded rail', () => {
     it('a workspace is named with its agents ("tynn, 2 agents"), its visual count hidden from a screen reader', () => {
         const tynn = control(rail(false), 'data-workspace="tynn"')!;
         expect(tynn.inner).toMatch(/data-react-fancy-sidebar-badge-label=""[^>]*>, 2 agents</);
-        expect(tynn.text).toMatch(/tynn\s*, 2 agents/);
+        // The visual count is hidden from a screen reader; what it hears is the name, the dot's words, then the agents.
+        expect(tynn.inner).toMatch(/aria-hidden="true"[^>]*>(?:<[^>]*>)*2</);
+        expect(heard(tynn.inner)).toMatch(/^tynn\s+needs you\s*, 2 agents$/);
     });
 
     it('still shows how many wait in the Deck — seen, not read twice (the dot says it in words)', () => {

@@ -161,6 +161,12 @@ describe('the dot on the Dashboard’s sidebar row', () => {
 });
 
 describe('from any page: the Shell lights the dot from the header’s readings', () => {
+    /** The RAIL's Dashboard item (a react-fancy Sidebar item) — not the title bar's Genie mark, also a dashboard door. */
+    const railDashboard = (html: string): string => {
+        const row = html.match(/<button\b[^>]*data-nav="genie:\/\/dashboard"[^>]*data-react-fancy-sidebar-item=""[\s\S]*?<\/button>/)?.[0] ?? '';
+        expect(row, 'the rail’s Dashboard item is drawn').not.toBe('');
+        return row;
+    };
     const render = (route: string, rateLimits: Record<string, Headroom>) => renderToStaticMarkup(
         <Shell
             route={route}
@@ -189,10 +195,10 @@ describe('from any page: the Shell lights the dot from the header’s readings',
 
     it('on Settings, Claude at 8% left this week: the red dot on the Dashboard row, named', () => {
         const html = render('genie://settings', { claude: room(8, '7d') });
-        expect(dotIn(html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '')).toEqual({ color: 'red', words: 'Claude Code: 8% left this week' });
+        expect(dotIn(railDashboard(html))).toEqual({ color: 'red', words: 'Claude Code: 8% left this week' });
     });
 
     it('every window above 30%: no dot', () => {
-        expect(dotIn(render('genie://settings', { claude: room(31, '7d') }).match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '')).toBeNull();
+        expect(dotIn(railDashboard(render('genie://settings', { claude: room(31, '7d') })))).toBeNull();
     });
 });
