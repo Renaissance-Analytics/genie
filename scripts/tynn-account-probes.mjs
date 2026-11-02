@@ -23,7 +23,7 @@ const SOURCE = 'src/main/tynn-account.ts';
 
 function vitest() {
     try {
-        return { ok: true, out: execFileSync('npx', ['vitest', 'run', TEST], { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 }) };
+        return { ok: true, out: execFileSync('npx', ['vitest', 'run', TEST, '--testTimeout=30000'], { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 64 * 1024 * 1024 }) };
     } catch (error) {
         return { ok: false, out: `${error.stdout ?? ''}${error.stderr ?? ''}` };
     }
@@ -65,6 +65,8 @@ function probe(name, anchor, replacement, expect) {
         const r = vitest();
         const out = plain(r.out);
         if (r.ok) { console.log(`PROBE ${name}: STAYED GREEN with the bug put back (the tests are vacuous)`); fail = 1; return; }
+        // A probe that does not compile ran no test at all: that is a broken PROBE, never a verdict on the tests.
+        if (/Transform failed|PARSE_ERROR|SyntaxError/.test(out)) { console.log(`PROBE ${name}: BROKEN PROBE: the probed source does not compile, so no test ran`); show(out); fail = 1; return; }
         const failed = failures(out);
         for (const e of expect) {
             if (failed.some((f) => f.name.includes(e))) console.log(`PROBE ${name}: red as expected (${e})`);
@@ -80,12 +82,13 @@ function probe(name, anchor, replacement, expect) {
 
 probe('revocation-kept',
     'if (res.status === 401 || res.status === 419) { await this.#forget(credential); return; }',
-    'if (res.status === 401 || res.status === 419) { return; } // probe: a revocation kept',
+    'if (res.status === 401 || res.status === 419) { return; } /* probe: a revocation kept */',
     ['CONTROL: a 401 from /me is a definite revocation', 'CONTROL: a 419 from /me is a definite revocation', 'through the store it is given']);
 
 probe('store-ignored',
     'return this.#ports.credentials ?? PRIVATE_CREDENTIAL_STORE;',
-    'return PRIVATE_CREDENTIAL_STORE; // probe: the given store ignored',
+    // A BLOCK comment: the getter is one line, and a `//` swallowed its closing brace (batch C: a parse error, no test ran).
+    'return PRIVATE_CREDENTIAL_STORE; /* probe: the given store ignored */',
     ['through the store it is given']);
 
 for (const file of [SOURCE, TEST]) {

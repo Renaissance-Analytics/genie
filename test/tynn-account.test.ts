@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { PRIVATE_CREDENTIAL_STORE } from '../src/main/private-credentials.js';
 import { chmod, mkdir, readFile, rename, stat, symlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { TynnAccount, type TynnAccountPorts } from '../src/main/tynn-account.js';
@@ -94,9 +95,15 @@ describe.skipIf(process.platform === 'win32')('Tynn account credential permissio
  * plain fs; the permission tests above use Genie's real store, which is also what an account with no store is given.
  */
 describe('TynnAccount — the credential store it is given', () => {
+    // The watch on Genie's private store ends with each test, whatever it found.
+    afterEach(() => { vi.restoreAllMocks(); });
+
     it('opens, signs in and forgets a revoked credential through the store it is given, and reads back what that store wrote', async () => {
         const t = fakeTynn();
         const seen: string[] = [];
+        // Genie's private store, watched: an account given a store must not ALSO (or instead) go to it. On Windows the
+        // private store works too, only slowly, so behaviour alone cannot tell the two apart (batch C).
+        const real = (['prepare', 'migrate', 'write'] as const).map((m) => vi.spyOn(PRIVATE_CREDENTIAL_STORE, m));
         const credentials = {
             prepare: async (file: string) => { seen.push(`prepare ${file === t.ports.file}`); await plainCredentialStore.prepare(file); },
             migrate: async (legacy: string, file: string) => { seen.push('migrate'); await plainCredentialStore.migrate(legacy, file); },
@@ -112,6 +119,18 @@ describe('TynnAccount — the credential store it is given', () => {
         expect(seen).toEqual(['prepare true', 'write signed-out']);
         // And what it wrote is what the next launch reads.
         expect(JSON.parse(await readFile(t.ports.file, 'utf8'))).toMatchObject({ state: 'signed-out' });
+        // The private store was never touched.
+        expect(real.map((s) => s.mock.calls.length), 'calls to Genie’s private store (prepare, migrate, write)').toEqual([0, 0, 0]);
+    });
+
+    it('CONTROL: an account given no store goes to Genie’s private store — the watch above sees it', async () => {
+        // The positive control for "never touched": the same spies read the calls when the private store IS used.
+        // Answered without touching the disk: this proves the wiring, not the store (private-credentials*.test.ts do).
+        const prepare = vi.spyOn(PRIVATE_CREDENTIAL_STORE, 'prepare').mockResolvedValue(undefined);
+        const ports: TynnAccountPorts = { ...fakeTynn().ports };
+        delete (ports as { credentials?: unknown }).credentials;
+        await TynnAccount.open(ports);
+        expect(prepare.mock.calls.map((c) => c[0]), 'prepared through Genie’s private store').toEqual([ports.file]);
     });
 });
 
