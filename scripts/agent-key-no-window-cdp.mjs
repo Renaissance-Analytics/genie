@@ -12,7 +12,8 @@
  * "no tynn server"), kills Electron main ONLY, and sends A's real `agentinbox send` to the stopped agent B through the host's real
  * MCP server. The host wakes B. The stub provider records the MCP servers it was really given, the bearer included.
  *
- * With the bug back (the old no-window `return own` in session-engine-server.ts) check 8 should fail: B starts with no tynn server.
+ * THE NEGATIVE: `run --expect-bug`, on a tree scripts/perf-lag/agent-key-bug-back.mjs has broken. Everything up to the mail must still hold,
+ * and check 8 inverts: B started by the host with NO Tynn key. A PASS there is this check seen catching the bug.
  *
  * Prints a line per step, then `### agent-key <check>=PASS|FAIL` and `### agent-key=PASS|FAIL`. Every wait has a deadline, the run
  * is capped at 4 min, and every exit ends the providers and the host it found. The key is a test word, never a real one.
@@ -24,6 +25,7 @@ import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 
 const phase = process.argv[2] ?? '';
+const expectBug = process.argv.includes('--expect-bug');
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this writes a keychain entry and a seeded profile; test machines only'); process.exit(2); }
 
 const PORT = Number(process.env.CDP_PORT ?? 9222);
@@ -172,8 +174,12 @@ try {
     check(sent.status === 200 && sent.parsed?.result?.isError !== true && sent.parsed?.error === undefined, '7-A-mailed-B-with-no-window', `http ${sent.status} ${JSON.stringify(sent.parsed?.result?.content ?? sent.parsed?.error ?? null).slice(0, 200)}`);
 
     const b = await until('B\'s provider', 60_000, () => records().find((r) => r.pid !== first.pid) ?? null);
-    check(b?.servers?.tynn?.enabled === true && b.servers.tynn.bearer === KEY, '8-B-started-by-the-host-has-its-tynn-key', b ? `given: ${given(b).join(',')}` : 'B never started');
-    check(b?.servers?.tynn?.url === 'https://tynn.ai/mcp/tynn', '9-the-tynn-server-is-tynns', b?.servers?.tynn?.url ?? 'none');
+    if (expectBug) {
+        check(b !== null && !given(b).includes('tynn') && !b.servers.tynn?.bearer, '8-NEGATIVE-with-the-bug-back-B-has-no-tynn-key', b ? `given: ${given(b).join(',')}` : 'B never started');
+    } else {
+        check(b?.servers?.tynn?.enabled === true && b.servers.tynn.bearer === KEY, '8-B-started-by-the-host-has-its-tynn-key', b ? `given: ${given(b).join(',')}` : 'B never started');
+        check(b?.servers?.tynn?.url === 'https://tynn.ai/mcp/tynn', '9-the-tynn-server-is-tynns', b?.servers?.tynn?.url ?? 'none');
+    }
     check(b?.servers?.genie?.enabled === true && Boolean(b.servers.genie.url), '10-and-the-hosts-genie-server-beside-it');
     check(!readFileSync(join(home, 'agent-credentials', 'agents.json'), 'utf8').includes('rpk_'), '11-the-vault-holds-no-key');
     const leaks = logsHolding(KEY);
