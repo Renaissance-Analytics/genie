@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
+import type { MigrationSource } from './keychain-migration.js';
 import { PRIVATE_CREDENTIAL_STORE, type PrivateCredentialStore } from './private-credentials.js';
 
 /** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
@@ -81,6 +82,11 @@ const parseMe = (body: unknown): Me | null => {
     return b && (typeof b.id === 'string' || typeof b.id === 'number') && String(b.id) !== '' && typeof b.name === 'string' && typeof b.email === 'string'
         ? { id: String(b.id), user: { name: b.name, email: b.email } } : null;
 };
+
+/** RED STUB (cut c's first commit). */
+export function tynnPairingSource(_options: { file: string; cipher: { decrypt(bytes: Buffer): string }; store?: PrivateCredentialStore }): MigrationSource {
+    return { name: 'tynn/pairing', old: { read: async () => ({ kind: 'none' }), remove: async () => {} } };
+}
 
 export class TynnAccount implements TynnAccountPort {
     readonly #ports: TynnAccountPorts;
@@ -207,6 +213,8 @@ export class TynnAccount implements TynnAccountPort {
         if (!me || me.id !== credential.userId) { await this.#forget(credential); return; }
         this.#set(me, credential.host);
     }
+
+    async reload(): Promise<void> {}
 
     async recheck(): Promise<TynnStatus> {
         this.#retry?.cancel(); this.#retry = null;

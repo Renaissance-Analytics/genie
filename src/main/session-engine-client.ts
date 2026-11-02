@@ -1,3 +1,4 @@
+import { TynnAccountReplica } from './tynn-account-replica.js';
 import type { McpServer, SessionModelState } from '@particle-academy/prism-acp';
 import type { RowsPatch } from '../core/agent-push-wire.js';
 import type { AgentActionKind } from '../core/agent-actions.js';
@@ -129,6 +130,7 @@ export class SessionEngineClient {
     #supervisor: SupervisorReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
+    #tynn: TynnAccountReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -482,6 +484,12 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#terminals;
+    }
+
+    /** genie-host's Tynn account, as this window reads and asks it (P3.4 cut c). */
+    tynn(_options?: { openExternal?: (url: string) => Promise<void> }): TynnAccountReplica {
+        this.#tynn ??= new TynnAccountReplica();
+        return this.#tynn;
     }
 
     /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */

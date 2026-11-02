@@ -1,5 +1,6 @@
 import type { HostAgentKeys } from './host-agent-keys.js';
 import { hostVault } from './keychain-migration.js';
+import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
@@ -57,6 +58,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** The host's Tynn account (P3.4 cut c). */
+    readonly tynn?: TynnAccountService;
     /** The host's keychain (P3.4), which a window reaches for an agent's key. Absent = refused, which a window reads as unavailable. */
     readonly keychain?: AgentSecrets;
     /** An agent's Tynn key with no window connected (genie#1457: host-agent-keys.ts). */
