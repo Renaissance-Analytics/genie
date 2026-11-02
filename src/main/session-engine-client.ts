@@ -355,7 +355,7 @@ export class SessionEngineClient {
         }
     }
 
-    /** The host asks the window: only `client.prepareMcpServers` in phase 1. */
+    /** The host asks the window: a window tool's call, and each process's app-inbox credential. */
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
@@ -371,13 +371,7 @@ export class SessionEngineClient {
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
-            if (method !== 'client.prepareMcpServers') throw new Error(`${method} is not the window's to answer`);
-            const record = args[0] as AgentRecord;
-            const cwd = typeof args[1] === 'string' ? args[1] : '';
-            const servers = this.#options.prepareMcpServers
-                ? await this.#options.prepareMcpServers(record, cwd, new AbortController().signal)
-                : (this.#options.mcpServersFor?.(record) ?? []);
-            reply = { kind: 'result', id, ok: true, value: servers };
+            throw new Error(`${method} is not the window's to answer`);
         } catch (error) {
             reply = { kind: 'result', id, ok: false, reason: error instanceof Error ? error.message : String(error) };
         }

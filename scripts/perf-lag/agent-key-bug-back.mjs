@@ -19,16 +19,15 @@ const FILE = 'src/main/session-engine-server.ts';
 const raw = readFileSync(FILE, 'utf8');
 const crlf = raw.includes('\r\n');
 const text = raw.split('\r\n').join('\n');
-const FIXED = `                if (this.#options.mcp && !this.windowConnected()) {
-                    const held = await this.#options.agentKeys?.(record, cwd);
-                    if (held?.note) this.#host?.notice(record.id, held.note);
-                    return [...own, ...(held?.servers ?? [])];
-                }
+// The host prepares its agents, window or no window, so the bug is: it hands out nothing it prepared.
+const FIXED = `                const held = await this.#options.agentKeys?.(record, cwd, signal);
+                if (held?.note) this.#host?.notice(record.id, held.note);
+                return [...own, ...(held?.servers ?? [])];
 `;
-const THE_BUG = `                if (this.#options.mcp && !this.windowConnected()) return own;
+const THE_BUG = `                return own;
 `;
 if (text.split(FIXED).length !== 2) { console.error(`the fix is not where it was in ${FILE}`); process.exit(1); }
 const next = text.replace(FIXED, () => THE_BUG);
 writeFileSync(FILE, crlf ? next.split('\n').join('\r\n') : next);
-if (!readFileSync(FILE, 'utf8').includes('!this.windowConnected()) return own;')) { console.error('the edit did not take'); process.exit(1); }
-console.log(`### agent-key-bug-back=PASS  ${FILE} has the old no-window return`);
+if (readFileSync(FILE, 'utf8').includes('held?.servers')) { console.error('the edit did not take'); process.exit(1); }
+console.log(`### agent-key-bug-back=PASS  ${FILE} hands out only the host's own entry`);

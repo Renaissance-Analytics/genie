@@ -53,8 +53,8 @@ if (phase === 'seed') {
     mkdirSync(join(home, 'agent-credentials'), { recursive: true, mode: 0o700 });
     mkdirSync(join(home, 'credentials'), { recursive: true, mode: 0o700 });
     writeFileSync(join(home, 'agent-credentials', 'agents.json'), JSON.stringify({ version: 1, records: { [JSON.stringify([USER, PROJECT, B_ID])]: { userId: USER, projectId: PROJECT, genieId: B_ID, remoteAgentId: 'remote-1', state: 'ready', publicId: PUBLIC_ID } } }), { mode: 0o600 });
-    // The account a sign-in leaves. Its sealed token opens for nobody here, so the WINDOW is signed out and mints nothing.
-    writeFileSync(join(home, 'credentials', 'tynn.json'), JSON.stringify({ version: 1, state: 'signed-in', host: 'https://tynn.ai', userId: USER, scopes: [], tokenEnc: Buffer.from('not a real seal').toString('base64') }), { mode: 0o600 });
+    // The record a sign-in leaves, with no pairing token in the keychain: the account knows whose it is, is not signed in, and mints nothing.
+    writeFileSync(join(home, 'credentials', 'tynn.json'), JSON.stringify({ version: 1, state: 'signed-in', host: 'https://tynn.ai', userId: USER, scopes: ['genie:discovery', 'genie:projects', 'genie:workstations', 'genie:agents', 'genie:agent-tokens', 'genie:issue-watch', 'genie:issues', 'genie:inbox'] }), { mode: 0o600 });
     writeFileSync(RECORD, '');
     say('seeded');
     process.exit(0);

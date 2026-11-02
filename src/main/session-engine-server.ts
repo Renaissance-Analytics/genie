@@ -189,17 +189,13 @@ export class SessionEngineServer {
             currentRecord: (id) => this.#records.get(id) ?? null,
             // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
             serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
-            // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's private servers:
-            // the window prepares them while it is there. With none, the host reads the key it holds (genie#1457).
-            prepareMcpServers: async (record, cwd) => {
+            // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's own Tynn server, which the
+            // host prepares, window or no window (host-agent-keys.ts). What it could not hand out, it says why in the agent's chat.
+            prepareMcpServers: async (record, cwd, signal) => {
                 const own = this.#options.mcp?.sessionServers(record) ?? [];
-                if (this.#options.mcp && !this.windowConnected()) {
-                    const held = await this.#options.agentKeys?.(record, cwd);
-                    if (held?.note) this.#host?.notice(record.id, held.note);
-                    return [...own, ...(held?.servers ?? [])];
-                }
-                const fromWindow = (await this.#reverse('client.prepareMcpServers', [record, cwd])) as readonly McpServer[];
-                return [...own, ...fromWindow];
+                const held = await this.#options.agentKeys?.(record, cwd, signal);
+                if (held?.note) this.#host?.notice(record.id, held.note);
+                return [...own, ...(held?.servers ?? [])];
             },
             onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
@@ -503,8 +499,6 @@ export class SessionEngineServer {
             case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
-            case 'client.prepareMcpServers':
-                throw new Error('client.prepareMcpServers is the window\'s to answer');
         }
     }
 

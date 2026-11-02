@@ -226,6 +226,16 @@ async function main(): Promise<void> {
         log: say,
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
     })));
+    let hostTynn: TynnAccount | null = null;
+    void tynnOpening.then((account) => { hostTynn = account; }, (error: unknown) => say(`the Tynn account could not open: ${error instanceof Error ? error.message : String(error)}`));
+    // THE HOST PREPARES ITS AGENTS (P3.4 cut c), with a window open or not. A start waits for the account: opening has its own deadline.
+    const agentKeys = hostAgentKeys({
+        vaultFile: join(home, 'agent-credentials', 'agents.json'),
+        keychain,
+        tynn: () => hostTynn,
+        workspaces: () => hostRegistry.listWorkspaces(),
+        ready: () => tynnOpening.catch(() => null),
+    });
     const engine = new SessionEngineServer({
         token,
         build,
@@ -243,7 +253,7 @@ async function main(): Promise<void> {
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
-        tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST }),
+        tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: (asked) => agentKeys.recovery(asked) }),
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {
@@ -252,8 +262,7 @@ async function main(): Promise<void> {
                 if (account && !account.status().signedIn && account.savedUserId() !== null) await account.recheck();
             },
         },
-        // The window's files, read in the clear: the agent's binding and who is signed in. The key is in the keychain.
-        agentKeys: hostAgentKeys({ vaultFile: join(home, 'agent-credentials', 'agents.json'), accountFile: join(home, 'credentials', 'tynn.json'), tynnHost: TYNN_HOST, keychain }),
+        agentKeys,
         mcp: {
             setView: (view) => mcp!.setView(view as never),
             sessionServers: (record) => mcp!.sessionServers(record),

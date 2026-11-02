@@ -327,14 +327,6 @@ describe('the inbox push reads (#1412): deliverable, inTurn, the queue, and the 
 });
 
 describe('the host asks the window, and tells it', () => {
-    it('an agent\'s MCP servers are prepared BY THE WINDOW (its secrets) before its driver starts', async () => {
-        const asked: string[] = [];
-        const { client } = await window({ prepareMcpServers: async (rec) => { asked.push(rec.id); return []; } });
-        const r = record();
-        await started(client, r);
-        expect(asked).toEqual([r.id]);
-    });
-
     it('a thread id reaches the window\'s onThreadId', async () => {
         const seen: Array<[string, string]> = [];
         const { client } = await window({ onThreadId: (id, thread) => seen.push([id, thread]) });

@@ -175,6 +175,20 @@ describe('a locked keychain is never read as signed out', () => {
     });
 });
 
+describe('whose account it is, from the record', () => {
+    it.each([
+        ['it says signed out, whatever else it holds', { version: 1, state: 'signed-out', host: HOST, userId: USER.id, scopes: SCOPES }],
+        ['it is for another Tynn', { version: 1, state: 'signed-in', host: 'https://elsewhere.example', userId: USER.id, scopes: SCOPES }],
+    ])('nobody when %s', async (_label, record) => {
+        writeFileSync(file, JSON.stringify(record));
+        const k = keychainFake();
+        k.held.set('tynn/pairing', TOKEN);
+        const account = await open(k, tynnFake());
+        expect(account.savedUserId()).toBeNull();
+        expect(account.status().signedIn).toBe(false);
+    });
+});
+
 describe('the host does the exchange, with no Electron session', () => {
     it('the code goes as a Cookie on the exchange and on nothing after it', async () => {
         const tynn = tynnFake();

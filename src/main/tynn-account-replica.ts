@@ -40,6 +40,7 @@ export class TynnAccountReplica implements TynnAccountPort {
     signOut(): Promise<SignOutResult> { return this.#call('signOut', []) as Promise<SignOutResult>; }
     recheck(): Promise<TynnStatus> { return this.#call('recheck', []) as Promise<TynnStatus>; }
     reload(): Promise<void> { return this.#call('reload', []) as Promise<void>; }
+    recovery(asked: { secretsMoved?: boolean } = {}): Promise<string[]> { return this.#call('recovery', [asked]) as Promise<string[]>; }
     projects(): Promise<unknown[]> { return this.#call('projects', []) as Promise<unknown[]>; }
     ownerOptions(): Promise<unknown[]> { return this.#call('ownerOptions', []) as Promise<unknown[]>; }
     createProject(body: { name: string; slug?: string; owner_type?: 'user' | 'organization' | 'team'; owner_id?: string }): Promise<unknown> { return this.#call('createProject', [body]); }

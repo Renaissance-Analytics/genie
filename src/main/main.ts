@@ -499,10 +499,12 @@ function recoverMissingMcp(agentId: AgentId, reports: readonly McpServerReport[]
  * has to restart them or Genie. One recovery at a time: two quick account changes must not restart an agent twice.
  */
 let tynnRecovering = false;
-function recoverTynnAgents(): void {
-    if (tynnRecovering || !services || !tynnAccount?.status().signedIn) return;
+function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
+    if (tynnRecovering || !services || (!asked.secretsMoved && !tynnAccount?.status().signedIn)) return;
     tynnRecovering = true;
-    void services.tynnRecovery().then((ids) => {
+    // The host prepares its agents, so it knows which went without; a window running its own engine knows here.
+    const named = agentEngineLink ? agentEngineLink.client.tynn().recovery(asked) : services.tynnRecovery(asked);
+    void named.then((ids) => {
         for (const id of ids) {
             if (!host?.probe(id as AgentId)) continue;
             host?.notice(id as AgentId, 'Tynn is available again. Genie is restarting this session on the same conversation to bring its Tynn tools up to date.');
@@ -2764,7 +2766,7 @@ async function boot(): Promise<void> {
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
         legacySecrets: async () => [tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform) })],
-        onSecretsMoved: () => { void tynnAccount?.reload().catch(() => {}); },
+        onSecretsMoved: () => { void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents({ secretsMoved: true })); },
         // An agent's key is the host's (genie#1457). A window running its own engine (the host could not start) holds it itself.
         ...(agentEngineLink
             ? { tynnSecrets: linkedAgentSecrets(agentEngineLink.client), tynnVault: linkedVault(agentEngineLink.client) }
@@ -3008,7 +3010,7 @@ async function boot(): Promise<void> {
     tynnAccount.onChange(pushFeatures);
     // Signing in brings back the Tynn tools of the agents that started without them (genie#1234) — and once now, for an
     // account that signed in while it opened, before anyone was listening.
-    tynnAccount.onChange(recoverTynnAgents);
+    tynnAccount.onChange(() => recoverTynnAgents());
     recoverTynnAgents();
     afterTynnUrl = pushFeatures;
     // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
