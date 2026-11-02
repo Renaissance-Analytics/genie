@@ -146,7 +146,7 @@ async function rig(): Promise<Rig> {
     }, 85_000), tell);
     // From here only the host (and whatever it handed it to) could hold the socket.
     await new Promise<void>((r) => server.close(() => r()));
-    await within(25_000, 'the host\'s terminals spawn host', until('terminals ready', () => /spawn host ready pid=\d+ profile=terminals/.test(host.log()), 20_000), tell);
+    // No wait for its terminals spawn host (genie#1453): a person who opens Genie and at once opens a terminal does not wait either.
     const token = readFileSync(join(home, 'runtime', 'host.token'), 'utf8').trim();
     const transport = await within(10_000, 'the socket to the host', connectSocket(record.endpoint), tell);
     const client = new SessionEngineClient();

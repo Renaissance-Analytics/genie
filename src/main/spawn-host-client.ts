@@ -49,6 +49,8 @@ export interface SpawnHostOptions {
      * `linkUp` reconciles with what is still running.
      */
     readonly link?: { send(frame: SpawnFrame): void };
+    /** How long an open waits for a link that has not come up yet. */
+    readonly linkWaitMs?: number;
 }
 
 /** How long a lost child's killed helpers are waited for before their ptys are reported exited anyway. */
