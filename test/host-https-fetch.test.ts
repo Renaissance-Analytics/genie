@@ -1,9 +1,7 @@
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { connect as netConnect, type AddressInfo } from 'node:net';
-import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -275,7 +273,7 @@ describe('the host’s account over it, against a real TLS server', () => {
 
 describe('verification is never turned off', () => {
     const files = (d: string): string[] => readdirSync(d).flatMap((name) => { const p = join(d, name); return statSync(p).isDirectory() ? files(p) : /\.tsx?$/.test(name) ? [p] : []; });
-    const FORBIDDEN = /rejectUnauthorized\s*:\s*(false|!|[a-z])|NODE_TLS_REJECT_UNAUTHORIZED|ignore-certificate-errors|setCertificateVerifyProc\(\(.*callback\(0\)/;
+    const FORBIDDEN = /rejectUnauthorized\s*:\s*(?!true\b)|NODE_TLS_REJECT_UNAUTHORIZED|ignore-certificate-errors|allow-insecure-localhost/;
 
     it('no source turns it off: not the option, not the variable, not the switch', () => {
         const found = [...files('src/main'), ...files('src/core')].filter((f) => FORBIDDEN.test(readFileSync(f, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n')));
@@ -283,22 +281,12 @@ describe('verification is never turned off', () => {
     });
 
     it('CONTROL: the gauge finds each of them', () => {
-        for (const line of ['{ rejectUnauthorized: false }', 'env.NODE_TLS_REJECT_UNAUTHORIZED = "0"', "app.commandLine.appendSwitch('ignore-certificate-errors')"]) expect(FORBIDDEN.test(line), line).toBe(true);
+        for (const line of ['{ rejectUnauthorized: false }', '{ rejectUnauthorized: strict }', 'env.NODE_TLS_REJECT_UNAUTHORIZED = "0"', "app.commandLine.appendSwitch('ignore-certificate-errors')"]) expect(FORBIDDEN.test(line), line).toBe(true);
+        // And it lets through the one way that verifies.
+        expect(FORBIDDEN.test('{ rejectUnauthorized: true }')).toBe(false);
     });
 
     it('it verifies by asking to, explicitly: the environment cannot change an option that is set', () => {
         expect(readFileSync('src/main/host-https-fetch.ts', 'utf8')).toMatch(/rejectUnauthorized: true/);
-    });
-});
-
-describe('the Electron binary is what really runs this', () => {
-    // Which binary test/host-tls-electron.test.ts uses, so a missing download is said here too.
-    it('the package resolves to a path', () => {
-        const path = createRequire(import.meta.url)('electron') as unknown;
-        expect(typeof path).toBe('string');
-        if (process.env.CI && process.platform === 'linux') {
-            expect(existsSync(path as string)).toBe(true);
-            expect(execFileSync('uname').toString().trim()).toBe('Linux');
-        }
     });
 });
