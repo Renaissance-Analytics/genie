@@ -1,4 +1,4 @@
-import { Button, ContextMenu, Icon, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
+import { Button, ContextMenu, Icon, MultiSwitch, TreeNav, type TreeNodeData } from '@particle-academy/react-fancy';
 import { useState, type ReactNode } from 'react';
 import { fileMenuItems, type FileMenuAction, type FileMenuTarget } from '../../core/file-menu.js';
 import { CodeEditor, FileViewer, resolveFileKind } from '@particle-academy/fancy-code';
@@ -233,11 +233,12 @@ export function FilesPanel({ workspace, tree, state, tabs, open, pinned, onSelec
             <header className="flex h-[38px] shrink-0 items-center gap-2.5 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 text-sm">
                 <span className="text-xs font-semibold">Files</span>
                 {single ? null : (
-                    <div className="flex overflow-hidden rounded-md border border-[var(--border-1)] text-[11px]">
-                        <Button variant="ghost" size="xs" type="button" data-files-filter="all" {...(filter === 'all' ? { 'data-current': 'true' } : {})} onClick={() => onFilter?.('all')} className={`px-2 py-0.5 ${filter === 'all' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>All</Button>
-                        {/* `data-changes` while there ARE changes — the chip is the door the footer's fold used to be. */}
-                        <Button variant="ghost" size="xs" type="button" data-files-filter="changed" {...(filter === 'changed' ? { 'data-current': 'true' } : {})} {...(changed > 0 ? { 'data-changes': '' } : {})} onClick={() => onFilter?.('changed')} className={`border-l border-[var(--border-1)] px-2 py-0.5 ${filter === 'changed' ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>{changed > 0 ? `Changed ${changed}` : 'Changed'}</Button>
-                    </div>
+                    // A react-fancy MultiSwitch: a radio group, the filter in use checked (the owner, 2026-11-01: a choice between
+                    // views is not a pair of Buttons). `data-changes` while there ARE changes — the switch is the door the
+                    // footer's fold used to be.
+                    <MultiSwitch<'all' | 'changed'> size="xs" data-files-filter="" {...(changed > 0 ? { 'data-changes': '' } : {})} aria-label="Show files" value={filter}
+                        list={[{ value: 'all', label: 'All' }, { value: 'changed', label: changed > 0 ? `Changed ${changed}` : 'Changed' }]}
+                        onValueChange={(f) => onFilter?.(f)} />
                 )}
                 <span className="truncate font-mono text-[11px] text-[var(--fg-4)]">{workspace.name ?? workspace.id} · {workspace.path}</span>
                 {prefs?.lockedRoot ? (

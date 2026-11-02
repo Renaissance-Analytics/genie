@@ -1,4 +1,4 @@
-import { Button, Icon, Input } from '@particle-academy/react-fancy';
+import { Button, Icon, Input, Tabs } from '@particle-academy/react-fancy';
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import type { AgentRow } from '../../core/dashboard-view.js';
 import { statusOf, summaryChips } from '../../core/dashboard-view.js';
@@ -192,24 +192,34 @@ export interface MobileWorkspacesProps {
     onSelect: (workspaceId: string | null) => void;
 }
 
-/** THE WORKSPACE SELECTOR: a row of chips to thumb through — All, then each workspace with its agents and what waits. */
+/** The value of the All tab; workspace ids are never empty, so it cannot collide with one. */
+const ALL_WORKSPACES = '';
+
+/**
+ * THE WORKSPACE SELECTOR: a row of chips to thumb through — All, then each workspace with its agents and what waits.
+ * react-fancy Tabs in the pills variant, not Buttons (the owner, 2026-11-01: "those should not be buttons, it's a menu"):
+ * each is role="tab", the one in view aria-selected.
+ */
 export function MobileWorkspaces({ workspaces, agents, items, selected, onSelect }: MobileWorkspacesProps) {
-    const chip = (on: boolean) => `flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm ${on ? 'border-[var(--primary)] bg-[var(--primary)]/15 text-[var(--fg-1)]' : 'border-[var(--border-1)] text-[var(--fg-2)]'}`;
     return (
-        <nav data-mobile-workspaces aria-label="Workspaces" className="flex shrink-0 gap-2 overflow-x-auto overscroll-x-contain border-b border-[var(--border-1)] px-4 py-2">
-            <Button size="xs" type="button" data-mobile-ws="all" data-selected={selected === null ? 'true' : 'false'} onClick={() => onSelect(null)} className={chip(selected === null)}>All</Button>
-            {workspaces.map((w) => {
-                const count = agents.filter((a) => a.workspaceId === w.id).length;
-                const waiting = items.filter((i) => i.workspaceId === w.id).length;
-                return (
-                    <Button size="xs" labelClassName="contents" key={w.id} type="button" data-mobile-ws={w.id} data-selected={selected === w.id ? 'true' : 'false'} onClick={() => onSelect(w.id)} className={chip(selected === w.id)}>
-                        <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
-                        <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
-                        {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
-                        {w.asleep ? <span data-mobile-ws-asleep={w.id} className="text-[11px] text-[var(--fg-4)]">asleep</span> : null}
-                    </Button>
-                );
-            })}
+        <nav data-mobile-workspaces aria-label="Workspaces" className="shrink-0 overflow-x-auto overscroll-x-contain border-b border-[var(--border-1)] px-4 py-2">
+            <Tabs variant="pills" activeTab={selected ?? ALL_WORKSPACES} onTabChange={(id) => onSelect(id === ALL_WORKSPACES ? null : id)}>
+                <Tabs.List className="w-max gap-1">
+                    <Tabs.Tab value={ALL_WORKSPACES} data-mobile-ws="all" className="shrink-0 px-3 text-sm">All</Tabs.Tab>
+                    {workspaces.map((w) => {
+                        const count = agents.filter((a) => a.workspaceId === w.id).length;
+                        const waiting = items.filter((i) => i.workspaceId === w.id).length;
+                        return (
+                            <Tabs.Tab key={w.id} value={w.id} data-mobile-ws={w.id} className="flex shrink-0 items-center gap-1.5 px-3 text-sm">
+                                <span>{w.name ?? workspaceLabel(workspaces, w.id)}</span>
+                                <span className="font-mono text-[11px] text-[var(--fg-4)]">{count}</span>
+                                {waiting > 0 ? <span data-mobile-ws-waiting={w.id} className="rounded-full bg-[var(--warning)] px-1.5 text-[11px] font-semibold text-black">{waiting}</span> : null}
+                                {w.asleep ? <span data-mobile-ws-asleep={w.id} className="text-[11px] text-[var(--fg-4)]">asleep</span> : null}
+                            </Tabs.Tab>
+                        );
+                    })}
+                </Tabs.List>
+            </Tabs>
         </nav>
     );
 }

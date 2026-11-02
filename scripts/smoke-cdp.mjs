@@ -365,7 +365,7 @@ if (typeof agentRow === 'string') {
             const body = document.querySelector('[data-stream]');
             return JSON.stringify({
                 tab: Boolean(tab),
-                active: tab?.getAttribute('data-active') === 'true',
+                active: tab?.getAttribute('aria-selected') === 'true',
                 body: body?.getAttribute('data-stream') ?? null,
             });
         })()
@@ -401,7 +401,7 @@ if (typeof agentRow === 'string') {
     // Undo exactly those two, or check 24's "Back again returns to the Dashboard" lands on a tab instead — the first
     // CI run of this check did precisely that. `go(-2)`, not a click on Stream, which would be a third entry.
     await cdp.evaluate('history.go(-2); true');
-    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('data-active') === 'true'`, 'the Stream tab again, by history');
+    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('aria-selected') === 'true'`, 'the Stream tab again, by history');
 
     /*
      * The composer is REACHABLE from here.
@@ -486,7 +486,7 @@ if (typeof agentRow === 'string') {
     // workspace; Back returns to the Dashboard.
     const doors = await cdp.evaluate(`JSON.stringify({
         open: document.querySelectorAll('button[data-open-workspace]').length,
-        toggle: Boolean(document.querySelector('[data-group-toggle="status"]')),
+        toggle: Boolean(document.querySelector('[data-group-toggle] [role="radio"]')),
         chat: Boolean(document.querySelector('button[data-action="chat-genie"]')),
         header: (document.querySelector('[data-workspace] .font-semibold')?.textContent ?? ''),
     })`);

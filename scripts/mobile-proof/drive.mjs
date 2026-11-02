@@ -109,7 +109,7 @@ async function main() {
     await shot(page, '01-dashboard');
     check('paired: the dashboard shows the agents with their state', await page.locator('[data-mobile-agent]').count() >= 2);
     await page.tap('[data-mobile-ws="tynn"]');
-    await page.waitForSelector('[data-mobile-ws="tynn"][data-selected="true"]');
+    await page.waitForSelector('[data-mobile-ws="tynn"][aria-selected="true"]');
     await shot(page, '02-workspace-selected');
     check('picking a workspace narrows the dashboard and offers its Files', await page.locator('[data-action="open-files"]').count() === 1);
 

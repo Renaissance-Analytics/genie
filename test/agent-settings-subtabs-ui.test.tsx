@@ -37,7 +37,7 @@ describe('the sub-tab strip', () => {
     it('General, Permissions, IssueWatch, Persona, Skills — General open when none is asked for', () => {
         const html = render();
         expect(tabsIn(html)).toEqual(['general', 'permissions', 'issuewatch', 'persona', 'skills']);
-        expect(html).toMatch(/data-settings-tab="general"[^>]*aria-selected="true"/);
+        expect(html).toMatch(/<button(?=[^>]*data-settings-tab="general")(?=[^>]*data-react-fancy-tabs-tab="")[^>]*aria-selected="true"/);
         expect(panel(html)).toContain('data-settings-section="general"');
     });
 
