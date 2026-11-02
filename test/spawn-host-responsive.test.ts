@@ -27,10 +27,31 @@ const SLOW_MS = 5_000;
 /** Main held for longer than this was held FOR the spawn (a fifth of it); under it is the machine's scheduling. */
 const HELD_BAR_MS = SLOW_MS / 5;
 
+/** What a hold reads: the time, and how much of a span the whole process was stopped (the gauge's worker saw it too). */
+interface HoldClocks {
+    now(): number;
+    stalled(from: number, to: number): number;
+}
+
+/** How much of [from, to] the whole process was stopped: the gauge's worker gaps, while a gauge runs; none otherwise. */
+let processStalled: (from: number, to: number) => number = () => 0;
+
 /** Hold this thread `ms`, the way a synchronous CreateProcess does. */
 function hold(ms: number): void {
-    const end = Date.now() + ms;
-    while (Date.now() < end) { /* the thread is held */ }
+    holdFor(ms, { now: () => Date.now(), stalled: (from, to) => processStalled(from, to) });
+}
+
+/** The hold itself, over the clocks it is given. */
+function holdFor(ms: number, clocks: HoldClocks): void {
+    const end = clocks.now() + ms;
+    while (clocks.now() < end) { /* the thread is held */ }
+}
+
+/** The overlap of [from, to] with worker gaps given as [end, gap] pairs. */
+function overlapWith(gaps: ReadonlyArray<readonly [number, number]>, from: number, to: number): number {
+    let total = 0;
+    for (const [end, gap] of gaps) total += Math.max(0, Math.min(to, end) - Math.max(from, end - gap));
+    return total;
 }
 
 // IN-PROCESS, the spawner is node:child_process's execFile: made to take 5 s of this thread per call.
@@ -69,6 +90,18 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
         }, 10);
     `, { eval: true, workerData: shared.buffer });
     await new Promise((r) => setTimeout(r, 100));
+    // A hold on main, while this gauge runs, reads the worker's gaps as they land (shared memory: no event loop needed).
+    const ringGaps = (): Array<[number, number]> => {
+        const out: Array<[number, number]> = [];
+        for (let i = 0; i < Math.min(shared[0]!, 4096); i += 1) out.push([shared[1 + 2 * i]!, shared[2 + 2 * i]!]);
+        return out;
+    };
+    let ringCount = -1;
+    let ringCache: Array<[number, number]> = [];
+    processStalled = (from, to) => {
+        if (shared[0] !== ringCount) { ringCount = shared[0]!; ringCache = ringGaps(); }
+        return overlapWith(ringCache, from, to);
+    };
     const mine: Array<[number, number]> = [];
     let last = Date.now();
     const timer = setInterval(() => { const now = Date.now(); const gap = now - last - 10; last = now; if (gap > 20) mine.push([now, gap]); }, 10);
@@ -76,26 +109,65 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
         await run();
         await new Promise((r) => setTimeout(r, 60));
     } finally {
+        processStalled = () => 0;
         clearInterval(timer);
         await worker.terminate();
     }
-    const theirs: Array<[number, number]> = [];
-    for (let i = 0; i < Math.min(shared[0]!, 4096); i += 1) theirs.push([shared[1 + 2 * i]!, shared[2 + 2 * i]!]);
+    const theirs = ringGaps();
     let worst = 0;
+    lastReading = { gap: 0, stalled: 0 };
     for (const [end, gap] of mine) {
         const start = end - gap;
         let process = 0;
         for (const [wEnd, wGap] of theirs) process = Math.max(process, Math.max(0, Math.min(end, wEnd) - Math.max(start, wEnd - wGap)));
-        worst = Math.max(worst, gap - process);
+        if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process }; }
     }
     return worst;
 }
+
+/** The worst reading's parts: main's heartbeat gap, and how much of it the whole process was stopped (subtracted). */
+let lastReading = { gap: 0, stalled: 0 };
 
 type HostModule = typeof import('../src/main/spawn-host-client.js');
 let stopHost: (() => Promise<void>) | null = null;
 afterEach(async () => {
     await stopHost?.();
     stopHost = null;
+});
+
+/*
+ * THE CONTROL'S HOLD, MEASURED THE WAY THE GAUGE MEASURES (2026-11-01). genie-test-windows read the CONTROL at 141 ms for
+ * a 5 s spawn made on main (batch C's full suite): the hold ran (the answer was the mock's), but it was timed by the wall
+ * clock, and the gauge subtracts what the WHOLE process was stopped for — a VM descheduled on its loaded host stops main
+ * and the gauge's worker alike. A hold the machine stalled through ended having held main for almost none of the time
+ * the gauge can count. The hold now lasts until main has been held `ms` while the rest of the process ran.
+ */
+describe('the hold a spawn on main is made of', () => {
+    it('holds main for the full time WHILE THE PROCESS RUNS: a stall of the whole process does not count toward it', () => {
+        // A fake clock: 1 ms per read, and at 100 ms a 4,860 ms stall of the whole process (main and the worker both).
+        let t = 0;
+        const STALL = { from: 100, to: 4_960 };
+        const clocks: HoldClocks = {
+            now: () => { t += 1; if (t === STALL.from) t = STALL.to; return t; },
+            stalled: (from, to) => Math.max(0, Math.min(to, STALL.to) - Math.max(from, STALL.from)),
+        };
+        const start = t;
+        holdFor(SLOW_MS, clocks);
+        const held = t - start - clocks.stalled(start, t);
+        // The wall-clock hold ended here holding main for 140 ms the gauge could count — the 141 ms the VM read.
+        expect(held, `main held ${held} ms the gauge can count, of ${t - start} ms`).toBeGreaterThanOrEqual(SLOW_MS);
+    });
+
+    it('without a stall, it is the time it was asked for, not more', () => {
+        let t = 0;
+        holdFor(SLOW_MS, { now: () => (t += 1), stalled: () => 0 });
+        expect(t).toBeLessThanOrEqual(SLOW_MS + 2);
+    });
+
+    it('the stalls it reads are the overlap with the worker’s gaps', () => {
+        expect(overlapWith([[200, 150], [1_000, 100]], 0, 950)).toBe(150 + 50);
+        expect(overlapWith([[200, 150]], 300, 400)).toBe(0);
+    });
 });
 
 describe('main never waits on a spawn (genie#1397)', () => {
@@ -132,7 +204,7 @@ describe('main never waits on a spawn (genie#1397)', () => {
         let answer: unknown = null;
         const worst = await heartbeatDuring(async () => { answer = await driver.status('genie-postgres-17'); });
         expect(answer).toEqual({ state: 'running', since: '2026-11-01T00:00:00Z' });
-        console.log(`GAUGE: main held ${worst} ms by a ${SLOW_MS} ms spawn made on main (bar ${HELD_BAR_MS} ms)`);
+        console.log(`GAUGE: main held ${worst} ms by a ${SLOW_MS} ms spawn made on main (bar ${HELD_BAR_MS} ms); main's gap ${lastReading.gap} ms, of it the whole process stopped ${lastReading.stalled} ms`);
         expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms spawn on main`).toBeGreaterThan(SLOW_MS / 2);
     }, 30_000);
 
