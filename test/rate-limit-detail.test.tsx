@@ -9,6 +9,13 @@ import { EMPTY_SNAPSHOT } from '../src/renderer/bridge.js';
 import { EMPTY_FEATURES } from '../src/renderer/features.js';
 import { Shell } from '../src/renderer/Shell.js';
 
+/** A Sidebar item's dot (react-fancy 6.1.0): its colour, and the words a screen reader hears with the item's name. */
+const dotIn = (row: string): { color: string; words: string } | null => {
+    const c = /data-react-fancy-sidebar-dot=""[^>]*data-color="([^"]+)"|data-color="([^"]+)"[^>]*data-react-fancy-sidebar-dot=""/.exec(row);
+    if (!c) return null;
+    return { color: (c[1] ?? c[2])!, words: /data-react-fancy-sidebar-dot-label=""[^>]*>([^<]*)</.exec(row)?.[1]?.trim() ?? '' };
+};
+
 /**
  * EVERY REPORTED LIMIT ON HOVER, AND A DOT IN THE SIDEBAR (genie#1268; the owner, 2026-10-27: "On hover of the provider
  * rate limit display in the dashboard, I should see all reportable rate limits and my usage. Also, once a rate limit hits
@@ -134,24 +141,22 @@ describe('the dot on the Dashboard’s sidebar row', () => {
 
     it('yellow at the warning, with its words for a screen reader; static', () => {
         const row = dashboardRow(sidebar({ level: 'warning', label: 'Claude Code: 30% left in the 5-hour window' }));
-        expect(row).toMatch(/data-rate-limit-dot="warning"[^>]*role="img"[^>]*aria-label="Claude Code: 30% left in the 5-hour window"/);
-        expect(row).toContain('bg-[var(--warning)]');
+        expect(dotIn(row)).toEqual({ color: 'amber', words: 'Claude Code: 30% left in the 5-hour window' });
         expect(row).not.toMatch(/animate-/);
     });
 
     it('red at the danger', () => {
         const row = dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }));
-        expect(row).toMatch(/data-rate-limit-dot="danger"/);
-        expect(row).toContain('bg-[var(--danger)]');
+        expect(dotIn(row)?.color).toBe('red');
     });
 
     it('on the collapsed rail too', () => {
-        expect(dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }, true))).toMatch(/data-rate-limit-dot="danger"/);
+        expect(dotIn(dashboardRow(sidebar({ level: 'danger', label: 'Claude Code: 8% left this week' }, true)))?.color).toBe('red');
     });
 
     it('no alert, no dot (positive control above)', () => {
-        expect(sidebar(null)).not.toContain('data-rate-limit-dot');
-        expect(sidebar(undefined, true)).not.toContain('data-rate-limit-dot');
+        expect(dotIn(dashboardRow(sidebar(null)))).toBeNull();
+        expect(dotIn(dashboardRow(sidebar(undefined, true)))).toBeNull();
     });
 });
 
@@ -184,10 +189,10 @@ describe('from any page: the Shell lights the dot from the header’s readings',
 
     it('on Settings, Claude at 8% left this week: the red dot on the Dashboard row, named', () => {
         const html = render('genie://settings', { claude: room(8, '7d') });
-        expect(html).toMatch(/data-rate-limit-dot="danger"[^>]*aria-label="Claude Code: 8% left this week"/);
+        expect(dotIn(html.match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '')).toEqual({ color: 'red', words: 'Claude Code: 8% left this week' });
     });
 
     it('every window above 30%: no dot', () => {
-        expect(render('genie://settings', { claude: room(31, '7d') })).not.toContain('data-rate-limit-dot');
+        expect(dotIn(render('genie://settings', { claude: room(31, '7d') }).match(/<button[^>]*data-nav="genie:\/\/dashboard"[\s\S]*?<\/button>/)?.[0] ?? '')).toBeNull();
     });
 });

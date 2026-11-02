@@ -180,26 +180,24 @@ describe('the yellow ! on the Settings row', () => {
     const rail = (over: Partial<Parameters<typeof Sidebar>[0]> = {}) =>
         renderToStaticMarkup(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} {...over} />);
 
-    it('shows a yellow ! on the Settings row whose tooltip names the device and the date', async () => {
+    it('marks the Settings item with an amber dot whose words name the device and the date (react-fancy Sidebar dot)', () => {
         act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
         const settings = host.querySelector('[data-nav="genie://settings"]')!;
-        const mark = settings.querySelector('[data-settings-alert]')!;
-        expect(mark.textContent).toBe('!');
-        expect(mark.getAttribute('aria-label')).toBe(label);
-        expect(mark.className).toContain('var(--warning)');
-        await hoverTooltip(mark, label);
+        const dot = settings.querySelector('[data-react-fancy-sidebar-dot]')!;
+        expect(dot.getAttribute('data-color')).toBe('amber');
+        expect(settings.querySelector('[data-react-fancy-sidebar-dot-label]')!.textContent!.trim()).toBe(label);
     });
 
     it('no alert, no mark', () => {
-        expect(rail()).not.toMatch(/data-settings-alert/);
-        expect(rail({ settingsAlert: null })).not.toMatch(/data-settings-alert/);
+        expect(rail()).not.toMatch(/data-react-fancy-sidebar-dot=/);
+        expect(rail({ settingsAlert: null })).not.toMatch(/data-react-fancy-sidebar-dot=/);
     });
 
     it('the collapsed rail shows it too', () => {
         const store = { getItem: () => '1', setItem: () => {} };
         const html = rail({ settingsAlert: { label }, railStorage: store });
         expect(html).toMatch(/data-rail="collapsed"/);
-        expect(html).toMatch(/data-settings-alert/);
+        expect(html.match(/<button[^>]*data-nav="genie:\/\/settings"[\s\S]*?<\/button>/)?.[0] ?? '').toContain('data-react-fancy-sidebar-dot=""');
     });
 });
 
