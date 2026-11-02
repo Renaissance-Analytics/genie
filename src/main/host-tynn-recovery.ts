@@ -15,7 +15,7 @@ import type { StopVerdict } from '../core/session.js';
  * the host heard: resuming from the registry alone would quietly start a new conversation.
  */
 export const RECOVERY_STEPS_MS: readonly number[] = [30_000, 120_000, 600_000, 1_800_000];
-const BACK_NOTICE = 'Tynn is available again. Genie is restarting this session on the same conversation to bring its Tynn tools up to date.';
+const BACK_NOTICE = 'Tynn is available again. Genie restarted this session on the same conversation to bring its Tynn tools up to date.';
 
 export interface HostTynnRecoveryPorts {
     /** Who should restart to get their tools back. */
@@ -52,7 +52,6 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
         if (!known) { log(`tynn recovery: no record for ${id}`); return; }
         const record: AgentRecord = { ...known, threadId: ports.threadOf(id) ?? known.threadId };
         const agent = id as AgentId;
-        ports.host.notice(agent, BACK_NOTICE);
         ports.host.stop(agent);
         const verdict = await ports.host.ended(agent);
         if (verdict && !verdict.verified && verdict.survivors.length > 0) {
@@ -61,6 +60,8 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
         }
         const started = await ports.host.start(record, ports.cwdFor(record));
         if (!started.ok) { log(`tynn recovery: ${record.name} could not start again: ${started.reason}`); return; }
+        // In the new run's chat, where it is seen, and only once it is true.
+        ports.host.notice(agent, BACK_NOTICE);
         await ports.host.deliverOwed(agent);
     };
 

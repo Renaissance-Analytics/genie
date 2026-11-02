@@ -183,15 +183,15 @@ describe('never through a running turn', () => {
         expect(f.calls).toContain('deliverOwed');
     });
 
-    it('stop, then the end, then start, and the notice comes first', async () => {
+    it('stop, then the end, then start, and only then the notice, in the new run', async () => {
         const f = fakeHost();
         const agent = record();
         const recovery = hostTynnRecovery({ names: async () => [agent.id], waiting: () => false, recheck: async () => {}, host: f.host as never, record: () => agent, threadOf: () => null, cwdFor: () => workspace });
         await recovery.recover();
         await settle();
-        expect(f.calls[0]).toMatch(/^notice: Tynn is available again/);
-        expect(f.calls.slice(1, 3)[0]).toBe('stop');
-        expect(f.calls[2]).toMatch(/^start:/);
+        expect(f.calls[0]).toBe('stop');
+        expect(f.calls[1]).toMatch(/^start:/);
+        expect(f.calls[2]).toMatch(/^notice: Tynn is available again/);
     });
 
     it('A STOPPED AGENT IS NOT STARTED: its next start prepares it anyway', async () => {
