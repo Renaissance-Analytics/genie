@@ -9,7 +9,7 @@ import type { StopVerdict } from '../core/session.js';
  *
  * THE ASKING. An account change is one way to hear it. An agent waiting on Tynn is the other reason to look: the account's own retries end, and
  * Tynn's agent endpoints can be down while /me is fine. So while someone waits, this asks again on a backoff; with nobody waiting, nothing is
- * scheduled. A Tynn that answers /me and fails the rest can restart an idle agent at each step: that is the price, and it is bounded by the last step.
+ * scheduled. A restart comes only once the host holds the key (`names`, agent-tynn-prep.ts): until then the running agent is not touched.
  *
  * THE THREAD. With no window, the host only queues an agent's thread id for the next window, so the registry may not know it yet. `threadOf` is what
  * the host heard: resuming from the registry alone would quietly start a new conversation.

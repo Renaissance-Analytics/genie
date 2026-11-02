@@ -11,12 +11,19 @@
  *   node scripts/smoke-seed.mjs && node scripts/agent-never-minted-cdp.mjs --expect-bug
  * `### never-minted=PASS` there means everything up to the mail held and B started with no key.
  *
+ * THE OUTAGE, in the same run: Tynn's agent endpoints go down while /me still answers, A mails never-minted C with the window still dead, and C
+ * starts without Tynn. The host asks again on its backoff and restarts nobody while that fails. Tynn comes back and C is restarted, by the host, on the
+ * same thread, holding its key. Its negative, in a throwaway tree:
+ *   node scripts/perf-lag/agent-key-bug-back.mjs recovery && npm run build
+ *   node scripts/smoke-seed.mjs && node scripts/agent-never-minted-cdp.mjs --expect-no-recovery
+ * `### never-minted=PASS` there means C was still without its key when the time ran out, with Tynn answering.
+ *
  * It starts the app itself, because Tynn has to be up before the host opens its account. Tynn here is a small fake that answers the endpoints the
  * host calls and counts them, over real TLS. Nothing reaches the network and nothing needs root: the host reaches it through HTTPS_PROXY, a local
  * CONNECT proxy that sends tynn.ai to it, and trusts its CA through SSL_CERT_FILE, which is what Node reads as the OS store
  * (scripts/perf-lag/host-tls-measure.mjs measured both, under this binary). All keys here are test words.
  *
- * Prints a line per step, `### never-minted <check>=PASS|FAIL  detail`, then `### never-minted=PASS|FAIL`. Capped at 5 min. Every exit ends what it started.
+ * Prints a line per step, `### never-minted <check>=PASS|FAIL  detail`, then `### never-minted=PASS|FAIL`. Capped at 8 min. Every exit ends what it started.
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
@@ -34,12 +41,14 @@ if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusin
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
 process.env.DBUS_SESSION_BUS_ADDRESS ??= `unix:path=${process.env.XDG_RUNTIME_DIR}/bus`;
 const expectBug = process.argv.includes('--expect-bug');
+const expectNoRecovery = process.argv.includes('--expect-no-recovery');
 const PORT = Number(process.env.CDP_PORT ?? 9222);
 const PAIRING = `gpk_01ARZ3NDEKTSV4RRFFQ69G5FAV.${'ab'.repeat(32)}`;
 const USER = { id: 'vm-user-1', name: 'VM Person', email: 'vm@example.invalid' };
 const PROJECT = 'vm-project-1';
 const SCOPES = ['genie:discovery', 'genie:projects', 'genie:workstations', 'genie:agents', 'genie:agent-tokens', 'genie:issue-watch', 'genie:issues', 'genie:inbox'];
 const B_ID = `agent_${'d4e5f6a7'.repeat(4)}`;
+const C_ID = `agent_${'e5f6a7b8'.repeat(4)}`;
 const home = join(homedir(), '.genie');
 const runtime = join(home, 'runtime');
 const RECORD = join(tmpdir(), 'genie-stub-codex-record-servers');
@@ -78,7 +87,7 @@ async function finish() {
     console.log(`### never-minted=${failures.length === 0 ? 'PASS' : 'FAIL'}${failures.length ? `  failed: ${failures.join(', ')}` : ''}`);
     process.exit(failures.length === 0 ? 0 : 1);
 }
-setTimeout(() => { check(false, 'the-5-min-cap'); void finish(); }, 300_000).unref();
+setTimeout(() => { check(false, 'the-8-min-cap'); void finish(); }, 480_000).unref();
 
 class Cdp {
     #ws; #id = 1; #pending = new Map();
@@ -98,7 +107,7 @@ class Cdp {
 }
 
 /** What the host calls: who am I, the project's agents, register, mint. Counted, and only by the bearer it was given. */
-const tynn = { remote: [], minted: [], lists: 0, me: 0 };
+const tynn = { remote: [], minted: [], lists: 0, me: 0, agentsDown: false };
 function tynnAnswers(req, res) {
     let text = '';
     req.on('data', (chunk) => { text += chunk; });
@@ -108,6 +117,8 @@ function tynnAnswers(req, res) {
         if (req.headers.authorization !== `Bearer ${PAIRING}`) return reply(404, { message: 'Not Found' });
         const path = (req.url ?? '').split('?')[0];
         if (path === '/api/v1/me') { tynn.me += 1; return reply(200, USER); }
+        // THE OUTAGE: who you are still answers, and the agent endpoints do not.
+        if (tynn.agentsDown) return reply(503, { message: 'Service Unavailable' });
         if (path === `/api/v1/projects/${PROJECT}/agents` && req.method === 'GET') { tynn.lists += 1; return reply(200, { project_id: PROJECT, agents: tynn.remote }); }
         if (path === `/api/v1/projects/${PROJECT}/agents` && req.method === 'POST') {
             const body = JSON.parse(text);
@@ -164,7 +175,7 @@ try {
     const agents = JSON.parse(readFileSync(join(runtime, 'agents.json'), 'utf8'));
     const codex = agents.find((a) => a.provider === 'codex');
     if (!codex) throw new Error('smoke-seed.mjs left no codex agent');
-    writeFileSync(join(runtime, 'agents.json'), JSON.stringify([...agents.filter((a) => a.id !== B_ID), { ...codex, id: B_ID, name: 'newcomer', mode: 'automated', threadId: null, accessScope: 'self' }], null, 2));
+    writeFileSync(join(runtime, 'agents.json'), JSON.stringify([...agents.filter((a) => a.id !== B_ID && a.id !== C_ID), { ...codex, id: B_ID, name: 'newcomer', mode: 'automated', threadId: null, accessScope: 'self' }, { ...codex, id: C_ID, name: 'latecomer', mode: 'automated', threadId: null, accessScope: 'self' }], null, 2));
     const manifest = join(process.cwd(), 'project.json');
     writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, 'utf8')), tynn: { projectId: PROJECT } }, null, 2));
     writeFileSync(RECORD, '');
@@ -186,7 +197,7 @@ try {
     check(signedIn === USER.name, '2-the-host-signed-in-over-real-tls-through-the-proxy', `${signedIn}; /me asked ${tynn.me} time(s); tunnels ${tunnels.length}`);
 
     const snap = await cdp.evaluate('window.genie.snapshot()');
-    const a = snap.agents.find((x) => x.provider === 'codex' && x.id !== B_ID);
+    const a = snap.agents.find((x) => x.provider === 'codex' && x.id !== B_ID && x.id !== C_ID);
     check(Boolean(a) && snap.agents.some((x) => x.id === B_ID), '3-the-seed-left-both-agents', a?.id ?? 'no agent A');
     say('starting A through the window');
     await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`);
@@ -224,6 +235,7 @@ try {
     const words = JSON.stringify(sent.parsed?.result?.content ?? sent.parsed?.error ?? null);
     check(sent.status === 200 && !words.includes('\\"ok\\":false') && sent.parsed?.result?.isError !== true, '7-A-mailed-B-with-no-window', words.slice(0, 180));
 
+    const mail = async (to) => post({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'agentinbox', arguments: { action: 'send', to, text: 'wake up: this is the outage check' } } }, opened.session);
     const b = await until("B's provider", 60_000, () => records().find((r) => r.pid !== first.pid) ?? null);
     const mine = tynn.minted.find((m) => m.agent === B_ID);
     if (expectBug) {
@@ -237,6 +249,36 @@ try {
         check(vault.includes(B_ID) && !vault.includes('rpk_'), '11-the-vault-binds-it-and-holds-no-key');
         const listsBefore = tynn.lists;
         check(listsBefore > 0, '12-tynn-was-asked-at-start', `agents listed ${listsBefore} time(s)`);
+
+        say('THE OUTAGE: the agent endpoints go down, and /me still answers');
+        tynn.agentsDown = true;
+        const seen = new Set(records().map((r) => r.pid));
+        const asked = await mail('latecomer');
+        check(asked.status === 200, '13-A-mailed-C-during-the-outage', `http ${asked.status}`);
+        const c = await until("C's provider", 60_000, () => records().find((r) => !seen.has(r.pid)) ?? null);
+        check(c !== null && !given(c).includes('tynn'), '14-C-started-without-tynn', c ? `given: ${given(c).join(',')}` : 'C never started');
+        const meBefore = tynn.me;
+        say('waiting past the first retry, with the outage still on');
+        await sleep(45_000);
+        const cRuns = () => records().filter((r) => c !== null && (r.pid === c.pid || r.method === 'thread/resume') && !seen.has(r.pid));
+        check(tynn.me > meBefore, '15-CONTROL-the-host-asked-again-and-me-answered', `/me ${meBefore} -> ${tynn.me}`);
+        check(cRuns().length === 1 && c !== null && alive(c.pid), '16-THREE-OF-NOTHING-no-restart-while-the-endpoint-fails', `${cRuns().length} run(s) of C; C alive=${c !== null && alive(c.pid)}`);
+        check(tynn.minted.every((m) => m.agent !== C_ID), '17-nothing-minted-for-C-during-it');
+        check(existsSync(VAULT) && !alive(mains[0]), '18-the-window-is-still-dead');
+
+        say('Tynn comes back');
+        tynn.agentsDown = false;
+        const back = await until('C restarted with its key', 200_000, () => cRuns().find((r) => r.servers?.tynn?.enabled === true) ?? null);
+        const mintedC = tynn.minted.find((m) => m.agent === C_ID);
+        if (expectNoRecovery) {
+            check(back === null && c !== null && alive(c.pid), '19-NEGATIVE-with-recovery-broken-C-stays-without-its-key', `${cRuns().length} run(s) of C`);
+        } else {
+            check(Boolean(mintedC), '19-the-host-minted-for-C', `mints: ${tynn.minted.length}`);
+            check(back?.servers?.tynn?.bearer === mintedC?.token && Boolean(back), '20-C-restarted-holding-that-key', back ? `given: ${given(back).join(',')}` : 'C was not restarted');
+            check(back?.method === 'thread/resume' && typeof back?.threadId === 'string' && back.threadId.length > 0, '21-on-the-same-conversation', back ? `${back.method} ${back.threadId}` : 'none');
+            check(!alive(mains[0]), '22-and-no-window-ever-came-back');
+            check(pgrep(`remote-debugging-port=${PORT}`).filter((pid) => basename(exeOf(pid)) === 'electron').length === 0, '23-no-window-process-at-all');
+        }
     }
 } catch (error) {
     check(false, 'the-check-threw', error instanceof Error ? error.message : String(error));

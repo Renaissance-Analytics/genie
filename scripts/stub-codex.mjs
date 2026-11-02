@@ -64,14 +64,14 @@ const TICKER = (() => {
  * The file exists only in a test VM. Without it nothing below changes.
  */
 const RECORD_SERVERS = join(tmpdir(), 'genie-stub-codex-record-servers');
-function recordServers(params) {
+function recordServers(params, method = 'thread/start') {
     if (!existsSync(RECORD_SERVERS)) return;
     const given = params?.config?.mcp_servers ?? {};
     const servers = Object.fromEntries(Object.entries(given).map(([name, server]) => [name, {
         // `enabled: false` is how Genie stops a provider inheriting a server (session-host.ts): named, and not given.
         enabled: server.enabled !== false, url: server.url, headers: server.http_headers ?? {}, bearer: server.bearer_token_env_var ? process.env[server.bearer_token_env_var] ?? null : null,
     }]));
-    appendFileSync(RECORD_SERVERS, `${JSON.stringify({ pid: process.pid, servers })}\n`, { mode: 0o600 });
+    appendFileSync(RECORD_SERVERS, `${JSON.stringify({ pid: process.pid, servers, method, threadId: params?.threadId ?? null })}\n`, { mode: 0o600 });
 }
 const THREAD_ID = TICKER ? `stub_thread_${process.pid}` : 'stub_thread_0001';
 const TURN_ID = 'stub_turn_0001';
@@ -253,6 +253,7 @@ function handle(frame) {
             return;
 
         case 'thread/resume':
+            recordServers(frame?.params, 'thread/resume');
             respond(id, { thread: { id: THREAD_ID } });
             return;
 
