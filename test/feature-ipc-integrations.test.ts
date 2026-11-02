@@ -191,3 +191,44 @@ describe('GitHub through the account', () => {
         await expect(handleFeatureAction(services, { kind: 'integrations.githubSignIn' }, state())).rejects.toThrow(/cannot sign in to GitHub here/);
     });
 });
+
+/**
+ * NO KEYRING, THE CARD — NOT A VAGUE ERROR (the owner, 2026-11-01: "I can't log into tynn" on Omarchy). With no keyring
+ * the snapshot carries the keyring card's view; Open Tynn does not send the person to a sign-in that cannot be kept; the
+ * card's one button runs the keyring's next step.
+ */
+describe('the keyring card in the snapshot and its action', () => {
+    function keyringPort(view: import('../src/main/linux-keyring.js').KeyringView | null) {
+        const calls: string[] = [];
+        return { calls, port: { view: () => view, fix: async () => { calls.push('fix'); } } };
+    }
+    const account = (calls: string[]): TynnAccountPort => ({
+        status: () => ({ signedIn: false }), host: () => 'https://tynn.ai',
+        startSignIn: async () => { calls.push('open'); return { url: 'https://tynn.ai/x' }; },
+        signIn: async () => ({ ok: false, reason: 'x' }), signOut: async () => ({ ok: true, revoked: true }), onChange: () => () => {},
+    });
+    const blocked = { state: 'not-installed' as const, step: null, failure: null, manual: 'sudo pacman -S --needed --noconfirm gnome-keyring libsecret', packages: 'gnome-keyring, libsecret' };
+
+    it('the snapshot carries the card when the keyring is missing, and null when it is fine (CONTROL)', async () => {
+        expect((await featureSnapshot(services, state(), { keyring: keyringPort(blocked).port })).integrations!.keyring).toEqual(blocked);
+        expect((await featureSnapshot(services, state(), { keyring: keyringPort(null).port })).integrations!.keyring).toBeNull();
+        expect((await featureSnapshot(services, state())).integrations!.keyring).toBeNull();
+    });
+
+    it('Open Tynn with no keyring opens nothing (the card says why); with one it opens Tynn (CONTROL)', async () => {
+        const calls: string[] = [];
+        const snap = await handleFeatureAction(services, { kind: 'integrations.tynnSignIn' }, state(), { tynnAccount: account(calls), keyring: keyringPort(blocked).port });
+        expect(calls).toEqual([]);
+        expect(snap.integrations!.tynn.signInUrl).toBeNull();
+        expect(snap.integrations!.keyring).toEqual(blocked);
+        await handleFeatureAction(services, { kind: 'integrations.tynnSignIn' }, state(), { tynnAccount: account(calls), keyring: keyringPort(null).port });
+        expect(calls).toEqual(['open']);
+    });
+
+    it('the card’s button runs the keyring’s next step; without a keyring port it refuses in words', async () => {
+        const k = keyringPort(blocked);
+        await handleFeatureAction(services, { kind: 'keyring.fix' }, state(), { keyring: k.port });
+        expect(k.calls).toEqual(['fix']);
+        await expect(handleFeatureAction(services, { kind: 'keyring.fix' }, state())).rejects.toThrow(/keyring/i);
+    });
+});

@@ -183,3 +183,53 @@ describe('Settings → GitHub', () => {
         expect(html).toMatch(/data-action="github-sign-in"[^>]*>(?:<[^>]+>)*Sign in again</);
     });
 });
+
+/**
+ * THE KEYRING CARD (the owner, 2026-11-01): "Genie needs a keyring to keep your sign-ins safe", with ONE obvious button
+ * whose words say what it does, its progress while it runs, then success or the failure with Retry; the command to run
+ * by hand when Genie cannot. Sign-in waits behind it: no Open Tynn and no code box while nothing could keep the sign-in.
+ */
+describe('Settings → Tynn: the keyring card', () => {
+    const card = (keyring: NonNullable<NonNullable<FeatureData['integrations']>['keyring']>) => render({ ...integrations, keyring });
+    const base = { step: null, failure: null, manual: 'sudo pacman -S --needed --noconfirm gnome-keyring libsecret', packages: 'gnome-keyring, libsecret' };
+
+    it('no keyring card when the keyring is fine (CONTROL): the sign-in is there', () => {
+        const html = render({ ...integrations, keyring: null });
+        expect(html).not.toContain('data-keyring-card');
+        expect(html).toContain('data-action="tynn-sign-in"');
+    });
+
+    it('not installed: the reason, the packages, Install keyring — and the sign-in waits behind it', () => {
+        const html = card({ state: 'not-installed', ...base });
+        expect(html).toContain('data-keyring-card="not-installed"');
+        expect(html).toMatch(/Genie needs a keyring to keep your sign-ins safe/);
+        expect(html).toMatch(/gnome-keyring, libsecret/);
+        expect(html).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Install keyring</);
+        expect(html).not.toContain('data-action="tynn-sign-in"');
+        expect(html).not.toContain('data-form="tynn-code"');
+    });
+
+    it('each state names its own action', () => {
+        expect(card({ state: 'not-running', ...base })).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Start keyring</);
+        const restart = card({ state: 'restart-needed', ...base });
+        expect(restart).toMatch(/Keyring ready/);
+        expect(restart).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Restart Genie</);
+        expect(card({ state: 'refused', ...base })).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Check again</);
+    });
+
+    it('while a step runs: the button is busy and says the step', () => {
+        const html = card({ state: 'not-installed', ...base, step: 'installing' });
+        expect(html).toMatch(/data-action="keyring-fix"[^>]*disabled/);
+        expect(html).toMatch(/Installing…/);
+        expect(card({ state: 'not-running', ...base, step: 'starting' })).toMatch(/Starting…/);
+        expect(card({ state: 'restart-needed', ...base, step: 'restarting' })).toMatch(/Restarting…/);
+    });
+
+    it('a failure: its words, Retry, and the command to run by hand with a Copy', () => {
+        const html = card({ state: 'not-installed', ...base, failure: 'Your system could not ask for your password. Run this in a terminal instead.' });
+        expect(html).toMatch(/data-keyring-failure[^>]*>Your system could not ask for your password/);
+        expect(html).toMatch(/data-action="keyring-fix"[^>]*>(?:<[^>]+>)*Retry</);
+        expect(html).toContain('data-keyring-manual="sudo pacman -S --needed --noconfirm gnome-keyring libsecret"');
+        expect(html).toContain('data-action="keyring-copy-command"');
+    });
+});
