@@ -50,6 +50,8 @@ export interface HostMcpPorts {
     readonly lastRowAt: (agentId: AgentId) => number | null;
     readonly reportPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => boolean | Promise<boolean>;
     readonly window: { connected(): boolean; call(call: ForwardedToolCall): Promise<McpToolResult> };
+    /** The background processes the `processes` tool acts on (P3.3c): the host's book, scheduler and supervisor logs. */
+    readonly processes?: import('./mcp-tools-processes.js').ProcessesPort;
     /** openFileForUser with no window: shown when the next window connects. */
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** A tool's moment for the window: a glow, a thumbs-up, an action signal. Dropped with no window. */
@@ -122,6 +124,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             openFile: unavailable('openFileForUser'),
             terminals: { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             plugins: { tools: () => view?.pluginTools ?? [], guard: () => null, run: unavailable('a plugin tool') },
+            ...(ports.processes ? { processes: ports.processes } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },

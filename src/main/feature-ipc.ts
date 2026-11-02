@@ -96,7 +96,7 @@ export interface FeaturePorts {
      */
     readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void> };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
-    readonly processes?: ProcessBook;
+    readonly processes?: import('./processes-host.js').ProcessBookApi;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
     readonly processScheduler?: Pick<import('./process-scheduler.js').ProcessScheduler, 'runNow'>;
     /** Open the flow editor window on a route (`genie://flow/<id>`, `genie://flow/new?workspace=<id>`, genie#1204). Absent = no windows (doctor mode). */

@@ -48,6 +48,8 @@ const docker: DockerRunner = async () => ({ stdout: '', exitCode: 1 });
 let dir: string;
 let services: ComposedServices;
 let ports: FeaturePorts;
+/** The book itself (its restore is the boot's, not the feature ports': P3.3c typed the ports by what a window uses). */
+let ownBook: ProcessBook;
 let serviceEnv: Record<string, string>;
 let asleep: Set<string>;
 const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
@@ -57,6 +59,7 @@ const queue = { kind: 'hosting.createProcess' as const, ...WS, name: 'queue', co
 async function boot(): Promise<void> {
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker });
     const book = await ProcessBook.open(dir, { supervisor: services.supervisor, envFor: () => ({ ...serviceEnv }), asleep: (id) => asleep.has(id) });
+    ownBook = book;
     ports = { processes: book };
 }
 
@@ -64,7 +67,7 @@ async function boot(): Promise<void> {
 async function relaunch(): Promise<void> {
     await services.shutdown();
     await boot();
-    ports.processes!.restore();
+    ownBook.restore();
 }
 
 const mine = async (name = 'queue') => (await featureSnapshot(services, state(), ports)).hosting!.processes.filter((p) => p.name === name);

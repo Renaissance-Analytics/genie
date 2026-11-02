@@ -38,7 +38,8 @@ function rig(window: { connected: boolean; answer?: (c: ForwardedToolCall) => Pr
 
 describe('the host keeps its own tools; the rest are the window\'s', () => {
     it('the host-native list is the stores-and-sessions tools', () => {
-        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'imDone', 'knowledge', 'lists', 'plan', 'thumbsUp'].sort());
+        // processes joined in P3.3c: the book, its scheduler and the supervisor are the host's.
+        expect([...HOST_NATIVE_TOOLS].sort()).toEqual(['ForceTheQuestion', 'agentinbox', 'imDone', 'knowledge', 'lists', 'plan', 'processes', 'thumbsUp'].sort());
     });
 
     it('a host-native tool runs in the host, window or not', async () => {

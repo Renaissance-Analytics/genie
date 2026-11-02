@@ -69,6 +69,15 @@ describe('the process supervisor is genie-host\'s (P3.3b)', () => {
     });
 });
 
+describe('the process book and its scheduler are genie-host\'s (P3.3c)', () => {
+    it('the host opens the book and runs the scheduler; a window with a host uses the replica, its own only on the emergency path', () => {
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/await ProcessBook\.open\(home,/);
+        expect(host).toMatch(/new ProcessScheduler\(\{/);
+        expect(code('src/main/main.ts')).toMatch(/if \(agentEngineLink\) \{[\s\S]{0,400}?processBook = agentEngineLink\.client\.processBook\(\);/);
+    });
+});
+
 describe('genie-host', () => {
     it('opens the stores, serves them, and starts Genie\'s MCP server', () => {
         const host = code('src/main/genie-host.ts');

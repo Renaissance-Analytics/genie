@@ -28,6 +28,7 @@ import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
+import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -65,6 +66,8 @@ export interface EngineClientOptions {
     readonly onOpenFileLater?: (call: ForwardedToolCall) => void;
     /** A tool's moment: a glow, a thumbs-up, an action signal. */
     readonly onToolSignal?: (signal: unknown) => void;
+    /** Each kept process's app-inbox credential, for the host's process book (P3.3c). */
+    readonly appEnvs?: (processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>) => Record<string, Record<string, string>>;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
@@ -122,6 +125,7 @@ export class SessionEngineClient {
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
+    #processBook: ProcessBookReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -277,6 +281,9 @@ export class SessionEngineClient {
                 if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
                 return;
             }
+            case 'processes.event':
+                this.processBook().rebase(payload as ProcessesDump);
+                return;
             case 'supervisor.dump':
                 this.supervisor().rebase(payload as SupervisorDump);
                 return;
@@ -333,6 +340,12 @@ export class SessionEngineClient {
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
+            if (method === 'client.appEnvs') {
+                const list = Array.isArray(args[0]) ? (args[0] as Array<{ id: string; name: string; workspaceId: string }>) : [];
+                reply = { kind: 'result', id, ok: true, value: this.#options.appEnvs?.(list) ?? {} };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
             if (method === 'client.toolCall') {
                 if (!this.#options.onToolCall) throw new Error('this window runs no tools');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.onToolCall(args[0] as ForwardedToolCall) };
@@ -446,6 +459,16 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#supervisor;
+    }
+
+    /** genie-host's process book and scheduler, as this window lists and manages them (P3.3c). */
+    processBook(): ProcessBookReplica {
+        this.#processBook ??= new ProcessBookReplica(async (method, args) => {
+            const reply = await this.call('engine.processes', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#processBook;
     }
 
     /** The batches and git results for this window's views. */

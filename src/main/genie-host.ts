@@ -17,6 +17,12 @@ import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { SpawnHostClient } from './spawn-host-client.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
+import { ProcessBook } from './process-book.js';
+import { ProcessScheduler } from './process-scheduler.js';
+import { ProcessBookReplica, ProcessesService } from './processes-host.js';
+import { limitOf } from '../core/shell-limits.js';
+import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
+import type { AgentId } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { AgentStoresService } from './agent-stores-host.js';
@@ -158,6 +164,15 @@ async function main(): Promise<void> {
     );
     processSupervisor.watchLiveness();
     const supervisorService = new SupervisorService(processSupervisor);
+    /*
+     * THE PROCESS BOOK AND THE SCHEDULER (P3.3c): what the person keeps running is restored and started here, and a
+     * scheduled task fires on this host's clock, with no window. Opened at the first window's v1 import (it names Genie 1's
+     * database, whose background processes the book takes once) — the host is only ever started by a window until P6.
+     */
+    const processesService = new ProcessesService();
+    // The book as the host's own `processes` tool reads and drives it: the service's list, its actions in place.
+    const hostBook = new ProcessBookReplica((method, args) => processesService.call(method, args));
+    processesService.onEvent((dump) => hostBook.rebase(dump));
     const engine = new SessionEngineServer({
         token,
         build,
@@ -168,6 +183,7 @@ async function main(): Promise<void> {
         // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
         spawn: { send: (profile, frame) => { if (profile !== 'supervised') relay?.send(profile as 'processes' | 'terminals', frame); }, windowGone: () => relay?.windowGone() },
         supervisor: supervisorService,
+        processes: processesService,
         stores,
         mcp: {
             setView: (view) => mcp!.setView(view as never),
@@ -182,6 +198,7 @@ async function main(): Promise<void> {
             // Genie 1's settings carried over once (the store records it), then its memories and mail.
             await settings.carryOverFromV1(readV1Settings(databasePath)).catch((error: unknown) => say(`v1 settings carry-over failed: ${error instanceof Error ? error.message : String(error)}`));
             importV1Knowledge(own.knowledge, () => readV1Knowledge(databasePath), say);
+            await openProcessBook(databasePath);
             await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), hostRegistry.listAgents(), Date.now());
         },
         files: {
@@ -221,6 +238,52 @@ async function main(): Promise<void> {
         },
     });
     engine.attach(host);
+    /** Kept processes' app-inbox credentials, as a window minted them (P3.3c); none with no window since the host began. */
+    const appEnvCache = new Map<string, Readonly<Record<string, string>>>();
+    const refreshAppEnvs = async (book: ProcessBook): Promise<void> => {
+        const kept = book.kept().map((p) => ({ id: p.id, name: p.name, workspaceId: p.workspaceId }));
+        if (kept.length === 0 || !engine.windowConnected()) return;
+        const envs = await engine.appEnvs(kept).catch(() => ({} as Record<string, Record<string, string>>));
+        for (const [id, env] of Object.entries(envs)) appEnvCache.set(id, env);
+    };
+    /** The process book and its scheduler (P3.3c), once — at the first window's v1 import, which names Genie 1's database. */
+    let bookOpening: Promise<void> | null = null;
+    const openProcessBook = (databasePath: string): Promise<void> => {
+        bookOpening ??= (async () => {
+            const deps = {
+                supervisor: processSupervisor,
+                // The workspace's service variables the last window handed over (its engines are the window's until P5).
+                envFor: (workspaceId: string) => engine.serviceEnvFor(workspaceId),
+                appEnv: (p: { readonly id: string }) => appEnvCache.get(p.id) ?? {},
+                asleep: (workspaceId: string) => hostRegistry.workspace(workspaceId)?.asleep === true,
+            };
+            const processBook = await ProcessBook.open(home, {
+                ...deps,
+                limit: (workspaceId) => limitOf(settings.snapshotFor(workspaceId), 'processes'),
+                v1: { database: databasePath, workspaces: () => hostRegistry.listWorkspaces(), roster: () => hostRegistry.listAgents() },
+            });
+            const scheduler = new ProcessScheduler({
+                ...deps,
+                book: processBook,
+                // A nudge reaches its agent by its address, on the host's roster, at its turn's end.
+                nudge: (address, text, from) => {
+                    const found = resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs());
+                    return found.kind === 'one' ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
+                },
+                now: Date.now,
+                schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
+            });
+            scheduler.plan();
+            // A workspace hibernated or woken changes what may fire: plan again on every registry write.
+            stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
+            processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
+            // Each kept process's app-inbox credential, minted by the window that is here, BEFORE they are restored.
+            await refreshAppEnvs(processBook);
+            const restored = processBook.restore();
+            lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
+        })();
+        return bookOpening;
+    };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
     wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); } });
     mcp = startHostMcp({
@@ -235,6 +298,7 @@ async function main(): Promise<void> {
         openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
         signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
         forwardedCalls,
+        processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
         endpointFile: join(home, 'mcp-endpoint.json'),
         log: (line) => { say(line); lifecycleLog(line); },
     });
