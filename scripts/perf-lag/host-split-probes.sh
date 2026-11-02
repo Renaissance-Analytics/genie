@@ -306,8 +306,26 @@ probe "the-cookie-is-sent-on-the-exchange" src/main/host-tynn-account.ts \
     test/tynn-account-host.test.ts "the code goes as a Cookie"
 
 
+# P3.4 cut c: the host's HTTPS. Broken, each of these sends a token where it should not, or refuses Tynn.
+probe "explicit-verification-beats-the-env-variable" src/main/host-https-fetch.ts \
+    "        const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {" "        const ask = request(target, { method: init.method, headers: init.headers, signal: init.signal, agent: new Agent({ ca: [...rootsOfThisMachine()] }) }, (res) => {" \
+    test/host-https-fetch.test.ts "turns nothing off"
+
+probe "genies-ca-is-trusted" src/main/host-https-fetch.ts \
+    "        const ca = [...rootsOfThisMachine(), ...(pem ? [pem] : [])];" "        const ca = [...rootsOfThisMachine()];" \
+    test/host-https-fetch.test.ts "a server signed by Genie"
+
+probe "a-redirect-is-refused" src/main/host-https-fetch.ts \
+    "            if (status >= 300 && status < 400) {" "            if (status === 999) {" \
+    test/host-https-fetch.test.ts "a redirect is REFUSED"
+
+probe "only-https" src/main/host-https-fetch.ts \
+    "        if (target.protocol !== 'https:') {" "        if (target.protocol === 'never:') {" \
+    test/host-https-fetch.test.ts "it speaks only https"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

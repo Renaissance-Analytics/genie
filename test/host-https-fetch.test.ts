@@ -273,7 +273,7 @@ describe('the host’s account over it, against a real TLS server', () => {
 
 describe('verification is never turned off', () => {
     const files = (d: string): string[] => readdirSync(d).flatMap((name) => { const p = join(d, name); return statSync(p).isDirectory() ? files(p) : /\.tsx?$/.test(name) ? [p] : []; });
-    const FORBIDDEN = /rejectUnauthorized\s*:\s*(?!true\b)|NODE_TLS_REJECT_UNAUTHORIZED|ignore-certificate-errors|allow-insecure-localhost/;
+    const FORBIDDEN = /rejectUnauthorized\s*:(?!\s*true\b)|NODE_TLS_REJECT_UNAUTHORIZED|ignore-certificate-errors|allow-insecure-localhost/;
 
     it('no source turns it off: not the option, not the variable, not the switch', () => {
         const found = [...files('src/main'), ...files('src/core')].filter((f) => FORBIDDEN.test(readFileSync(f, 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n')));
