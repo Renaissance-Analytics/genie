@@ -1,3 +1,5 @@
+import './close-inherited-fds.js';
+// ^ FIRST (bug A, VM job 76): the window's sockets — its DevTools port among them — never live on in this host or below it.
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
@@ -36,6 +38,7 @@ import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
+import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
@@ -400,6 +403,15 @@ async function main(): Promise<void> {
      * process's children — `processes` (exec, streams, supervised ptys) and `terminals` (interactive shells) — so a site,
      * a queue worker and an open terminal outlive the window, and the next window takes them back.
      */
+    // A PTY NEVER OUTLIVES ITS OWNER (bug B, VM job 76): what a dead host left running — its spawn hosts SIGKILLed with it,
+    // so nothing ended their ptys — is reaped before this host starts its own (main/pty-ledger.ts). Then the ledger is ours.
+    const ptyLedgerFile = join(runtime, 'ptys.json');
+    const leftover = readPtyLedger(ptyLedgerFile);
+    if (leftover) reapLeftoverPtys(leftover, realReapPorts((line) => { say(line); lifecycleLog(line); }));
+    const writePtys = (ptys: ReadonlyArray<{ profile: string; id: string; pid: number }>): void => {
+        try { writePtyLedger(ptyLedgerFile, { owner: process.pid, ptys: ptys.map((p) => ({ ...p, start: procStart(p.pid) })) }); } catch (error) { say(`pty ledger not written: ${error instanceof Error ? error.message : String(error)}`); }
+    };
+    writePtys([]);
     relay = startSpawnRelay({
         entry: process.env.GENIE_SPAWN_HOST_ENTRY && process.env.GENIE_SPAWN_HOST_ENTRY.length > 0 ? process.env.GENIE_SPAWN_HOST_ENTRY : join(dirname(fileURLToPath(import.meta.url)), 'spawn-host.js'),
         send: (profile, frame) => {
@@ -414,6 +426,7 @@ async function main(): Promise<void> {
         // Between their lives, opens are refused in words (a crash the supervisor backs off from), never sent into nothing.
         onChildExit: (profile) => { if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`); },
         log: (line) => { say(line); lifecycleLog(line); },
+        onPtys: writePtys,
     });
 
     server.on('connection', (socket) => engine.accept(lineTransport(socket)));
