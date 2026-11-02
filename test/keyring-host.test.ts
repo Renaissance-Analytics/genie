@@ -30,7 +30,7 @@ async function hostKeyring(start: Facts) {
         platform: 'linux',
         facts: async () => state.facts,
         plan: async () => ({ pm: 'pacman', packages: ['gnome-keyring', 'libsecret'], run: ['pkexec', 'pacman', '-S', 'gnome-keyring'], manual: 'sudo pacman -S gnome-keyring' }) as never,
-        exec: async (argv) => { state.execs.push([...argv]); state.facts = HEALTHY; return { code: 0, stdout: '', stderr: '' }; },
+        exec: async (argv: readonly string[]) => { state.execs.push([...argv]); state.facts = HEALTHY; return { code: 0, stdout: '', stderr: '' }; },
         relaunch: () => { state.relaunches += 1; },
     } as never;
     return { state, keyring: await LinuxKeyring.open(ports) };
