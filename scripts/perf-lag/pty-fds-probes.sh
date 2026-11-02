@@ -29,8 +29,12 @@ probe "host-closes-inherited-fds" src/main/genie-host.ts \
     test/host-pty-fds.test.ts "NOTHING holds the inherited socket"
 
 probe "only-sockets-and-pipes-are-closed" src/main/inherited-fds.ts \
-    "        return info.target.startsWith('socket:') || info.target.startsWith('pipe:');" "        return true;" \
+    "        if (!info.target.startsWith('socket:') && !info.target.startsWith('pipe:')) return false;" "" \
     test/inherited-fds.test.ts "picks sockets and pipes"
+
+probe "the-parents-socket-whatever-its-flag" src/main/inherited-fds.ts \
+    "        return (info.flags & O_CLOEXEC) === 0 || parentHolds.has(info.target);" "        return (info.flags & O_CLOEXEC) === 0;" \
+    "test/inherited-fds.test.ts test/host-pty-fds.test.ts" "the PARENT also holds"
 
 # B: the next host reaps what a dead owner left, and only what is still the same process
 probe "next-host-reaps-leftover-ptys" src/main/genie-host.ts \
