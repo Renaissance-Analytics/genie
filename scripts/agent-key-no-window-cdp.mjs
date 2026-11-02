@@ -18,10 +18,10 @@
  * is capped at 4 min, and every exit ends the providers and the host it found. The key is a test word, never a real one.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 const phase = process.argv[2] ?? '';
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this writes a keychain entry and a seeded profile; test machines only'); process.exit(2); }
@@ -45,7 +45,7 @@ if (phase === 'seed') {
     const agents = JSON.parse(readFileSync(join(runtime, 'agents.json'), 'utf8'));
     const codex = agents.find((a) => a.provider === 'codex');
     if (!codex) throw new Error('smoke-seed.mjs left no codex agent');
-    writeFileSync(join(runtime, 'agents.json'), JSON.stringify([...agents.filter((a) => a.id !== B_ID), { ...codex, id: B_ID, name: 'keyholder', mode: 'automated', threadId: null }], null, 2));
+    writeFileSync(join(runtime, 'agents.json'), JSON.stringify([...agents.filter((a) => a.id !== B_ID), { ...codex, id: B_ID, name: 'keyholder', mode: 'automated', threadId: null, accessScope: 'self' }], null, 2));
     const manifest = join(process.cwd(), 'project.json');
     writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, 'utf8')), tynn: { projectId: PROJECT } }, null, 2));
     mkdirSync(join(home, 'agent-credentials'), { recursive: true, mode: 0o700 });
@@ -151,25 +151,30 @@ try {
     const genie = first?.servers?.genie;
     check(Boolean(genie?.url && genie?.bearer), '3-A-has-the-hosts-genie-server', genie?.url ?? 'none');
     // POSITIVE CONTROL: this gauge can read "no tynn server", from a real start. The window here has no account.
-    check(first?.servers !== undefined && first.servers.tynn === undefined, '4-CONTROL-the-gauge-reads-no-tynn-server', Object.keys(first?.servers ?? {}).join(','));
+    const given = (record) => Object.entries(record?.servers ?? {}).filter(([, server]) => server.enabled).map(([name]) => name);
+    check(first?.servers !== undefined && !given(first).includes('tynn') && !first.servers.tynn?.bearer, '4-CONTROL-the-gauge-reads-no-tynn-server', `given: ${given(first).join(',')}; disabled so none is inherited: ${first?.servers?.tynn?.enabled === false}`);
 
     const host = JSON.parse(readFileSync(join(runtime, 'host.json'), 'utf8'));
-    const mains = pgrep(`remote-debugging-port=${PORT}`).filter((pid) => { try { return !readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('--type='); } catch { return false; } });
-    check(mains.length === 1, '5-found-electron-main', mains.join(','));
+    const matching = pgrep(`remote-debugging-port=${PORT}`);
+    const exeOf = (pid) => { try { return readlinkSync(`/proc/${pid}/exe`); } catch { return ''; } };
+    const mains = matching.filter((pid) => { try { return basename(exeOf(pid)) === 'electron' && !readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('--type='); } catch { return false; } });
+    check(mains.length === 1, '5-found-electron-main', `main ${mains.join(',')}; everything with the flag: ${matching.map((pid) => `${pid}=${basename(exeOf(pid))}`).join(' ')}`);
+    if (mains.length !== 1) throw new Error('no single Electron main to kill');
     say(`killing Electron main ${mains[0]} (not its tree); the host is ${host.pid}`);
     process.kill(mains[0], 'SIGKILL');
     await until('the window to go', 15_000, () => !alive(mains[0]));
     await sleep(2_000);
-    check(alive(host.pid) && alive(first.pid), '6-window-dead-host-and-A-alive', `main alive=${alive(mains[0])} host alive=${alive(host.pid)} A alive=${alive(first.pid)}`);
+    const debuggerAnswers = await fetch(`http://127.0.0.1:${PORT}/json/version`, { signal: AbortSignal.timeout(3_000) }).then(() => true, () => false);
+    check(!alive(mains[0]) && !debuggerAnswers && alive(host.pid) && alive(first.pid), '6-window-dead-host-and-A-alive', `main alive=${alive(mains[0])} debugger answers=${debuggerAnswers} host alive=${alive(host.pid)} A alive=${alive(first.pid)}`);
 
     say('A mails B, through the host');
     const sent = await callTool(genie, 'agentinbox', { action: 'send', to: 'keyholder', text: 'wake up: this is the no-window key check' });
     check(sent.status === 200 && sent.parsed?.result?.isError !== true && sent.parsed?.error === undefined, '7-A-mailed-B-with-no-window', `http ${sent.status} ${JSON.stringify(sent.parsed?.result?.content ?? sent.parsed?.error ?? null).slice(0, 200)}`);
 
     const b = await until('B\'s provider', 60_000, () => records().find((r) => r.pid !== first.pid) ?? null);
-    check(b?.servers?.tynn?.bearer === KEY, '8-B-started-by-the-host-has-its-tynn-key', b ? `servers: ${Object.keys(b.servers).join(',')}` : 'B never started');
+    check(b?.servers?.tynn?.enabled === true && b.servers.tynn.bearer === KEY, '8-B-started-by-the-host-has-its-tynn-key', b ? `given: ${given(b).join(',')}` : 'B never started');
     check(b?.servers?.tynn?.url === 'https://tynn.ai/mcp/tynn', '9-the-tynn-server-is-tynns', b?.servers?.tynn?.url ?? 'none');
-    check(Boolean(b?.servers?.genie?.url), '10-and-the-hosts-genie-server-beside-it');
+    check(b?.servers?.genie?.enabled === true && Boolean(b.servers.genie.url), '10-and-the-hosts-genie-server-beside-it');
     check(!readFileSync(join(home, 'agent-credentials', 'agents.json'), 'utf8').includes('rpk_'), '11-the-vault-holds-no-key');
     const leaks = logsHolding(KEY);
     check(leaks.length === 0, '12-no-log-holds-the-key', leaks.join(','));

@@ -68,7 +68,8 @@ function recordServers(params) {
     if (!existsSync(RECORD_SERVERS)) return;
     const given = params?.config?.mcp_servers ?? {};
     const servers = Object.fromEntries(Object.entries(given).map(([name, server]) => [name, {
-        url: server.url, headers: server.http_headers ?? {}, bearer: server.bearer_token_env_var ? process.env[server.bearer_token_env_var] ?? null : null,
+        // `enabled: false` is how Genie stops a provider inheriting a server (session-host.ts): named, and not given.
+        enabled: server.enabled !== false, url: server.url, headers: server.http_headers ?? {}, bearer: server.bearer_token_env_var ? process.env[server.bearer_token_env_var] ?? null : null,
     }]));
     appendFileSync(RECORD_SERVERS, `${JSON.stringify({ pid: process.pid, servers })}\n`, { mode: 0o600 });
 }
