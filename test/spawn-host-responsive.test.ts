@@ -44,22 +44,27 @@ function hold(ms: number): void {
 /**
  * The hold itself, over the clocks it is given: until main has been held `ms` WHILE THE REST OF THE PROCESS RAN. Time the
  * whole process was stopped (the gauge's worker stopped too) is not main held by a spawn — the gauge does not count it,
- * so neither does the hold. Capped at five times `ms` of wall time, should the worker never run again.
+ * so neither does the hold. Capped at twice `ms` of wall time (well inside the 30 s test timeout), should the worker never
+ * run again.
  */
 function holdFor(ms: number, clocks: HoldClocks): void {
     const start = clocks.now();
-    const cap = start + 5 * ms;
+    const cap = start + 2 * ms;
     for (;;) {
         const now = clocks.now();
         if (now >= cap || now - start - clocks.stalled(start, now) >= ms) return;
     }
 }
 
-/** The overlap of [from, to] with worker gaps given as [end, gap] pairs. */
+/**
+ * How much of [from, to] the whole process was stopped, as the GAUGE counts it: the longest worker gap overlapping the
+ * span (worker gaps as [end, gap] pairs). The hold and the gauge both use this, so they cannot disagree — a hold that
+ * summed every short gap of a worker merely preempted by the spinning main stretched far past what the gauge subtracts.
+ */
 function overlapWith(gaps: ReadonlyArray<readonly [number, number]>, from: number, to: number): number {
-    let total = 0;
-    for (const [end, gap] of gaps) total += Math.max(0, Math.min(to, end) - Math.max(from, end - gap));
-    return total;
+    let longest = 0;
+    for (const [end, gap] of gaps) longest = Math.max(longest, Math.min(to, end) - Math.max(from, end - gap));
+    return longest;
 }
 
 // IN-PROCESS, the spawner is node:child_process's execFile: made to take 5 s of this thread per call.
@@ -126,8 +131,8 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     lastReading = { gap: 0, stalled: 0 };
     for (const [end, gap] of mine) {
         const start = end - gap;
-        let process = 0;
-        for (const [wEnd, wGap] of theirs) process = Math.max(process, Math.max(0, Math.min(end, wEnd) - Math.max(start, wEnd - wGap)));
+        // The same measure the hold uses (`overlapWith`): the longest worker gap overlapping this one of main's.
+        const process = overlapWith(theirs, start, end);
         if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process }; }
     }
     return worst;
