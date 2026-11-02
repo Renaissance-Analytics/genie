@@ -1,7 +1,36 @@
-import type { TynnAccountPorts } from './tynn-account.js';
-export interface HostTynnOptions { readonly file: string; readonly host: () => string; readonly secrets: unknown; readonly fetch?: TynnAccountPorts['fetch'] }
-/** RED STUB (cut c's first commit). */
+import type { TynnAccountPorts, TynnSecrets } from './tynn-account.js';
+
+/**
+ * THE TYNN ACCOUNT'S PORTS WHERE THERE IS NO ELECTRON (P3.4 cut c). The sign-in exchange sends the code as a cookie: in the window
+ * that was an Electron session's jar, which genie-host does not have. Here the jar is a small map that lives for the exchange
+ * (the account sets it, then clears it), and the cookie is a header on the one call that asks for credentials.
+ */
+export interface HostTynnOptions {
+    readonly file: string;
+    readonly host: () => string;
+    readonly secrets: TynnSecrets;
+    readonly fetch?: (url: string, init: never) => Promise<Response>;
+    readonly schedule?: TynnAccountPorts['schedule'];
+}
+
 export function hostTynnPorts(options: HostTynnOptions): TynnAccountPorts {
-    return { file: options.file, host: options.host, cipher: { isAvailable: () => false, encrypt: () => Buffer.alloc(0), decrypt: () => '' },
-        cookies: { set: async () => {}, get: async () => null, clear: async () => {} }, fetch: options.fetch as TynnAccountPorts['fetch'] };
+    const jar = new Map<string, Map<string, string>>();
+    const send = options.fetch ?? (globalThis.fetch as unknown as NonNullable<HostTynnOptions['fetch']>);
+    return {
+        file: options.file,
+        host: options.host,
+        secrets: options.secrets,
+        ...(options.schedule ? { schedule: options.schedule } : {}),
+        cookies: {
+            set: async (host, name, value) => { jar.set(host, (jar.get(host) ?? new Map<string, string>()).set(name, value)); },
+            get: async (host, name) => jar.get(host)?.get(name) ?? null,
+            clear: async (host) => { jar.delete(host); },
+        },
+        fetch: (url, init) => {
+            const { credentials, ...rest } = init;
+            const cookies = credentials === 'include' ? jar.get(new URL(url).origin) : undefined;
+            const cookie = cookies ? [...cookies].map(([name, value]) => `${name}=${value}`).join('; ') : '';
+            return send(url, { ...rest, headers: { ...init.headers, ...(cookie ? { Cookie: cookie } : {}) } } as never);
+        },
+    };
 }

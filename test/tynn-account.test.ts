@@ -182,7 +182,7 @@ describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
 
     it('NO KEYRING: refused before any request, the code is not spent, nothing is written, and it says keyring (2026-11-01)', async () => {
         const t = fakeTynn();
-        const ports = { ...t.ports, cipher: { ...t.ports.cipher, isAvailable: () => false, encrypt: () => { throw new Error('must not encrypt'); } } };
+        const ports = { ...t.ports, secrets: { ...t.ports.secrets, probe: async () => ({ ok: false as const, reason: 'no keyring' }), set: async () => { throw new Error('must not store'); } } };
         const account = await TynnAccount.open(ports);
         const before = t.calls.length;
         const r = await account.signIn(CODE);
@@ -308,7 +308,7 @@ describe('TynnAccount.request — every call uses the scoped bearer', () => {
         expect(account.status(), 'the UI shows signed out').toEqual({ signedIn: false });
         expect(changes).toEqual([false]);
         expect(account.savedUserId(), 'the credential is kept').toBe('7');
-        expect(JSON.parse(await readFile(t.ports.file, 'utf8')), 'and kept on disk').toMatchObject({ state: 'signed-in', tokenEnc: expect.any(String) });
+        expect(JSON.parse(await readFile(t.ports.file, 'utf8')), 'and kept on disk').toMatchObject({ state: 'signed-in' });
         expect(s.timers.filter((x) => x.live).map((x) => x.ms), 'the backoff re-check is scheduled').toEqual([30_000]);
     });
 

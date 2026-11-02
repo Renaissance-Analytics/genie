@@ -41,7 +41,7 @@ import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
 import { tynnAgentTokens, tynnUnavailableNote, type TynnFailure, type TynnSessionPort } from './tynn-agent-token.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
-import { fileMigrationBook, migrateSecrets, type HostVault } from './keychain-migration.js';
+import { fileMigrationBook, migrateSecrets, type HostVault, type MigrationSource } from './keychain-migration.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
 import { PluginHost } from './plugin-host.js';
@@ -224,6 +224,10 @@ export interface ComposeInput {
     /** The one-time move of keys an older Genie sealed: the window opens them, the host keeps and reads back. */
     readonly tynnCipher?: { decrypt(bytes: Buffer): string };
     readonly tynnVault?: HostVault;
+    /** What else an older Genie sealed, moved the same way: each joins this with its reader (the Tynn pairing, cut c). */
+    readonly legacySecrets?: () => Promise<readonly MigrationSource[]>;
+    /** Something moved: whoever reads it reads again. */
+    readonly onSecretsMoved?: () => void;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -1021,13 +1025,15 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const moveAgentKeys = (): Promise<void> => keysMoved ??= (async () => {
         const { tynnCipher, tynnVault } = input;
         if (!tynnCipher || !tynnVault) return;
-        const outcomes = await migrateSecrets(await tynnTokens.legacyKeys(tynnCipher), tynnVault, migrationBook);
+        const sources = [...await tynnTokens.legacyKeys(tynnCipher), ...(await input.legacySecrets?.() ?? [])];
+        const outcomes = await migrateSecrets(sources, tynnVault, migrationBook);
+        if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
         const stuck = outcomes.filter((o) => !['moved', 'nothing', 'already'].includes(o.status));
-        for (const o of stuck) console.error(`[tynn] an agent's key stays where it was: ${o.status}`);
+        for (const o of stuck) console.error(`[keychain] ${o.name} stays where it was: ${o.status}`);
         if (stuck.length > 0) keysMoved = null;
     })().catch((error: unknown) => {
         keysMoved = null;
-        console.error(`[tynn] agents' keys could not be moved: ${error instanceof Error ? error.message : String(error)}`);
+        console.error(`[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`);
     });
     const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'));
     void moveAgentKeys();

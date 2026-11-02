@@ -1,3 +1,4 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -57,7 +58,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         await writeFile(legacyFile, original);
         let requests = 0;
         const cipher = { isAvailable: () => true, encrypt: (text: string) => Buffer.from(`fixture:${text}`), decrypt: (bytes: Buffer) => bytes.toString().slice('fixture:'.length) };
-        const ports = { file, legacyFile, cipher, host: () => 'https://fixture.invalid',
+        const ports = { file, legacyFile, secrets: fakeKeychain({ 'tynn/pairing': token }), host: () => 'https://fixture.invalid',
             cookies: { clear: async () => {}, get: async () => null, set: async () => {} },
             fetch: async (_url: string, init: { headers: Record<string, string> }) => {
                 requests++; expect(init.headers.Authorization).toBe(`Bearer ${token}`);

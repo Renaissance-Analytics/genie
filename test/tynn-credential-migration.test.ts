@@ -34,7 +34,7 @@ async function fixture(seed = true) {
 
 it('production pairing storage is inside its own directory and declares the old file for migration', async () => {
     const source = await readFile(new URL('../src/main/main.ts', import.meta.url), 'utf8');
-    const main = source.match(/tynnAccount = await TynnAccount\.open\(\{[\s\S]*?\n    \}\)/)?.[0];
+    const main = source.match(/await TynnAccount\.open\(\{[\s\S]*?\n    \}\)/)?.[0];
     expect(main).toMatch(/file:\s*join\(genieHome\(\),\s*'credentials',\s*'tynn\.json'\)/);
     expect(main).toMatch(/legacyFile:\s*join\(genieHome\(\),\s*'tynn\.json'\)/);
 });

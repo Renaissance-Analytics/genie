@@ -40,6 +40,9 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { openHostKeychain } from './host-keychain.js';
 import { hostAgentKeys } from './host-agent-keys.js';
+import { hostTynnPorts } from './host-tynn-account.js';
+import { TynnAccount } from './tynn-account.js';
+import { TynnAccountService } from './tynn-account-service.js';
 import { Keychain } from './keychain.js';
 import { TYNN_HOST } from '../core/tynn.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
@@ -229,6 +232,13 @@ async function main(): Promise<void> {
         flows: flowsService,
         stores,
         keychain,
+        // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
+        tynn: new TynnAccountService(TynnAccount.open(hostTynnPorts({
+            file: join(home, 'credentials', 'tynn.json'),
+            host: () => TYNN_HOST,
+            secrets: keychain,
+            schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
+        })), { host: TYNN_HOST }),
         // The window's files, read in the clear: the agent's binding and who is signed in. The key is in the keychain.
         agentKeys: hostAgentKeys({ vaultFile: join(home, 'agent-credentials', 'agents.json'), accountFile: join(home, 'credentials', 'tynn.json'), tynnHost: TYNN_HOST, keychain }),
         mcp: {

@@ -1,4 +1,5 @@
 import { TynnAccountReplica } from './tynn-account-replica.js';
+import type { TynnAccountDump } from './tynn-account-service.js';
 import type { McpServer, SessionModelState } from '@particle-academy/prism-acp';
 import type { RowsPatch } from '../core/agent-push-wire.js';
 import type { AgentActionKind } from '../core/agent-actions.js';
@@ -311,6 +312,9 @@ export class SessionEngineClient {
             case 'stores.event':
                 this.stores().apply(payload as StoresEvent);
                 return;
+            case 'tynn.event':
+                this.tynn().rebase(payload as TynnAccountDump);
+                return;
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
                 return;
@@ -487,8 +491,13 @@ export class SessionEngineClient {
     }
 
     /** genie-host's Tynn account, as this window reads and asks it (P3.4 cut c). */
-    tynn(_options?: { openExternal?: (url: string) => Promise<void> }): TynnAccountReplica {
-        this.#tynn ??= new TynnAccountReplica();
+    tynn(options?: { openExternal?: (url: string) => Promise<void> }): TynnAccountReplica {
+        this.#tynn ??= new TynnAccountReplica(async (method, args) => {
+            const reply = await this.call('engine.tynn', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        if (options?.openExternal) this.#tynn.useBrowser(options.openExternal);
         return this.#tynn;
     }
 

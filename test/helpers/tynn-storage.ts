@@ -35,12 +35,20 @@ export const plainCredentialStore = {
     },
 };
 
-/** In-memory fake cipher boundary, never a production encryption implementation. */
+/** An in-memory keychain, never a production store. It answers; its failures are each test's to arrange. */
+export function fakeKeychain(seed: Readonly<Record<string, string>> = {}) {
+    const held = new Map<string, string>(Object.entries(seed));
+    return {
+        held,
+        probe: async () => ({ ok: true as const }),
+        get: async (name: string) => { const value = held.get(name); return value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; },
+        set: async (name: string, value: string) => { held.set(name, value); return { ok: true as const }; },
+        delete: async (name: string) => { held.delete(name); return { ok: true as const }; },
+    };
+}
+
 export function fakeTynnStorage() {
     const dir = mkdtempSync(join(tmpdir(), 'genie-tynn-account-'));
     directories.push(dir);
-    return {
-        file: join(dir, 'tynn.json'),
-        cipher: { isAvailable: () => true, encrypt: (text: string) => Buffer.from(`test-sealed:${text}`), decrypt: (bytes: Buffer) => bytes.toString().slice('test-sealed:'.length) },
-    };
+    return { file: join(dir, 'tynn.json'), secrets: fakeKeychain() };
 }
