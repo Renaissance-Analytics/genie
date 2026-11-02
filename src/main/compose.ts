@@ -22,7 +22,7 @@ import type { V1Inbox } from '../core/v1-inbox.js';
 import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1FlowImport } from './v1-flows.js';
-import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-tools.js';
+import { ensureFlowToolKinds, type FlowToolCall } from './flow-tools.js';
 import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -52,11 +52,10 @@ import { PairApprovals } from '../core/pair-confirm.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
-import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
-import { FlowScheduler } from './flow-scheduler.js';
-import { startFileSource, type RawWatchEvent } from './flow-file-source.js';
-import { fileMover } from './flow-file-move.js';
-import { FileTriggerWatches, nodeWatch } from './flow-file-watch.js';
+import type { AgentSessionsPort } from './flow-runner.js';
+import type { FlowScheduler } from './flow-scheduler.js';
+import { startFlowsEngine } from './flows-engine.js';
+import type { FlowSchedulerApi, FlowsApi } from './flows-host.js';
 import { FlowStore } from './flow-store.js';
 import { GenRouterServer } from './gen-router-server.js';
 import { GenLeafContexts } from './browser-trust.js';
@@ -127,6 +126,8 @@ export interface ComposeInput {
     readonly agentStores?: WindowAgentStores;
     /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
     readonly supervisor?: SupervisorApi;
+    /** genie-host's flows and their scheduler, through this window's replica (P3.3d). Absent = this window runs its own. */
+    readonly flowsEngine?: { readonly flows: FlowsApi; readonly scheduler: FlowSchedulerApi };
     /**
      * Genie 1's database, for TAKING OVER its service engines in place and stopping its sandbox/site containers
      * (main/v1-services.ts) — at boot until services.json records a take-over that saw Genie 1 and Docker. Before the
@@ -296,8 +297,10 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly knowledge: S['knowledge'];
     /** The stores themselves when THIS window opened them (the emergency path); null when genie-host owns them. */
     readonly own: OwnAgentStores | null;
-    readonly flows: FlowStore;
-    readonly flowScheduler: FlowScheduler;
+    readonly flows: S extends OwnAgentStores ? FlowStore : FlowsApi;
+    readonly flowScheduler: S extends OwnAgentStores ? FlowScheduler : FlowSchedulerApi;
+    /** The flows file itself when THIS window opened it (the emergency path); null when genie-host owns it (P3.3d). */
+    readonly ownFlows: FlowStore | null;
     readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: SupervisorApi;
     readonly sites: SiteManager;
@@ -740,14 +743,17 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
     const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
     const knowledge: WindowAgentStores['knowledge'] = input.agentStores?.knowledge ?? ownStores!.knowledge;
+    // FLOWS (P3.3d): genie-host's when it runs — its scheduler fires armed flows with no window, and this window reads and
+    // drives them through a replica. This window's own (its store, scheduler and file trigger) only on the emergency path.
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
     ensureFlowToolKinds();
-    let flowToolCall: FlowToolCall | null = null;
-    let handFlowTools: (call: FlowToolCall) => void = () => {};
-    const flowToolsReady = new Promise<FlowToolCall>((resolve) => { handFlowTools = resolve; });
-    const flows = await FlowStore.open(input.userData, now);
-    // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
-    if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
+    let ownFlows: FlowStore | null = null;
+    if (!input.flowsEngine) {
+        ownFlows = await FlowStore.open(input.userData, now);
+        // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
+        if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
+    }
+    const flows: FlowsApi = input.flowsEngine?.flows ?? ownFlows!;
 
     // THE PROCESS SUPERVISOR (P3.3b): genie-host's when it runs — its restart policy keeps sites and workers alive with the
     // UI closed, and this window drives it through a replica. This window's own only on the emergency path.
@@ -1104,58 +1110,20 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const workspaceRef = (id: string): WorkspaceRef | undefined => workspacesNow().find((w) => w.id === id);
     const asleep = (id: string): boolean => workspaceRef(id)?.asleep === true;
     const sessions: AgentSessionsPort = input.agentSessions ?? { session: () => null, rows: () => [], prompt: () => false, subscribe: () => () => {} };
-    const flowScheduler = new FlowScheduler({
-        store: flows,
+    const ownEngine = ownFlows ? startFlowsEngine({
+        store: ownFlows,
         now,
-        schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
-        run: createFlowRunner({
-            now,
-            asleep,
-            ports: (flow) => ({
-                promptAgent: agentPrompter({
-                    sessions,
-                    resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
-                    agent: (id) => agents().get(id) ?? null,
-                    asleep,
-                    by: `flow "${flow.name}"`,
-                }),
-                // One supervised process per flow: every run's output lands in the same kept log, after the runs before it.
-                runCommand: supervisedCommand(
-                    { supervisor, workspacePath: (id) => workspaceRef(id)?.path ?? null, envFor: (id) => engines.envFor(id) },
-                    { processId: `flow-run:${flow.id}`, name: `flow: ${flow.name}` },
-                ),
-                // The person armed it (an agent never can), so what it writes is theirs.
-                addKnowledge: async (entry) => ({ id: (await knowledge.add({ ...entry, source: 'user' })).id }),
-                // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
-                moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
-                // Genie's tools as steps (genie#1204): late-bound — main builds the tools after composing (setFlowToolCaller).
-                // A step that comes before main has handed them over WAITS for them: the runs Genie quit under resume while
-                // this composes (below), and failing there failed exactly the tool steps that are safe to resume (a
-                // question, an issues check, knowledge) — found by the Flows acceptance suite.
-                callTool: async (tool, args) => (flowToolCall ?? (await flowToolsReady))(flow, tool, args),
-                // A flow's question holds the run until the person answers (genie#1204).
-                awaitQuestion: questionWaiter(attention),
-            }),
-        }),
-    });
-    flowScheduler.plan();
-    // A run Genie quit under resumes now, when the step it reached is safe to run again (genie#1204).
-    void flowScheduler.resumeInterrupted().catch((error: unknown) => console.error(`[flows] resume: ${error instanceof Error ? error.message : String(error)}`));
-    // THE FILE TRIGGER (genie#1204): only the workspaces an armed file flow names are watched (flow-file-watch.ts); what
-    // lands there becomes an addition (flow-file-source.ts: de-duplicated, reported once it is finished — quiet, never
-    // empty, never at a partial size) and starts the armed flows it matches; one nothing took is watched a while longer.
-    const fileListeners = new Set<(event: RawWatchEvent) => void>();
-    const fileSource = startFileSource({
-        subscribe: (listener) => { fileListeners.add(listener); return () => { fileListeners.delete(listener); }; },
-        statFile: nodeWatch.statFile,
-        emit: (event) => flowScheduler.fileAdded(event),
-    });
-    const fileWatches = new FileTriggerWatches({
-        store: flows,
+        asleep,
         workspacePath: (id) => workspaceRef(id)?.path ?? null,
-        watch: nodeWatch.watch,
-        onEvent: (event) => { for (const l of fileListeners) l(event); },
-    });
+        sessions,
+        resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
+        agent: (id) => agents().get(id) ?? null,
+        supervisor,
+        envFor: (id) => engines.envFor(id),
+        addKnowledge: async (entry) => ({ id: (await knowledge.add(entry as never)).id }),
+        attention,
+    }) : null;
+    const flowScheduler: FlowSchedulerApi = input.flowsEngine?.scheduler ?? ownEngine!.scheduler;
     // A running process is ASKED after on a heartbeat (P2): one whose pty vanished without an exit is a crash, not
     // "running". Started last, after every await that could fail, so a composition that throws leaves no timer behind.
     const stopLiveness = supervisor.watchLiveness();
@@ -1163,6 +1131,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
 
     return {
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
+        ownFlows,
         inbox,
         prepareAgentMcp,
         tynnNote,
@@ -1340,7 +1309,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         agentAddresses: () => { const slugs = input.workspaceSlugs?.() ?? new Map<string, string>(); return roster().map((r) => ({ address: agentAddress(r, slugs), agentId: r.id as string, name: r.name })); },
         // The inbox's own rule (core/inbox.ts), on the same roster the agents' tool uses: one rule for both.
         resolveAddress: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
-        setFlowToolCaller: (call) => { flowToolCall = call; handFlowTools(call); },
+        setFlowToolCaller: (call) => { ownEngine?.setToolCaller(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             down ??= (async () => {
@@ -1348,10 +1317,8 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 stopWatchingWorkspaces();
                 stopLiveness();
                 driver.unwatch();
-                fileWatches.stop();
-                fileSource.stop();
                 // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
-                flowScheduler.stop();
+                ownEngine?.stop();
                 // Nothing more is started (a port probe still in flight) or synced (a pending hosts write) from here.
                 frontDoorCtl.close();
                 // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`
@@ -1364,10 +1331,10 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.
                 let quitWait: ReturnType<typeof setTimeout> | undefined;
-                await Promise.race([flowScheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
+                if (ownEngine) await Promise.race([ownEngine.scheduler.settled(), new Promise<void>((r) => { quitWait = setTimeout(r, FLOW_SETTLE_ON_QUIT_MS); })]);
                 clearTimeout(quitWait);
                 // And the flows file's last write has landed (a held record, the run in flight kept as it goes).
-                await flows.flushed();
+                await ownFlows?.flushed();
                 await remoteDevices.flushed();
                 await portAllocator?.settled();
                 ownStores?.knowledge.close();

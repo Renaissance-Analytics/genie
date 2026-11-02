@@ -20,9 +20,18 @@ import { SupervisorService } from './supervisor-host.js';
 import { ProcessBook } from './process-book.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
+import { FlowStore } from './flow-store.js';
+import { FlowsReplica, FlowsService } from './flows-host.js';
+import { startFlowsEngine } from './flows-engine.js';
+import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
+import { runV1FlowImport } from './v1-flows.js';
+import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
+import { startForWork } from './start-on-demand.js';
+import { startRefusal } from './workspace-ops-host.js';
+import { agentCapFrom } from '../core/inbox.js';
 import { limitOf } from '../core/shell-limits.js';
 import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
-import type { AgentId } from '../core/identity.js';
+import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { AgentStoresService } from './agent-stores-host.js';
@@ -170,6 +179,16 @@ async function main(): Promise<void> {
      * database, whose background processes the book takes once) — the host is only ever started by a window until P6.
      */
     const processesService = new ProcessesService();
+    /*
+     * FLOWS (P3.3d): the flows file, the scheduler, the runner and the file trigger — an armed flow fires on this host's
+     * clock with no window, its prompts reaching this host's sessions, its commands this host's supervisor, its tool steps
+     * this host's tools. Opened at the first window's v1 import, like the process book.
+     */
+    const flowsService = new FlowsService();
+    const flowCallers = new FlowCallers((id) => hostRegistry.workspace(id)?.path ?? null);
+    // The flows as the host's own `flows` tool reads and drives them: the service's list, its actions in place.
+    const hostFlows = new FlowsReplica((method, args) => flowsService.call(method, args));
+    flowsService.onEvent((event) => hostFlows.apply(event));
     // The book as the host's own `processes` tool reads and drives it: the service's list, its actions in place.
     const hostBook = new ProcessBookReplica((method, args) => processesService.call(method, args));
     processesService.onEvent((dump) => hostBook.rebase(dump));
@@ -184,6 +203,7 @@ async function main(): Promise<void> {
         spawn: { send: (profile, frame) => { if (profile !== 'supervised') relay?.send(profile as 'processes' | 'terminals', frame); }, windowGone: () => relay?.windowGone() },
         supervisor: supervisorService,
         processes: processesService,
+        flows: flowsService,
         stores,
         mcp: {
             setView: (view) => mcp!.setView(view as never),
@@ -199,6 +219,7 @@ async function main(): Promise<void> {
             await settings.carryOverFromV1(readV1Settings(databasePath)).catch((error: unknown) => say(`v1 settings carry-over failed: ${error instanceof Error ? error.message : String(error)}`));
             importV1Knowledge(own.knowledge, () => readV1Knowledge(databasePath), say);
             await openProcessBook(databasePath);
+            await openFlows(databasePath);
             await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), hostRegistry.listAgents(), Date.now());
         },
         files: {
@@ -246,6 +267,55 @@ async function main(): Promise<void> {
         const envs = await engine.appEnvs(kept).catch(() => ({} as Record<string, Record<string, string>>));
         for (const [id, env] of Object.entries(envs)) appEnvCache.set(id, env);
     };
+    /** Flows (P3.3d), once — at the first window's v1 import, after the book (the old scheduled tasks move into it). */
+    let flowsOpening: Promise<void> | null = null;
+    let processBookNow: ProcessBook | null = null;
+    const openFlows = (databasePath: string): Promise<void> => {
+        flowsOpening ??= (async () => {
+            const store = await FlowStore.open(home);
+            // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
+            await runV1FlowImport(store, { database: databasePath, workspaces: hostRegistry.listWorkspaces() }).catch((error: unknown) => say(`v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
+            // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
+            if (processBookNow) await moveScheduledTasksOutOfFlows(store, processBookNow, (id) => hostRegistry.workspace(id)?.path ?? null).catch((error: unknown) => say(`scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
+            const cwdOf = (r: AgentRecord): string => hostRegistry.workspace(r.workspaceId)?.path ?? osaHomeDir();
+            const engineFlows = startFlowsEngine({
+                store,
+                now: Date.now,
+                asleep: (id) => hostRegistry.workspace(id)?.asleep === true,
+                workspacePath: (id) => hostRegistry.workspace(id)?.path ?? null,
+                sessions: {
+                    session: (id) => host.probe(id as AgentId),
+                    rows: (id) => host.rowsFor(id as AgentId),
+                    // A flow's prompt is work: an agent not running is started for it, under the person's refusals (q_04ce323c).
+                    start: async (id) => {
+                        const record = hostRegistry.find(id);
+                        if (!record) return false;
+                        const refusal = (r: AgentRecord) => startRefusal({ registry: hostRegistry }, r, {
+                            running: hostRegistry.listAgents().filter((a) => a.workspaceId === r.workspaceId && host.probe(a.id as AgentId)?.running === true).length,
+                            cap: agentCapFrom(settings.snapshotFor(r.workspaceId)),
+                        });
+                        return (await startForWork({ probe: (x) => host.probe(x), start: (r, cwd) => host.start(r, cwd), cwdFor: cwdOf, startRefusal: refusal }, record)).ok;
+                    },
+                    prompt: (id, text, by) => host.prompt(id as AgentId, text, by),
+                    subscribe: (listener) => host.subscribe(listener),
+                },
+                resolve: (text) => resolveOnRoster(text, hostRegistry.listAgents(), hostRegistry.workspaceSlugs()),
+                agent: (id) => { const r = hostRegistry.find(id); return r ? { name: r.name, workspaceId: r.workspaceId } : null; },
+                supervisor: processSupervisor,
+                envFor: (id) => engine.serviceEnvFor(id),
+                addKnowledge: async (entry) => ({ id: own.knowledge.add(entry as never).id }),
+                attention: own.attention,
+            });
+            // Genie's tools as flow steps: the host's MCP server's own (its native ones in place, the window's forwarded).
+            const regs = mcp?.registrations() ?? [];
+            if (regs.length > 0) engineFlows.setToolCaller(createFlowToolCaller({ registrations: regs, callers: flowCallers }));
+            flowsService.attach({ store, scheduler: engineFlows.scheduler });
+            // A hibernate or a wake changes what may fire: plan again on every registry write.
+            stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
+            lifecycleLog(`flows open: ${store.list().length} flow(s)`);
+        })();
+        return flowsOpening;
+    };
     /** The process book and its scheduler (P3.3c), once — at the first window's v1 import, which names Genie 1's database. */
     let bookOpening: Promise<void> | null = null;
     const openProcessBook = (databasePath: string): Promise<void> => {
@@ -277,6 +347,7 @@ async function main(): Promise<void> {
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
+            processBookNow = processBook;
             // Each kept process's app-inbox credential, minted by the window that is here, BEFORE they are restored.
             await refreshAppEnvs(processBook);
             const restored = processBook.restore();
@@ -299,6 +370,8 @@ async function main(): Promise<void> {
         signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
         forwardedCalls,
         processes: { book: hostBook, logs: (id, lines) => processSupervisor.readLog(id, lines), runNow: (id) => hostBook.runNow(id) },
+        flows: { store: hostFlows, runNow: (id) => hostFlows.runNow(id) },
+        flowCallers,
         endpointFile: join(home, 'mcp-endpoint.json'),
         log: (line) => { say(line); lifecycleLog(line); },
     });

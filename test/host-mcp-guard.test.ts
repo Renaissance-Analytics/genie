@@ -78,6 +78,16 @@ describe('the process book and its scheduler are genie-host\'s (P3.3c)', () => {
     });
 });
 
+describe('flows are genie-host\'s (P3.3d)', () => {
+    it('the host opens the flows and runs their engine; a window with a host uses the replica, its own engine only on the emergency path', () => {
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/await FlowStore\.open\(home\)/);
+        expect(host).toMatch(/startFlowsEngine\(\{/);
+        expect(code('src/main/main.ts')).toMatch(/flowsEngine: \{ flows: agentEngineLink\.client\.flows\(\), scheduler: agentEngineLink\.client\.flows\(\) \}/);
+        expect(code('src/main/compose.ts')).toMatch(/const ownEngine = ownFlows \? startFlowsEngine\(\{/);
+    });
+});
+
 describe('genie-host', () => {
     it('opens the stores, serves them, and starts Genie\'s MCP server', () => {
         const host = code('src/main/genie-host.ts');

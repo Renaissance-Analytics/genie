@@ -29,6 +29,7 @@ import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js'
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
+import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -126,6 +127,7 @@ export class SessionEngineClient {
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
+    #flows: FlowsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -281,6 +283,9 @@ export class SessionEngineClient {
                 if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
                 return;
             }
+            case 'flows.event':
+                this.flows().apply(payload as FlowsEvent);
+                return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
                 return;
@@ -459,6 +464,16 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#supervisor;
+    }
+
+    /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */
+    flows(): FlowsReplica {
+        this.#flows ??= new FlowsReplica(async (method, args) => {
+            const reply = await this.call('engine.flows', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#flows;
     }
 
     /** genie-host's process book and scheduler, as this window lists and manages them (P3.3c). */
