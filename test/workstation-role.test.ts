@@ -1,3 +1,4 @@
+import { fakeKeychain } from './helpers/tynn-storage.js';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -64,8 +65,8 @@ describe('readWorkstationRole — GET /api/v1/workstations/me, nothing else', ()
         const file = join(dir, 'workstation.json');
         // What an agent on a drone could write: a role, a pilot flag, in the identity file Genie keeps.
         writeFileSync(file, JSON.stringify({ 'https://tynn.example.com': { workstationId: 'ws_1', keyEnc: 'x', role: 'pilot', pilot: true } }));
-        const store = workstationKeyStore(file, { isAvailable: () => true, encrypt: (t) => Buffer.from(t), decrypt: (b) => b.toString() });
-        await store.read('https://tynn.example.com');
+        const store = workstationKeyStore(file, fakeKeychain());
+        await store.read('https://tynn.example.com').catch(() => null);
         const settings = { workstation_role: 'pilot', role: 'pilot', pilot: true };
 
         const role = await readWorkstationRole(async () => respond(200, { role: 'drone' }));

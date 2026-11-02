@@ -83,6 +83,8 @@ export const ENGINE_METHODS = [
     'engine.mcpStatus',
     // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.
     'engine.runTool',
+    // This machine as a workstation: the host holds its key and signs: `[method, args]`.
+    'engine.workstation',
     // The keyring card, as the host found it: `[method, args]`.
     'engine.keyring',
     // The host's GitHub account, and the authenticated git it runs (P3.4 cut c): `[method, args]`.

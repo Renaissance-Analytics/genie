@@ -47,7 +47,7 @@ describe('wired: main asks with every identity it holds, not the one this launch
 
     it('thisMachineIds reads the stored Genie 2 identity and Genie 1’s workstation_id', () => {
         const wiring = /thisMachineIds = \(\)[^]*?;\n/.exec(main)?.[0] ?? '';
-        expect(wiring).toContain('identities.read(');
+        expect(wiring).toContain('machineIdentity.identity(');
         expect(wiring).toContain('readV1Settings(v1DatabaseFile())');
     });
 });

@@ -65,7 +65,8 @@ import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { githubSealedSources, GithubAccount } from './github-account.js';
 import type { GithubAccountReplica } from './github-account-replica.js';
 import type { RepoListing } from '../core/github.js';
-import { ensureWorkstation, identityFrom, readGenie1Identity, workstationKeyStore } from './workstation-identity.js';
+import { readGenie1Identity, workstationKeyStore, workstationSealedSources } from './workstation-identity.js';
+import { WorkstationService, type WorkstationPort } from './workstation-service.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
@@ -1075,6 +1076,8 @@ let tynnAccount: TynnAccount | TynnAccountReplica | null = null;
 let githubAccount: GithubAccount | GithubAccountReplica | null = null;
 /** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
 let keyring: LinuxKeyring | KeyringReplica | null = null;
+/** Late-bound: a move of this machine's key that finishes lets it register with what it has. */
+let registerWorkstationNow: (() => Promise<void>) | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
@@ -2772,9 +2775,11 @@ async function boot(): Promise<void> {
         legacySecrets: async () => [
             tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform) }),
             ...await githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }),
+            ...await workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }),
         ],
         onSecretsMoved: () => {
             void githubAccount?.reload().catch(() => {});
+            void registerWorkstationNow?.();
             void tynnAccount?.reload().catch(() => {}).finally(() => recoverTynnAgents({ secretsMoved: true }));
         },
         // An agent's key is the host's (genie#1457). A window running its own engine (the host could not start) holds it itself.
@@ -3052,14 +3057,21 @@ async function boot(): Promise<void> {
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
     // sign-in landing during the launch's own check cannot make two workstations.
     const identityCipher = osCipher(safeStorage, process.platform);
-    const identities = workstationKeyStore(join(genieHome(), 'workstation.json'), identityCipher);
+    // THE KEY IS THE HOST'S (P3.4): this window asks it to sign. Only a window running its own engine holds one, in the keychain just the same.
+    const machineIdentity: WorkstationPort = agentEngineLink ? agentEngineLink.client.workstation() : new WorkstationService({
+        store: workstationKeyStore(join(genieHome(), 'workstation.json'), new Keychain()),
+        request: (path, init) => tynnAccount ? tynnAccount.request(path, init) : Promise.reject(new Error('Sign in to Tynn first')),
+        host: () => tynnAccount?.host() ?? TYNN_HOST,
+        hostname,
+        machineKey: () => machineKey(),
+    });
     // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
     // duplicate, on the next registration — once.
     const genie1Identity = async () => readGenie1Identity(readV1Settings(v1DatabaseFile()), identityCipher);
     // THIS MACHINE, ALL OF IT (this-machine.ts): this launch's registration, the identity Genie 2 stored for this Tynn,
     // and the one Genie 1 registered from the userData Genie 2 shares — "Your workstations" never lists any of them.
-    thisMachineIds = () => identities.read(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
+    thisMachineIds = () => machineIdentity.identity(tynnAccount?.host() ?? '').catch(() => null).then((stored) => thisMachineWorkstationIds({ registered: tynnWorkstationNow?.registered ? tynnWorkstationNow.workstationId : null, stored: stored?.workstationId ?? null, v1Settings: readV1Settings(v1DatabaseFile()) }));
     // THIS MACHINE'S STABLE KEY (genie#1278 W2): the OS machine id, never sent raw (machine-key.ts).
     const machineKey = (): Promise<string | null> => readMachineId({
         platform: process.platform,
@@ -3090,7 +3102,10 @@ async function boot(): Promise<void> {
                 tynnWorkstationNow = { registered: false, reason: 'sign in to Tynn to register this machine', role: null };
                 return;
             }
-            const result = await ensureWorkstation({ host: () => host, hostname, request: (path, init) => account.request(path, init), store: identities, machineKey, legacy: genie1Identity })
+            // Genie 1's record, which only this window can open, goes to the host until that record is settled with Tynn.
+            const legacy = await genie1Identity().catch(() => null);
+            const settled = await machineIdentity.legacyDone(host).catch(() => null);
+            const result = await machineIdentity.ensure({ host, legacy: legacy && legacy.workstationId !== settled ? legacy : null })
                 .catch((error: unknown) => ({ ok: false as const, reason: error instanceof Error ? error.message : String(error) }));
             tynnWorkstationNow = result.ok ? { registered: true, host, workstationId: result.workstationId, role: workstationRoleNow } : { registered: false, reason: result.reason, role: workstationRoleNow };
         })().finally(() => { registering = null; void applyRelayHost(); void readRole(); pushFeatures(); });
@@ -3109,15 +3124,14 @@ async function boot(): Promise<void> {
         relayFor = want;
         relayStatusNow = { state: 'off' };
         if (!want || !registered) { pushFeatures(); return; }
-        const stored = await identities.read(registered.host);
-        if (!stored || relayFor !== want) { pushFeatures(); return; }
-        const identity = identityFrom(stored);
+        const identity = await machineIdentity.identity(registered.host).catch(() => null);
+        if (!identity || relayFor !== want) { pushFeatures(); return; }
         relayHostNow = startRelayHost({
-            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => identity.authHeader(), fetch }),
+            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => machineIdentity.authHeader(registered.host), fetch }),
             socket: relaySocket,
             workstationId: identity.workstationId,
             fingerprint: identity.fingerprint,
-            sign: (data) => identity.sign(data),
+            sign: (data) => machineIdentity.sign(registered.host, data),
             attach: (transport) => remoteHub.add(transport),
             onStatus: (status) => { relayStatusNow = status; pushFeatures(); },
             log: (message) => console.log(`[tynn relay] ${message}`),
@@ -3126,6 +3140,7 @@ async function boot(): Promise<void> {
         });
     };
     relayAfterSwitch = () => { void applyRelayHost(); };
+    registerWorkstationNow = registerWorkstation;
     tynnAccount.onChange(() => { void registerWorkstation(); });
     // Another account (or none): the relay windows opened under the last one hold its grants (M0 finding 2).
     tynnAccount.onChange(() => { closeRelayWindowsOfOtherAccounts(); });
