@@ -138,6 +138,29 @@ describe('the agent view tabs and its settings sub-tabs are react-fancy Tabs', (
     });
 });
 
+describe('the agent’s breadcrumb is react-fancy Breadcrumbs', () => {
+    const session = { running: true, turnState: 'idle', startedAt: 1, pendingApproval: null, failure: null, contextUsed: null, contextSize: null, lastDelivery: null, collaborators: null, commsAgeSeconds: null, plan: null } as unknown as LiveSession;
+    const html = renderToStaticMarkup(
+        <AgentView agent={{ id: 'a1', name: 'atlas', provider: 'claude', fidelity: 'declared', cwd: '/w/tynn' }} session={session} rows={[]} tab="stream" lanes={null} at={null} selectedId={null} turns={0} cost={null}
+            onNavigate={() => {}} onSelect={() => {}} now={() => 2_000} workspace={{ id: 'tynn', name: 'Tynn.ai', path: '/w/tynn' }} />,
+    );
+
+    it('a <nav aria-label="Breadcrumb">: the workspace is a crumb that leads back, the agent is the current page', () => {
+        expect(html).toMatch(/<nav data-react-fancy-breadcrumbs="" aria-label="Breadcrumb"/);
+        const crumb = control(html, 'data-crumb="tynn"')!;
+        expect(crumb.open).toContain('data-react-fancy-breadcrumbs-item=""');
+        expect(crumb.open).not.toContain(BUTTON);
+        expect(crumb.open).toContain('data-nav="genie://workspace/tynn"');
+        expect(crumb.text).toBe('Tynn.ai');
+        expect(html).toMatch(/<span(?=[^>]*data-react-fancy-breadcrumbs-item="")(?=[^>]*aria-current="page")[^>]*data-agent-name=""[^>]*>atlas<\/span>/);
+    });
+
+    it('the slash is the Breadcrumbs separator (decoration, hidden from a screen reader), not part of the crumb’s name', () => {
+        const nav = html.slice(html.indexOf('data-react-fancy-breadcrumbs=""'), html.indexOf('</nav>', html.indexOf('data-react-fancy-breadcrumbs=""')));
+        expect(nav).toMatch(/<span aria-hidden="true"><span[^>]*>\/<\/span><\/span>/);
+    });
+});
+
 describe('the segmented filters are a react-fancy MultiSwitch (a radio group)', () => {
     it('Dashboard: By workspace | By status, the grouping in use aria-checked="true"', () => {
         const render = (group: 'workspace' | 'status') =>
