@@ -23,6 +23,7 @@ import {
     targetOf,
     type AgentRow,
     type AgentState,
+    type SummaryChip,
     type Delivery,
     type Fidelity,
     type WorkspaceFault,
@@ -75,6 +76,8 @@ const GRID =
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
 const STATE_DOT: Record<AgentState, string> = {
     working: 'text-[var(--success)]',
+    // Cooling: the 15 s after a turn that replied — its own colour, sorted with Working.
+    cooling: 'text-[var(--sky-400)]',
     waiting: 'text-[var(--warning)]',
     broken: 'text-[var(--danger)]',
     idle: 'text-[var(--zinc-400)]',
@@ -86,6 +89,8 @@ const STATUS_TONE = {
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 } as const;
 
 /**
@@ -414,7 +419,7 @@ function GroupHeader({
     );
 }
 
-const CHIP_DOT: Record<AgentState, string> = {
+const CHIP_DOT: Record<SummaryChip['state'], string> = {
     waiting: 'bg-[var(--warning)]',
     broken: 'bg-[var(--danger)]',
     working: 'bg-[var(--success)]',

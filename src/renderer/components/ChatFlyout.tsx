@@ -70,7 +70,7 @@ export interface ChatThread {
     arriving?: string | null | undefined;
 }
 
-const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]' } as const;
+const CONTEXT_TONE = { ok: 'text-[var(--success)]', warn: 'text-[var(--warning)]', bad: 'text-[var(--danger)]', muted: 'text-[var(--fg-3)]', cool: 'text-[var(--sky-400)]' } as const;
 
 /** `13:58` from epoch ms, in the local clock — only ever called with a real time. */
 /** genie's tab mark: Genie's own gradient, the title bar's mark in small — the OS agent has no state to guess. */
