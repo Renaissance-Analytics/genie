@@ -70,6 +70,9 @@ import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } fr
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
 import { osCipher } from './os-cipher.js';
+import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
+import { Keychain } from './keychain.js';
+import { hostVault } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
@@ -2742,6 +2745,10 @@ async function boot(): Promise<void> {
         tynn: () => tynnAccount,
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
+        // An agent's key is the host's (genie#1457). A window running its own engine (the host could not start) holds it itself.
+        ...(agentEngineLink
+            ? { tynnSecrets: linkedAgentSecrets(agentEngineLink.client), tynnVault: linkedVault(agentEngineLink.client) }
+            : (() => { const keychain = new Keychain(); return { tynnSecrets: keychain, tynnVault: hostVault(keychain) }; })()),
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.

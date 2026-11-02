@@ -55,9 +55,11 @@ async function fixture() {
             const publicId = String(state.minted).padStart(26, '0'); row.tokens.push({ public_id: publicId, active: true });
             return answer({ token: `rpk_${publicId}.${'a'.repeat(64)}`, mcp_url: entry.url, agent: { id: row.id } });
         } };
+    const held = new Map<string, string>();
     const input = { userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
         mcpEndpoint: () => ({ url: 'http://127.0.0.1:1/mcp', token: 'synthetic-genie' }),
         workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
+        tynnSecrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
         tynnCipher: { isAvailable: () => state.encryption, encrypt: (s: string) => Buffer.from([...Buffer.from(s)].map((b) => b ^ 0x5a)), decrypt: (b: Buffer) => Buffer.from([...b].map((v) => v ^ 0x5a)).toString() } };
     const boot = async () => { await services?.shutdown(); services = await composeServices(input); return services as Activated; };
     const s = await boot();

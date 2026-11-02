@@ -39,8 +39,9 @@ import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
-import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
-import type { AgentCredentialPorts } from './tynn-agent-identities.js';
+import { tynnAgentTokens, tynnUnavailableNote, type TynnFailure, type TynnSessionPort } from './tynn-agent-token.js';
+import type { AgentSecrets } from './tynn-agent-identities.js';
+import { fileMigrationBook, migrateSecrets, type HostVault } from './keychain-migration.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
 import { PluginHost } from './plugin-host.js';
@@ -218,7 +219,11 @@ export interface ComposeInput {
      */
     readonly tynn?: () => TynnSessionPort | null;
     /** OS encryption from Electron; the vault's path is fixed under Genie's own userData, never an envelope path. */
-    readonly tynnCipher?: AgentCredentialPorts['cipher'];
+    /** Where agents' keys are held: the host's keychain, over the link (agent-secrets.ts). */
+    readonly tynnSecrets?: AgentSecrets;
+    /** The one-time move of keys an older Genie sealed: the window opens them, the host keeps and reads back. */
+    readonly tynnCipher?: { decrypt(bytes: Buffer): string };
+    readonly tynnVault?: HostVault;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
@@ -1002,8 +1007,30 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const agentFiles = new AgentFilesHealth();
     const tynnTokens = tynnAgentTokens({
         file: join(input.userData, 'agent-credentials', 'agents.json'),
-        cipher: input.tynnCipher ?? { isAvailable: () => false, encrypt: () => { throw new Error('OS encryption unavailable'); }, decrypt: () => { throw new Error('OS encryption unavailable'); } },
+        secrets: input.tynnSecrets ?? {
+            probe: async () => ({ ok: false, reason: 'no keychain' }),
+            get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
+            set: async () => ({ ok: false, reason: 'no keychain' }),
+        },
     });
+    /**
+     * THE KEYS AN OLDER GENIE SEALED MOVE TO THE KEYCHAIN (P3.4 cut b's engine, switched on with this reader). At boot, so a host
+     * that loses this window still has them; and awaited before a key is read. What could not move is tried again next time.
+     */
+    let keysMoved: Promise<void> | null = null;
+    const moveAgentKeys = (): Promise<void> => keysMoved ??= (async () => {
+        const { tynnCipher, tynnVault } = input;
+        if (!tynnCipher || !tynnVault) return;
+        const outcomes = await migrateSecrets(await tynnTokens.legacyKeys(tynnCipher), tynnVault, migrationBook);
+        const stuck = outcomes.filter((o) => !['moved', 'nothing', 'already'].includes(o.status));
+        for (const o of stuck) console.error(`[tynn] an agent's key stays where it was: ${o.status}`);
+        if (stuck.length > 0) keysMoved = null;
+    })().catch((error: unknown) => {
+        keysMoved = null;
+        console.error(`[tynn] agents' keys could not be moved: ${error instanceof Error ? error.message : String(error)}`);
+    });
+    const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'));
+    void moveAgentKeys();
     // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
     const configWork = new Map<string, Promise<unknown>>();
     const withConfig = <T>(path: string, run: () => Promise<T>): Promise<T> => {
@@ -1030,21 +1057,12 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
      * at all when its private Tynn credential could not be prepared, and when Genie signed itself out every such agent
      * showed Broken. Now it starts without the `tynn` server and is told why; sign-in brings the server back.
      */
-    type TynnFailure = NonNullable<Extract<Awaited<ReturnType<typeof tynnTokens.ensure>>, { status: 'failed' }>['code']>;
     const tynnWithout = new Map<string, TynnFailure>();
     const tynnUnverified = new Map<string, { agent: AgentRecord; path: string; text: string | null }>();
     const tynnRestart = new Set<string>();
-    const TYNN_NOTES: Record<TynnFailure, string> = {
-        refused: 'Genie is not signed in to Tynn, so this agent started without its Tynn tools. They come back by themselves when you sign in (Settings → Accounts).',
-        offline: 'Tynn could not be reached, so this agent started without its Tynn tools. They come back when Genie signs in to Tynn again, or restart this agent once Tynn answers.',
-        inactive: 'This agent’s Tynn identity or key is inactive, so it started without its Tynn tools. Renew its key in Tynn, then restart the agent.',
-        conflict: 'This agent has a conflicting Tynn identity or project binding, so it started without its Tynn tools. Resolve it in Tynn, then restart the agent.',
-        pending: 'An earlier Tynn key request for this agent is unconfirmed, so it started without its Tynn tools. Review its keys in Tynn, then restart the agent.',
-        storage: 'This agent’s private Tynn credential could not be unlocked or saved, so it started without its Tynn tools. Unlock OS credential encryption, then restart the agent.',
-    };
     const tynnNote = (agentId: string): string | null => {
         const code = tynnWithout.get(agentId);
-        return code ? `Tynn unavailable — ${TYNN_NOTES[code] ?? TYNN_NOTES.refused} Nothing else is affected, and no shared workspace credential was used.` : null;
+        return code ? tynnUnavailableNote(code) : null;
     };
     /** Signed out or unreachable: the failures a sign-in can cure. The rest need the person, and are not restarted in a loop. */
     const SIGN_IN_CURES: ReadonlySet<TynnFailure> = new Set<TynnFailure>(['refused', 'offline']);
@@ -1077,6 +1095,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         checkStop();
         const projectId = tynnProjectIdOf(text);
         if (projectId === null) return [];
+        await moveAgentKeys();
         const ensure = (tynn: TynnSessionPort | null) => tynnTokens.ensure({
             workspacePath: workspace.path, agent, signal, tynn,
             fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },

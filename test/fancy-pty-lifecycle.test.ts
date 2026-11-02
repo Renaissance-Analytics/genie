@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
+import { readdirSync, readFileSync, readlinkSync, realpathSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -33,6 +33,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 function alive(pid: number): boolean { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
 function ppid(pid: number): number { try { return Number(readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[1]); } catch { return 0; } }
 function children(pid: number): number[] { return readdirSync('/proc').filter((n) => /^\d+$/.test(n)).map(Number).filter((p) => ppid(p) === pid); }
+function exeOf(pid: number): string | null { try { return readlinkSync(`/proc/${pid}/exe`); } catch { return null; } }
 function fdsHolding(pid: number, target: string): Array<{ fd: string; flags: string }> {
     try {
         return readdirSync(`/proc/${pid}/fd`).flatMap((fd) => {
@@ -92,7 +93,10 @@ describe.skipIf(process.platform !== 'linux')('fancy-pty under Genie', () => {
         helper.stderr!.resume();
         // The request a Pty sends, in fancy-pty's own encoding: SPAWN (0x00) first.
         helper.stdin!.write(frame(0 as Parameters<typeof frame>[0], encodeSpawn({ argv: ['/bin/sleep', '300'], cwd: tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' } })));
-        const shell = await until('the command under the helper', () => children(helper.pid!)[0] ?? null, 15_000);
+        // AFTER THE EXEC. A child seen the moment it forks still holds everything until it reaches close_range and execvp, and a read there
+        // reports a leak that does not exist (batch S; measured by scripts/perf-lag/fancy-pty-fd-race.mjs). The shell is what must not hold it.
+        const requested = realpathSync('/bin/sleep');
+        const shell = await until('the command under the helper, exec\'d', () => { const child = children(helper.pid!)[0]; return child !== undefined && exeOf(child) === requested ? child : null; }, 15_000);
         // CONTROL: the helper holds the socket on fd 3, WITHOUT close-on-exec — the condition the shell must not inherit.
         const held = fdsHolding(helper.pid!, inode);
         expect(held.map((h) => h.fd)).toContain('3');

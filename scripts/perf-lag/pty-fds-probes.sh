@@ -11,6 +11,10 @@ set -u
 fail=0
 probe() {
     local name="$1" file="$2" anchor="$3" replacement="$4" tests="$5" expect="$6"
+    if ! (for f in $tests; do grep -qF -- "$expect" "$f" 2>/dev/null && exit 0; done; exit 1); then
+        echo "PROBE $name: NO SUCH TEST: no test file in ($tests) holds ($expect), so this probe would prove nothing"; fail=1
+        return
+    fi
     cp "$file" "/tmp/probe-$$.orig"
     node -e "const fs=require('fs');const p=process.argv[1];let s=fs.readFileSync(p,'utf8').split('\r\n').join('\n');if(!s.includes(process.argv[2])){console.error('anchor missing');process.exit(2)}fs.writeFileSync(p,s.replace(process.argv[2],process.argv[3]))" "$file" "$anchor" "$replacement" || { echo "PROBE $name: anchor missing in $file"; fail=1; cp "/tmp/probe-$$.orig" "$file"; return; }
     if npx vitest run $tests > "/tmp/probe-$$.log" 2>&1; then

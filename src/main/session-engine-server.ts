@@ -1,3 +1,6 @@
+import type { HostAgentKeys } from './host-agent-keys.js';
+import { hostVault } from './keychain-migration.js';
+import type { AgentSecrets } from './tynn-agent-identities.js';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { hostname } from 'node:os';
 import type { McpServer } from '@particle-academy/prism-acp';
@@ -43,10 +46,21 @@ import type { TerminalsService } from './terminals-host.js';
 
 type HostOptions = ConstructorParameters<typeof SessionHost>[0];
 
+/** What a window may ask the keychain for: an agent's key. The accounts' entries are refused until their reader moves (cut c). */
+function agentKeyName(name: string): `tynn/agent/${string}` {
+    if (!/^tynn\/agent\/[0-9A-HJKMNP-TV-Z]{26}$/i.test(name)) throw new Error('A window can ask only for an agent\'s key.');
+    return name as `tynn/agent/${string}`;
+}
+
 /** What the session host is built with, from this server: its owner's half of the options. */
+export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** The host's keychain (P3.4), which a window reaches for an agent's key. Absent = refused, which a window reads as unavailable. */
+    readonly keychain?: AgentSecrets;
+    /** An agent's Tynn key with no window connected (genie#1457: host-agent-keys.ts). */
+    readonly agentKeys?: HostAgentKeys;
     /** The token a window must say in `hello` (constant-time compared). */
     readonly token: string;
     /** This host's build: a window of another build replaces it (core/engine-protocol.ts `hostDecision`). */
@@ -160,11 +174,15 @@ export class SessionEngineServer {
             currentRecord: (id) => this.#records.get(id) ?? null,
             // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
             serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
-            // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's private servers,
-            // which only a window can prepare — none when no window is there.
+            // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's private servers:
+            // the window prepares them while it is there. With none, the host reads the key it holds (genie#1457).
             prepareMcpServers: async (record, cwd) => {
                 const own = this.#options.mcp?.sessionServers(record) ?? [];
-                if (this.#options.mcp && !this.windowConnected()) return own;
+                if (this.#options.mcp && !this.windowConnected()) {
+                    const held = await this.#options.agentKeys?.(record, cwd);
+                    if (held?.note) this.#host?.notice(record.id, held.note);
+                    return [...own, ...(held?.servers ?? [])];
+                }
                 const fromWindow = (await this.#reverse('client.prepareMcpServers', [record, cwd])) as readonly McpServer[];
                 return [...own, ...fromWindow];
             },
@@ -451,12 +469,25 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.secretProbe':
+                return this.#keychain().probe();
+            case 'engine.secretRead':
+                return this.#keychain().get(agentKeyName(str(0)));
+            case 'engine.secretStore':
+                return this.#keychain().set(agentKeyName(str(0)), str(1));
+            case 'engine.secretCompare':
+                return hostVault(this.#keychain()).compare(agentKeyName(str(0)), str(1));
             case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
             case 'client.prepareMcpServers':
                 throw new Error('client.prepareMcpServers is the window\'s to answer');
         }
+    }
+
+    #keychain(): AgentSecrets {
+        if (!this.#options.keychain) throw new Error('This host keeps no keychain.');
+        return this.#options.keychain;
     }
 
     /** A call to the WINDOW (the newest one): what only it has in phase 1. Refused when no window is connected. */

@@ -448,13 +448,16 @@ describe('the book on disk', () => {
     });
 });
 
-describe('not switched on (each secret switches on with its reader)', () => {
+describe('each secret switches on with its reader', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((line) => line.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
 
-    it('nothing runs it yet', () => {
-        for (const file of ['src/main/main.ts', 'src/main/compose.ts', 'src/main/genie-host.ts', 'src/main/session-engine-server.ts', 'src/main/session-engine-client.ts']) {
-            expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/keychain-migration/);
+    it('compose runs it for the agents’ keys and nothing else; nothing else runs it', () => {
+        for (const file of ['src/main/main.ts', 'src/main/genie-host.ts', 'src/main/session-engine-server.ts', 'src/main/session-engine-client.ts', 'src/main/tynn-account.ts']) {
+            expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/migrateSecrets/);
         }
+        const compose = strip(readFileSync('src/main/compose.ts', 'utf8'));
+        expect(compose.match(/migrateSecrets\(/g)).toHaveLength(1);
+        expect(compose).toMatch(/migrateSecrets\(await tynnTokens\.legacyKeys\(tynnCipher\)/);
     });
 
     it('it has no fallback to write to: the engine touches no file but its book', () => {

@@ -39,6 +39,9 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { openHostKeychain } from './host-keychain.js';
+import { hostAgentKeys } from './host-agent-keys.js';
+import { Keychain } from './keychain.js';
+import { TYNN_HOST } from '../core/tynn.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
@@ -110,7 +113,8 @@ async function main(): Promise<void> {
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No keychain refuses secrets; it never stops the host.
-    void openHostKeychain({}).then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
+    const keychain = new Keychain();
+    void openHostKeychain({ keychain }).then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * THE SPAWN LEDGER AND ITS SWEEP, here now (they were main.ts's): what a previous host left running — a crash, a
      * kill, an installer — is ended BEFORE any agent starts, from the record only (pid, start time and name must match).
@@ -224,6 +228,9 @@ async function main(): Promise<void> {
         processes: processesService,
         flows: flowsService,
         stores,
+        keychain,
+        // The window's files, read in the clear: the agent's binding and who is signed in. The key is in the keychain.
+        agentKeys: hostAgentKeys({ vaultFile: join(home, 'agent-credentials', 'agents.json'), accountFile: join(home, 'credentials', 'tynn.json'), tynnHost: TYNN_HOST, keychain }),
         mcp: {
             setView: (view) => mcp!.setView(view as never),
             sessionServers: (record) => mcp!.sessionServers(record),
