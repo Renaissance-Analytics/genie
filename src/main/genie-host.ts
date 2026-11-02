@@ -15,6 +15,11 @@ import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { FilesWatchHub } from './files-watch-hub.js';
+import { AgentStoresService } from './agent-stores-host.js';
+import { InboxStore } from './inbox-store.js';
+import { AttentionStore } from './attention-store.js';
+import { KnowledgeStore } from './knowledge-store.js';
+import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
 import { gitTreeStatus } from './git-ports.js';
 import { repoStatus } from './repo-git.js';
 

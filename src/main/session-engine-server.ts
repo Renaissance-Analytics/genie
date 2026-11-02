@@ -18,6 +18,7 @@ import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
+import type { AgentStoresService } from './agent-stores-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -64,6 +65,8 @@ export interface EngineServerOptions {
      * genie-host's file-watch hub (the host split, P2.2: files-watch-hub.ts). Views are owned by their CONNECTION: a window
      * whose link closes drops them all. Absent = `engine.filesWatch` is refused.
      */
+    /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
+    readonly stores?: AgentStoresService;
     readonly files?: {
         subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
         unsubscribe(owner: string, viewId: string): void;
@@ -203,6 +206,8 @@ export class SessionEngineServer {
         const host = this.#host;
         if (host) for (const id of host.startedIds()) for (const u of this.#updatesFor(conn, id)) this.#event(conn, 'engine.agent', u);
         this.#sendGlobal(conn);
+        // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
+        if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
         for (const callback of queued) this.#event(conn, 'engine.callback', callback);
@@ -336,6 +341,10 @@ export class SessionEngineServer {
                 const repos = Array.isArray(want.repos) ? want.repos.filter((r): r is string => typeof r === 'string') : [];
                 this.#options.files.subscribe(conn.id, str(0), { id: ws.id, path: ws.path }, { ...(want.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) });
                 return true;
+            }
+            case 'engine.stores': {
+                if (!this.#options.stores) throw new Error('This host keeps no stores.');
+                return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
             }
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));

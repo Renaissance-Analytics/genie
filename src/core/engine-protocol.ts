@@ -61,6 +61,9 @@ export const ENGINE_METHODS = [
     // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
     'engine.filesWatch',
     'engine.filesUnwatch',
+    // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
+    // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
+    'engine.stores',
     // Host → window.
     'client.prepareMcpServers',
 ] as const;

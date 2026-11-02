@@ -25,6 +25,8 @@ import type { TimedEvent } from '../core/stream-view.js';
 import { commsFields } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
+import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
+import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -108,6 +110,7 @@ export class SessionEngineClient {
     /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
+    #replicas: StoreReplicas | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -263,6 +266,12 @@ export class SessionEngineClient {
                 if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
                 return;
             }
+            case 'stores.dump':
+                this.stores().rebase(payload as StoresDump);
+                return;
+            case 'stores.event':
+                this.stores().apply(payload as StoresEvent);
+                return;
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
                 return;
@@ -365,6 +374,19 @@ export class SessionEngineClient {
     filesUnwatch(viewId: string): Promise<boolean> {
         this.#filesViews.delete(viewId);
         return this.#value('engine.filesUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    /**
+     * The window's replicas of genie-host's stores (the host split, P3.1): the inbox, attention, approvals (read here,
+     * synchronously, re-based at every connect) and the knowledge graph (read by call). Writes answer in the host's words.
+     */
+    stores(): StoreReplicas {
+        this.#replicas ??= storeReplicas(async (store: StoreName, method: string, args: readonly unknown[]) => {
+            const reply = await this.call('engine.stores', [store, method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#replicas;
     }
 
     /** The batches and git results for this window's views. */
