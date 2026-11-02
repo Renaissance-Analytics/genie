@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
 import { HUMAN } from '../src/core/inbox.js';
 import type { AgentId } from '../src/core/identity.js';
@@ -14,6 +14,25 @@ import { KnowledgeStore } from '../src/main/knowledge-store.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
+
+/**
+ * A SLOW DISK, ON DEMAND. The attention store applies a change in memory at once and ANNOUNCES it (the event a replica
+ * hears) only once its file write lands (attention-store.ts #flush: writeJsonAtomic, then onChange). A CI runner's disk once
+ * took longer than a fixed wait (PR #1451's run, then #1452's): the store read `seen: true`, the replica still `false`.
+ * Here the write is held `slowWrites.ms` (0 — no change — unless a test sets it), so that race happens every run.
+ */
+const slowWrites = vi.hoisted(() => ({ ms: 0 }));
+vi.mock('../src/main/store.js', async (importOriginal) => {
+    const real = await importOriginal<typeof import('../src/main/store.js')>();
+    return {
+        ...real,
+        writeJsonAtomic: async (...args: Parameters<typeof real.writeJsonAtomic>) => {
+            if (slowWrites.ms > 0) await new Promise((r) => setTimeout(r, slowWrites.ms));
+            return real.writeJsonAtomic(...args);
+        },
+    };
+});
+afterEach(() => { slowWrites.ms = 0; });
 
 /**
  * THE STORES AGENTS WRITE TO LIVE IN GENIE-HOST; THE WINDOW HOLDS REPLICAS (the host split, P3.1: plan §11d).
@@ -149,6 +168,8 @@ describe('the attention replica answers what the store answers', () => {
         expect(r.replica.attention.allUserItems()).toEqual(r.attention.allUserItems());
         expect(r.replica.attention.lists.show({ list: 'user', workspaceId: 'ws', agentId: A })).toEqual(r.attention.lists.show({ list: 'user', workspaceId: 'ws', agentId: A }));
         const finishedId = r.attention.finished()[0]!.id;
+        // The write behind markSeen lands 100 ms late: the replica hears it only then.
+        slowWrites.ms = 100;
         r.replica.attention.markSeen(finishedId);
         await tick(8);
         expect(r.attention.finished()[0]!.seen).toBe(true);
