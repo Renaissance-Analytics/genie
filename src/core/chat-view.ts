@@ -278,8 +278,9 @@ export function waitingMessages(ledger: readonly TimedEvent[]): Map<string, Chat
                 continue;
             }
             const known = open.get(e.toolCallId);
-            const step = e.title ?? e.name ?? known?.step ?? 'a step';
-            open.set(e.toolCallId, { step: known && (e.title === null || e.title === '') ? known.step : step, since: known?.since ?? at, kind: e.toolKind ?? known?.kind ?? null });
+            // A row of a call often has no title: the name it started under stands, and one that started before the agent last spoke has none to stand on.
+            const step = (known && !e.title ? known.step : e.title || e.name) || 'a step';
+            open.set(e.toolCallId, { step, since: known?.since ?? at, kind: e.toolKind ?? known?.kind ?? null });
             continue;
         }
         if (e.kind === 'message' && e.speaker === 'you' && open.size > 0) {
