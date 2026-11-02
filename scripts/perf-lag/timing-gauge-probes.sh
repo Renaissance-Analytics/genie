@@ -47,10 +47,23 @@ else
         if grep -F -- "FAIL" "$LOG" | grep -qF -- "$t"; then echo "PROBE spawn-on-main: red as expected ($t)"; else echo "PROBE spawn-on-main: NOT red ($t)"; fail=1; fi
     done
     grep -E "main was held [0-9]+ ms" -o "$LOG" | sort -u | sed 's/^/    /'
-    if grep -F -- "FAIL" "$LOG" | grep -qF -- "CONTROL"; then echo "PROBE spawn-on-main: the CONTROL failed too (it must read the 5 s either way)"; fail=1; fi
+    if grep -F -- "FAIL" "$LOG" | grep -qF -- "CONTROL"; then
+        echo "PROBE spawn-on-main: the CONTROL failed too (it must read the 5 s either way):"
+        # Its own error, not only the verdict: the FAIL line and what follows it.
+        grep -F -A4 -- "> CONTROL" "$LOG" | grep -E "FAIL|Error|expected|timed out" | head -6 | sed 's/^/    /'
+        fail=1
+    fi
+    grep -E "GAUGE:" "$LOG" | head -2 | sed 's/^/    /'
 fi
 mv "/tmp/probe-$$.shc" src/main/spawn-host-client.ts
 trap - EXIT
+
+# 1b. THE CONTROL'S HOLD TIMED BY THE WALL CLOCK: a stall of the whole process ends it early (genie-test-windows read
+#     141 ms for a 5 s spawn on main). The hold must last until main was held while the process ran.
+probe "hold-timed-by-wall-clock" test/spawn-host-responsive.test.ts \
+    "        if (now >= cap || now - start - clocks.stalled(start, now) >= ms) return;" \
+    "        if (now >= cap || now - start >= ms) return; /* probe: wall clock */" \
+    test/spawn-host-responsive.test.ts "WHILE THE PROCESS RUNS"
 
 # 2. THE LEDGER REBUILT PER READ: main's `ledgerFor` copies every row again on every call (what each event did before).
 probe "ledger-rebuilt-per-read" src/main/session-host.ts \
