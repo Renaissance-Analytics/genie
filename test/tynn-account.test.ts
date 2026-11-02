@@ -128,6 +128,20 @@ describe('TynnAccount.signIn — Genie 1’s redeemToken', () => {
         expect(await account.signIn(CODE)).toEqual({ ok: false, reason: 'Tynn pairing could not be completed. Check your connection and OS keychain, then try again.' });
         expect(account.status()).toEqual({ signedIn: false });
     });
+
+    it('NO KEYRING: refused before any request, the code is not spent, nothing is written, and it says keyring (2026-11-01)', async () => {
+        const t = fakeTynn();
+        const ports = { ...t.ports, cipher: { ...t.ports.cipher, isAvailable: () => false, encrypt: () => { throw new Error('must not encrypt'); } } };
+        const account = await TynnAccount.open(ports);
+        const before = t.calls.length;
+        const r = await account.signIn(CODE);
+        expect(r).toEqual({ ok: false, reason: 'Genie needs a keyring to keep your sign-in safe, and this computer has none running. Set one up in the card above, then sign in again.' });
+        expect(t.calls.length).toBe(before);
+        expect(t.jar.size).toBe(0);
+        // Positive control: the same code, with a keyring, signs in — the refusal above did not spend it.
+        const ok = await TynnAccount.open(t.ports);
+        expect((await ok.signIn(CODE)).ok).toBe(true);
+    });
 });
 
 describe('TynnAccount across launches', () => {

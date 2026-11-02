@@ -145,10 +145,25 @@ export function parseDbusSendBoolean(stdout: string): boolean {
     return /\bboolean\s+true\b/.test(stdout ?? '');
 }
 
-type Run = (cmd: string, args: string[]) => string;
+type Run = (cmd: string, args: string[], timeoutMs?: number) => string;
 
-const defaultRun: Run = (cmd, args) =>
-    execFileSync(cmd, args, { encoding: 'utf8', timeout: 1200, stdio: ['ignore', 'pipe', 'ignore'] });
+/** A listing answers in milliseconds; boot never waits on a dead bus for longer than a blink. */
+const LIST_TIMEOUT_MS = 1200;
+/** Activating the Secret Service starts a daemon (gnome-keyring opens its keyrings): longer than a listing, still bounded. */
+const ACTIVATE_TIMEOUT_MS = 4000;
+
+const defaultRun: Run = (cmd, args, timeoutMs = LIST_TIMEOUT_MS) =>
+    execFileSync(cmd, args, { encoding: 'utf8', timeout: timeoutMs, stdio: ['ignore', 'pipe', 'ignore'] });
+
+/** PURE: names in a `busctl --user list` listing that are ACTIVATABLE — installed, not running (PID `-`). */
+export function parseBusctlActivatable(stdout: string): string[] {
+    const names: string[] = [];
+    for (const line of (stdout ?? '').split(/\r?\n/)) {
+        const [name = '', pid = ''] = line.trim().split(/\s+/);
+        if (name && !name.startsWith(':') && pid === '-' && line.includes('(activatable)')) names.push(name);
+    }
+    return names;
+}
 
 /** True for the "that program is not installed" spawn failure. */
 function isMissingTool(e: unknown): boolean {
@@ -167,11 +182,27 @@ function isMissingTool(e: unknown): boolean {
  * the first hit and gives up entirely when the tool isn't there. Boot must
  * never wait on a dead bus for longer than a blink.
  */
-export function probeOwnedBusNames(names: string[], run: Run = defaultRun): string[] {
+export function probeOwnedBusNames(names: string[], run: Run = defaultRun, opts: { activateSecretService?: boolean } = {}): string[] {
     try {
-        const listed = new Set(
-            parseBusctlNames(run('busctl', ['--user', 'list', '--no-legend', '--no-pager'])),
-        );
+        const list = () => run('busctl', ['--user', 'list', '--no-legend', '--no-pager']);
+        let listing = list();
+        let listed = new Set(parseBusctlNames(listing));
+        // OMARCHY BEFORE ANYTHING ASKED FOR A SECRET (2026-11-01): gnome-keyring's Secret Service is D-Bus ACTIVATED — not
+        // running until a client asks. Genie launched at login saw it unowned, chose nothing, and landed on the plaintext
+        // store. Activate THAT name (never KWallet: an activated kwalletd6 answers nothing outside KDE, Tynn #846), then
+        // look again. A failed or slow activation is "not owned", as before.
+        if (opts.activateSecretService && names.includes(SECRET_SERVICE_NAME) && !listed.has(SECRET_SERVICE_NAME)
+            && !KWALLET_BACKENDS.some(([name]) => listed.has(name))
+            && parseBusctlActivatable(listing).includes(SECRET_SERVICE_NAME)) {
+            try {
+                run('dbus-send', [
+                    '--session', '--dest=org.freedesktop.DBus', '--print-reply', '--type=method_call',
+                    '/org/freedesktop/DBus', 'org.freedesktop.DBus.StartServiceByName', `string:${SECRET_SERVICE_NAME}`, 'uint32:0',
+                ], ACTIVATE_TIMEOUT_MS);
+                listing = list();
+                listed = new Set(parseBusctlNames(listing));
+            } catch { /* activation failed or timed out: nothing owned, boot goes on */ }
+        }
         return names.filter((n) => listed.has(n));
     } catch {
         /* busctl absent (non-systemd) or no session bus — try dbus-send */

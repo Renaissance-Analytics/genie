@@ -67,6 +67,8 @@ import { ensureWorkstation, identityFrom, readGenie1Identity, workstationKeyStor
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
+import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
+import { osCipher } from './os-cipher.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
@@ -921,6 +923,8 @@ function attractMainWindow(reason: string): void {
 let tynnAccount: TynnAccount | null = null;
 /** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
 let githubAccount: GithubAccount | null = null;
+/** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
+let keyring: LinuxKeyring | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
@@ -1117,7 +1121,9 @@ async function boot(): Promise<void> {
     // genie:// — Tynn's sign-in hands its code back through it (openGenieUrl above).
     registerGenieProtocol();
     // The store this launch actually got, written down for the next (a probe can come back empty — genie#588).
-    if (process.platform === 'linux') rememberPasswordStore(genieHome(), safeStorage.getSelectedStorageBackend());
+    // Only a store that gave a key is remembered; the remembered store failing to give one is forgotten (a selected store
+    // is not a working one: password-store-memo.ts).
+    if (process.platform === 'linux') rememberPasswordStore(genieHome(), safeStorage.getSelectedStorageBackend(), safeStorage.isEncryptionAvailable());
     // BEFORE anything is spawned (the pty host, sessions, sites): the PATH order and PHP's CA ini a Check and repair
     // chose, so everything Genie starts inherits them. Two file reads; nothing runs (toolchain-ops.ts).
     restoreToolchainEnv({ platform: process.platform as Platform, env: processEnv, fs: nodeToolchainFs(), dataDir: toolchainDataDir() });
@@ -2298,7 +2304,7 @@ async function boot(): Promise<void> {
     void refreshTailscale();
     // Set once the feature push exists (below): Docker answering after a snapshot stopped waiting for it pushes again.
     let requestFeaturePush = (): void => {};
-    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
+    const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
         tailscale: () => execFileText('tailscale', ['status', '--json']),
@@ -2421,11 +2427,8 @@ async function boot(): Promise<void> {
         mcpEndpoint: () => mcp?.endpoint() ?? null,
         // The account is opened after compose; private credentials are requested only when an agent starts.
         tynn: () => tynnAccount,
-        tynnCipher: {
-            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
-        },
+        // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
+        tynnCipher: osCipher(safeStorage, process.platform),
         mcpVerification: () => mcpVerified,
         mcpTools: () => mcpToolList,
         // The live roster, late-bound: the human's inbox resolves, names and counts from the same agents the MCP tools do.
@@ -2609,6 +2612,26 @@ async function boot(): Promise<void> {
     // person does (their own action answers with the snapshot; an agent's has nobody to answer but this push).
     composed.engines.onChange(pushFeatures);
     composed.sites.onChange(pushFeatures);
+    // LINUX WITH NO KEYRING (linux-keyring.ts; the owner, 2026-11-01): what the session's keyring is, the card Settings
+    // shows when there is none, and its one button — install (pkexec), start, Restart Genie. Never fatal to boot.
+    if (process.platform === 'linux') {
+        try {
+            keyring = await LinuxKeyring.open(realKeyringPorts({
+                run: (binary, args, timeoutMs) => execFileRunner(binary, args, { timeoutMs: timeoutMs ?? 5_000 }).then((r) => ({ exitCode: r.exitCode, stdout: r.streams.stdout, stderr: r.streams.stderr })),
+                storage: () => ({ backend: safeStorage.getSelectedStorageBackend(), available: safeStorage.isEncryptionAvailable() }),
+                relaunch: () => {
+                    // Which sign-in to reopen after the restart — never a code or a token.
+                    if (tynnAccount && !tynnAccount.status().signedIn) markResumeSignIn(genieHome(), 'tynn');
+                    app.relaunch();
+                    requestQuit();
+                },
+                onChange: () => pushFeatures(),
+            }));
+        } catch (error) {
+            console.warn('[genie] the keyring check failed', error);
+        }
+        console.log(`[genie] keyring: ${keyring?.state() ?? 'unknown'} (backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'})`);
+    }
     // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
     // the one-time pairing exchange; ordinary API requests explicitly omit it.
     const tynnSession = session.fromPartition('persist:tynn');
@@ -2616,11 +2639,7 @@ async function boot(): Promise<void> {
         host: () => TYNN_HOST,
         file: join(genieHome(), 'credentials', 'tynn.json'),
         legacyFile: join(genieHome(), 'tynn.json'),
-        cipher: {
-            isAvailable: () => safeStorage.isEncryptionAvailable() && (process.platform !== 'linux' || !['basic_text', 'unknown'].includes(safeStorage.getSelectedStorageBackend())),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
-        },
+        cipher: osCipher(safeStorage, process.platform),
         // Tynn unreachable at launch is asked again on a bounded backoff (main/tynn-account.ts TYNN_RETRY_MS), not never.
         schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         cookies: {
@@ -2648,17 +2667,18 @@ async function boot(): Promise<void> {
     tynnAccount.onChange(recoverTynnAgents);
     recoverTynnAgents();
     afterTynnUrl = pushFeatures;
+    // A SIGN-IN THAT WAITED FOR THE KEYRING (linux-keyring.ts): the card's Restart Genie left a note (which sign-in, never
+    // a code); with the keyring working now, Tynn's sign-in opens again by itself, so the person is not left to find it.
+    if (takeResumeSignIn(genieHome()) === 'tynn' && (keyring?.canKeepSecrets() ?? true) && !tynnAccount.status().signedIn) {
+        void tynnAccount.startSignIn().then(({ url }) => { featureState = { ...featureState, tynnSignInUrl: url, tynnMessage: null }; pushFeatures(); }, () => { /* the person signs in by hand */ });
+    }
     // GITHUB (beta.33 item 25; Genie 1's main/github/*): Genie 1's sign-in carried over — read from its genie.db, decrypted
     // with this Genie's safeStorage (the same userData, so the same key: measured) and kept encrypted in ~/.genie — or the
     // device flow. Every change reaches Settings and the Deck's signal at once; GitHub is read once now, and again on
     // Check again or after a sign-in (no polling of the API).
     githubAccount = await GithubAccount.open({
         file: join(genieHome(), 'github.json'),
-        cipher: {
-            isAvailable: () => safeStorage.isEncryptionAvailable(),
-            encrypt: (text) => safeStorage.encryptString(text),
-            decrypt: (bytes) => safeStorage.decryptString(bytes),
-        },
+        cipher: osCipher(safeStorage, process.platform),
         fetch: (url, init) => net.fetch(url, init),
         v1Settings: () => readV1Settings(v1DatabaseFile()),
         openExternal: (url) => shell.openExternal(url),
@@ -2668,11 +2688,7 @@ async function boot(): Promise<void> {
     // THIS MACHINE ON THE TYNN NETWORK (Tynn #836; Genie 1's ensureLocalWorkstation): signed in, it registers with that
     // Tynn once and keeps its key encrypted by the OS; every sign-in re-checks. One registration at a time, so a
     // sign-in landing during the launch's own check cannot make two workstations.
-    const identityCipher = {
-        isAvailable: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (text: string) => safeStorage.encryptString(text),
-        decrypt: (bytes: Buffer) => safeStorage.decryptString(bytes),
-    };
+    const identityCipher = osCipher(safeStorage, process.platform);
     const identities = workstationKeyStore(join(genieHome(), 'workstation.json'), identityCipher);
     // GENIE 1'S RECORD OF THIS MACHINE (genie#1278 adopt on sign-in): its genie.db in the userData both share, its key
     // decrypted with this Genie's safeStorage (same userData, same OS key). Tynn takes that record over, or retires the
@@ -3683,7 +3699,9 @@ function drainWritesThenQuit(): Promise<void> {
 applyLinuxPasswordStore({
     platform: process.platform,
     argv: process.argv,
-    probe: () => probeOwnedBusNames(passwordStoreBusNames()),
+    // An installed-but-not-yet-started Secret Service (Omarchy at login, before any app asked for a secret) is ACTIVATED
+    // first, so a Genie that starts at login does not land on the plaintext store (linux-password-store.ts).
+    probe: () => probeOwnedBusNames(passwordStoreBusNames(), undefined, { activateSecretService: true }),
     remembered: () => readRememberedPasswordStore(genieHome()),
     appendSwitch: (key, value) => app.commandLine.appendSwitch(key, value),
 });

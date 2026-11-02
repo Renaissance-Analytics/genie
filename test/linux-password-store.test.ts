@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import {
     SECRET_SERVICE_NAME,
     chooseLinuxPasswordStore,
@@ -456,5 +457,79 @@ describe('busctl on a fresh Omarchy boot (measured output)', () => {
     it('a KWallet that IS running still wins (CONTROL: a KDE session)', () => {
         const kde = FRESH_OMARCHY.replace('org.kde.kwalletd6                               - -               -     (activatable)', 'org.kde.kwalletd6                            4999 kwalletd6       genie :1.47        ');
         expect(chooseLinuxPasswordStore({ platform: 'linux', argv: [], ownedBusNames: probeOwnedBusNames(passwordStoreBusNames(), () => kde) })).toBe('kwallet6');
+    });
+});
+
+/**
+ * OMARCHY BEFORE ANYTHING HAS ASKED FOR A SECRET (genie keyring fix, 2026-11-01). Omarchy installs gnome-keyring with a
+ * passwordless default keyring, and the Secret Service is D-Bus ACTIVATED: it is not running until something asks for it
+ * (Omarchy's own Chromium does, via its `--password-store=gnome-libsecret` flag). Genie launched at login, before any such
+ * app, saw `org.freedesktop.secrets` activatable-but-unowned, chose nothing, landed on the plaintext store and refused the
+ * Tynn sign-in. Genie 1 counted activatable names as owned (and so worked there, but also chose a KWallet nobody ran);
+ * #1011 dropped them all. Now Genie ACTIVATES the Secret Service — only that name, never KWallet — and asks again.
+ */
+describe('probeOwnedBusNames — activating an activatable Secret Service', () => {
+    const ACTIVATABLE = [
+        'org.freedesktop.secrets                         - -               -     (activatable) -                 - -',
+        'org.kde.kwalletd6                               - -               -     (activatable) -                 - -',
+    ].join('\n');
+    const OWNED = [
+        'org.freedesktop.secrets                       933 gnome-keyring-d genie :1.9          user@1000.service - -',
+        'org.kde.kwalletd6                               - -               -     (activatable) -                 - -',
+    ].join('\n');
+
+    it('activates org.freedesktop.secrets (StartServiceByName), then counts it owned → gnome-libsecret', () => {
+        const calls: string[] = [];
+        let started = false;
+        const owned = probeOwnedBusNames(passwordStoreBusNames(), (cmd, args) => {
+            calls.push([cmd, ...args].join(' '));
+            if (cmd === 'dbus-send') { started = true; return 'method return …\n   uint32 1\n'; }
+            return started ? OWNED : ACTIVATABLE;
+        }, { activateSecretService: true });
+        expect(owned).toEqual([SECRET_SERVICE_NAME]);
+        expect(calls.filter((c) => c.includes('StartServiceByName'))).toEqual([
+            'dbus-send --session --dest=org.freedesktop.DBus --print-reply --type=method_call /org/freedesktop/DBus org.freedesktop.DBus.StartServiceByName string:org.freedesktop.secrets uint32:0',
+        ]);
+        // KWallet was never started.
+        expect(calls.some((c) => c.includes('kwallet') && c.includes('StartServiceByName'))).toBe(false);
+        expect(chooseLinuxPasswordStore({ platform: 'linux', argv: [], ownedBusNames: owned })).toBe('gnome-libsecret');
+    });
+
+    it('activation is given longer than the listing (a cold daemon start), but is still bounded', () => {
+        const timeouts: Array<number | undefined> = [];
+        probeOwnedBusNames(passwordStoreBusNames(), (cmd, _args, timeoutMs) => {
+            timeouts.push(timeoutMs);
+            return cmd === 'dbus-send' ? '' : ACTIVATABLE;
+        }, { activateSecretService: true });
+        const activation = timeouts[1];
+        expect(activation).toBeGreaterThan(1200);
+        expect(activation).toBeLessThanOrEqual(5000);
+    });
+
+    it('activation that fails or hangs: nothing owned, boot goes on', () => {
+        const owned = probeOwnedBusNames(passwordStoreBusNames(), (cmd) => {
+            if (cmd === 'dbus-send') throw Object.assign(new Error('ETIMEDOUT'), { code: 'ETIMEDOUT' });
+            return ACTIVATABLE;
+        }, { activateSecretService: true });
+        expect(owned).toEqual([]);
+    });
+
+    it('already owned, or not activatable at all: nothing is started (CONTROL)', () => {
+        for (const listing of [OWNED, 'org.kde.kwalletd6 - - - (activatable) - - -']) {
+            const calls: string[] = [];
+            probeOwnedBusNames(passwordStoreBusNames(), (cmd) => { calls.push(cmd); return listing; }, { activateSecretService: true });
+            expect(calls).toEqual(['busctl']);
+        }
+    });
+
+    it('without the option, the probe stays read-only (CONTROL: the old behaviour)', () => {
+        const calls: string[] = [];
+        expect(probeOwnedBusNames(passwordStoreBusNames(), (cmd) => { calls.push(cmd); return ACTIVATABLE; })).toEqual([]);
+        expect(calls).toEqual(['busctl']);
+    });
+
+    it('the launch hook in main.ts asks for the activation', () => {
+        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+        expect(main).toMatch(/probeOwnedBusNames\(passwordStoreBusNames\(\), undefined, \{ activateSecretService: true \}\)/);
     });
 });

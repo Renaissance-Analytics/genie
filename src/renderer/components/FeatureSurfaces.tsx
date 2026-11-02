@@ -15,6 +15,7 @@ import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKin
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
@@ -2266,6 +2267,44 @@ function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integra
     );
 }
 
+/** The keyring card's button, per state: what it does, and what it says while it does it. */
+const KEYRING_ACTION: Record<KeyringView['state'], string> = { 'not-installed': 'Install keyring', 'not-running': 'Start keyring', 'restart-needed': 'Restart Genie', refused: 'Check again' };
+const KEYRING_STEP: Record<NonNullable<KeyringView['step']>, string> = { installing: 'Installing…', starting: 'Starting…', restarting: 'Restarting…' };
+/** One line per state: why the sign-in waits, in the fewest words (the owner: reduce reading). */
+const KEYRING_LINE: Record<KeyringView['state'], string> = {
+    'not-installed': 'Genie needs a keyring to keep your sign-ins safe. This computer has none.',
+    'not-running': 'Genie needs a keyring to keep your sign-ins safe. Yours is installed but not running.',
+    'restart-needed': 'Keyring ready. Restart Genie to use it.',
+    refused: 'Genie needs a keyring to keep your sign-ins safe. Yours is locked.',
+};
+
+/**
+ * NO KEYRING, THE CARD (the owner, 2026-11-01): one line saying why the sign-in waits, ONE button whose words say what it
+ * does (Install keyring / Start keyring / Restart Genie / Check again), busy with the step while it runs, then the
+ * failure in words with Retry, and the command to run by hand with a Copy when Genie cannot. Genie never asks for a
+ * password: Install opens the system's own prompt. The sign-in is not offered behind it: nothing could keep it.
+ */
+function KeyringCard({ keyring, onAction }: { keyring: KeyringView; onAction: SurfaceProps['onAction'] }) {
+    const command = useCopyText();
+    const busy = keyring.step !== null;
+    const label = busy ? KEYRING_STEP[keyring.step!] : keyring.failure ? 'Retry' : KEYRING_ACTION[keyring.state];
+    return (
+        <div data-keyring-card={keyring.state} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
+            <span>{KEYRING_LINE[keyring.state]}</span>
+            {keyring.state === 'not-installed' ? <span className="text-xs text-[var(--fg-3)]">Installs {keyring.packages}. Your system asks for your password.</span> : null}
+            <div><Button type="button" data-action="keyring-fix" size="sm" disabled={busy} loading={busy} onClick={() => onAction({ kind: 'keyring.fix' })}>{label}</Button></div>
+            {keyring.failure ? <span data-keyring-failure="" role="status" className="text-xs text-[var(--danger)]">{keyring.failure}</span> : null}
+            {keyring.failure && keyring.manual ? (
+                <div data-keyring-manual={keyring.manual} className="flex min-w-0 items-center gap-1.5">
+                    <span className="flex-1 truncate font-mono text-xs" title={keyring.manual}>{keyring.manual}</span>
+                    <Button type="button" data-action="keyring-copy-command" variant="ghost" size="xs" onClick={() => { void command.copy(keyring.manual ?? ''); }}>{copyWords(command.state, 'Copy')}</Button>
+                    <CopyAnnounce state={command.state} />
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 /** The Settings pages' card: a titled block, one per concern (Genie 1's SetSection). */
 function SetSection({ title, desc, children, ...rest }: { title: string; desc?: string; children: React.ReactNode } & Record<`data-${string}`, string>) {
     return (
@@ -2324,7 +2363,7 @@ function TynnBlock({ integrations, onAction }: { integrations: FeatureData['inte
     if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
     return (
         <div data-integrations="" className="flex flex-col gap-2">
-            <TynnSignIn tynn={integrations.tynn} onAction={onAction} />
+            {integrations.keyring && !integrations.tynn.user ? <KeyringCard keyring={integrations.keyring} onAction={onAction} /> : <TynnSignIn tynn={integrations.tynn} onAction={onAction} />}
                         <ul className="mt-2 divide-y divide-[var(--border-1)]">
                             {integrations.gated.map((row) => (
                                 <li key={row.id} data-gated={row.id} data-gated-enabled={row.enabled ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
@@ -2381,7 +2420,8 @@ function GithubBlock({ integrations, onAction }: { integrations: FeatureData['in
         return (
             <div data-integrations="" data-github-status="signed-out" className="flex flex-col gap-2 text-sm">
                 <p className="text-[var(--fg-3)]">One click: GitHub shows a code, you approve the Genie AOS app in your browser, and Genie reads where it is installed. No token to paste.</p>
-                <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in with GitHub</Button></div>
+                {/* No keyring: nothing could keep the GitHub sign-in either — the same card, in its place. */}
+                {integrations.keyring ? <KeyringCard keyring={integrations.keyring} onAction={onAction} /> : <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in with GitHub</Button></div>}
                 {message}
                 {githubCapabilityList(gh.capabilities)}
             </div>

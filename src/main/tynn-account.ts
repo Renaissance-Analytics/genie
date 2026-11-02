@@ -65,6 +65,8 @@ interface Me {
 
 const trimHost = (h: string) => h.trim().replace(/\/+$/, '');
 const UNREACHABLE = 'Tynn could not be reached. Check your connection and try again.';
+/** No keyring: refused BEFORE the code is exchanged, so the code is not spent (the owner, 2026-11-01). */
+export const NO_KEYRING_FOR_TYNN = 'Genie needs a keyring to keep your sign-in safe, and this computer has none running. Set one up in the card above, then sign in again.';
 const REQUIRED_SCOPES = ['genie:discovery', 'genie:projects', 'genie:workstations', 'genie:agents', 'genie:agent-tokens', 'genie:issue-watch', 'genie:issues', 'genie:inbox'];
 const tokenValid = (s: unknown): s is string => typeof s === 'string' && /^gpk_[0-9A-HJKMNP-TV-Z]{26}\.[a-f0-9]{64}$/i.test(s);
 interface Credential { readonly token: string; readonly host: string; readonly userId: string; readonly scopes: readonly string[] }
@@ -215,7 +217,7 @@ export class TynnAccount implements TynnAccountPort {
         if (code === null) return { ok: false, reason: 'That is not a Tynn sign-in code. Paste the code Tynn shows after you sign in — 64 letters and digits.' };
         const hash = createHash('sha256').update(code).digest('hex');
         if (this.#usedCodes.includes(hash)) return this.status().signedIn ? { ok: true, user: this.#me!.user } : { ok: false, reason: 'That code was already used. Open Tynn again for a fresh sign-in code.' };
-        if (!this.#ports.cipher.isAvailable()) return { ok: false, reason: 'OS credential encryption is unavailable. Unlock your keychain before pairing Tynn.' };
+        if (!this.#ports.cipher.isAvailable()) return { ok: false, reason: NO_KEYRING_FOR_TYNN };
         await this.#prepareStorage();
         const host = this.host();
         const previous = { credential: this.#credential, me: this.#me, host: this.#meHost };
