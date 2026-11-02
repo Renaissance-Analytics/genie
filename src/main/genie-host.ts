@@ -38,6 +38,7 @@ import { resolveAddress as resolveOnRoster } from '../core/inbox.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
 import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
+import { openHostKeychain } from './host-keychain.js';
 import { procStart, readPtyLedger, reapLeftoverPtys, realReapPorts, writePtyLedger } from './pty-ledger.js';
 import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
@@ -108,6 +109,8 @@ async function main(): Promise<void> {
     if (process.platform !== 'win32') chmodSync(endpoint, 0o600);
 
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
+    // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No keychain refuses secrets; it never stops the host.
+    void openHostKeychain({}).then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * THE SPAWN LEDGER AND ITS SWEEP, here now (they were main.ts's): what a previous host left running — a crash, a
      * kill, an installer — is ended BEFORE any agent starts, from the record only (pid, start time and name must match).

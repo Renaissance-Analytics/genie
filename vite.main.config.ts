@@ -26,6 +26,6 @@ export default defineConfig({
          * peers) and keeps outside the asar (`asarUnpack`). fancy-term-host itself is bundled;
          * its `import { spawn } from 'node-pty'` becomes the external import.
          */
-        rollupOptions: { external: ['electron', 'node-pty', /^node:/] },
+        rollupOptions: { external: ['electron', 'node-pty', '@napi-rs/keyring', /^node:/] },
     },
 });

@@ -72,6 +72,8 @@ asarUnpack:
   # package — it must live on disk, outside the asar, under the install dir (§7.2 scans there).
   # Fancy: this one line is the whole packaging requirement for the fancy-pty engine.
   - "**/node_modules/@particle-academy/fancy-pty/bin/**"
+  # @napi-rs/keyring (P3.4): a .node binary in a per-platform package. It must live on disk, outside the asar.
+  - "**/node_modules/@napi-rs/keyring*/**"
 afterPack: ./scripts/after-pack.cjs
 
 # ─────────────────────────────────────────────────────────────────────────────────────────
