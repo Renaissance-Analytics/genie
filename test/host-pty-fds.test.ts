@@ -157,7 +157,9 @@ describe.skipIf(process.platform !== 'linux')('a terminal in genie-host on Elect
         expect(alive(r.shellPid)).toBe(true);
         expect(cmdline(r.helperPid)).toMatch(/fancy-pty-helper/);
         const held = holders(r.inode);
-        console.log(`[host-pty-fds] A: host ${r.host.pid}, spawn hosts ${JSON.stringify(r.spawnHosts)}, helper ${r.helperPid}, shell ${r.shellPid}; holders of ${r.inode}: ${JSON.stringify(held)}`);
+        // For each holder: WHICH fd, and its flags (octal; 02000000 = close-on-exec) — what the host saw at startup.
+        const flagsOf = (pid: number) => readdirSync(`/proc/${pid}/fd`).flatMap((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) === r.inode ? [`fd ${fd} ${/^flags:\s+(\d+)$/m.exec(readFileSync(`/proc/${pid}/fdinfo/${fd}`, 'utf8'))?.[1] ?? '?'}`] : []; } catch { return []; } });
+        console.log(`[host-pty-fds] A: host ${r.host.pid}, spawn hosts ${JSON.stringify(r.spawnHosts)}, helper ${r.helperPid}, shell ${r.shellPid}; holders of ${r.inode}: ${JSON.stringify(held.map((h) => ({ ...h, fds: flagsOf(h.pid) })))}; host log head: ${JSON.stringify(r.hostLog().split('\n').slice(0, 4))}`);
         expect(held).toEqual([]);
         expect(await probe(r.port)).toBe('refused');
         // CONTROL that it ARRIVED (so "nothing holds it" is a reading, not a socket that never got there): the host says so.
