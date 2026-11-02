@@ -510,7 +510,12 @@ export class SessionEngineClient {
         return this.#terminals;
     }
 
-    configSync(_request: WorkspaceConfigRequest): Promise<SyncResult[]> { return Promise.resolve([]); }
+    /** A workspace's agent config: the host writes it. Anything but its answer rejects, so nothing reads as synced. */
+    async configSync(request: WorkspaceConfigRequest): Promise<SyncResult[]> {
+        const reply = await this.call('engine.configSync', [request]);
+        if (!reply.ok) throw new Error(reply.reason);
+        return reply.value as SyncResult[];
+    }
 
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
     deviceLink(): DeviceLinkReplica {

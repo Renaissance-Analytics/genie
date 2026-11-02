@@ -2804,6 +2804,7 @@ async function boot(): Promise<void> {
         // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
         remoteTransport: remoteHub,
         mcpEndpoint: () => mcpEndpointNow(),
+        hostConfigSync: () => agentEngineLink?.client ?? null,
         // The account is opened after compose; private credentials are requested only when an agent starts.
         tynn: () => tynnAccount,
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.

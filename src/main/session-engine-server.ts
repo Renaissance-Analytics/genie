@@ -513,6 +513,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.configSync':
+                if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
+                return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
             case 'engine.deviceLink':
                 if (!this.#options.deviceLink) throw new Error('This host dials no other machines.');
                 return this.#options.deviceLink.call(conn.id, str(0), Array.isArray(args[1]) ? args[1] : []);

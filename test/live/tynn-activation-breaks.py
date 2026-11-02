@@ -11,7 +11,7 @@ controls = [
     ('main connection', 'src/main/main.ts',
      'const privateServers = await services.prepareAgentMcp(record, signal);', 'const privateServers = [];',
      'test/tynn-activation.test.ts', 'production main wires', 'main must prepare each session'),
-    ('legacy cleanup', 'src/main/compose.ts',
+    ('legacy cleanup', 'src/main/workspace-config-sync.ts',
      'await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });', 'void workspacePath;',
      'test/tynn-activation.test.ts', 'config sync removes the legacy shared credential', '.mcp.json must not contain'),
     ('agent identity isolation', 'src/main/agent-tynn-prep.ts',
