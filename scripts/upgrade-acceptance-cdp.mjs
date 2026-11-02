@@ -17,7 +17,7 @@
  * Getting a sign-in code changes nothing in repos/tynn: `/dev/quick-login` then `/genie/callback`. That route exists only where APP_ENV is local or development, so against
  * production this fails closed, and the alias is checked first as well. No token is printed.
  *
- * NOT HERE: S4 (needs a test build that holds at each step), S5-S7 (a real mint on tynn.gen), S10, S12, the relay half of S11, and A1-A5.
+ * NOT HERE: S4 (needs a test build that holds at each step), S5-S7 (scripts/upgrade-acceptance-mint-cdp.mjs), S10, S12, the relay half of S11, and A1-A5.
  *
  * Prints `### upgrade <check>=PASS|FAIL  detail`, then `### upgrade=PASS|FAIL`. Capped at 12 min. Every exit puts back what it hid.
  */
