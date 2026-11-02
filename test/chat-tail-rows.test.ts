@@ -37,7 +37,8 @@ function ledger(n: number, seed: number): TimedEvent[] {
         else if (p < 0.25) {
             const id = `tc${i}`;
             openTools.push(id);
-            event = { kind: 'tool', toolCallId: id, name: 'Bash', title: `step ${i}`, status: 'in_progress' };
+            // A subagent's call now and then: it never holds a message, in the whole chat or the tail (genie#1473).
+            event = { kind: 'tool', toolCallId: id, name: 'Bash', title: `step ${i}`, status: 'in_progress', ...(r() < 0.3 ? { parentToolCallId: 'tc_spawner' } : {}) };
         } else if (p < 0.35 && openTools.length > 0) {
             const id = openTools.splice(Math.floor(r() * openTools.length), 1)[0]!;
             event = { kind: 'tool', toolCallId: id, name: 'Bash', title: null, status: r() < 0.8 ? 'completed' : 'failed' };
@@ -67,11 +68,13 @@ const detailOf = (rows: readonly TimedEvent[], comms: ChatDetail['comms'] = null
 
 describe('the tail is exactly the end of the full chat', () => {
     it('over 60 generated ledgers of every row kind, at several window sizes, with and without mail', () => {
+        let waitingSeen = 0;
         for (let seed = 1; seed <= 60; seed += 1) {
             const rows = ledger(400 + seed * 13, seed);
             const comms = seed % 2 === 0 ? Array.from({ length: 12 }, (_, k) => ({ id: `c${k}`, from: k % 2 ? 'human' : 'agent_a', to: k % 2 ? 'agent_a' : 'agent_w', text: `mail ${k}`, sentAt: new Date(1_700_000_000_000 + (k * 37 + seed) * 1000 * 7).toISOString(), readAt: null })) : null;
             const detail = detailOf(rows, comms, seed % 3 !== 0);
             const full = chatThreadFrom(detail, 'agent_a', [], Date.now).messages;
+            waitingSeen += full.filter((m) => m.waiting).length;
             for (const lines of [1, 20, 100, 500]) {
                 const tail = chatThreadFrom(detail, 'agent_a', [], Date.now, lines);
                 expect(tail.messages, `seed ${seed}, ${lines} lines`).toEqual(full.slice(full.length - tail.messages.length));
@@ -81,6 +84,8 @@ describe('the tail is exactly the end of the full chat', () => {
                 else expect(tail.messages, `seed ${seed}, ${lines} lines: nothing behind = the whole chat`).toEqual(full);
             }
         }
+        // CONTROL: these ledgers do hold waiting messages, so agreeing on them means something.
+        expect(waitingSeen).toBeGreaterThan(0);
     });
 
     it('CONTROL: without a window the chat is the whole history, and nothing is behind it', () => {
