@@ -188,6 +188,25 @@ describe('the yellow ! on the Settings row', () => {
         expect(settings.querySelector('[data-react-fancy-sidebar-dot-label]')!.textContent!.trim()).toBe(label);
     });
 
+    // The owner's beta.53 ask, back on the dot (react-fancy 6.2.0 `dotTooltip`): the warning NAMES the phone and the date
+    // where a mouse rests and where the keyboard lands.
+    const tooltipText = () => document.querySelector('[role="tooltip"]')?.textContent ?? '';
+    it('hovering the Settings item shows the warning: the phone and the date', async () => {
+        act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
+        const settings = host.querySelector('[data-nav="genie://settings"]')!;
+        expect(document.querySelector('[role="tooltip"]')).toBeNull();
+        await act(async () => { settings.dispatchEvent(new MouseEvent('mouseover', { bubbles: true })); settings.dispatchEvent(new MouseEvent('mouseenter', { bubbles: false })); await new Promise((r) => setTimeout(r, 300)); });
+        expect(tooltipText()).toContain('Pixel 7');
+        expect(tooltipText()).toContain('Nov 14, 2026');
+    });
+    it('focusing the Settings item from the keyboard shows the same warning', async () => {
+        act(() => root.render(<Sidebar route="genie://dashboard" available={['dashboard', 'settings']} workspaces={[]} deckCount={0} onNavigate={() => {}} railStorage={null} settingsAlert={{ label }} />));
+        const settings = host.querySelector<HTMLElement>('[data-nav="genie://settings"]')!;
+        await act(async () => { settings.focus(); settings.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); await new Promise((r) => setTimeout(r, 300)); });
+        expect(tooltipText()).toContain('Pixel 7');
+        expect(tooltipText()).toContain('Nov 14, 2026');
+    });
+
     it('no alert, no mark', () => {
         expect(rail()).not.toMatch(/data-react-fancy-sidebar-dot=/);
         expect(rail({ settingsAlert: null })).not.toMatch(/data-react-fancy-sidebar-dot=/);

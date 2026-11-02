@@ -106,6 +106,12 @@ describe('the expanded rail', () => {
         for (const d of DESTINATIONS) expect(classes(control(html, d)!.open), d).not.toContain('justify-center');
     });
 
+    it('a workspace is named with its agents ("tynn, 2 agents"), its visual count hidden from a screen reader', () => {
+        const tynn = control(rail(false), 'data-workspace="tynn"')!;
+        expect(tynn.inner).toMatch(/data-react-fancy-sidebar-badge-label=""[^>]*>, 2 agents</);
+        expect(tynn.text).toMatch(/tynn\s*, 2 agents/);
+    });
+
     it('still shows how many wait in the Deck — seen, not read twice (the dot says it in words)', () => {
         const deck = control(rail(false), 'data-nav="genie://deck"')!.inner;
         expect(deck).toMatch(/data-deck-badge="3"[^>]*aria-hidden="true"|aria-hidden="true"[^>]*data-deck-badge="3"/);
