@@ -17,7 +17,9 @@ import { afterEach, describe, expect, it } from 'vitest';
  *   Then: the host the window spawned the product's way (`spawnHostProcess`) holds it, or not; and once the window is gone,
  *   the port is free, or not.
  *
- * Two hosts: one that closes nothing (does the SPAWN leak?) and one whose first module is close-inherited-fds.
+ * MEASURED on CI (2026-11-02): window holds it, port accepts; the host holds NONE of it; port free once the window is gone.
+ * So the product's spawn does not hand the window's sockets to the host, and a fd-closing step in the host (tried first, on
+ * the suspicion alone) had no cause and was removed. This stays as the regression test for that, with its control.
  * Linux: POSIX fd inheritance, read from /proc.
  */
 
@@ -81,12 +83,4 @@ describe.skipIf(process.platform !== 'linux')('a host spawned by the window, the
         expect(m.portAfterWindow).toBe('refused');
     }, 60_000);
 
-    it('a host whose first module is close-inherited-fds: the same, the port free once the window is gone', async () => {
-        const m = await measure('test/fixtures/fd-host-closing.ts');
-        expect(m.windowHolds).toBe(true);
-        expect(m.acceptsWhileWindowLives).toBe('accepts');
-        expect(m.hostAlive).toBe(true);
-        expect(m.hostHolds).toBe(false);
-        expect(m.portAfterWindow).toBe('refused');
-    }, 60_000);
 });

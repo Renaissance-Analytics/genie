@@ -48,8 +48,8 @@ function step(id, what) {
 }
 
 step('0.1', 'reading the settings');
-const PORT = Number(process.env.CDP_PORT ?? 9222);
-const INSPECT = Number(process.env.QUIT_CDP_INSPECT ?? 9229);
+let PORT = Number(process.env.CDP_PORT ?? 9222);
+let INSPECT = Number(process.env.QUIT_CDP_INSPECT ?? 9229);
 const CLOSED_MS = Number(process.env.QUIT_CDP_CLOSED_MS ?? 12_000);
 const DEADLINE_MS = Number(process.env.QUIT_CDP_DEADLINE_MS ?? 360_000);
 const AGENTS = 3;
@@ -334,12 +334,29 @@ const testMachine = process.env.CI === 'true' || process.env.QUIT_CDP_ALLOW === 
 if (!testMachine) refuse(`it launches Electron, so it runs only on a test machine (CI, the test VM as user \`genie\`, or QUIT_CDP_ALLOW=1); user is "${user}"`);
 step('0.3', `is this the root of a Genie tree? (${process.cwd()})`);
 if (!existsSync('package.json') || !existsSync('scripts/stub-codex.mjs')) refuse(`run it from the root of a built Genie tree (${process.cwd()})`);
-step('0.4', `is the debugger port ${PORT} free? (≤ 3 s)`);
-const busy = await answers(PORT);
-if (busy) { console.log(portOwners(PORT)); refuse(`something already answers on the debugger port ${PORT} (${busy === true ? 'it answers' : busy}): stop the running Genie first`); }
-step('0.5', `is the inspector port ${INSPECT} free? (≤ 3 s)`);
-const busyInspect = await answers(INSPECT);
-if (busyInspect) { console.log(portOwners(INSPECT)); refuse(`something already answers on the inspector port ${INSPECT}: set QUIT_CDP_INSPECT to a free port`); }
+/**
+ * A port the previous Genie should have let go of (batch L3: 9222 "accepts but does not answer" right after vm-smoke ended
+ * its window). Named — `ss` and each owner's command line — given 30 s to come free (a window still dying), named again,
+ * and if it is STILL held: a failed check (someone holds a dead Genie's port, which is a finding of its own), and this run
+ * carries on, on the first free port above, so the same batch still measures what this script is for.
+ */
+async function freePort(port, label, id) {
+    step(id, `is the ${label} port ${port} free? (≤ 3 s)`);
+    const busy = await answers(port);
+    if (!busy) return port;
+    console.log(`  the ${label} port ${port} is held (${busy === true ? 'it answers' : busy}):`);
+    console.log(portOwners(port));
+    step(`${id}w`, `waiting for the ${label} port ${port} to come free (≤ 30 s)`);
+    const freed = await until(async () => !(await answers(port)), 30_000, 1_000);
+    if (freed) { console.log(`  the ${label} port ${port} came free`); return port; }
+    console.log(`  STILL held after 30 s:`);
+    console.log(portOwners(port));
+    check(false, `${id}. the ${label} port ${port} is still held after the previous Genie ended (its holder is named above)`);
+    for (let p = port + 100; p < port + 200; p++) if (!(await answers(p))) { console.log(`  this run uses the ${label} port ${p} instead`); return p; }
+    refuse(`no free ${label} port in ${port + 100}..${port + 199}`);
+}
+PORT = await freePort(PORT, 'debugger', '0.4');
+INSPECT = await freePort(INSPECT, 'inspector', '0.5');
 
 console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming, then open Genie again (deadline ${Math.round(DEADLINE_MS / 1000)} s)\n`);
 step('0.6', `the ticker marker, holding this script's pid ${process.pid}`);
