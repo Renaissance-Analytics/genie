@@ -45,6 +45,7 @@ import type { AgentSecrets } from './tynn-agent-identities.js';
 import { fileMigrationBook, migrateSecrets, type HostVault, type MigrationSource } from './keychain-migration.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
+import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
@@ -215,6 +216,8 @@ export interface ComposeInput {
     readonly appInboxEnv?: (source: AppEnvSource) => Readonly<Record<string, string>>;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
+    /** With a host, a workspace's agent config is the host's to write. */
+    readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
     /**
      * The scoped Tynn account, late-bound because it opens after composition. Used only during private agent preparation.
      */

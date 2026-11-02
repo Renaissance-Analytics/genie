@@ -1,5 +1,7 @@
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
+import type { SyncResult } from '../core/integrations.js';
+import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { DeviceLinkEvent } from './device-link-service.js';
 import { KeyringReplica } from './keyring-replica.js';
 import type { KeyringDump } from './keyring-service.js';
@@ -507,6 +509,8 @@ export class SessionEngineClient {
         });
         return this.#terminals;
     }
+
+    configSync(_request: WorkspaceConfigRequest): Promise<SyncResult[]> { return Promise.resolve([]); }
 
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
     deviceLink(): DeviceLinkReplica {
