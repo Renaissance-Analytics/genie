@@ -90,17 +90,36 @@ interface Rig {
     spawnHosts: number[];
 }
 const rigs: Rig[] = [];
-afterAll(async () => {
-    for (const r of rigs) {
-        try { writeFileSync(join(r.home, 'go'), ''); } catch { /* gone */ }
-        for (const pid of [r.shellPid, r.helperPid, ...r.spawnHosts, r.hostPid]) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
-        await rm(r.home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+const homes: string[] = [];
+/**
+ * Every process of this run carries this in its environment (the window's env travels to the host, its spawn hosts and the
+ * terminal's helper). Twice a first version left orphans holding the CI runner's pipes, and the unit job ran to its
+ * 15-minute limit with no log: whatever a test leaves, the run ends here — and what had to be ended is printed (it is
+ * evidence for B in its own right).
+ */
+const RUN = `host-pty-fds-${process.pid}-${Date.now()}`;
+function processesOfThisRun(): Array<{ pid: number; cmd: string }> {
+    const out: Array<{ pid: number; cmd: string }> = [];
+    for (const name of readdirSync('/proc')) {
+        if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
+        try { if (readFileSync(`/proc/${name}/environ`, 'utf8').split('\0').includes(`HOST_PTY_FDS_RUN=${RUN}`)) out.push({ pid: Number(name), cmd: cmdline(Number(name)).slice(0, 120) }); } catch { /* gone, or not ours */ }
     }
+    return out;
+}
+afterAll(async () => {
+    if (process.platform !== 'linux') return;
+    for (const r of rigs) { try { writeFileSync(join(r.home, 'go'), ''); } catch { /* gone */ } }
+    await sleep(500);
+    const left = processesOfThisRun();
+    console.log(`[host-pty-fds] afterAll: ${left.length} process(es) of this run still alive: ${JSON.stringify(left)}`);
+    for (const p of left) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
+    for (const home of homes) await rm(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 
 /** A window on Electron's runtime holding a listening socket starts the real host; a client opens a real terminal in it. */
 async function rig(): Promise<Rig> {
     const home = await mkdtemp(join(tmpdir(), 'host-pty-fds-'));
+    homes.push(home);
     const server: Server = createServer();
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const port = (server.address() as { port: number }).port;
@@ -108,7 +127,7 @@ async function rig(): Promise<Rig> {
     const inode = readlinkSync(`/proc/self/fd/${fd}`);
     let log = '';
     const window = spawn(electron, ['--import', 'tsx', resolve('test/fixtures/pty-window.ts'), home], {
-        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts'), GENIE_HOST_IDLE_MS: '600000' },
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts'), GENIE_HOST_IDLE_MS: '600000', HOST_PTY_FDS_RUN: RUN },
         stdio: ['ignore', 'pipe', 'pipe', fd],
     });
     window.stderr!.on('data', (c: Buffer) => { log += c.toString(); });
