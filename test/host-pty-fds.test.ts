@@ -9,6 +9,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { parseHostRecord } from '../src/core/engine-protocol.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { connectSocket } from '../src/main/engine-launch.js';
+import { procStart, readPtyLedger, writePtyLedger } from '../src/main/pty-ledger.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 
 /**
@@ -184,10 +185,26 @@ describe.skipIf(process.platform !== 'linux')('a terminal in genie-host on Elect
         await sleep(3_000);
         const survived = { helper: alive(r.helperPid) ? { pid: r.helperPid, ppid: ppid(r.helperPid) } : null, shell: alive(r.shellPid) ? { pid: r.shellPid, ppid: ppid(r.shellPid) } : null };
         console.log(`[host-pty-fds] B: 3 s after the host and its spawn hosts were SIGKILLed: ${JSON.stringify(survived)}`);
+        /*
+         * A LEFTOVER THAT DOES NOT END ON ITS OWN (batch N). From fancy-pty 0.2.0 the helper ends its tree when its controller
+         * dies, so on 0.2.1 the helper and shell above may be gone before any reap — and a test that only watched them stayed
+         * green with the reap removed. The reap is for whatever outlives its owner regardless (a helper of another version, a
+         * platform where it does not, a process tree a helper missed): a plain long-running process this test starts stands
+         * for it, recorded in the dead host's ledger by the same rules as any pty — its real pid, its real start time.
+         */
+        const stray = spawn('sleep', ['300'], { detached: true, stdio: 'ignore' });
+        const strayPid = stray.pid!;
+        const ledgerFile = join(r.home, 'runtime', 'ptys.json');
+        const left = readPtyLedger(ledgerFile);
+        expect(left?.owner).toBe(r.host.pid); // the dead host's own ledger
+        writePtyLedger(ledgerFile, { owner: left!.owner, ptys: [...left!.ptys, { profile: 'terminals', id: 'stray', pid: strayPid, start: procStart(strayPid) }] });
+        // CONTROL: the stray runs, and nothing but a reap would end it.
+        expect(alive(strayPid)).toBe(true);
         const next = startHost(r.home, null);
         await within(90_000, 'the next host', until('next host.json', () => parseHostRecord(existsSync(join(r.home, 'runtime', 'host.json')) ? readFileSync(join(r.home, 'runtime', 'host.json'), 'utf8') : null)?.pid === next.child.pid || null, 85_000), () => next.log().slice(-3000));
-        const reaped = await until('the leftover terminal reaped', () => (!alive(r.helperPid) && !alive(r.shellPid) ? true : null), 15_000).catch(() => false);
-        console.log(`[host-pty-fds] B: the next host (${next.child.pid}) started; helper ${alive(r.helperPid) ? 'ALIVE' : 'gone'}, shell ${alive(r.shellPid) ? 'ALIVE' : 'gone'}; its log: ${JSON.stringify(next.log().split('\n').filter((l) => /reap|ptys/i.test(l)))}`);
+        const reaped = await until('the leftovers reaped', () => (!alive(strayPid) && !alive(r.helperPid) && !alive(r.shellPid) ? true : null), 15_000).catch(() => false);
+        console.log(`[host-pty-fds] B: the next host (${next.child.pid}) started; stray ${alive(strayPid) ? 'ALIVE' : 'gone'}, helper ${alive(r.helperPid) ? 'ALIVE' : 'gone'}, shell ${alive(r.shellPid) ? 'ALIVE' : 'gone'}; its log: ${JSON.stringify(next.log().split('\n').filter((l) => /reap|ptys/i.test(l)))}`);
+        try { process.kill(strayPid, 'SIGKILL'); } catch { /* gone */ }
         expect(reaped).toBe(true);
         try { process.kill(next.child.pid!, 'SIGKILL'); } catch { /* gone */ }
     }, 150_000);
