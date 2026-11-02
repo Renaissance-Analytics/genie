@@ -91,14 +91,6 @@ const TAB_LABEL: Record<AgentTab, string> = {
     settings: 'Settings',
 };
 
-/**
- * A `title` for a react-fancy Breadcrumbs crumb. The crumb spreads its rest props onto the element (react-fancy 6.1.1), so a
- * title works at runtime, but `BreadcrumbsItemProps` does not admit HTML attributes yet; asked of the fancy agent
- * (2026-11-01). Remove this once the type takes `title`. A truncated crumb needs it: it is the only way to read the whole
- * name.
- */
-const titled = (title: string): object => ({ title });
-
 const PILL_TONE = {
     ok: 'text-[var(--success)]',
     warn: 'text-[var(--warning)]',
@@ -613,11 +605,11 @@ function AgentViewBody({
                     agent, the page you are on. Below md react-fancy folds it into a menu that keeps the way back. */}
                 <Breadcrumbs separator={<span className="text-[13px] text-[var(--fg-4)]">/</span>} className="min-w-0 shrink items-center gap-1.5 overflow-hidden">
                     {workspace ? (
-                        <Breadcrumbs.Item data-crumb={workspace.id} data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} {...titled(`Back to ${workspace.name ?? workspace.id}`)} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
+                        <Breadcrumbs.Item data-crumb={workspace.id} data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
                             {workspace.name ?? workspace.id}
                         </Breadcrumbs.Item>
                     ) : null}
-                    <Breadcrumbs.Item active data-agent-name="" {...titled(agent.name)} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium text-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Breadcrumbs.Item>
+                    <Breadcrumbs.Item active data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium text-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Breadcrumbs.Item>
                 </Breadcrumbs>
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
