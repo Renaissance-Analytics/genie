@@ -76,6 +76,9 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
 };
 
 export class AgentStoresService {
+    /** RED STUB. */
+    registrySettled(): Promise<void> { return Promise.resolve(); }
+
     readonly #stores: AgentStores;
     readonly #forwardedCall: (id: string) => import('./mcp-tools.js').McpCall | undefined;
     readonly #listeners = new Set<(event: StoresEvent) => void>();

@@ -14,6 +14,7 @@ export interface HostAgentKeysOptions {
     readonly tynn: AgentTynnPrepOptions['tynn'];
     readonly workspaces: AgentTynnPrepOptions['workspaces'];
     readonly ready?: AgentTynnPrepOptions['ready'];
+    readonly settled?: () => Promise<void>;
 }
 export interface HostAgentKeysResult {
     readonly servers: readonly McpServer[];
@@ -21,6 +22,7 @@ export interface HostAgentKeysResult {
 }
 export type HostAgentKeys = ((agent: AgentRecord, cwd: string, signal?: AbortSignal) => Promise<HostAgentKeysResult>) & {
     recovery(options?: { readonly secretsMoved?: boolean }): Promise<string[]>;
+    waiting(): boolean;
 };
 
 export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
@@ -35,5 +37,5 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         const servers = await prep.prepare(agent, signal);
         return { servers, note: prep.note(agent.id) };
     };
-    return Object.assign(read, { recovery: prep.recovery });
+    return Object.assign(read, { recovery: prep.recovery, waiting: () => false });
 }
