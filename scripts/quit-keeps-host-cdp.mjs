@@ -169,6 +169,13 @@ class Cdp {
         return f.result.result.value;
     }
     close() { try { this.#ws.close(); } catch { /* gone */ } }
+    /** Closed, and the close done (bounded): a session still attached keeps a quitting Node process waiting for it. */
+    async closed(ms = 5_000) {
+        if (this.#ws.readyState === WebSocket.CLOSED) return true;
+        const done = new Promise((r) => this.#ws.addEventListener('close', () => r(true), { once: true }));
+        this.close();
+        return Promise.race([done, sleep(ms).then(() => false)]);
+    }
 }
 
 // ---------------------------------------------------------------- one Genie, launched and ended by this script
@@ -226,10 +233,15 @@ async function open(label, id) {
 /**
  * The person's click, and nothing else: the dialog answers `index` and writes down what it asked; then the quit is the
  * product's own (`app.quit()` → before-quit → quitPlan → quitAnswer → runQuit). Answers whether the substitution took.
+ *
+ * THE INSPECTOR LETS GO BEFORE THE QUIT (batch M: both windows ended their quit and then sat on "Waiting for the debugger
+ * to disconnect..." — Node keeps a process alive while a debugger session is attached, so the script's own session held
+ * the window open, and the exit checks failed for the harness, not the product). The quit is deferred by a second; this
+ * session is closed, and its close done, well inside it.
  */
 async function answerTheQuit(inspector, index) {
     rmSync(PROOF, { force: true });
-    return inspector.evaluate(`(() => {
+    const said = await inspector.evaluate(`(() => {
         const module = process.getBuiltinModule && process.getBuiltinModule('node:module');
         if (!module) return 'no process.getBuiltinModule in this Electron';
         const require = module.createRequire(process.execPath);
@@ -242,12 +254,25 @@ async function answerTheQuit(inspector, index) {
         };
         dialog.showMessageBoxSync = click;
         if (require('electron').dialog.showMessageBoxSync !== click) return 'the dialog could not be answered (the substitution did not take)';
-        setTimeout(() => app.quit(), 100);
+        setTimeout(() => app.quit(), 1000);
         return 'ok';
     })()`, 10_000);
+    const detached = await inspector.closed(5_000);
+    console.log(`  the inspector session ${detached ? 'is closed' : 'did NOT close within 5 s'} before the quit`);
+    return said;
 }
 const asked = () => { try { return JSON.parse(readFileSync(PROOF, 'utf8')); } catch { return null; } };
 const exitWithin = (app, ms) => Promise.race([app.exited, sleep(ms).then(() => null)]);
+/**
+ * Why a window did not exit: Node's own words when a debugger session holds it (then it is this harness, not Genie), or
+ * the product's — named either way, from the window's log.
+ */
+function whyStillRunning(app) {
+    const tail = readOr(app.log).split('\n').slice(-20).join('\n');
+    return /Waiting for the debugger to disconnect/.test(tail)
+        ? 'still running after 60 s, HELD BY A DEBUGGER SESSION ("Waiting for the debugger to disconnect...") — the harness, not the product'
+        : 'still running after 60 s (no debugger hold in its log: the product did not exit)';
+}
 
 // ---------------------------------------------------------------- the ledger's word: which pid streams, up to which tick
 async function ticksOf(cdp, agentId) {
@@ -422,7 +447,7 @@ try {
     check(took === 'ok', '10. the quit is answered by button 1 (the person\'s click, substituted)', String(took));
     step('11', 'waiting for the window process to exit (≤ 60 s)');
     const exit = await exitWithin(a.app, 60_000);
-    check(exit !== null, '11. the UI closed: the window process exited', exit ? `code ${exit.code} signal ${exit.signal}` : 'still running after 60 s');
+    check(exit !== null, '11. the UI closed: the window process exited', exit ? `code ${exit.code} signal ${exit.signal}` : whyStillRunning(a.app));
     const q = asked();
     check(JSON.stringify(q?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '12. the quit ASKED the two answers, and button 1 was "Just close the UI"', JSON.stringify(q));
     check(!alive(a.windowPid), '13. the window process is gone (the OS says so)', `pid ${a.windowPid}`);
@@ -458,7 +483,7 @@ try {
     check(took2 === 'ok', '24. the quit is answered by button 2', String(took2));
     step('25', 'waiting for the window process to exit (≤ 60 s)');
     const exit2 = await exitWithin(b.app, 60_000);
-    check(exit2 !== null, '25. the window process exited', exit2 ? `code ${exit2.code}` : 'still running after 60 s');
+    check(exit2 !== null, '25. the window process exited', exit2 ? `code ${exit2.code}` : whyStillRunning(b.app));
     const q2 = asked();
     check(JSON.stringify(q2?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '26. it asked the two answers; button 2 was "Shut down everything"', JSON.stringify(q2));
     step('27', `waiting for the host pid ${hostPid} to end (≤ 30 s)`);
