@@ -8,6 +8,8 @@ import { agentRecord, mintAgentId, type AgentId, type AgentRecord } from '../src
 import { memoryPair } from '../src/core/line-transport.js';
 import type { SessionDriverFactory } from '../src/core/session.js';
 import { AgentStoresService } from '../src/main/agent-stores-host.js';
+import { openAgentStores } from '../src/main/agent-stores-open.js';
+import { ApprovalQueue } from '../src/main/approval-queue.js';
 import { hostAgentKeys } from '../src/main/host-agent-keys.js';
 import { HostRegistry } from '../src/main/host-registry.js';
 import { hostTynnRecovery, RECOVERY_STEPS_MS } from '../src/main/host-tynn-recovery.js';
@@ -39,7 +41,11 @@ beforeEach(async () => {
     vaultFile = join(dir, 'agent-credentials', 'agents.json');
     writeFileSync(join(workspace, 'project.json'), JSON.stringify({ tynn: { projectId: PROJECT } }));
 });
-afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
+const closers: Array<() => void> = [];
+afterEach(async () => {
+    for (const close of closers.splice(0)) close();
+    await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+});
 
 const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRecord =>
     agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'atlas', ...over });
@@ -325,7 +331,9 @@ describe('A WORKSPACE A WINDOW HAS JUST ADDED IS NEVER REFUSED', () => {
     async function linked() {
         const { store, release } = heldStore();
         const model = new HostRegistry(store);
-        const stores = new AgentStoresService({ registry: { store, model } } as never);
+        const own = await openAgentStores(dir, () => new Date().toISOString());
+        const stores = new AgentStoresService({ ...own, approvals: new ApprovalQueue(), registry: { store, model } });
+        closers.push(() => own.knowledge.close());
         const handed: Array<readonly McpServer[]> = [];
         const t = tynnFake();
         const keys = hostAgentKeys({ vaultFile, keychain: fakeKeychain(), tynn: () => t.port, workspaces: () => model.listWorkspaces(), settled: () => stores.registrySettled() });

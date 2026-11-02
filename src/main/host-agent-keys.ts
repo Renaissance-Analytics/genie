@@ -15,6 +15,8 @@ export interface HostAgentKeysOptions {
     readonly workspaces: AgentTynnPrepOptions['workspaces'];
     readonly ready?: AgentTynnPrepOptions['ready'];
     readonly settled?: () => Promise<void>;
+    /** An agent was prepared: whoever keeps asking for Tynn looks again. */
+    readonly onPrepared?: () => void;
 }
 export interface HostAgentKeysResult {
     readonly servers: readonly McpServer[];
@@ -32,10 +34,12 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         tynn: options.tynn,
         workspaces: options.workspaces,
         ...(options.ready ? { ready: options.ready } : {}),
+        ...(options.settled ? { settled: options.settled } : {}),
     });
     const read = async (agent: AgentRecord, _cwd: string, signal: AbortSignal = new AbortController().signal): Promise<HostAgentKeysResult> => {
         const servers = await prep.prepare(agent, signal);
+        options.onPrepared?.();
         return { servers, note: prep.note(agent.id) };
     };
-    return Object.assign(read, { recovery: prep.recovery, waiting: () => false });
+    return Object.assign(read, { recovery: prep.recovery, waiting: prep.waiting });
 }

@@ -26,6 +26,11 @@ export interface AgentTynnPrepOptions {
     readonly withConfig?: <T>(path: string, run: () => Promise<T>) => Promise<T>;
     /** What must finish before a key is read: the account opening, or a window's one-time move. */
     readonly ready?: () => Promise<unknown>;
+    /**
+     * A workspace this does not know, or knows as asleep, may be one a write in flight is about to change: a window's add goes over the same
+     * socket as its start, and the host runs its calls concurrently. Waits for those writes, so an ordinary click is never refused.
+     */
+    readonly settled?: () => Promise<void>;
 }
 
 const projectText = async (workspacePath: string): Promise<string | null> => {
@@ -84,16 +89,19 @@ export function agentTynnPrep(options: AgentTynnPrepOptions) {
         const checkStop = () => { if (signal.aborted) throw new McpPreparationError('cancelled'); };
         checkStop();
         if (agent.workspaceId === OS_WORKSPACE) return [];
-        const workspace = options.workspaces()?.find((w) => w.id === agent.workspaceId);
+        const known = () => options.workspaces()?.find((w) => w.id === agent.workspaceId);
+        let workspace = known();
+        if (!workspace || workspace.asleep) { await options.settled?.(); workspace = known(); checkStop(); }
         if (!workspace || workspace.asleep) throw new McpPreparationError('workspace');
-        const text = await projectText(workspace.path);
-        await withConfig(workspace.path, () => reconcileLegacyTynnConfig({ workspacePath: workspace.path, fs: nodeTynnConfigFs(workspace.path) }));
+        const here = workspace;
+        const text = await projectText(here.path);
+        await withConfig(here.path, () => reconcileLegacyTynnConfig({ workspacePath: here.path, fs: nodeTynnConfigFs(here.path) }));
         checkStop();
         const projectId = tynnProjectIdOf(text);
         if (projectId === null) return [];
         await options.ready?.();
         const ensure = (tynn: TynnSessionPort | null) => tokens.ensure({
-            workspacePath: workspace.path, agent, signal, tynn,
+            workspacePath: here.path, agent, signal, tynn,
             fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },
         });
         const asked = options.tynn() ?? null;
@@ -112,12 +120,15 @@ export function agentTynnPrep(options: AgentTynnPrepOptions) {
         if (result.status === 'failed') { without.set(agent.id, result.code ?? 'refused'); return []; }
         if (result.status === 'unlinked') throw new McpPreparationError('workspace');
         const current = options.workspaces()?.find((w) => w.id === agent.workspaceId);
-        if (!current || current.asleep || current.path !== workspace.path || tynnProjectIdOf(await projectText(workspace.path)) !== projectId) throw new McpPreparationError('workspace');
+        if (!current || current.asleep || current.path !== here.path || tynnProjectIdOf(await projectText(here.path)) !== projectId) throw new McpPreparationError('workspace');
         checkStop();
         without.delete(agent.id);
-        if (result.unverified) unverified.set(agent.id, { agent, path: workspace.path, text });
+        if (result.unverified) unverified.set(agent.id, { agent, path: here.path, text });
         return [{ type: 'http', name: 'tynn', url: result.mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${result.mcp.token}` }] }];
     };
 
-    return { prepare, note, recovery, legacyKeys: tokens.legacyKeys };
+    /** Is an agent running without what Tynn answering would give it: no key for want of Tynn, or a key nobody has checked? */
+    const waiting = (): boolean => unverified.size > 0 || [...without.values()].includes('offline');
+
+    return { prepare, note, recovery, waiting, legacyKeys: tokens.legacyKeys };
 }

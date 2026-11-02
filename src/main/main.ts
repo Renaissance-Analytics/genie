@@ -501,8 +501,10 @@ function recoverMissingMcp(agentId: AgentId, reports: readonly McpServerReport[]
 let tynnRecovering = false;
 function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
     if (tynnRecovering || !services || (!asked.secretsMoved && !tynnAccount?.status().signedIn)) return;
+    // With a host, the host hears the account itself and restarts its own agents, with or without this window (host-tynn-recovery.ts). All it
+    // cannot hear is that this window's one-time move has finished.
+    if (agentEngineLink && !asked.secretsMoved) return;
     tynnRecovering = true;
-    // The host prepares its agents, so it knows which went without; a window running its own engine knows here.
     const named = agentEngineLink ? agentEngineLink.client.tynn().recovery(asked) : services.tynnRecovery(asked);
     void named.then((ids) => {
         for (const id of ids) {
