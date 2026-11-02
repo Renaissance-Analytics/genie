@@ -239,6 +239,12 @@ export const REPLAY_META = 'particle.academy/replay';
  * `{ turns, items, diagnostics, reasons, omittedDiagnostics, complete }`.
  */
 export const REPLAY_SUMMARY_META = 'particle.academy/replay_summary';
+/**
+ * prism-acp's mark on a tool call made INSIDE another (its exported `META_PARENT_TOOL_CALL`): a subagent's calls and their
+ * results, naming the call that spawned it; absent on the agent's own. Pinned to prism-acp's value in
+ * test/reply-one-row-1456.test.ts.
+ */
+export const PARENT_TOOL_CALL_META = 'particle.academy/parent_tool_call_id';
 /** Where prism-acp (0.19.0+) puts a compaction on a `notice` (its exported `META_COMPACTION`): trigger, pre/post tokens. */
 export const COMPACTION_META = 'particle.academy/compaction';
 
