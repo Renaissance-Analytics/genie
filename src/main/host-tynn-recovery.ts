@@ -38,6 +38,12 @@ export interface HostTynnRecoveryPorts {
     cwdFor(record: AgentRecord): string;
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     readonly log?: (line: string) => void;
+    /** Starts while someone waits, and stops when nobody does: says when the machine has been asleep. */
+    readonly watchWake?: (onWake: () => void) => () => void;
+}
+
+export function wallClockJumps(_onWake: () => void, _options: { readonly everyMs?: number; readonly toleranceMs?: number; readonly now?: () => number; readonly schedule?: (ms: number, fn: () => void) => () => void } = {}): () => void {
+    throw new Error('not built yet');
 }
 
 export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
@@ -117,5 +123,7 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
         tick();
     };
 
-    return { recover, kick };
+    const nudge = (): void => { throw new Error('not built yet'); };
+
+    return { recover, kick, nudge };
 }

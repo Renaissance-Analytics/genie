@@ -12,7 +12,7 @@ import { openAgentStores } from '../src/main/agent-stores-open.js';
 import { ApprovalQueue } from '../src/main/approval-queue.js';
 import { hostAgentKeys } from '../src/main/host-agent-keys.js';
 import { HostRegistry } from '../src/main/host-registry.js';
-import { hostTynnRecovery, RECOVERY_STEPS_MS } from '../src/main/host-tynn-recovery.js';
+import { hostTynnRecovery, RECOVERY_STEPS_MS, wallClockJumps } from '../src/main/host-tynn-recovery.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
@@ -344,6 +344,150 @@ describe('one at a time, and it keeps asking only while someone waits', () => {
         recovery.kick();
         for (let i = 0; i < RECOVERY_STEPS_MS.length + 3; i += 1) { t.due.shift()!.fn(); await settle(); }
         expect(t.due.map((d) => d.ms)).toEqual([RECOVERY_STEPS_MS.at(-1)]);
+    });
+
+    it('it asks after 30 s, after 2 min, then every 5 min: a restart needs the key held, so asking often touches nobody', () => {
+        expect(RECOVERY_STEPS_MS).toEqual([30_000, 120_000, 300_000]);
+    });
+
+    describe('asking at once, when something has changed', () => {
+        function rig(options: { waiting?: () => boolean; names?: () => Promise<string[]>; recheck?: () => Promise<void>; inTurn?: boolean; watchWake?: (onWake: () => void) => () => void } = {}) {
+            const f = fakeHost();
+            const agent = record();
+            const t = timers();
+            let rechecks = 0;
+            if (options.inTurn) f.state.inTurn = true;
+            const recovery = hostTynnRecovery({
+                names: options.names ?? (async () => []), waiting: options.waiting ?? (() => true),
+                recheck: async () => { rechecks += 1; await options.recheck?.(); },
+                host: f.host as never, record: () => agent, threadOf: () => null, cwdFor: () => workspace, schedule: t.schedule,
+                ...(options.watchWake ? { watchWake: options.watchWake } : {}),
+            });
+            return { f, t, agent, recovery, rechecks: () => rechecks };
+        }
+
+        it('a nudge while someone waits asks now, and the timer it replaced does not also fire', async () => {
+            const r = rig();
+            r.recovery.kick();
+            expect(r.t.due).toHaveLength(1);
+            r.recovery.nudge();
+            await settle();
+            expect(r.rechecks()).toBe(1);
+            expect(r.t.due, 'one timer, the next step').toHaveLength(1);
+        });
+
+        it('a nudge restarts an agent whose key is now held', async () => {
+            const agentId = record().id as string;
+            const r = rig({ names: async () => [agentId] });
+            r.recovery.nudge();
+            await settle();
+            expect(r.f.calls).toContain('stop');
+        });
+
+        it('with nobody named, a nudge touches nobody', async () => {
+            const r = rig();
+            r.recovery.kick();
+            r.recovery.nudge();
+            await settle();
+            expect(r.f.calls).toEqual([]);
+        });
+
+        it('wired: a window linking asks at once, and the host watches for its machine waking', () => {
+            const host = readFileSync('src/main/genie-host.ts', 'utf8');
+            expect(host).toMatch(/if \(n > windowsLinked\) tynnRecovery\?\.nudge\(\);/);
+            expect(host).toMatch(/watchWake: wallClockJumps/);
+        });
+
+        it('a nudge with nobody waiting does nothing: no question to Tynn, and nothing scheduled', async () => {
+            const r = rig({ waiting: () => false });
+            r.recovery.nudge();
+            await settle();
+            expect(r.rechecks()).toBe(0);
+            expect(r.t.due).toEqual([]);
+        });
+
+        it('a nudge during a check does not start a second one', async () => {
+            let release: () => void = () => {};
+            const r = rig({ recheck: () => new Promise<void>((done) => { release = done; }) });
+            r.recovery.nudge();
+            r.recovery.nudge();
+            await settle();
+            expect(r.rechecks()).toBe(1);
+            release();
+            await settle();
+            expect(r.t.due).toHaveLength(1);
+        });
+
+        it('a nudge starts the asking if a kick never did', async () => {
+            const r = rig();
+            r.recovery.nudge();
+            await settle();
+            expect(r.rechecks()).toBe(1);
+            expect(r.t.due).toHaveLength(1);
+        });
+
+        it('a nudge never restarts through a running turn', async () => {
+            const agentId = record().id as string;
+            const r = rig({ names: async () => [agentId], inTurn: true });
+            r.recovery.nudge();
+            await settle();
+            expect(r.f.calls, 'the key is held and the turn is running: it waits').toEqual([]);
+        });
+
+        it('the wake watch runs only while someone waits, and its word is a nudge', async () => {
+            let waiting = true;
+            let wake: () => void = () => {};
+            let started = 0;
+            let stopped = 0;
+            const r = rig({ waiting: () => waiting, watchWake: (onWake) => { started += 1; wake = onWake; return () => { stopped += 1; }; } });
+            expect(started).toBe(0);
+            r.recovery.kick();
+            r.recovery.kick();
+            expect(started).toBe(1);
+            wake();
+            await settle();
+            expect(r.rechecks()).toBe(1);
+            waiting = false;
+            r.t.due.shift()!.fn();
+            await settle();
+            expect(stopped).toBe(1);
+            expect(r.t.due).toEqual([]);
+        });
+    });
+
+    describe('wallClockJumps: a host with no Electron hears that the machine slept', () => {
+        function clock() {
+            const c = { at: 1_000_000, due: [] as { ms: number; fn: () => void }[] };
+            return { c, now: () => c.at, schedule: (ms: number, fn: () => void) => { const t = { ms, fn }; c.due.push(t); return () => { c.due.splice(c.due.indexOf(t), 1); }; } };
+        }
+
+        it('timers on time say nothing', () => {
+            const { c, now, schedule } = clock();
+            let woke = 0;
+            wallClockJumps(() => { woke += 1; }, { everyMs: 30_000, toleranceMs: 60_000, now, schedule });
+            for (let i = 0; i < 5; i += 1) { c.at += 30_000; c.due.shift()!.fn(); }
+            expect(woke).toBe(0);
+        });
+
+        it('a timer far later than it asked says so, once per jump, and keeps watching', () => {
+            const { c, now, schedule } = clock();
+            let woke = 0;
+            wallClockJumps(() => { woke += 1; }, { everyMs: 30_000, toleranceMs: 60_000, now, schedule });
+            c.at += 3_600_000;
+            c.due.shift()!.fn();
+            expect(woke).toBe(1);
+            c.at += 30_000;
+            c.due.shift()!.fn();
+            expect(woke).toBe(1);
+            expect(c.due).toHaveLength(1);
+        });
+
+        it('stopping leaves nothing scheduled', () => {
+            const { c, now, schedule } = clock();
+            const stop = wallClockJumps(() => {}, { now, schedule });
+            stop();
+            expect(c.due).toEqual([]);
+        });
     });
 
     it('a kick with nobody waiting schedules nothing, and a second kick does not start a second loop', () => {
