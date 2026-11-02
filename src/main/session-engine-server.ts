@@ -2,6 +2,7 @@ import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
 import type { WorkstationService } from './workstation-service.js';
+import type { DeviceLinkEvent, DeviceLinkService } from './device-link-service.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
@@ -71,6 +72,8 @@ export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'se
 export interface EngineServerOptions {
     /** This machine as a workstation (P3.4): the host holds its key. */
     readonly workstation?: WorkstationService;
+    /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
+    readonly deviceLink?: DeviceLinkService;
     /** The keyring card, as the host found it (P3.4 cut c). */
     readonly keyring?: KeyringService;
     /** The host's GitHub account (P3.4 cut c). */
@@ -551,6 +554,8 @@ export class SessionEngineServer {
     }
 
     /** A batch or a git result of the file-watch hub, to the window (connection) that owns the views it is for. */
+    deviceEvent(_owner: string, _event: DeviceLinkEvent): void {}
+
     filesEvent(owner: string, event: FilesHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'files.event', event);
     }

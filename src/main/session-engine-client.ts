@@ -1,4 +1,5 @@
 import { WorkstationReplica } from './workstation-replica.js';
+import { DeviceLinkReplica } from './device-link-replica.js';
 import { KeyringReplica } from './keyring-replica.js';
 import type { KeyringDump } from './keyring-service.js';
 import { GithubAccountReplica } from './github-account-replica.js';
@@ -500,6 +501,8 @@ export class SessionEngineClient {
         });
         return this.#terminals;
     }
+
+    deviceLink(): DeviceLinkReplica { return new DeviceLinkReplica(async () => null); }
 
     /** This machine as a workstation: genie-host holds the key and signs (P3.4). */
     workstation(): WorkstationReplica {

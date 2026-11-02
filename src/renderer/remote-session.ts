@@ -1,4 +1,5 @@
 import { relayWorkstationOf } from '../core/remote-window.js';
+import type { AuthRequest } from '../core/remote-protocol.js';
 /**
  * CONNECTING TO ANOTHER MACHINE — the client-local half (§6.8). The device's memory of where it has
  * paired is a DEVICE preference (the three-way split), so it lives in the window's own storage under
@@ -53,6 +54,16 @@ export { relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteWindo
 
 const HOSTS_KEY = 'genie.remote.hosts';
 
+export interface DeviceLinkBridge {
+    open(url: string): Promise<{ ok: true; channel: string } | { ok: false; reason: string }>;
+    hosts(): Promise<string[]>;
+    forget(url: string): Promise<boolean>;
+    adopt(url: string, token: string): Promise<boolean>;
+}
+
+export function moveRememberedTokens(_storage: TokenStorage, _link: DeviceLinkBridge): Promise<void> { throw new Error('not built yet'); }
+export function deviceAuth(_pin: string, _label: string, _paired: readonly string[], _url: string): AuthRequest | null { throw new Error('not built yet'); }
+
 /** A host this device has connected to (Genie 1's `remote.known`). `name` is the host's own, from its welcome. */
 export interface KnownHost {
     readonly url: string;
@@ -67,7 +78,7 @@ export interface KnownHost {
  * and when it was last connected. A host remembered before names were kept is listed by its address, never dropped.
  * Forget removes the host AND its token — the next connection needs the PIN again.
  */
-export function knownHosts(storage: TokenStorage) {
+export function knownHosts(storage: TokenStorage, _held?: { hosts(): string[]; forget(url: string): void }) {
     const tokens = rememberedTokens(storage);
     const read = (): Record<string, { name: string | null; at: number | null }> => {
         try {
