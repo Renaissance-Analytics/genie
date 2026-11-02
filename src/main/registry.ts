@@ -6,6 +6,12 @@ import { agentRowFor, type LiveSession } from '../core/roster.js';
 import type { DeckItem, SignalState } from '../core/deck.js';
 import type { GenieSnapshot } from '../renderer/bridge.js';
 import { Store, type WorkspaceRecord } from './store.js';
+
+/**
+ * Where a Registry's files are read and written (the host split, P3.2): the Store itself (genie-host, and the emergency
+ * path), or a window's HostRegistryStore — the same calls, answered by the host, the files' one writer.
+ */
+export type RegistryStore = Pick<Store, 'readWorkspaces' | 'readAgents' | 'readRunningAtQuit' | 'readInterruptedAtQuit' | 'writeWorkspaces' | 'writeAgents' | 'writeRunningAtQuit' | 'writeInterruptedAtQuit' | 'dropped'>;
 import { isOsAgent, OS_WORKSPACE, withOsAgentPolicy } from '../core/os-agent.js';
 import { folderName } from '../core/workspace-name.js';
 import { slugsFor } from '../core/address.js';
@@ -45,7 +51,7 @@ export { OS_WORKSPACE };
 export type SessionProbe = (id: AgentId) => LiveSession | null;
 
 export class Registry {
-    readonly #store: Store;
+    #store: RegistryStore;
     #workspaces: readonly WorkspaceRecord[] = [];
     #agents: readonly AgentRecord[] = [];
     #probe: SessionProbe = () => null;
@@ -64,8 +70,32 @@ export class Registry {
     /** A workspace's colour (genie#1300: project.json `appearance.color`, main/workspace-color-host.ts); `null` = none yet. */
     #colorer: (path: string) => string | null = () => null;
 
-    constructor(store: Store) {
+    constructor(store: RegistryStore) {
         this.#store = store;
+    }
+
+    /** Read and write through `store` instead (genie-host's, P3.2). Before `load` only: a loaded model is not re-homed. */
+    useStore(store: RegistryStore): void {
+        if (this.#loaded) throw new Error('the registry is loaded; its store is not changed under it');
+        this.#store = store;
+    }
+
+    /**
+     * Read the files again — another window, or the host, wrote them (P3.2: two windows, one registry). Announced only
+     * when something changed, so a window's own write, read back, redraws nothing twice.
+     */
+    async refresh(): Promise<void> {
+        if (!this.#loaded) return;
+        const workspaces = await this.#store.readWorkspaces();
+        const agents = await this.#store.readAgents();
+        const changedAgents = agents.filter((a) => JSON.stringify(a) !== JSON.stringify(this.#agents.find((x) => x.id === a.id) ?? null)).map((a) => a.id);
+        const gone = this.#agents.filter((a) => !agents.some((x) => x.id === a.id)).map((a) => a.id);
+        const workspacesChanged = JSON.stringify(workspaces) !== JSON.stringify(this.#workspaces);
+        if (!workspacesChanged && changedAgents.length === 0 && gone.length === 0) return;
+        this.#workspaces = workspaces;
+        this.#agents = agents;
+        this.#emit();
+        for (const id of [...changedAgents, ...gone]) for (const listener of this.#recordListeners) listener(id as AgentId);
     }
 
     /** Problems found while loading, for the surface to report rather than swallow. */

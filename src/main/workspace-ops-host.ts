@@ -421,7 +421,7 @@ export async function addWorkspaceFromTynn(ports: WorkspaceOpsPorts, parent: str
     return { ok: true, id, kind: 'empty', stamped: null };
 }
 
-export function startRefusal(ports: Pick<WorkspaceOpsPorts, 'registry'>, record: AgentRecord, load?: { running: number; cap: number }): string | null {
+export function startRefusal(ports: { readonly registry: { workspace(id: string): { readonly id: string; readonly asleep?: boolean | undefined } | null } }, record: AgentRecord, load?: { running: number; cap: number }): string | null {
     const workspace = ports.registry.workspace(record.workspaceId);
     if (workspace?.asleep) return `${workspace.id} is hibernating; wake it before starting ${record.name}`;
     // §6.1 caps: a start past the cap is refused with the number and the setting named — never queued, never silent.

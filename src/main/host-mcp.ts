@@ -30,7 +30,8 @@ import { osaHomeDir } from './paths.js';
 type SettingValue = boolean | string;
 
 export interface WindowView {
-    readonly workspaces: ReadonlyArray<{ readonly id: string; readonly path: string; readonly slug: string; readonly defaultAgentId: string | null }>;
+    /** The workspaces' names as the window reads them (project.json): their address slugs. The rest is the host's own registry. */
+    readonly workspaceNames: Readonly<Record<string, string>>;
     /** The person is at the computer (the window's own measure). No window = nobody is. */
     readonly userActive: boolean;
     /** Terminals the window runs whose agents call Genie (Take Over windows, flow runs): terminal id → caller. */
@@ -43,6 +44,8 @@ export interface HostMcpPorts {
     /** The settings: the host's own since P3.2 (dnd, inbox access, workspace tabs are read here, live). */
     readonly settings: Pick<import('./settings-store.js').SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly records: () => readonly AgentRecord[];
+    /** The host's own registry (P3.2): a workspace's path, its default agent, the address slugs. */
+    readonly registry: Pick<import('./host-registry.js').HostRegistry, 'workspace' | 'workspaceSlugs' | 'defaultAgentOf' | 'setNames'>;
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
     readonly lastRowAt: (agentId: AgentId) => number | null;
     readonly reportPlan: (agentId: AgentId, steps: readonly { content: string; status: string }[]) => boolean | Promise<boolean>;
@@ -87,7 +90,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     const injected = new Map<string, Caller>();
     let injectSeq = 0;
 
-    const workspace = (id: string) => view?.workspaces.find((w) => w.id === id) ?? null;
+    const workspace = (id: string) => ports.registry.workspace(id);
     const resolveCaller = (id: string): Caller | null => {
         const records = ports.records();
         const vouched = injected.get(id);
@@ -106,7 +109,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             settings,
             approve: (caller, action, detail, call) => s.approvals.gate(caller, action, detail, call),
             roster: ports.records,
-            workspaceSlugs: () => new Map((view?.workspaces ?? []).map((w) => [w.id, w.slug])),
+            workspaceSlugs: () => ports.registry.workspaceSlugs(),
             liveness: (id) => livenessOf(ports.probe(id as AgentId), ports.lastRowAt(id as AgentId)),
             resolveCaller,
             userActive: () => ports.window.connected() && view?.userActive === true,
@@ -119,7 +122,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             openFile: unavailable('openFileForUser'),
             terminals: { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             plugins: { tools: () => view?.pluginTools ?? [], guard: () => null, run: unavailable('a plugin tool') },
-            agents: { defaultAgentOf: (ws) => workspace(ws)?.defaultAgentId ?? null, register: unavailable('createAgent') },
+            agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
         }));
@@ -157,6 +160,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     return {
         setView: async (next) => {
             view = next;
+            ports.registry.setNames(new Map(Object.entries(next.workspaceNames ?? {})));
             starting ??= start();
             await starting;
         },

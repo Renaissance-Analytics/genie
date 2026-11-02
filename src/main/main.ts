@@ -195,6 +195,7 @@ import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import { HostRegistryStore } from './agent-stores-replica.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -1358,6 +1359,10 @@ async function boot(): Promise<void> {
      */
     if (agentEngineLink) {
         const engineLink = agentEngineLink.client;
+        // THE REGISTRY'S FILES ARE GENIE-HOST'S (P3.2): this window's model reads and writes them through the host, and
+        // re-reads them when another window (or the host) wrote — two windows, one registry. Before its load, below.
+        theRegistry.useStore(new HostRegistryStore(engineLink.stores()));
+        engineLink.stores().onRegistryChanged(() => { void theRegistry.refresh(); });
         const processes = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('processes'), log: lifecycleLog });
         const shells = new SpawnHostClient({ entry: '', link: engineLink.spawnLink('terminals'), log: lifecycleLog });
         engineLink.onSpawnFrame('processes', (frame) => processes.linkFrame(frame));
@@ -3174,10 +3179,8 @@ async function boot(): Promise<void> {
             windowToolRun = windowToolRunner(() => registrations, vouchedCallers);
             for (const call of openFilesLater.splice(0)) void windowToolRun(call);
             const view = (): WindowView => {
-                const workspaces = registry?.listWorkspaces() ?? [];
-                const slugs = registry?.workspaceSlugs() ?? new Map<string, string>();
                 return {
-                    workspaces: workspaces.map((w) => ({ id: w.id, path: w.path, slug: slugs.get(w.id) ?? w.id, defaultAgentId: registry?.defaultAgentOf(w.id) ?? null })),
+                    workspaceNames: Object.fromEntries((registry?.snapshot().workspaces ?? []).map((w) => [w.id, w.name ?? w.id])),
                     userActive: powerMonitor.getSystemIdleTime() < 120,
                     callers: takeOvers?.callers() ?? {},
                     pluginTools: composed.plugins.tools(),
@@ -3318,7 +3321,9 @@ async function boot(): Promise<void> {
     // NOBODY HAS TO TYPE (genie#1379): every agent with a session is told after the coalescing window — a busy one at its
     // next step, as typed input arrives (genie#1411). An app's message starts a stopped agent only if it is automated and
     // the app wake cap allows; a turn only apps' mail opens is spent from that cap, and past it the mail waits for the window.
-    wireInboxPush({
+    // With genie-host the MAIL WAKE is the host's (P3.2, host-mail-wake.ts): an agent is told, and a stopped one started,
+    // with no window. This window's own runs only on the emergency path.
+    if (!agentEngineLink) wireInboxPush({
         inbox: composed.inbox, host, reminders: (input) => composed.inboxReminders(input), settled: (agentId, delivered) => composed.inboxNoticeSettled(agentId, delivered),
         wake: wakeAgent,
         // "You have N unread": a newer notice covers the one before, so new mail mid-turn is told at once (genie#1411).

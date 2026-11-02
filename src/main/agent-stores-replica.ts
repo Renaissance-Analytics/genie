@@ -11,6 +11,8 @@ import type { InboxMessage, ReceiveInput, ReceivePage, Receipt, SendInput } from
 import type { AddInput, Hit, KnowledgeNode, LinkResult, ListInput, SearchInput, Unresolved } from './knowledge-store.js';
 import { settingOf, snapshotForOf, snapshotOf, workspaceValuesOf, type SettingValue, type SettingsData } from './settings-read.js';
 import type { ChatDrafts } from '../core/chat-drafts.js';
+import type { AgentRecord } from '../core/identity.js';
+import type { WorkspaceRecord } from './store.js';
 
 /**
  * THE WINDOW'S REPLICAS OF THE HOST'S STORES (the host split, P3.1: plan §11d).
@@ -298,6 +300,29 @@ export class DraftsRemote {
     async prune(agentIds: Iterable<string>): Promise<void> { await this.#call('drafts', 'prune', [[...agentIds]]); }
 }
 
+/**
+ * A window Registry's files, read and written by genie-host (P3.2): the Store's own calls, answered by the files' one
+ * writer. `dropped` is what the host's read set aside, from the dump.
+ */
+export class HostRegistryStore {
+    readonly #call: StoresCall;
+    readonly dropped: string[];
+
+    constructor(replicas: Pick<StoreReplicas, 'call' | 'registryDropped'>) {
+        this.#call = replicas.call;
+        this.dropped = [...replicas.registryDropped()];
+    }
+
+    async readWorkspaces(): Promise<readonly WorkspaceRecord[]> { return (await this.#call('registry', 'readWorkspaces', [])) as WorkspaceRecord[]; }
+    async readAgents(): Promise<readonly AgentRecord[]> { return (await this.#call('registry', 'readAgents', [])) as AgentRecord[]; }
+    async readRunningAtQuit(): Promise<readonly string[]> { return (await this.#call('registry', 'readRunningAtQuit', [])) as string[]; }
+    async readInterruptedAtQuit(): Promise<readonly string[]> { return (await this.#call('registry', 'readInterruptedAtQuit', [])) as string[]; }
+    async writeWorkspaces(workspaces: readonly WorkspaceRecord[]): Promise<void> { await this.#call('registry', 'writeWorkspaces', [workspaces]); }
+    async writeAgents(records: readonly AgentRecord[]): Promise<void> { await this.#call('registry', 'writeAgents', [records]); }
+    async writeRunningAtQuit(ids: readonly string[]): Promise<void> { await this.#call('registry', 'writeRunningAtQuit', [ids]); }
+    async writeInterruptedAtQuit(ids: readonly string[]): Promise<void> { await this.#call('registry', 'writeInterruptedAtQuit', [ids]); }
+}
+
 export interface StoreReplicas {
     readonly inbox: InboxReplica;
     readonly attention: AttentionReplica;
@@ -305,6 +330,12 @@ export interface StoreReplicas {
     readonly knowledge: KnowledgeRemote;
     readonly settings: SettingsReplica;
     readonly drafts: DraftsRemote;
+    /** A store method on the host, as the replicas call it. */
+    readonly call: StoresCall;
+    /** What the host's store dropped reading the registry's files. */
+    registryDropped(): readonly string[];
+    /** The registry's files were written (by any window, or the host): re-read them. */
+    onRegistryChanged(listener: () => void): () => void;
     rebase(dump: StoresDump): void;
     apply(event: StoresEvent): void;
 }
@@ -316,13 +347,24 @@ export function storeReplicas(call: StoresCall): StoreReplicas {
     const knowledge = new KnowledgeRemote(call);
     const settings = new SettingsReplica(call);
     const drafts = new DraftsRemote(call);
+    let dropped: readonly string[] = [];
+    const registryListeners = new Set<() => void>();
     return {
-        inbox, attention, approvals, knowledge, settings, drafts,
-        rebase: (dump) => { inbox.rebase(dump.inbox); attention.rebase(dump.attention); approvals.rebase(dump.approvals); if (dump.settings) settings.rebase(dump.settings); },
+        inbox, attention, approvals, knowledge, settings, drafts, call,
+        registryDropped: () => dropped,
+        onRegistryChanged: (listener) => { registryListeners.add(listener); return () => { registryListeners.delete(listener); }; },
+        rebase: (dump) => {
+            inbox.rebase(dump.inbox); attention.rebase(dump.attention); approvals.rebase(dump.approvals);
+            if (dump.settings) settings.rebase(dump.settings);
+            dropped = dump.registryDropped ?? [];
+            // A reconnect: what changed while the link was down is read again.
+            for (const l of [...registryListeners]) l();
+        },
         apply: (event) => {
             if (event.store === 'inbox') inbox.apply(event);
             else if (event.store === 'attention') attention.apply(event);
             else if (event.store === 'settings') settings.apply(event);
+            else if (event.store === 'registry') { for (const l of [...registryListeners]) l(); }
             else approvals.rebase(event.view);
         },
     };

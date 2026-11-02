@@ -8,7 +8,7 @@ import { lineTransport } from '../core/line-transport.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { doctorHoldNow } from './genie-running-file.js';
 import { openLifecycleLog } from './lifecycle-log.js';
-import { genieHome, runtimeDir } from './paths.js';
+import { genieHome, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
 import { SessionHost } from './session-host.js';
@@ -26,6 +26,9 @@ import { readV1Inbox } from './v1-inbox.js';
 import { SettingsStore } from './settings-store.js';
 import { ChatDraftStore } from './chat-draft-store.js';
 import { readV1Settings } from './v1-settings.js';
+import { Store } from './store.js';
+import { HostRegistry } from './host-registry.js';
+import { wireHostMailWake } from './host-mail-wake.js';
 import { gitTreeStatus } from './git-ports.js';
 import { repoStatus } from './repo-git.js';
 
@@ -121,17 +124,21 @@ async function main(): Promise<void> {
     // THE SETTINGS AND THE CHAT DRAFTS (P3.2): one file each, one writer — this host. Every window a replica; hot-swap kept.
     const settings = await SettingsStore.open(home);
     const drafts = await ChatDraftStore.open(home);
+    // THE REGISTRY'S FILES (P3.2): this host writes them (windows through it) and reads them for its own tools and approvals.
+    const registryStore = new Store(home);
+    const hostRegistry = new HostRegistry(registryStore);
+    await hostRegistry.refresh();
     let engineRef: SessionEngineServer | null = null;
     const approvals = new ApprovalQueue({
-        autoApproved: (caller) => (engineRef?.records() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
+        autoApproved: (caller) => hostRegistry.listAgents().some((a) => a.id === caller.agentId && a.autoApprove === true),
         granted: (caller, action) => {
             const flag = SWITCH_ANSWERS[action];
-            return flag !== undefined && (engineRef?.records() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
+            return flag !== undefined && hostRegistry.listAgents().some((a) => a.id === caller.agentId && a[flag] === true);
         },
     });
     // The agent's calls while a window runs them (P3.1): a window tool's approval in this queue ends with its call (genie#1360).
     const forwardedCalls = new Map<string, import('./mcp-tools.js').McpCall>();
-    const stores = new AgentStoresService({ ...own, approvals, settings, drafts }, { forwardedCall: (id) => forwardedCalls.get(id) });
+    const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
     let mcp: HostMcp | null = null;
     let v1Done = false;
     const engine = new SessionEngineServer({
@@ -156,7 +163,7 @@ async function main(): Promise<void> {
             // Genie 1's settings carried over once (the store records it), then its memories and mail.
             await settings.carryOverFromV1(readV1Settings(databasePath)).catch((error: unknown) => say(`v1 settings carry-over failed: ${error instanceof Error ? error.message : String(error)}`));
             importV1Knowledge(own.knowledge, () => readV1Knowledge(databasePath), say);
-            await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), engineRef?.records() ?? [], Date.now());
+            await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), hostRegistry.listAgents(), Date.now());
         },
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
@@ -195,10 +202,13 @@ async function main(): Promise<void> {
         },
     });
     engine.attach(host);
+    // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
+    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); } });
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
-        records: () => engine.records(),
+        records: () => hostRegistry.listAgents(),
+        registry: hostRegistry,
         probe: (id) => host.probe(id),
         lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
         reportPlan: (id, steps) => host.reportPlan(id, steps),
