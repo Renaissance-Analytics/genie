@@ -1,5 +1,5 @@
 import WebSocket from 'ws';
-import type { DeviceSocket } from './device-link-service.js';
+import { DEVICE_FRAME_LIMIT_BYTES, type DeviceSocket } from './device-link-service.js';
 import { rootsOfThisMachine } from './host-https-fetch.js';
 
 /**
@@ -10,7 +10,7 @@ import { rootsOfThisMachine } from './host-https-fetch.js';
  * the address it was minted by. Genie's CA counts only once it is in the OS store. No proxy: these machines are reached directly, as a window reached them over the tailnet.
  */
 export function deviceSocket(url: string, options: { readonly machineRoots?: () => readonly string[]; readonly maxPayload?: number } = {}): DeviceSocket {
-    const socket = new WebSocket(url, { ca: [...(options.machineRoots ?? rootsOfThisMachine)()], rejectUnauthorized: true, followRedirects: false });
+    const socket = new WebSocket(url, { ca: [...(options.machineRoots ?? rootsOfThisMachine)()], rejectUnauthorized: true, followRedirects: false, maxPayload: options.maxPayload ?? DEVICE_FRAME_LIMIT_BYTES });
     // ws emits `error` when a socket is closed mid-dial, and an emitter with no listener throws: giving up on a machine must not take the host with it.
     socket.on('error', () => {});
     return socket as unknown as DeviceSocket;

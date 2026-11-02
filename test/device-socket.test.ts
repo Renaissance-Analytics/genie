@@ -131,6 +131,8 @@ describe('a frame over the limit', () => {
         if (!opened.ok) throw new Error(opened.reason);
         service.send('w', opened.channel, JSON.stringify({ kind: 'hello', auth: { kind: 'pin', code: '1' } }));
         for (let i = 0; i < 100 && !events.some((e) => e.type === 'closed' || e.type === 'frame'); i += 1) await new Promise((r) => setTimeout(r, 20));
+        // A socket still open would hold the server's close: an upgraded socket is not one of its connections any more.
+        service.dropOwner('w');
         return { events, lines };
     }
 

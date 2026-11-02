@@ -48,6 +48,15 @@ function frameOf(text: string): Record<string, unknown> | null {
 
 /** The largest frame the host takes from another machine in one piece. */
 export const DEVICE_FRAME_LIMIT_BYTES = 100 * 1024 * 1024;
+const TOO_LARGE = `That machine sent a message larger than ${DEVICE_FRAME_LIMIT_BYTES / (1024 * 1024)} MiB, the most this connection carries in one piece, so the connection was closed. It usually means an agent's history there has grown very long.`;
+const TOO_LARGE_THERE = 'That machine closed the connection because a message from this one was too large for it.';
+
+/** The words for a socket's error: its own, unless it is the frame limit, which a person should be able to read. */
+function errorWords(ev: unknown): string | null {
+    const e = ev as { message?: unknown; error?: { code?: unknown } } | null;
+    if (e?.error?.code === 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH' || (typeof e?.message === 'string' && /max payload/i.test(e.message))) return TOO_LARGE;
+    return typeof e?.message === 'string' && e.message.length > 0 ? `The connection to that machine failed: ${e.message}` : null;
+}
 const DEFAULT_DIAL_TIMEOUT_MS = 20_000;
 const PIN_NEEDED = 'type the PIN shown on that machine — this device has not paired with it yet';
 
@@ -113,8 +122,8 @@ export class DeviceLinkService {
         this.#channels.set(id, channel);
         socket.onmessage = (ev) => { if (typeof ev.data === 'string') this.#heard(channel, ev.data); };
         // An error that ends a socket gives `error` with no `close` (ws-transport.ts measured it), so either one is the end, once.
-        socket.onclose = () => this.#end(channel, null);
-        socket.onerror = () => this.#end(channel, null);
+        socket.onclose = (ev) => this.#end(channel, (ev as { code?: unknown } | null)?.code === 1009 ? TOO_LARGE_THERE : null);
+        socket.onerror = (ev) => this.#end(channel, errorWords(ev));
         return id;
     }
 
@@ -193,6 +202,7 @@ export class DeviceLinkService {
         if (channel.closed) return;
         channel.closed = true;
         this.#channels.delete(channel.id);
+        if (reason) this.#options.log(`device link: ${channel.url}: ${reason}`);
         this.#options.send(channel.owner, { type: 'closed', channel: channel.id, reason });
     }
 

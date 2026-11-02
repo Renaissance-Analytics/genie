@@ -379,6 +379,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                 if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
                 const transport = ipcRelayTransport(net, opened.channel);
                 const next = connectRemote(transport, auth, label || 'another screen');
+                // Dropped after it was up: the host's words, when it has some.
+                transport.onClose(() => { const why = transport.closedBecause(); if (why) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: why })); });
                 setClient(next);
                 setState(next.state());
                 const r = await next.ready;

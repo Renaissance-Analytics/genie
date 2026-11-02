@@ -491,6 +491,10 @@ probe "the-welcome-loses-its-token" src/main/device-link-service.ts \
     "        const heard = JSON.stringify(rest);" "        const heard = JSON.stringify(message);" \
     test/device-link.test.ts "the welcome reaches the window WITHOUT the minted token"
 
+probe "a-frame-over-the-limit-says-so" src/main/device-link-service.ts \
+    "        socket.onerror = (ev) => this.#end(channel, errorWords(ev));" "        socket.onerror = () => this.#end(channel, null);" \
+    test/device-socket.test.ts "closes with words that name the limit"
+
 probe "a-window-cannot-say-a-token" src/main/device-link-service.ts \
     "        if (!message || !auth || (auth.kind !== 'pin' && auth.kind !== 'saved')) {" "        if (!message || !auth) {" \
     test/device-link.test.ts "closes the channel and nothing reaches the machine"
