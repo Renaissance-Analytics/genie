@@ -58,6 +58,20 @@ const TICKER = (() => {
     if (!Number.isInteger(owner) || owner <= 0) return false;
     try { process.kill(owner, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 })();
+/**
+ * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
+ * thread's start appends the MCP servers this provider was REALLY given, the bearer read from the variable Genie bound it to.
+ * The file exists only in a test VM. Without it nothing below changes.
+ */
+const RECORD_SERVERS = join(tmpdir(), 'genie-stub-codex-record-servers');
+function recordServers(params) {
+    if (!existsSync(RECORD_SERVERS)) return;
+    const given = params?.config?.mcp_servers ?? {};
+    const servers = Object.fromEntries(Object.entries(given).map(([name, server]) => [name, {
+        url: server.url, headers: server.http_headers ?? {}, bearer: server.bearer_token_env_var ? process.env[server.bearer_token_env_var] ?? null : null,
+    }]));
+    appendFileSync(RECORD_SERVERS, `${JSON.stringify({ pid: process.pid, servers })}\n`, { mode: 0o600 });
+}
 const THREAD_ID = TICKER ? `stub_thread_${process.pid}` : 'stub_thread_0001';
 const TURN_ID = 'stub_turn_0001';
 
@@ -233,6 +247,7 @@ function handle(frame) {
             return;
 
         case 'thread/start':
+            recordServers(frame?.params);
             respond(id, { thread: { id: THREAD_ID } });
             return;
 

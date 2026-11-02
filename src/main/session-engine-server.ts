@@ -178,7 +178,11 @@ export class SessionEngineServer {
             // the window prepares them while it is there. With none, the host reads the key it holds (genie#1457).
             prepareMcpServers: async (record, cwd) => {
                 const own = this.#options.mcp?.sessionServers(record) ?? [];
-                if (this.#options.mcp && !this.windowConnected()) return own;
+                if (this.#options.mcp && !this.windowConnected()) {
+                    const held = await this.#options.agentKeys?.(record, cwd);
+                    if (held?.note) this.#host?.notice(record.id, held.note);
+                    return [...own, ...(held?.servers ?? [])];
+                }
                 const fromWindow = (await this.#reverse('client.prepareMcpServers', [record, cwd])) as readonly McpServer[];
                 return [...own, ...fromWindow];
             },

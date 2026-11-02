@@ -250,8 +250,34 @@ probe "migration-host-compares-for-real" src/main/keychain-migration.ts \
     test/keychain-migration.test.ts "compare answers same, different"
 
 
+# P3.4 cut d: an agent's key is the host's (genie#1457).
+probe "no-window-agent-has-its-key" src/main/session-engine-server.ts \
+    "                    return [...own, ...(held?.servers ?? [])];" "                    return own;" \
+    test/host-agent-keys.test.ts "it starts with the key"
+
+probe "no-window-says-why" src/main/session-engine-server.ts \
+    "                    if (held?.note) this.#host?.notice(record.id, held.note);" "" \
+    test/host-agent-keys.test.ts "its chat says why"
+
+probe "host-reads-only-the-signed-in-account" src/main/host-agent-keys.ts \
+    "data.state === 'signed-in' && " "" \
+    test/host-agent-keys.test.ts "signed out: not handed out"
+
+probe "a-window-asks-only-for-agent-keys" src/main/session-engine-server.ts \
+    "                return this.#keychain().get(agentKeyName(str(0)));" "                return this.#keychain().get(str(0) as never);" \
+    test/host-agent-keys.test.ts "nothing but an agent"
+
+probe "a-dead-link-is-not-a-missing-key" src/main/agent-secrets.ts \
+    "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'unavailable', reason: reply.reason };" "            return reply.ok ? (reply.value as KeychainRead) : { kind: 'missing' };" \
+    test/host-agent-keys.test.ts "a dead link is not a signed-out agent"
+
+probe "a-sealed-key-must-match-its-record" src/main/tynn-agent-identities.ts \
+    "? { kind: 'value', value: token } : { kind: 'unreadable' };" "? { kind: 'value', value: token } : { kind: 'value', value: token };" \
+    test/host-agent-keys.test.ts "is not moved, and not deleted"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
