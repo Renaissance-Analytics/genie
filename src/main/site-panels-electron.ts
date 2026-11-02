@@ -13,11 +13,14 @@ import type { Activation } from '../core/window-activation.js';
  * - in the Genie browser's own session (`genieBrowserSession`: .gen to the front door, Genie's CA for .gen only, every
  *   request secure or cancelled) — the window's own session has no .gen route;
  * - isolated from Node with no preload, and NOT sandboxed (a sandboxed child view renders blank, electron#44897);
- * - a page's new window opens in the Genie browser window; a link off the Genie sites opens in the machine's browser.
+ * - a page's new window opens in the Genie browser window; a link off the Genie sites opens in the machine's browser;
+ * - the MAIN window can be closed and built again (P1b: "Just close the UI", then Open Genie): the panels follow whichever
+ *   window is the main one now — their IPC registered ONCE, each window attached as it is built, its panels closed with it.
  */
 
 export interface SitePanelsOptions {
-    readonly window: BrowserWindow;
+    /** The main window now; null while there is none (tray-only Genie). */
+    readonly window: () => BrowserWindow | null;
     readonly frontDoorPort: number;
     readonly caPem: string | null;
     readonly enabledHosts: () => readonly string[];
@@ -28,9 +31,16 @@ export interface SitePanelsOptions {
     readonly openInWindow: (url: string, activation: Activation) => void;
 }
 
-export function sitePanels(options: SitePanelsOptions): SitePanelViews {
-    const { window } = options;
+export interface LiveSitePanels extends SitePanelViews {
+    /** A (new) main window: its panels close with it, and the next one starts with none. */
+    attach(window: BrowserWindow): void;
+}
+
+export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
     const createView = (panelKey: string): PanelViewPort => {
+        // Asked by the window that shows the panel: there is one while a renderer can ask.
+        const window = options.window();
+        if (!window || window.isDestroyed()) throw new Error('no Genie window to place a site panel in');
         const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem });
         const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: false } });
         const wc = view.webContents;
@@ -61,8 +71,8 @@ export function sitePanels(options: SitePanelsOptions): SitePanelViews {
     };
     const panels = new SitePanelViews({ enabledHosts: options.enabledHosts, createView });
 
-    // The window's calls: only its own (a panel is placed in the window that shows it).
-    const ours = (event: { sender: unknown }) => event.sender === window.webContents;
+    // The window's calls: only the main window's own (a panel is placed in the window that shows it).
+    const ours = (event: { sender: unknown }) => { const w = options.window(); return w !== null && !w.isDestroyed() && event.sender === w.webContents; };
     const key = (raw: unknown) => (typeof raw === 'string' ? raw : '');
     ipcMain.handle('site-panel:show', (event, panelKey: unknown, host: unknown, raw: unknown) => {
         const b = raw as { x?: unknown; y?: unknown; width?: unknown; height?: unknown } | null;
@@ -72,6 +82,9 @@ export function sitePanels(options: SitePanelsOptions): SitePanelViews {
     ipcMain.handle('site-panel:hide', (event, panelKey: unknown) => { if (ours(event)) panels.hide(key(panelKey)); });
     ipcMain.handle('site-panel:reload', (event, panelKey: unknown) => { if (ours(event)) panels.reload(key(panelKey)); });
     ipcMain.handle('site-panel:open-window', (event, host: unknown) => { if (ours(event)) options.openInWindow(`https://${key(host)}/`, 'user-gesture'); });
-    window.on('closed', () => panels.closeAll());
-    return panels;
+    return Object.assign(panels, {
+        attach(window: BrowserWindow): void {
+            window.on('closed', () => panels.closeAll());
+        },
+    });
 }

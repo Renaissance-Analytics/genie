@@ -82,7 +82,8 @@ describe('the paths an agent or a job can reach are BACKGROUND', () => {
 
 describe('every main-process activation names its gesture', () => {
     it('revealMainWindow takes a reason and is the user-gesture path; it is never handed over bare', () => {
-        expect(main).toMatch(/function revealMainWindow\(reason: string\): void \{\s*if \(!window\) return;\s*bringUp\(window, \{ activation: 'user-gesture', reason/);
+        // With no window (tray-only, P1b) the person's gesture builds one; otherwise it is shown as the user-gesture it is.
+        expect(main).toMatch(/function revealMainWindow\(reason: string\): void \{\s*if \(!window \|\| window\.isDestroyed\(\)\) \{ mountMainWindow\(true, reason\); return; \}\s*bringUp\(window, \{ activation: 'user-gesture', reason/);
         expect(main.match(/[(,:]\s*revealMainWindow\s*[,)]/g) ?? []).toEqual([]);
     });
 

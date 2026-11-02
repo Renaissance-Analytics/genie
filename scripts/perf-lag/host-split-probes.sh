@@ -147,8 +147,50 @@ probe "terminals-dump-before-ready" src/main/session-engine-server.ts \
     "        if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());" "" \
     test/terminals-host-contract.test.ts "OUTLIVES its window"
 
+# P1b: the quit keeps the host, and the tray keeps Genie (the owner, 2026-11-02: "Keep the tray up")
+probe "close-ui-is-not-a-quit" src/core/quit.ts \
+    "                if (answer === 'close-ui') return 'close-ui';" "" \
+    test/quit-sequence.test.ts "JUST CLOSE THE UI is not a quit"
+
+probe "shut-down-ends-the-host" src/core/quit.ts \
+    "    await ports.shutDownHost();" "" \
+    test/quit-sequence.test.ts "calls stopAll and then engine.shutdown"
+
+probe "quit-asks-two-answers" src/core/quit.ts \
+    "    if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses);" "" \
+    test/quit-plan.test.ts "the two answers, Cancel by default"
+
+probe "tray-only-exits-after-the-grace" src/core/tray-only.ts \
+    "    return { quietSince: since, exit: now - since >= graceMs };" "    return { quietSince: since, exit: false };" \
+    test/tray-only.test.ts "at the grace it exits"
+
+probe "tray-offers-the-host-verbs" src/main/tray.ts \
+    "        ...(handlers.onCloseUi && handlers.onRestart && handlers.onShutDown" "        ...(false && handlers.onCloseUi && handlers.onRestart && handlers.onShutDown" \
+    test/tray.test.ts "Just close the UI, Restart, Shut down everything"
+
+probe "tray-only-has-no-close-ui" src/main/tray.ts \
+    "                ...(handlers.uiOpen?.() !== false ? [{ label: 'Just close the UI', click: handlers.onCloseUi }] : [])," "                { label: 'Just close the UI', click: handlers.onCloseUi }," \
+    test/tray.test.ts "tray-only (no window)"
+
+probe "tray-says-what-runs" src/main/tray.ts \
+    "    const hostPart = words === null ? [] : [words ? \`host running: \${words}\` : 'host running'];" "    const hostPart: string[] = [];" \
+    test/tray.test.ts "WHAT it runs"
+
+probe "tray-probe-is-gated" src/main/main.ts \
+    "    if (trayProbeEnabled(process.env)) {" "    if (true) {" \
+    test/quit-keeps-host-wiring.test.ts "ABSENT without GENIE_TRAY_PROBE=1"
+
+# ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first
+probe "tray-always-asks" src/main/main.ts \
+    "onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }" "onShutDown: () => { requestQuit('shut-down'); }" \
+    test/quit-keeps-host-wiring.test.ts "offers the host"
+
+probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \
+    "    return button === 1;" "    return button !== 0;" \
+    test/tray-confirm.test.ts "only the confirm button goes on"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

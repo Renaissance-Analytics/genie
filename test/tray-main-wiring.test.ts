@@ -22,7 +22,9 @@ describe('main.ts wiring', () => {
 
     it('the main window boots by showOnBoot (start minimised) and its close goes through wireCloseToTray with the quit sequence', () => {
         const src = main();
-        expect(src).toMatch(/window = createWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
+        // Built by mountMainWindow (P1b: built again after "Just close the UI"), shown at boot by showOnBoot.
+        expect(src).toMatch(/mountMainWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
+        expect(src).toMatch(/window = createWindow\(show\);/);
         // Shown ACTIVE: this is the launch the person made (genie#1235: only a gesture may take focus).
         expect(src).toMatch(/if \(show\) onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
         expect(src).toMatch(/wireCloseToTray\(window, \{[\s\S]*?quitting: \(\) => quit\.quitting,/);
@@ -61,11 +63,13 @@ describe('main.ts wiring', () => {
         // EXIT, not quit: a quit would run this process's before-quit, which clears the RUNNING Genie's genie-running file.
         expect(block(src, "if (launch.kind === 'exit') {", '\n}\n')).toMatch(/app\.exit\(0\);/);
         expect(block(src, "if (launch.kind === 'exit') {", '\n}\n')).not.toMatch(/app\.quit\(/);
-        // Only a boot launch boots; only boot() creates the main window.
+        // Only a boot launch boots; only boot() creates the main window — through mountMainWindow, the one place a main window
+        // is created (P1b: also when the person opens Genie again from the tray, a reveal only a booted Genie can make).
         expect(src).toMatch(/if \(launch\.kind === 'boot'\) \{\s*\n\s*app\.whenReady\(\)\.then\(boot\)/);
         expect(src.match(/app\.whenReady\(\)\.then\(boot\)/g)).toHaveLength(1);
-        expect(block(src, 'async function boot', '\n}\n')).toMatch(/window = createWindow\(/);
+        expect(block(src, 'async function boot', '\n}\n')).toMatch(/mountMainWindow\(showOnBoot\(/);
         expect(src.match(/window = createWindow\(/g)).toHaveLength(1);
+        expect(block(src, 'function mountMainWindow(', '\n}\n')).toMatch(/window = createWindow\(show\);/);
         // And a launch that never booted owns nothing to shut down.
         expect(block(src, "app.on('before-quit'")).toMatch(/^app\.on\('before-quit', \(event\) => \{\s*\n\s*if \(launch\.kind !== 'boot'\) return;/);
     });
@@ -74,8 +78,9 @@ describe('main.ts wiring', () => {
         const src = block(main(), "app.on('before-quit'");
         expect(src).toMatch(/const step = quit\.beforeQuit\(/);
         expect(src).toMatch(/if \(step === 'cancel'\) \{ event\.preventDefault\(\); return; \}/);
-        // The shutdown pass holds the quit until the sessions' writes land (quit-drains-writes.test.ts), then stops them.
-        expect(src).toMatch(/if \(step === 'pass'\) return;\s*\n\s*event\.preventDefault\(\);\s*\n\s*host\?\.stopAll\(\);/);
+        // The shutdown pass holds the quit until the sessions' writes land (quit-drains-writes.test.ts), then runs the answer:
+        // the stops are core/quit.ts runQuit's, in order (quit-sequence.test.ts), through main's quitPorts (P1b).
+        expect(src).toMatch(/if \(step === 'pass'\) return;\s*\n\s*event\.preventDefault\(\);\s*\n\s*let bound: ReturnType<typeof setTimeout> \| undefined;\s*\n\s*const done = runQuit\(quitPorts\)/);
         expect(src).not.toMatch(/quitConfirmed|runningRecorded/);
     });
 

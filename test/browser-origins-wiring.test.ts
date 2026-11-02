@@ -42,7 +42,9 @@ describe('the pane’s session (electron-browser-view.ts)', () => {
 
 describe('main and compose', () => {
     it('main hands the pane the in-app front door’s port and Genie’s CA — once', () => {
-        expect(count(main, /electronBrowserView\(window, \{ frontDoorPort: composed\.frontDoorPort, caPem: browserTrust\.caPem \}\)/g)).toBe(1);
+        // Through mountMainWindow (P1b: the main window can be built again), from boot's front door and CA.
+        expect(count(main, /electronBrowserView\(window, \{ frontDoorPort: deps\.frontDoorPort, caPem: deps\.caPem \}\)/g)).toBe(1);
+        expect(count(main, /mainWindowDeps = \{ frontDoorPort: composed\.frontDoorPort, caPem: browserTrust\.caPem,/g)).toBe(1);
     });
 
     it('main applies back / forward / reload to the pane, and pushes what the pane reports', () => {

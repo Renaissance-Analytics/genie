@@ -37,6 +37,8 @@ export interface AgentEngineLink {
     readonly how: EngineLink['how'] | 'unreachable';
     /** Stop gracefully and end the host (a quit, an upgrade): sessions stopped and verified, then the process gone. */
     shutdown(waitMs?: number): Promise<void>;
+    /** `true` while this window holds the host: not after `shutdown` (an upgrade has ended it; nothing is kept). */
+    readonly live: boolean;
 }
 
 const killPid = (pid: number): void => {
@@ -128,6 +130,7 @@ export async function connectAgentEngine(options: AgentEngineLinkOptions): Promi
     return {
         client,
         how,
+        get live() { return !stopping; },
         shutdown: async (waitMs = 10_000) => {
             stopping = true;
             clearInterval(sweep);

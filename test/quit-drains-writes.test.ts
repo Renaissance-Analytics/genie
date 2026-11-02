@@ -150,11 +150,12 @@ const count = (re: RegExp) => (main.match(re) ?? []).length;
 
 describe('the quit’s shutdown pass (main.ts before-quit)', () => {
     it('holds the quit, drains the sessions’ writes (bounded), and only then quits again', () => {
-        // The hold is taken in the shutdown pass, with the stop.
-        expect(count(/if \(step === 'pass'\) return;\s*event\.preventDefault\(\);\s*host\?\.stopAll\(\);/g)).toBe(1);
-        // The pass ends by starting the wait: the call is the handler's last statement.
-        expect(count(/clearGenieRunning\(genieHome\(\)\);\s*void drainWritesThenQuit\(\);\s*\}\);/g)).toBe(1);
-        expect(count(/void drainWritesThenQuit\(\);/g)).toBe(1);
+        // The hold is taken in the shutdown pass, and the answer's work (core/quit.ts runQuit: the stops, then the drain) starts.
+        expect(count(/if \(step === 'pass'\) return;\s*event\.preventDefault\(\);\s*let bound: ReturnType<typeof setTimeout> \| undefined;\s*const done = runQuit\(quitPorts\)/g)).toBe(1);
+        // The pass ends by starting the bounded wait: the race is the handler's last statement.
+        expect(count(/void Promise\.race\(\[done, new Promise<void>\(\(r\) => \{ bound = setTimeout\(r, QUIT_WRITES_MS\); \}\)\]\)\s*\.finally\(\(\) => \{ clearTimeout\(bound\); app\.quit\(\); \}\);\s*\}\);/g)).toBe(1);
+        // The stop that precedes the drain is the agents' (quit-sequence.test.ts holds the order).
+        expect(count(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/g)).toBe(1);
         // The wait — host.drained — bounded, and app.quit() only once it is over (the re-entry is the 'pass' step).
         expect(count(/host\?\.drained\(QUIT_EXIT_WAIT_MS\)/g)).toBe(1);
         expect(count(/setTimeout\(r, QUIT_WRITES_MS\)/g)).toBe(1);
