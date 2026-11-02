@@ -3,7 +3,7 @@ import type { JsonObject, SessionStore } from '@particle-academy/prism-harness';
 import { openAgentThread, readHistory, RUN_FIELD } from './thread-store.js';
 import { approvalFrom, type Approval } from './approval.js';
 import { approvalNoteText } from './approval-note.js';
-import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
+import { PARENT_TOOL_CALL_META, REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type StreamEvent } from './stream-event.js';
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
@@ -477,9 +477,19 @@ export class AgentSession {
      * been satisfied by `zephyr-bfd`.
      *
      * `persisted` tracks whether the thread already holds this message, so a growing message is
-     * written once when it closes rather than once per chunk.
+     * written once when it closes rather than once per chunk. `messageId`: the provider's own id for it, when it gives one
+     * (Codex's item id): a chunk with another id is another message.
      */
-    #openMessage: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean } | null = null;
+    #openMessage: { event: Extract<StreamEvent, { kind: 'message' | 'think' }>; persisted: boolean; messageId?: string | null } | null = null;
+    /**
+     * ROWS THAT ARRIVED BESIDE THE OPEN MESSAGE (genie#1456): emitted and written right after it closes (`#besideTheOpen`).
+     * Holding them keeps the two rules everything downstream relies on: the growing message is the NEWEST row (the host's
+     * `replacesLast` overwrites the last row, and `LiveReadings` reads that), and rows reach the thread in the order they
+     * reached the screen.
+     */
+    #heldBeside: StreamEvent[] = [];
+    /** A subagent's calls not yet answered, so a result is known as theirs even if it comes without the mark. */
+    #subagentCalls = new Set<string>();
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
     #echo: string | null = null;
     #echoSeen = '';
@@ -1595,11 +1605,39 @@ export class AgentSession {
      * ends, and when the provider exits. Writing per chunk would put a row in the thread for
      * every few tokens, and reassembling them on read would mean the same joining rule
      * implemented in two places — which is how the two copies drift apart.
+     *
+     * What was held beside it follows it, in the order it came.
      */
     #closeMessage(): void {
         const open = this.#openMessage;
         this.#openMessage = null;
         this.#enqueue(open);
+        if (this.#heldBeside.length === 0) return;
+        const held = this.#heldBeside;
+        this.#heldBeside = [];
+        for (const event of held) void this.#wireRow(event);
+    }
+
+    /**
+     * WHETHER A ROW ARRIVED BESIDE THE OPEN MESSAGE, rather than after it (genie#1456: one reply drawn as four bubbles, cut
+     * mid-word). Only the agent's own next step ends what it is saying. A subagent working in the background and a notice
+     * about the session say nothing about that: they land between two deltas of one text block, whenever they happen to.
+     * Measured in the ledgers: of 54 mid-word cuts in `tynn`'s, 40 had only a subagent's calls between the pieces and 14
+     * only notices, none a call of its own; Codex cut a reply per word on `model/safetyBuffering/updated`.
+     *
+     * A usage report is not one of these: it is how a provider says a message is over, and on Codex nothing else may
+     * separate two of them.
+     */
+    #besideTheOpen(event: StreamEvent, update: Record<string, unknown>): boolean {
+        let subagent = false;
+        if (event.kind === 'tool') {
+            const meta = update['_meta'];
+            const marked = typeof meta === 'object' && meta !== null && typeof (meta as Record<string, unknown>)[PARENT_TOOL_CALL_META] === 'string';
+            subagent = marked || this.#subagentCalls.has(event.toolCallId);
+            if (subagent && event.status !== 'completed' && event.status !== 'failed') this.#subagentCalls.add(event.toolCallId);
+            else this.#subagentCalls.delete(event.toolCallId);
+        }
+        return this.#openMessage !== null && (subagent || event.kind === 'notice');
     }
 
     /**
@@ -1811,6 +1849,11 @@ export class AgentSession {
             }
         }
 
+        if (this.#besideTheOpen(event, update)) {
+            this.#heldBeside.push(event);
+            return;
+        }
+
         if (event.kind === 'think') {
             const open = this.#openMessage;
             if (open && open.event.kind === 'think') {
@@ -1819,15 +1862,17 @@ export class AgentSession {
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.
             }
+            this.#closeMessage();
             this.#openMessage = { event, persisted: false };
             this.#options.onEvent?.(event, { replacesLast: false });
-            this.#enqueue(open);
             return;
         }
 
         if (event.kind === 'message') {
             const open = this.#openMessage;
-            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName) {
+            const messageId = typeof update['messageId'] === 'string' ? update['messageId'] : null;
+            const sameItem = !open?.messageId || messageId === null || open.messageId === messageId;
+            if (open && open.event.kind === 'message' && open.event.speaker === event.speaker && open.event.peerName === event.peerName && sameItem) {
                 open.event = { ...open.event, text: open.event.text + event.text };
                 this.#options.onEvent?.(open.event, { replacesLast: true });
                 return; // Written to the thread once, when it closes.
@@ -1835,20 +1880,25 @@ export class AgentSession {
 
             // A different speaker: the previous message is finished, and must reach the thread
             // before this one does.
-            this.#openMessage = { event, persisted: false };
+            this.#closeMessage();
+            this.#openMessage = { event, persisted: false, messageId };
             this.#options.onEvent?.(event, { replacesLast: false });
-            this.#enqueue(open);
             return;
         }
 
         /*
-         * Anything else CLOSES the open message.
+         * Anything else not beside it (`#besideTheOpen`) CLOSES the open message.
          *
          * A reply, a tool call, then more reply is three rows in that order — which is the
          * point of a ledger. Joining across the tool call would reorder the account of what
          * happened, and the queue is what keeps the tool call from being written before the
          * words that preceded it.
          */
+        await this.#wireRow(event);
+    }
+
+    /** A row off the wire that is not a message chunk, arriving now or held until now: emitted, and what it says acted on. */
+    #wireRow(event: StreamEvent): Promise<void> {
         const written = this.#emitRow(event);
         // REFUSED FOR WANT OF /design-login (#1081): said ONCE per login, after the refused call, however many calls fail.
         if (!this.#designLogin && designLoginRefused(event)) {
@@ -1856,7 +1906,7 @@ export class AgentSession {
             void this.#emitRow({ kind: 'notice', level: 'warning', message: 'Claude Design needs its login on this machine, which an agent session cannot run. Use "Log in to Claude Design" above; Genie tells this agent to retry once it has run.' });
             this.#changed();
         }
-        await written;
+        return written;
     }
 
     /**
@@ -1864,12 +1914,9 @@ export class AgentSession {
      * reaches the renderer synchronously, and is written to the thread after the message it closed.
      */
     async #emitRow(event: StreamEvent): Promise<void> {
-        const closing = this.#openMessage;
-        this.#openMessage = null;
+        this.#closeMessage();
 
         this.#options.onEvent?.(event, { replacesLast: false });
-
-        this.#enqueue(closing);
 
         // ON THE SAME CHAIN as the message writes: waiting for the chain and then writing outside it let two rows
         // emitted together (a turn marker and your message) reach the thread in either order. A storage fault must not
