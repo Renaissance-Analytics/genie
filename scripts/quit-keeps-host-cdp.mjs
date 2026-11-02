@@ -116,6 +116,19 @@ async function answers(port) {
     }
 }
 
+/**
+ * Who holds a listening port, in the OS's words: `ss -ltnp` and each owner's command line (Linux; bounded). Printed when
+ * the run refuses a busy port, so the next failure names the process instead of guessing (batch L3).
+ */
+function portOwners(port) {
+    if (process.platform !== 'linux') return '(not read off Linux)';
+    let ss = '';
+    try { ss = execFileSync('ss', ['-ltnpH', `sport = :${port}`], { encoding: 'utf8', timeout: SYNC_MS }).trim(); } catch (e) { return `ss failed: ${e.message}`; }
+    const pids = [...new Set([...ss.matchAll(/pid=(\d+)/g)].map((m) => Number(m[1])))];
+    const owners = pids.map((pid) => `    pid ${pid} (ppid ${readOr(`/proc/${pid}/stat`).split(') ')[1]?.split(' ')[1] ?? '?'}): ${commandLine(pid).slice(0, 300) || '(gone)'}`);
+    return [`  ss -ltnp 'sport = :${port}':`, `    ${ss || '(no listener)'}`, ...(owners.length ? ['  owners:', ...owners] : ['  owners: none visible to this user'])].join('\n');
+}
+
 // ---------------------------------------------------------------- CDP (the page) and the inspector (the window's main)
 async function targetOn(port, kind, ms) {
     let last = 'no attempt';
@@ -323,10 +336,10 @@ step('0.3', `is this the root of a Genie tree? (${process.cwd()})`);
 if (!existsSync('package.json') || !existsSync('scripts/stub-codex.mjs')) refuse(`run it from the root of a built Genie tree (${process.cwd()})`);
 step('0.4', `is the debugger port ${PORT} free? (≤ 3 s)`);
 const busy = await answers(PORT);
-if (busy) refuse(`something already answers on the debugger port ${PORT} (${busy === true ? 'it answers' : busy}): stop the running Genie first`);
+if (busy) { console.log(portOwners(PORT)); refuse(`something already answers on the debugger port ${PORT} (${busy === true ? 'it answers' : busy}): stop the running Genie first`); }
 step('0.5', `is the inspector port ${INSPECT} free? (≤ 3 s)`);
 const busyInspect = await answers(INSPECT);
-if (busyInspect) refuse(`something already answers on the inspector port ${INSPECT}: set QUIT_CDP_INSPECT to a free port`);
+if (busyInspect) { console.log(portOwners(INSPECT)); refuse(`something already answers on the inspector port ${INSPECT}: set QUIT_CDP_INSPECT to a free port`); }
 
 console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming, then open Genie again (deadline ${Math.round(DEADLINE_MS / 1000)} s)\n`);
 step('0.6', `the ticker marker, holding this script's pid ${process.pid}`);
