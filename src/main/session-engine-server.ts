@@ -21,6 +21,7 @@ import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
 import type { ProcessesService } from './processes-host.js';
+import type { FlowsService } from './flows-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -83,6 +84,8 @@ export interface EngineServerOptions {
     readonly supervisor?: SupervisorService;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
+    /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
+    readonly flows?: FlowsService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     readonly files?: {
@@ -139,6 +142,9 @@ export class SessionEngineServer {
         });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
+        });
+        options.flows?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'flows.event', event);
         });
     }
 
@@ -271,6 +277,7 @@ export class SessionEngineServer {
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
+        if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
         for (const callback of queued) this.#event(conn, 'engine.callback', callback);
@@ -418,6 +425,9 @@ export class SessionEngineServer {
                 return this.#options.mcp.runNative(args[0] as never);
             case 'engine.mcpStatus':
                 return this.#options.mcp?.status() ?? null;
+            case 'engine.flows':
+                if (!this.#options.flows) throw new Error('This host keeps no flows.');
+                return this.#options.flows.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);

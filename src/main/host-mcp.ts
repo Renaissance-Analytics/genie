@@ -52,6 +52,10 @@ export interface HostMcpPorts {
     readonly window: { connected(): boolean; call(call: ForwardedToolCall): Promise<McpToolResult> };
     /** The background processes the `processes` tool acts on (P3.3c): the host's book, scheduler and supervisor logs. */
     readonly processes?: import('./mcp-tools-processes.js').ProcessesPort;
+    /** The flows the `flows` tool acts on (P3.3d): the host's store and scheduler. */
+    readonly flows?: import('./mcp-tools-flows.js').FlowsPort;
+    /** A flow calling Genie's tools as a step is a caller too (genie#1204): its own key, its workspace. */
+    readonly flowCallers?: { callerFor(key: string): Caller | null };
     /** openFileForUser with no window: shown when the next window connects. */
     readonly openFileLater: (call: ForwardedToolCall) => void;
     /** A tool's moment for the window: a glow, a thumbs-up, an action signal. Dropped with no window. */
@@ -75,6 +79,8 @@ export interface HostMcp {
      * caller, answered as the tool answers. Only the host's own tools; the window has the rest.
      */
     runNative(call: ForwardedToolCall): Promise<McpToolResult>;
+    /** Every tool as this server serves it (the host's own, and the window's forwarded): what a flow's tool steps call. */
+    registrations(): readonly import('./mcp-tools.js').Registration[];
     stop(): Promise<void>;
 }
 
@@ -88,6 +94,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
     let tools: Array<{ name: string; description: string }> = [];
     let starting: Promise<void> | null = null;
     let native = new Map<string, import('./mcp-tools.js').Registration>();
+    let servedNow: readonly import('./mcp-tools.js').Registration[] = [];
     /** Callers the window vouched for, for the length of one call (runNative). */
     const injected = new Map<string, Caller>();
     let injectSeq = 0;
@@ -98,7 +105,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const vouched = injected.get(id);
         if (vouched) return vouched;
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, osaHomeDir());
-        return session ?? view?.callers[id] ?? null;
+        return session ?? ports.flowCallers?.callerFor(id) ?? view?.callers[id] ?? null;
     };
     const settings = ports.settings;
 
@@ -125,6 +132,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
             terminals: { list: unavailable('manageTerminals'), open: unavailable('manageTerminals'), write: unavailable('manageTerminals'), scrollback: unavailable('manageTerminals'), finished: unavailable('manageTerminals'), scrollbackCap: 1_000_000 },
             plugins: { tools: () => view?.pluginTools ?? [], guard: () => null, run: unavailable('a plugin tool') },
             ...(ports.processes ? { processes: ports.processes } : {}),
+            ...(ports.flows ? { flows: ports.flows } : {}),
             agents: { defaultAgentOf: (ws) => ports.registry.defaultAgentOf(ws), register: unavailable('createAgent') },
             workspaceTabs: { write: unavailable('workspaceTabs'), sites: unavailable('workspaceTabs') },
             pages: { open: unavailable('pages') },
@@ -134,7 +142,9 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         // The action signal (the Dashboard row's "what it just did") for the HOST's own tools only: a forwarded tool runs in
         // the window, which signals it there — signalled here too, it would show twice.
         native = new Map(withActionSignal(served.filter((r) => HOST_NATIVE_TOOLS.has(r.definition.name)), resolveCaller, (agentId, kind, tool) => ports.signal({ kind: 'action', agentId, action: kind, tool })).map((r) => [r.definition.name, r]));
-        return served.map((r) => native.get(r.definition.name) ?? r);
+        const finalRegs = served.map((r) => native.get(r.definition.name) ?? r);
+        servedNow = finalRegs;
+        return finalRegs;
     };
 
     const start = async (): Promise<void> => {
@@ -171,6 +181,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         endpoint: () => server?.endpoint() ?? null,
         status: () => ({ endpoint: server?.endpoint() ?? null, verified, tools }),
         stop: async () => { await server?.stop().catch(() => undefined); },
+        registrations: () => servedNow,
         runNative: async (call) => {
             const r = native.get(call.name);
             if (!r) return { text: `${call.name} is not one of genie-host's own tools`, isError: true };
