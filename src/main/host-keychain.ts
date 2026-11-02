@@ -10,6 +10,8 @@ import { execFileRunner } from './toolchain-runner.js';
  * as it runs, with no store to pick at launch. Off Linux there is nothing to install, so the probe alone answers.
  */
 export interface HostKeychainOptions {
+    /** The one the rest of the host holds. Absent = its own. */
+    readonly keychain?: Keychain;
     readonly platform?: NodeJS.Platform;
     readonly load?: () => Promise<KeyringModule>;
     readonly run?: RealKeyringDeps['run'];
@@ -30,7 +32,7 @@ const runProgram: RealKeyringDeps['run'] = (binary, args, timeoutMs) => execFile
     .then((r) => ({ exitCode: r.exitCode, stdout: r.streams.stdout, stderr: r.streams.stderr }));
 
 export async function openHostKeychain(options: HostKeychainOptions = {}): Promise<HostKeychain> {
-    const keychain = new Keychain(options.load);
+    const keychain = options.keychain ?? new Keychain(options.load);
     let answers = false;
     const ask = async (): Promise<void> => { answers = (await keychain.probe()).ok; };
 

@@ -83,6 +83,11 @@ export const ENGINE_METHODS = [
     'engine.mcpStatus',
     // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.
     'engine.runTool',
+    // The host's keychain, from the window (P3.4): an agent's key only, by name; compare answers same-or-not.
+    'engine.secretProbe',
+    'engine.secretRead',
+    'engine.secretStore',
+    'engine.secretCompare',
     // Host → window.
     'client.prepareMcpServers',
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.

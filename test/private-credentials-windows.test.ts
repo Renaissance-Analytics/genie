@@ -72,7 +72,7 @@ describe.skipIf(process.platform !== 'win32')('native Windows private credential
         const identityDirectory = join(home, 'agent-credentials'); await mkdir(identityDirectory);
         const identities = join(identityDirectory, 'agents.json'); await writeFile(identities, JSON.stringify({ version: 1, records: {} }));
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'fixture', name: 'fixture-agent', provider: 'codex', mode: 'automated', instructions: null });
-        const result = await tynnAgentIdentities({ file: identities, cipher }).ensure({ projectId: 'fixture-project', agent,
+        const result = await tynnAgentIdentities({ file: identities, secrets: { probe: async () => ({ ok: true as const }), get: async () => ({ kind: 'missing' as const }), set: async () => ({ ok: true as const }) } }).ensure({ projectId: 'fixture-project', agent,
             tynn: { status: () => ({ signedIn: true as const, host: 'https://fixture.invalid', user: { name: 'Fixture', email: 'fixture@example.invalid' } }), userId: () => 'fixture-user',
                 request: async () => { requests++; return { ok: false, status: 503, json: async () => ({}) }; } },
         });

@@ -19,8 +19,8 @@ import { writeJsonAtomic } from './store.js';
  *    back. All that is left is the delete, and only while the keychain still holds an entry.
  *  - `done`: never run again. The old copy is not even read.
  *
- * Each secret answers for itself, in words with no value in them. Nothing runs this until a secret's reader does: each one
- * switches on with its reader.
+ * Each secret answers for itself, in words with no value in them. Each kind of secret switches on with its reader, and no
+ * sooner: the agents' keys in compose.ts, the rest with theirs.
  */
 
 export type OldRead = { readonly kind: 'value'; readonly value: string } | { readonly kind: 'none' } | { readonly kind: 'unreadable' };
@@ -122,7 +122,7 @@ export function migrateSecrets(sources: readonly MigrationSource[], vault: HostV
 }
 
 /** The host's half, over its keychain. It reads and compares here, and answers in one word. */
-export function hostVault(keychain: Keychain): HostVault {
+export function hostVault(keychain: Pick<Keychain, 'get' | 'set'>): HostVault {
     return {
         store: (name, value) => keychain.set(name, value),
         compare: async (name, value) => {
