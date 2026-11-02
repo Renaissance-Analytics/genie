@@ -67,7 +67,6 @@ async function main(): Promise<void> {
     const userData = mkdtempSync(join(tmpdir(), 'genie2-term-'));
     const token = `genie-${randomUUID().slice(0, 8)}`;
     console.log(`\ngenie2 live TERMINAL check — userData ${userData}\n  the token is ${token}\n`);
-    const MARK = Buffer.from('GT1');
     const host = new TerminalHost(realFancyTermPort());
     let output = '';
     const exits: Array<{ id: string; code: number }> = [];
