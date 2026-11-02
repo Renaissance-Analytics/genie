@@ -487,7 +487,7 @@ export class AgentSession {
      * `replacesLast` overwrites the last row, and `LiveReadings` reads that), and rows reach the thread in the order they
      * reached the screen.
      */
-    #held: StreamEvent[] = [];
+    #heldBeside: StreamEvent[] = [];
     /** A subagent's calls not yet answered, so a result is known as theirs even if it comes without the mark. */
     #subagentCalls = new Set<string>();
     /** The prompt just sent, while its echo may still arrive, and how much of the echo has arrived. */
@@ -1595,9 +1595,9 @@ export class AgentSession {
         const open = this.#openMessage;
         this.#openMessage = null;
         this.#enqueue(open);
-        if (this.#held.length === 0) return;
-        const held = this.#held;
-        this.#held = [];
+        if (this.#heldBeside.length === 0) return;
+        const held = this.#heldBeside;
+        this.#heldBeside = [];
         for (const event of held) void this.#wireRow(event);
     }
 
@@ -1833,7 +1833,7 @@ export class AgentSession {
         }
 
         if (this.#besideTheOpen(event, update)) {
-            this.#held.push(event);
+            this.#heldBeside.push(event);
             return;
         }
 
