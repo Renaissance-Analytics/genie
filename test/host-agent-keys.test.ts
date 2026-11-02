@@ -185,6 +185,15 @@ describe('what the host may hand out with no window', () => {
         expect(result.note).toContain('Tynn unavailable');
     });
 
+    it('a record that says signed out is not handed out, whatever else it still holds', async () => {
+        const agent = record();
+        minted(agent);
+        writeFileSync(accountFile, JSON.stringify({ version: 1, state: 'signed-out', host: 'https://tynn.ai', userId: USER }));
+        const result = await keys()(agent, workspace);
+        expect(result.servers).toEqual([]);
+        expect(result.note).toContain('Tynn unavailable');
+    });
+
     it('no account file: not handed out', async () => {
         const agent = record();
         minted(agent);

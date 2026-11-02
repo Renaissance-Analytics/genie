@@ -11,6 +11,10 @@ set -u
 fail=0
 probe() {
     local name="$1" file="$2" anchor="$3" replacement="$4" tests="$5" expect="$6"
+    if ! (for f in $tests; do grep -qF -- "$expect" "$f" 2>/dev/null && exit 0; done; exit 1); then
+        echo "PROBE $name: NO SUCH TEST: no test file in ($tests) holds ($expect), so this probe would prove nothing"; fail=1
+        return
+    fi
     cp "$file" "/tmp/probe-$$.orig"
     node -e "const fs=require('fs');const p=process.argv[1];let s=fs.readFileSync(p,'utf8').split('\r\n').join('\n');if(!s.includes(process.argv[2])){console.error('anchor missing');process.exit(2)}fs.writeFileSync(p,s.replace(process.argv[2],process.argv[3]))" "$file" "$anchor" "$replacement" || { echo "PROBE $name: anchor missing in $file"; fail=1; cp "/tmp/probe-$$.orig" "$file"; return; }
     if npx vitest run $tests > "/tmp/probe-$$.log" 2>&1; then
@@ -261,7 +265,7 @@ probe "no-window-says-why" src/main/session-engine-server.ts \
 
 probe "host-reads-only-the-signed-in-account" src/main/host-agent-keys.ts \
     "data.state === 'signed-in' && " "" \
-    test/host-agent-keys.test.ts "signed out: not handed out"
+    test/host-agent-keys.test.ts "a record that says signed out is not handed out"
 
 probe "a-window-asks-only-for-agent-keys" src/main/session-engine-server.ts \
     "                return this.#keychain().get(agentKeyName(str(0)));" "                return this.#keychain().get(str(0) as never);" \
