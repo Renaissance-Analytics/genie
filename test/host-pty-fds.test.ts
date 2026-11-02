@@ -62,6 +62,11 @@ function probe(port: number): Promise<'accepts' | 'refused' | 'timeout'> {
         s.once('error', (e: NodeJS.ErrnoException) => { clearTimeout(t); done(e.code === 'ECONNREFUSED' ? 'refused' : 'timeout'); });
     });
 }
+/** `p`, or a rejection naming what missed its deadline — with what the window and the host said. */
+function within<T>(ms: number, what: string, p: Promise<T>, said: () => string): Promise<T> {
+    let t: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([p, new Promise<never>((_, reject) => { t = setTimeout(() => reject(new Error(`deadline: ${what} (${ms / 1000} s)\n${said()}`)), ms); })]).finally(() => clearTimeout(t));
+}
 async function until<T>(what: string, fn: () => T | null | undefined | false, ms: number): Promise<T> {
     const end = Date.now() + ms;
     for (;;) {
@@ -109,18 +114,21 @@ async function rig(): Promise<Rig> {
     window.stderr!.on('data', (c: Buffer) => { log += c.toString(); });
     // From here only the window (and whatever took it from the window) holds the socket.
     await new Promise<void>((r) => server.close(() => r()));
-    const said = await new Promise<{ hostPid: number; hostRecord: string | null }>((ok, fail) => {
+    // Every wait bounded, and every miss says what the window and the host said (a first run with none ran the unit job
+    // into its 15-minute limit, and a cancelled job keeps no log).
+    const tell = () => `--- window stderr ---\n${log.slice(-2000)}\n--- host log ---\n${readHostLog(home)}`;
+    const said = await within(75_000, 'the window starting the host', new Promise<{ hostPid: number; hostRecord: string | null }>((ok, fail) => {
         let out = '';
         window.stdout!.on('data', (c: Buffer) => { out += c.toString(); const line = out.split('\n').find((l) => l.startsWith('{')); if (line) ok(JSON.parse(line)); });
-        window.once('exit', (code) => fail(new Error(`the window exited (${code}) before the host was up\n${log}\n--- host log ---\n${readHostLog(home)}`)));
-    });
+        window.once('exit', (code) => fail(new Error(`the window exited (${code}) before the host was up\n${tell()}`)));
+    }), tell);
     const record = parseHostRecord(said.hostRecord);
-    if (!record) throw new Error(`no host record\n${readHostLog(home)}`);
+    if (!record) throw new Error(`no host record\n${tell()}`);
     const token = readFileSync(join(home, 'runtime', 'host.token'), 'utf8').trim();
-    const transport = await connectSocket(record.endpoint);
+    const transport = await within(10_000, 'the socket to the host', connectSocket(record.endpoint), tell);
     const client = new SessionEngineClient();
-    expect(await client.connect(transport, token)).toMatchObject({ ok: true });
-    const opened = await client.terminals().openReady({ workspaceId: 'ws', cwd: home });
+    expect(await within(15_000, 'the client connecting to the host', client.connect(transport, token), tell)).toMatchObject({ ok: true });
+    const opened = await within(30_000, 'a terminal opening in the host', client.terminals().openReady({ workspaceId: 'ws', cwd: home }), tell);
     // The reported pid is the shell's or the helper's: whichever it is, the other is found by parentage.
     const reported = opened.pid;
     const isHelper = /fancy-pty-helper/.test(cmdline(reported));
@@ -149,7 +157,7 @@ describe.skipIf(process.platform !== 'linux')('a terminal in genie-host, started
         const others = holders(r.inode).filter((h) => h.pid !== r.window.pid);
         console.log(`[host-pty-fds] A: window ${r.window.pid}, host ${r.hostPid}, spawn hosts ${JSON.stringify(r.spawnHosts)}, helper ${r.helperPid}, shell ${r.shellPid}; other holders ${JSON.stringify(others)}`);
         expect(others).toEqual([]);
-    }, 240_000);
+    }, 150_000);
 
     it('B: the host SIGKILLed (a crashed Genie): the helper and the shell it owned are gone too, and nothing holds the port', async () => {
         expect(r).toBeDefined();
@@ -170,7 +178,7 @@ describe.skipIf(process.platform !== 'linux')('a terminal in genie-host, started
     it('B: the host SHUT DOWN (engine.shutdown, a quit): the helper and the shell are gone too', async () => {
         const g = await rig();
         expect(alive(g.helperPid) && alive(g.shellPid)).toBe(true);
-        await g.client.shutdown();
+        await within(15_000, "engine.shutdown", g.client.shutdown(), () => readHostLog(g.home));
         g.transport.close();
         writeFileSync(join(g.home, 'go'), '');
         const hostGone = await until('the host to exit', () => (!alive(g.hostPid) ? true : null), 30_000).catch(() => false);
@@ -178,5 +186,5 @@ describe.skipIf(process.platform !== 'linux')('a terminal in genie-host, started
         console.log(`[host-pty-fds] B (shutdown): host gone ${hostGone}; helper ${alive(g.helperPid) ? `alive (ppid ${ppid(g.helperPid)})` : 'gone'}, shell ${alive(g.shellPid) ? `alive (ppid ${ppid(g.shellPid)})` : 'gone'}`);
         expect(hostGone).toBe(true);
         expect(gone).toBe(true);
-    }, 240_000);
+    }, 150_000);
 });

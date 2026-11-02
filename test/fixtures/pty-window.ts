@@ -24,7 +24,7 @@ const hostPid = spawnHostProcess({
 });
 const wait = async (ready: () => boolean, ms: number) => { const end = Date.now() + ms; while (!ready() && Date.now() < end) await new Promise((r) => setTimeout(r, 100)); };
 const record = join(home, 'runtime', 'host.json');
-await wait(() => existsSync(record) && readFileSync(record, 'utf8').includes(`"pid":${hostPid}`), 120_000);
+await wait(() => existsSync(record) && readFileSync(record, 'utf8').includes(`"pid":${hostPid}`), 60_000);
 console.log(JSON.stringify({ hostPid, hostRecord: existsSync(record) ? readFileSync(record, 'utf8') : null }));
-await wait(() => existsSync(join(home, 'go')), 170_000);
+await wait(() => existsSync(join(home, "go")), 150_000);
 process.exit(0);
