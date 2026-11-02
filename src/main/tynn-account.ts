@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
-import { migratePrivateCredential, preparePrivateCredential, writePrivateCredential } from './private-credentials.js';
+import { PRIVATE_CREDENTIAL_STORE, type PrivateCredentialStore } from './private-credentials.js';
 
 /** The desktop pairing key stays encrypted in the main process. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
@@ -13,6 +13,12 @@ export interface TynnAccountPorts {
     /** Previous shared-home file; migration restricts this file, never its parent directory. */
     readonly legacyFile?: string;
     readonly cipher: { isAvailable(): boolean; encrypt(text: string): Buffer; decrypt(bytes: Buffer): string };
+    /**
+     * Where the encrypted credential is kept. Absent = Genie's private store (main/private-credentials.ts), which is what
+     * the app always uses; tests of the ACCOUNT inject a plain-file store, because on Windows the private store's ACL
+     * work is PowerShell on every prepare and write (test/tynn-account.test.ts, 'the credential store it is given').
+     */
+    readonly credentials?: PrivateCredentialStore;
     /** Fixed Tynn origin in production; injected origin in isolated tests. */
     readonly host: () => string;
     /** The session's cookie jar, for the Tynn origin. */
@@ -89,6 +95,9 @@ export class TynnAccount implements TynnAccountPort {
 
     private constructor(ports: TynnAccountPorts) { this.#ports = ports; }
 
+    /** Genie's private store, unless the ports name another. */
+    get #store(): PrivateCredentialStore { return this.#ports.credentials ?? PRIVATE_CREDENTIAL_STORE; }
+
     static async open(ports: TynnAccountPorts): Promise<TynnAccount> {
         const account = new TynnAccount(ports);
         // A legacy browser session cannot recover a once-only pairing secret.
@@ -101,8 +110,8 @@ export class TynnAccount implements TynnAccountPort {
     }
 
     async #prepareStorage(): Promise<void> {
-        if (this.#ports.legacyFile) await migratePrivateCredential(this.#ports.legacyFile, this.#ports.file);
-        await preparePrivateCredential(this.#ports.file);
+        if (this.#ports.legacyFile) await this.#store.migrate(this.#ports.legacyFile, this.#ports.file);
+        await this.#store.prepare(this.#ports.file);
     }
 
     async #restore(): Promise<void> {
@@ -122,12 +131,12 @@ export class TynnAccount implements TynnAccountPort {
 
     #persist(credential: Credential | null): Promise<void> {
         const run = async () => {
-            if (this.#ports.legacyFile) await migratePrivateCredential(this.#ports.legacyFile, this.#ports.file);
+            if (this.#ports.legacyFile) await this.#store.migrate(this.#ports.legacyFile, this.#ports.file);
             const data = credential ? {
                 version: 1, state: 'signed-in', host: credential.host, userId: credential.userId, scopes: credential.scopes,
                 tokenEnc: this.#ports.cipher.encrypt(credential.token).toString('base64'), usedCodes: this.#usedCodes,
             } : { version: 1, state: 'signed-out', host: this.host(), usedCodes: this.#usedCodes };
-            await writePrivateCredential(this.#ports.file, JSON.stringify(data));
+            await this.#store.write(this.#ports.file, JSON.stringify(data));
         };
         const work = this.#diskWork.then(run, run);
         this.#diskWork = work.catch(() => {});

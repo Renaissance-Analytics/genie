@@ -267,6 +267,20 @@ export async function migratePrivateCredential(legacyFile: string, file: string)
     } catch (error) { throw error instanceof SharedCredentialDirectoryError ? error : new Error(REFUSED); }
 }
 
+/** Where a private credential is kept: prepared before it is read, migrated from a legacy file, written in place. */
+export interface PrivateCredentialStore {
+    prepare(file: string): Promise<void>;
+    migrate(legacyFile: string, file: string): Promise<void>;
+    write(file: string, text: string): Promise<void>;
+}
+
+/** Genie's private store: an owner-only ACL on Windows (PowerShell), 0700/0600 elsewhere. */
+export const PRIVATE_CREDENTIAL_STORE: PrivateCredentialStore = {
+    prepare: (file) => preparePrivateCredential(file),
+    migrate: (legacyFile, file) => migratePrivateCredential(legacyFile, file),
+    write: (file, text) => writePrivateCredential(file, text),
+};
+
 /** Encrypted JSON is staged exclusively inside its private parent and restricted before replacement. */
 export async function writePrivateCredential(file: string, text: string): Promise<void> {
     const temp = `${resolve(file)}.${randomUUID()}.tmp`;
