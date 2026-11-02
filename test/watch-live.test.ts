@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FilesHost } from '../src/main/files-host.js';
+import type { FilesWatchHub } from '../src/main/files-watch-hub.js';
+import { watchInto } from './helpers/watch-into.js';
 
 /**
  * A WRITE RIGHT AFTER watch() IS A CHANGE. Linux stamps file times from a coarse clock that lags Date.now(), so a
@@ -18,27 +20,29 @@ beforeEach(async () => {
 });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
 
-describe('FilesHost.watch', () => {
+describe('the watcher (files-watch-hub.ts nodeWatchSource), as the window wires it', () => {
     let host: FilesHost;
+    let hub: FilesWatchHub | null = null;
+    const watch = () => { hub = watchInto(host, { id: 'tynn', path: root }); };
     beforeEach(() => { host = new FilesHost({ workspace: (id) => (id === 'tynn' ? { id: 'tynn', path: root } : null), agentsOf: () => [], eventsOf: () => [] }); });
-    afterEach(async () => { await host.close(); });
+    afterEach(() => { hub?.close(); hub = null; });
 
     it('sees an edit to an existing nested file made right after watch() returns, within one second', async () => {
-        await host.watch('tynn');
+        watch();
         await writeFile(join(root, 'src', 'deep', 'a.ts'), 'b\n');
         await vi.waitFor(async () => { expect((await host.state('tynn'))!.unreported).toEqual(['src/deep/a.ts']); }, { timeout: 1_000, interval: 20 });
     });
 
     it.runIf(process.platform === 'linux')('counts a change whose file time is earlier than the watcher start (the coarse clock, made certain)', async () => {
         const t0 = Date.now();
-        await host.watch('tynn');
+        watch();
         const lagging = new Date(t0 - 5);
         await utimes(join(root, 'src', 'deep', 'a.ts'), lagging, lagging);
         await vi.waitFor(async () => { expect((await host.state('tynn'))!.unreported).toEqual(['src/deep/a.ts']); }, { timeout: 1_000, interval: 20 });
     });
 
     it('watches a folder made after the start: a file written in it is seen', async () => {
-        await host.watch('tynn');
+        watch();
         await mkdir(join(root, 'later'));
         await new Promise((r) => setTimeout(r, 0));
         await vi.waitFor(async () => {

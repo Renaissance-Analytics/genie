@@ -159,22 +159,29 @@ export function FilesPanelContainer({ workspace, files, pinned, onPin, onClose, 
             });
         }
         void files.state(workspace.id).then((s) => setState(s));
-        readGit();
     }, [files, workspace.id, single, lazy, loadDir, lockedRoot]);
 
     useEffect(() => {
         refresh();
-        void files.watch(workspace.id);
-        return files.onChange((id, paths) => {
-            if (id !== workspace.id) return;
+        // Git is read ONCE here; after that it comes pushed with the batches (the host split, P2.2), computed once on the
+        // host however many views want it — never a git run per view per batch.
+        readGit();
+        const onBatch = (paths: readonly string[] | undefined) => {
             if (!lazy || !paths || paths.length === 0) { refresh(); return; }
             // Only the folders the changes are in, and only those already listed; the attribution state as before.
             const dirs = new Set(paths.map((p) => ancestorsOf(p).at(-1) ?? ''));
             for (const dir of dirs) if (loadedRef.current.has(dir)) loadDir(dir);
             void files.state(workspace.id).then((s) => setState(s));
-            readGit();
-        });
-    }, [files, workspace.id, refresh, lazy, loadDir]);
+        };
+        // THIS VIEW'S SUBSCRIPTION: the host watches the workspace while it is held, and lets go when the panel closes.
+        if (files.subscribe) {
+            return files.subscribe(workspace.id, { git: !single }, (event) => {
+                if (event.git) { if (event.git.tree) setGit(event.git.tree); return; }
+                onBatch(event.paths);
+            });
+        }
+        return files.onChange((id, paths) => { if (id === workspace.id) { onBatch(paths); readGit(); } });
+    }, [files, workspace.id, refresh, readGit, single, lazy, loadDir]);
 
     // Every folder that is open is listed (opening one is what loads it).
     useEffect(() => {

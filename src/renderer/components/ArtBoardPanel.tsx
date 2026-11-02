@@ -91,7 +91,7 @@ export function ArtBoardView({ posts, error, onReview, busy = null }: ArtBoardVi
 
 type BoardBridge = NonNullable<GenieBridge['artboard']>;
 
-export function ArtBoardPanel({ workspaceId, artboard, files }: { workspaceId: string; artboard: BoardBridge | undefined; files?: Pick<GenieBridge['files'], 'watch' | 'onChange'> | undefined }) {
+export function ArtBoardPanel({ workspaceId, artboard, files }: { workspaceId: string; artboard: BoardBridge | undefined; files?: Pick<GenieBridge['files'], 'subscribe'> | undefined }) {
     const [posts, setPosts] = useState<readonly DisplayPost[] | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [busy, setBusy] = useState<string | null>(null);
@@ -102,9 +102,9 @@ export function ArtBoardPanel({ workspaceId, artboard, files }: { workspaceId: s
     useEffect(() => { read(); }, [read]);
     // A new post lands on disk: the host's watcher pushes it (only changes under .artboard/ re-read the board).
     useEffect(() => {
-        if (!files || !artboard) return;
-        void files.watch(workspaceId);
-        return files.onChange((id, paths) => { if (id === workspaceId && (!paths || paths.some((p) => p.startsWith('.artboard/')))) read(); });
+        if (!files?.subscribe || !artboard) return;
+        // This view's subscription (the host split, P2.2): watched while the board is shown, let go when it is not.
+        return files.subscribe(workspaceId, {}, (event) => { if (!event.git && (!event.paths || event.paths.some((p) => p.startsWith('.artboard/')))) read(); });
     }, [files, artboard, workspaceId, read]);
 
     if (!artboard) return <p className="p-4 text-[13px] text-[var(--fg-3)]">This window has no ArtBoard host — the board lives on the machine that holds the workspace.</p>;

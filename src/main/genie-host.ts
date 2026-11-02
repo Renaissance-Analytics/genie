@@ -14,6 +14,9 @@ import { SessionEngineServer } from './session-engine-server.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
+import { FilesWatchHub } from './files-watch-hub.js';
+import { gitTreeStatus } from './git-ports.js';
+import { repoStatus } from './repo-git.js';
 
 /**
  * GENIE-HOST — the per-user host process (the host split, phase 1: `.ai/plans/genie-2-host-split-2026-10-31.md`).
@@ -94,6 +97,11 @@ async function main(): Promise<void> {
     let lastBusy = Date.now();
     // The spawn-host children (the host split, P2.1), bound late: they and the engine server refer to each other.
     let relay: SpawnRelay | null = null;
+    /*
+     * THE FILE WATCHER AND GIT (the host split, P2.2; plan §11b): one watcher per workspace while a window's view holds
+     * it, one batch per 250 ms to the windows watching, git once per batch. Here, so none of it runs in the window.
+     */
+    let files: FilesWatchHub | null = null;
     const engine = new SessionEngineServer({
         token,
         build,
@@ -102,7 +110,13 @@ async function main(): Promise<void> {
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
         spawn: { send: (profile, frame) => relay?.send(profile, frame), windowGone: () => relay?.windowGone() },
+        files: {
+            subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
+            unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
+            dropOwner: (owner) => files?.dropOwner(owner),
+        },
     });
+    files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), gitTree: gitTreeStatus, repoStatus, log: say });
     const host = new SessionHost({
         userData: home,
         ...engine.hostOptions(),
@@ -163,6 +177,7 @@ async function main(): Promise<void> {
         // host nobody wants.
         await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
         // Then every process the window started ("Shut down everything"): the spawn-host children end their ptys.
+        files?.close();
         await relay?.stop().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.

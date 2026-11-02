@@ -422,8 +422,15 @@ export interface GenieBridge {
         /** The file as of the last commit — `Show diff` on a change nobody reported. Absent on a bridge with no host files. */
         lastCommitted?(workspaceId: string, path: string): Promise<string | null>;
         state(workspaceId: string): Promise<FilesState | null>;
-        watch(workspaceId: string): Promise<void>;
-        /** Once per batch of changes on disk (genie#921), with the paths that changed — absent from a host before batching. */
+        /**
+         * A VIEW'S SUBSCRIPTION to a workspace's disk changes (the host split, P2.2): held while the view is shown, let go
+         * with the returned function. The host watches a workspace only while some view holds one. `want` asks for git too —
+         * the tree's colours (`git`) or repos' status (`repos`) — computed once per batch on the host and pushed here, so a
+         * view never runs git per batch itself. Absent on a bridge with no host files.
+         */
+        subscribe?(workspaceId: string, want: FilesViewWant, listener: (event: FilesViewEvent) => void): () => void;
+        /** Once per batch of changes on disk (genie#921), with the paths that changed — absent from a host before batching.
+         *  LISTEN only: a view that needs changes holds a `subscribe` too, or nothing watches for it. */
         onChange(listener: (workspaceId: string, paths?: readonly string[]) => void): () => void;
         /** Write against the sha that was read; a changed file comes back as a conflict, never overwritten (§4.3). */
         write(workspaceId: string, path: string, text: string, expectedSha: string | null): Promise<WriteResult>;
@@ -549,12 +556,26 @@ export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'work
  * exists. Every call is a no-op and every list is empty, which is the honest answer: nothing
  * is opened, nothing is written, nothing is claimed. Never a fake terminal.
  */
+/** What a files view asks for beside the batches (the host split, P2.2). */
+export interface FilesViewWant {
+    readonly git?: boolean;
+    readonly repos?: readonly string[];
+}
+
+/** A batch (`paths`) or a git result (`git`) for a view's workspace. */
+export interface FilesViewEvent {
+    readonly paths?: readonly string[];
+    readonly git?: {
+        readonly tree?: Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>;
+        readonly repos?: Readonly<Record<string, { ok: true; value: unknown } | { ok: false; error: string }>>;
+    };
+}
+
 export const NO_FILES: GenieBridge['files'] = {
     tree: () => Promise.resolve(null),
     children: () => Promise.resolve(null),
     open: (_w, path) => Promise.resolve({ ok: false as const, path, error: 'no files host is attached' }),
     state: () => Promise.resolve(null),
-    watch: () => Promise.resolve(),
     onChange: () => () => {},
     write: async () => ({ ok: false as const, reason: 'no files host is attached' }),
 };
