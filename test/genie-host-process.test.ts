@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -76,6 +76,9 @@ async function threadBytes(): Promise<number> {
 beforeAll(async () => {
     home = await mkdtemp(join(tmpdir(), 'genie-host-home-'));
     workspace = await mkdtemp(join(tmpdir(), 'genie-host-ws-'));
+    // The workspace its agents run in, as the host's registry knows it: the host prepares an agent, and refuses a workspace it has never heard of.
+    await mkdir(join(home, 'runtime'), { recursive: true });
+    await writeFile(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: workspace }]));
     hostProcess = spawn(process.execPath, ['--import', 'tsx', 'src/main/genie-host.ts'], {
         // The spawn host's real entry, as TypeScript (the host forks it with its own --import tsx).
         env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
