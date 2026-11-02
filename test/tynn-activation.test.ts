@@ -270,7 +270,7 @@ it('production main restarts the agents Tynn recovery names when the account cha
     const main = await readFile('src/main/main.ts', 'utf8');
     expect(/tynnAccount\.onChange\(\(\) => recoverTynnAgents\(\)\)/.test(main), 'an account change asks for recovery').toBe(true);
     expect(/\n\s*recoverTynnAgents\(\);/.test(main), 'and once after the account opens, signed in before anyone listened').toBe(true);
-    expect(/function recoverTynnAgents[\s\S]*?tynnRecovery\(\)[\s\S]*?restartForMcp/.test(main), 'with the existing graceful restart').toBe(true);
+    expect(/function recoverTynnAgents[\s\S]*?tynnRecovery\(asked\)[\s\S]*?restartForMcp/.test(main), 'with the existing graceful restart').toBe(true);
     expect(/prepareAgentMcp\(record,\s*signal\)[\s\S]*?tynnNote\(record\.id\)[\s\S]*?notice\(/.test(main), 'the note reaches the chat').toBe(true);
 });
 
