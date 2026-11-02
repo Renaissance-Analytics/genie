@@ -4,6 +4,7 @@
  * synchronous CreateProcess under load does: Docker answers that the container is running; a pty reports pid 4242,
  * prints "hello", and exits 0 when killed.
  */
+import { writeFileSync } from 'node:fs';
 import { processChannel } from '../../src/main/spawn-host-protocol.js';
 import { serveSpawnHost } from '../../src/main/spawn-host-server.js';
 import type { PtyPort } from '../../src/main/terminal-host.js';
@@ -31,8 +32,18 @@ const pty: PtyPort = {
 };
 
 const channel = processChannel(process);
+/**
+ * EXEC_NEVER_ANSWERS=<path>: a call that stays in flight for certain (test/spawn-host-client.test.ts). The exec writes the
+ * marker when the call reaches it, then never answers, so a test can kill this child with the call provably waiting.
+ */
+const NEVER_ANSWERS = process.env['EXEC_NEVER_ANSWERS'];
+
 serveSpawnHost(channel, {
     exec: async () => {
+        if (NEVER_ANSWERS) {
+            writeFileSync(NEVER_ANSWERS, String(process.pid));
+            return new Promise<never>(() => { /* in flight until this child dies */ });
+        }
         hold(SLOW);
         const stdout = '[{"State":{"Status":"running","StartedAt":"2026-11-01T00:00:00Z"}}]';
         return { stdout, exitCode: 0, streams: { stdout, stderr: '' } };
