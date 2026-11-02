@@ -59,6 +59,16 @@ describe('the registry\'s files and the mail wake are genie-host\'s (P3.2)', () 
     });
 });
 
+describe('the process supervisor is genie-host\'s (P3.3b)', () => {
+    it('the host runs it on its own `supervised` child; a window drives it through its replica; compose builds one only with none given', () => {
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/new ProcessSupervisor\(\s*supervisedClient\.ptyPort\(\)/);
+        expect(host).toMatch(/if \(profile !== 'supervised'\) relay\?\.send\(/); // no window sends into the host's own child
+        expect(code('src/main/main.ts')).toMatch(/supervisor: agentEngineLink\.client\.supervisor\(\)/);
+        expect(code('src/main/compose.ts')).toMatch(/if \(input\.supervisor\) supervisor = input\.supervisor;\s*else \{\s*const own = new ProcessSupervisor\(/);
+    });
+});
+
 describe('genie-host', () => {
     it('opens the stores, serves them, and starts Genie\'s MCP server', () => {
         const host = code('src/main/genie-host.ts');

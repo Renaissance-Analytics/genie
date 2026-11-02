@@ -19,6 +19,7 @@ import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
+import type { SupervisorService } from './supervisor-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -77,6 +78,8 @@ export interface EngineServerOptions {
     };
     /** Genie 1's database path from the window: the host takes its memories and mail once. */
     readonly v1Import?: (databasePath: string) => Promise<void>;
+    /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
+    readonly supervisor?: SupervisorService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     readonly files?: {
@@ -126,6 +129,10 @@ export class SessionEngineServer {
         // Every change to the stores agents write to, to every window's replicas (P3.1).
         options.stores?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'stores.event', event);
+        });
+        // Every status change and every line of a supervised process's output, to every window's replica (P3.3b).
+        options.supervisor?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'supervisor.event', event);
         });
     }
 
@@ -246,6 +253,7 @@ export class SessionEngineServer {
         this.#sendGlobal(conn);
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
+        if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
         for (const callback of queued) this.#event(conn, 'engine.callback', callback);
@@ -393,6 +401,9 @@ export class SessionEngineServer {
                 return this.#options.mcp.runNative(args[0] as never);
             case 'engine.mcpStatus':
                 return this.#options.mcp?.status() ?? null;
+            case 'engine.supervisor':
+                if (!this.#options.supervisor) throw new Error('This host runs no process supervisor.');
+                return this.#options.supervisor.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.stores': {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);

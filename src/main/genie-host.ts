@@ -14,6 +14,10 @@ import { SessionEngineServer } from './session-engine-server.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
+import { SpawnHostClient } from './spawn-host-client.js';
+import { ProcessSupervisor } from './process-supervisor.js';
+import { SupervisorService } from './supervisor-host.js';
+import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { AgentStoresService } from './agent-stores-host.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
@@ -141,6 +145,19 @@ async function main(): Promise<void> {
     const stores = new AgentStoresService({ ...own, approvals, settings, drafts, registry: { store: registryStore, model: hostRegistry } }, { forwardedCall: (id) => forwardedCalls.get(id) });
     let mcp: HostMcp | null = null;
     let v1Done = false;
+    /*
+     * THE PROCESS SUPERVISOR (P3.3b; plan §11e, decision 1a): sites' servers, queue workers, kept processes and the front
+     * door, under THIS process — their restart policy and their logs run here, so a crashed queue worker restarts with the
+     * UI closed. Its ptys are the `supervised` spawn-host child's, reached by a client inside this host (never a window).
+     */
+    const supervisedClient = new SpawnHostClient({ entry: '', link: { send: (frame) => relay?.send('supervised', frame) }, log: lifecycleLog });
+    const processSupervisor = new ProcessSupervisor(
+        supervisedClient.ptyPort(),
+        { now: () => Date.now(), schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } },
+        { pidAlive },
+    );
+    processSupervisor.watchLiveness();
+    const supervisorService = new SupervisorService(processSupervisor);
     const engine = new SessionEngineServer({
         token,
         build,
@@ -148,7 +165,9 @@ async function main(): Promise<void> {
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
-        spawn: { send: (profile, frame) => relay?.send(profile, frame), windowGone: () => relay?.windowGone() },
+        // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
+        spawn: { send: (profile, frame) => { if (profile !== 'supervised') relay?.send(profile as 'processes' | 'terminals', frame); }, windowGone: () => relay?.windowGone() },
+        supervisor: supervisorService,
         stores,
         mcp: {
             setView: (view) => mcp!.setView(view as never),
@@ -227,7 +246,16 @@ async function main(): Promise<void> {
      */
     relay = startSpawnRelay({
         entry: process.env.GENIE_SPAWN_HOST_ENTRY && process.env.GENIE_SPAWN_HOST_ENTRY.length > 0 ? process.env.GENIE_SPAWN_HOST_ENTRY : join(dirname(fileURLToPath(import.meta.url)), 'spawn-host.js'),
-        send: (profile, frame) => engine.spawnFrame(profile, frame),
+        send: (profile, frame) => {
+            if (profile !== 'supervised') { engine.spawnFrame(profile, frame); return; }
+            // The supervisor's own child: its frames are this host's, and its "ready" is when the supervisor may start.
+            supervisedClient.linkFrame(frame);
+            if (frame.kind === 'event' && frame.channel === 'host.ready') {
+                void supervisedClient.linkUp().catch((error: unknown) => lifecycleLog(`supervised spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
+            }
+        },
+        // Between its lives the supervisor's opens are refused in words (a crash it backs off from), never sent into nothing.
+        onChildExit: (profile) => { if (profile === 'supervised') supervisedClient.linkDown('the supervised spawn host exited'); },
         log: (line) => { say(line); lifecycleLog(line); },
     });
 

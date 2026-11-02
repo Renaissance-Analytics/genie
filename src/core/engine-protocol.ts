@@ -64,6 +64,9 @@ export const ENGINE_METHODS = [
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
+    // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
+    // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
+    'engine.supervisor',
     // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
     'engine.windowView',
     // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.

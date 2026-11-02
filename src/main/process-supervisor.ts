@@ -45,6 +45,13 @@ import type { ListedPty } from './spawn-host-protocol.js';
 
 export type RestartPolicy = 'never' | 'on-failure' | 'always';
 
+/**
+ * The supervisor as its users drive it (the host split, P3.3b): the supervisor itself (genie-host, and the emergency
+ * path), or a window's replica of the host's (supervisor-host.ts SupervisorReplica). Sites, the front door, the process
+ * book and the Processes view are written against this, never the class.
+ */
+export type SupervisorApi = Pick<ProcessSupervisor, 'start' | 'stop' | 'restart' | 'forget' | 'status' | 'list' | 'command' | 'log' | 'readLog' | 'recheck' | 'watchLiveness' | 'onChange' | 'onOutput'>;
+
 export interface ProcessSpec {
     readonly id: string;
     readonly workspaceId: string;

@@ -209,6 +209,37 @@ describe('genie-host as its own process', () => {
         second.transport.close();
     }, 120_000);
 
+    it('THE HOST KEEPS ALIVE WHAT THE PERSON LEFT RUNNING (P3.3b): with no window, a killed `restart: always` worker is started again by the host; the next window sees it; Stop from a window ends it for good', async () => {
+        await writeFile(join(workspace, 'worker.cjs'), `setInterval(() => console.log('working ' + process.pid), 200);\n`);
+        const spec = { id: 'proc:worker', workspaceId: 'ws', name: 'worker', command: `"${process.execPath}" worker.cjs`, cwd: workspace, restart: 'always' as const };
+        const first = await window();
+        first.client.supervisor().start(spec);
+        const firstPid = await until('the worker running with a pid', () => first.client.supervisor().status('proc:worker')?.pid ?? null, 30_000);
+        expect(pidAlive(firstPid)).toBe(true); // CONTROL: the gauge sees the worker alive
+
+        first.transport.close(); // the window goes
+        await sleep(500);
+        process.kill(firstPid, 'SIGKILL'); // the worker crashes, with nobody watching
+
+        // The host's restart policy, with no window: a new worker comes up.
+        const second = await window();
+        const secondPid = await until('a new worker pid', () => {
+            const s = second.client.supervisor().status('proc:worker');
+            return s && s.state === 'running' && s.pid !== null && s.pid !== firstPid ? s.pid : null;
+        }, 30_000);
+        expect(pidAlive(secondPid)).toBe(true);
+        expect(second.client.supervisor().status('proc:worker')!.restarts).toBeGreaterThanOrEqual(1);
+
+        // Stop from the window: ended, and NOT started again by the host.
+        expect(second.client.supervisor().stop('proc:worker')).toBe(true);
+        await until('the worker to end', () => !pidAlive(secondPid), 15_000);
+        await sleep(3_000); // longer than the first restart backoff (1 s): a restart would have come by now
+        const after = second.client.supervisor().status('proc:worker');
+        expect(after?.state).toBe('stopped');
+        expect(after?.pid === null || after?.pid === secondPid).toBe(true);
+        second.transport.close();
+    }, 120_000);
+
     it('an agent keeps running and writing while no window is connected, and the next window adopts it', async () => {
         const first = await window();
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'busy' });
