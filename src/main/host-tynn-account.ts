@@ -10,8 +10,8 @@ export interface HostTynnOptions {
     readonly file: string;
     readonly host: () => string;
     readonly secrets: TynnSecrets;
-    /** Genie's CA, trusted beside the OS store (host-https-fetch.ts). */
-    readonly genieCaFile?: string;
+    /** The roots to trust, for tests; the default is the machine's (host-https-fetch.ts). */
+    readonly machineRoots?: () => readonly string[];
     /** Tests of the account's logic; the real one speaks TLS. */
     readonly fetch?: SessionFetch;
     readonly schedule?: TynnAccountPorts['schedule'];
@@ -19,7 +19,7 @@ export interface HostTynnOptions {
 
 export function hostTynnPorts(options: HostTynnOptions): TynnAccountPorts {
     const jar = new Map<string, Map<string, string>>();
-    const send = options.fetch ?? hostHttpsFetch(options.genieCaFile ? { genieCaFile: options.genieCaFile } : {});
+    const send = options.fetch ?? hostHttpsFetch(options.machineRoots ? { machineRoots: options.machineRoots } : {});
     return {
         file: options.file,
         host: options.host,

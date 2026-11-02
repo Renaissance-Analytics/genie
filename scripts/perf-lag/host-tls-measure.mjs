@@ -14,7 +14,7 @@
  * measures. A CERTIFICATE failure is always a FAIL. On a test VM tynn.ai is the alias, and its CA is in the OS store only, so
  * expect-answer there measures whether the host reads the store that CA was put in.
  */
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -52,6 +52,14 @@ if (!process.env.HOST_TLS_CHILD) {
     process.exit(status);
 }
 
+/** THE STORE PROBE: a child whose OS store really holds the test CA, by OpenSSL's own variable. It answers and leaves. */
+if (process.env.HOST_TLS_STORE_URL) {
+    const { hostHttpsFetch } = await import(process.env.HOST_TLS_CHILD);
+    const answer = await hostHttpsFetch({ env: {} })(process.env.HOST_TLS_STORE_URL, { method: 'GET', headers: {}, credentials: 'omit', redirect: 'error', signal: AbortSignal.timeout(15_000) }).then((r) => String(r.status), (error) => String(error?.cause?.code ?? error?.code ?? error?.message ?? error));
+    console.log(`STORE-PROBE ${answer}`);
+    process.exit(0);
+}
+
 const failures = [];
 const line = (name, verdict, detail = '') => console.log(`### host-tls ${name}=${verdict}${detail ? `  ${detail}` : ''}`);
 const check = (name, ok, detail = '') => { line(name, ok ? 'PASS' : 'FAIL', detail); if (!ok) failures.push(name); };
@@ -66,6 +74,16 @@ const genieCa = issueCa({ commonName: 'Genie Local Development CA', organization
 const stranger = issueCa({ commonName: 'Nobody You Know', organization: 'Nobody', notBefore, notAfter });
 const caFile = join(dir, 'ca.crt');
 writeFileSync(caFile, genieCa.certPem);
+const inTheStore = () => [genieCa.certPem];
+/** The same fetch in a child of this binary, with SSL_CERT_FILE as the OS store. Asynchronous: this process serves the TLS it calls. */
+const storeProbe = (url, env) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, ...env, HOST_TLS_STORE_URL: url }, stdio: ['ignore', 'pipe', 'pipe'] });
+    let out = '';
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    child.stderr.on('data', (chunk) => { out += chunk; });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
+    child.on('close', () => { clearTimeout(timer); resolve(out.match(/STORE-PROBE (.*)/)?.[1] ?? `no answer: ${out.slice(0, 200)}`); });
+});
 const GET = { method: 'GET', headers: {}, credentials: 'omit', redirect: 'error', signal: new AbortController().signal };
 
 async function server(ca) {
@@ -90,12 +108,21 @@ const bad = await server(stranger);
 try {
     const before = await fetch(good.url).then(() => 'answered', (error) => errorOf(error));
     check('control-nodes-own-fetch-refuses-genies-ca', before !== 'answered', before);
-    const res = await hostHttpsFetch({ genieCaFile: caFile, env: {} })(good.url, GET).then((r) => r.status, (error) => errorOf(error));
-    check('genies-ca-answers', res === 200, String(res));
-    const refused = await hostHttpsFetch({ genieCaFile: caFile, env: {} })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
+    const res = await hostHttpsFetch({ machineRoots: inTheStore, env: {} })(good.url, GET).then((r) => r.status, (error) => errorOf(error));
+    check('a-trusted-ca-answers', res === 200, String(res));
+    const notInStore = await hostHttpsFetch({ env: {} })(good.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
+    check('genies-ca-on-disk-but-not-in-the-store-is-refused', !notInStore.startsWith('answered'), notInStore);
+    // THE REAL STORE, with nothing injected: does this binary read it? On Linux OpenSSL's variable names it; Windows has the VM's alias.
+    if (process.platform === 'linux') {
+        const withIt = await storeProbe(good.url, { SSL_CERT_FILE: caFile });
+        check('a-ca-really-in-the-os-store-answers', withIt === '200', withIt);
+        const without = await storeProbe(good.url, { SSL_CERT_FILE: join(dir, 'absent.crt') });
+        check('control-the-same-child-without-it-is-refused', without !== '200', without);
+    } else line('a-ca-really-in-the-os-store-answers', 'INFO', 'measured here by HOST_TLS_TYNN=expect-answer with the alias up');
+    const refused = await hostHttpsFetch({ machineRoots: inTheStore, env: {} })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
     check('an-unknown-ca-is-refused', !refused.startsWith('answered'), refused);
     process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
-    const forced = await hostHttpsFetch({ genieCaFile: caFile, env: {} })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
+    const forced = await hostHttpsFetch({ machineRoots: inTheStore, env: {} })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
     delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
     check('the-env-variable-turns-nothing-off', !forced.startsWith('answered'), forced);
 
@@ -110,14 +137,14 @@ try {
         client.on('error', () => up.destroy());
     });
     await new Promise((r) => proxy.listen(0, '127.0.0.1', r));
-    const via = await hostHttpsFetch({ genieCaFile: caFile, env: { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}` } })(good.url, GET).then((r) => r.status, (error) => errorOf(error));
+    const via = await hostHttpsFetch({ machineRoots: inTheStore, env: { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}` } })(good.url, GET).then((r) => r.status, (error) => errorOf(error));
     check('https-proxy-tunnels', via === 200 && tunnels.length === 1, `${via}, ${tunnels.length} tunnel(s)`);
-    const viaBad = await hostHttpsFetch({ genieCaFile: caFile, env: { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}` } })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
+    const viaBad = await hostHttpsFetch({ machineRoots: inTheStore, env: { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}` } })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
     check('through-a-proxy-an-unknown-ca-is-still-refused', !viaBad.startsWith('answered'), viaBad);
     proxy.closeAllConnections(); proxy.close();
 
     // The public chain, or a test VM's alias, whose CA is only in the OS store.
-    const tynn = await hostHttpsFetch({ genieCaFile: caFile, env: process.env })('https://tynn.ai/api/v1/me', { ...GET, signal: AbortSignal.timeout(20_000) }).then((r) => r.status, (error) => errorOf(error));
+    const tynn = await hostHttpsFetch({ env: process.env })('https://tynn.ai/api/v1/me', { ...GET, signal: AbortSignal.timeout(20_000) }).then((r) => r.status, (error) => errorOf(error));
     const certificate = /CERT|UNABLE_TO|SELF_SIGNED|ALTNAME|verify/i.test(String(tynn));
     if (typeof tynn === 'number') check('tynn-ai-answers-and-the-chain-verifies', tynn === 404 || tynn < 500, `http ${tynn} (no credential: 404 is Tynn's answer)`);
     else if (certificate || process.env.HOST_TLS_TYNN === 'expect-answer') check('tynn-ai-answers-and-the-chain-verifies', false, String(tynn));

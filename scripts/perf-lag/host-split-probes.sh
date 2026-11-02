@@ -311,9 +311,9 @@ probe "explicit-verification-beats-the-env-variable" src/main/host-https-fetch.t
     "        const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {" "        const ask = request(target, { method: init.method, headers: init.headers, signal: init.signal, agent: new Agent({ ca: [...rootsOfThisMachine()] }) }, (res) => {" \
     test/host-https-fetch.test.ts "turns nothing off"
 
-probe "genies-ca-is-trusted" src/main/host-https-fetch.ts \
-    "        const ca = [...rootsOfThisMachine(), ...(pem ? [pem] : [])];" "        const ca = [...rootsOfThisMachine()];" \
-    test/host-https-fetch.test.ts "a server signed by Genie"
+probe "the-trust-set-is-the-machines" src/main/host-https-fetch.ts \
+    "ca: [...(options.machineRoots ?? rootsOfThisMachine)()]," "ca: [...rootsOfThisMachine()]," \
+    test/host-https-fetch.test.ts "a CA in the OS store answers"
 
 probe "a-redirect-is-refused" src/main/host-https-fetch.ts \
     "            if (status >= 300 && status < 400) {" "            if (status === 999) {" \

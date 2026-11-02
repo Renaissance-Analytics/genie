@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
 import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import { connect as netConnect, type AddressInfo } from 'node:net';
@@ -15,7 +15,8 @@ import { fakeKeychain, plainCredentialStore } from './helpers/tynn-storage.js';
 /**
  * THE HOST'S CALLS TO TYNN, OVER REAL TLS (P3.4 cut c; the coordinator, 2026-11-02: "it can break sign-in outright"). A window's
  * session fetch is Chromium's network stack: the OS certificate store and the OS proxy settings. genie-host has Node. So the host
- * has its own fetch, trusting Node's bundled roots, the OS store and Genie's CA, verifying every time, and honouring env proxies.
+ * has its own fetch, trusting Node's bundled roots and the OS store, verifying every time, and honouring env proxies. Genie's CA
+ * counts only once the person's Trust has put it in the store, as it did for the window.
  *
  * Real sockets on the loopback, no mocks: a certificate either verifies or it does not. `test/host-tls-electron.test.ts` runs the
  * same questions under Electron's own Node, which is built on BoringSSL and is what really runs in the host.
@@ -29,13 +30,13 @@ const leafOf = (ca: IssuedPem): IssuedPem => issueLeaf(ca, ['localhost'], new Da
 const GENIE_CA = newCa(GEN_CA_SUBJECT.commonName);
 const STRANGER_CA = newCa('Nobody You Know');
 
+/** What a machine's store holds once the person has pressed Trust. No test touches a real store; the measure does that under Electron. */
+const trusted = (): readonly string[] => [GENIE_CA.certPem];
+
 let dir: string;
-let caFile: string;
 const open: Array<HttpServer | HttpsServer> = [];
 beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'host-https-'));
-    caFile = join(dir, 'ca.crt');
-    writeFileSync(caFile, GENIE_CA.certPem);
 });
 afterEach(async () => {
     for (const server of open.splice(0)) { server.closeAllConnections?.(); await new Promise((r) => server.close(r)); }
@@ -54,43 +55,41 @@ const answers = (status: number, body: unknown, headers: Record<string, string> 
 const GET = { method: 'GET' as const, headers: {}, credentials: 'omit' as const, redirect: 'error' as const, signal: new AbortController().signal };
 
 describe('what it trusts', () => {
-    it('CONTROL, the failure: Node’s own fetch refuses a server signed by Genie’s CA (this is what the host had)', async () => {
+    it('CONTROL, the failure: Node’s own fetch refuses a server signed by Genie’s CA', async () => {
         const url = await tlsServer(GENIE_CA, answers(200, { ok: true }));
         await expect(globalThis.fetch(`${url}/`)).rejects.toThrow();
     });
 
-    it('a server signed by Genie’s CA answers', async () => {
+    it('a CA in the OS store answers: the person pressed Trust, or a company installed it', async () => {
         const url = await tlsServer(GENIE_CA, answers(200, { hello: 'tynn' }));
-        const res = await hostHttpsFetch({ genieCaFile: caFile })(`${url}/`, GET);
+        const res = await hostHttpsFetch({ machineRoots: trusted })(`${url}/`, GET);
         expect([res.ok, res.status]).toEqual([true, 200]);
         expect(JSON.parse(await res.text())).toEqual({ hello: 'tynn' });
+    });
+
+    it('GENIE’S CA ON DISK BUT NOT IN THE STORE IS REFUSED: no Trust, no trust, and the token is never sent', async () => {
+        const home = join(dir, 'runtime', 'gen-ca');
+        mkdirSync(home, { recursive: true });
+        writeFileSync(join(home, 'ca.crt'), GENIE_CA.certPem);
+        let bearers = 0;
+        const url = await tlsServer(GENIE_CA, (req, res) => { if (req.headers.authorization) bearers += 1; res.end('{}'); });
+        await expect(hostHttpsFetch({})(`${url}/`, { ...GET, headers: { Authorization: 'Bearer t' } })).rejects.toThrow();
+        expect(bearers).toBe(0);
+    });
+
+    it('nothing of the host’s network reads Genie’s CA file', () => {
+        const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+        for (const file of ['src/main/host-https-fetch.ts', 'src/main/host-tynn-account.ts', 'src/main/tynn-account-service.ts']) {
+            expect(strip(readFileSync(file, 'utf8')), file).not.toMatch(/gen-ca|ca\.crt|genieCa/i);
+        }
+        expect(strip(readFileSync('src/main/genie-host.ts', 'utf8'))).not.toMatch(/genieCaFile/);
     });
 
     it('a server signed by a CA nobody knows is REFUSED, and no answer comes back', async () => {
         let reached = 0;
         const url = await tlsServer(STRANGER_CA, (_req, res) => { reached += 1; res.end('secret'); });
-        await expect(hostHttpsFetch({ genieCaFile: caFile })(`${url}/`, GET)).rejects.toThrow();
+        await expect(hostHttpsFetch({ machineRoots: trusted })(`${url}/`, GET)).rejects.toThrow();
         expect(reached).toBe(0);
-    });
-
-    it('with no Genie CA on disk, even Genie’s CA is refused: the file is what adds it', async () => {
-        const url = await tlsServer(GENIE_CA, answers(200, {}));
-        await expect(hostHttpsFetch({ genieCaFile: join(dir, 'absent.crt') })(`${url}/`, GET)).rejects.toThrow();
-    });
-
-    it('a CA that appears later is trusted with no restart: the person pressed Trust, or Genie made one', async () => {
-        const later = join(dir, 'later.crt');
-        const url = await tlsServer(GENIE_CA, answers(200, {}));
-        const send = hostHttpsFetch({ genieCaFile: later });
-        await expect(send(`${url}/`, GET)).rejects.toThrow();
-        writeFileSync(later, GENIE_CA.certPem);
-        expect((await send(`${url}/`, GET)).status).toBe(200);
-    });
-
-    it('a CA file that is not a certificate adds nothing and breaks nothing', async () => {
-        writeFileSync(caFile, 'not a certificate');
-        const url = await tlsServer(STRANGER_CA, answers(200, {}));
-        await expect(hostHttpsFetch({ genieCaFile: caFile })(`${url}/`, GET)).rejects.toThrow();
     });
 
     it('a certificate for another name is refused, whoever signed it', async () => {
@@ -98,7 +97,7 @@ describe('what it trusts', () => {
         const server = createHttpsServer({ key: leaf.keyPem, cert: leaf.certPem }, answers(200, {}));
         open.push(server);
         await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
-        await expect(hostHttpsFetch({ genieCaFile: caFile })(`https://localhost:${(server.address() as AddressInfo).port}/`, GET)).rejects.toThrow();
+        await expect(hostHttpsFetch({ machineRoots: trusted })(`https://localhost:${(server.address() as AddressInfo).port}/`, GET)).rejects.toThrow();
     });
 
     it('NODE_TLS_REJECT_UNAUTHORIZED=0 in its environment turns nothing off', async () => {
@@ -106,7 +105,7 @@ describe('what it trusts', () => {
         const before = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
         process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
         try {
-            await expect(hostHttpsFetch({ genieCaFile: caFile })(`${url}/`, GET)).rejects.toThrow();
+            await expect(hostHttpsFetch({ machineRoots: trusted })(`${url}/`, GET)).rejects.toThrow();
         } finally {
             if (before === undefined) delete process.env.NODE_TLS_REJECT_UNAUTHORIZED; else process.env.NODE_TLS_REJECT_UNAUTHORIZED = before;
         }
@@ -121,25 +120,25 @@ describe('it answers as the window’s fetch did', () => {
             req.on('data', (chunk) => { body += chunk; });
             req.on('end', () => { seen = { method: req.method ?? '', auth: req.headers.authorization ?? '', cookie: req.headers.cookie ?? '', body }; res.end('{}'); });
         });
-        await hostHttpsFetch({ genieCaFile: caFile })(`${url}/x`, { ...GET, method: 'POST', headers: { Authorization: 'Bearer t', Cookie: 'genie_token=c', 'Content-Type': 'application/json' }, body: '{"a":1}' });
+        await hostHttpsFetch({ machineRoots: trusted })(`${url}/x`, { ...GET, method: 'POST', headers: { Authorization: 'Bearer t', Cookie: 'genie_token=c', 'Content-Type': 'application/json' }, body: '{"a":1}' });
         expect(seen).toEqual({ method: 'POST', auth: 'Bearer t', cookie: 'genie_token=c', body: '{"a":1}' });
     });
 
     it('a 404 is an answer, not an error', async () => {
         const url = await tlsServer(GENIE_CA, answers(404, { message: 'Not Found' }));
-        const res = await hostHttpsFetch({ genieCaFile: caFile })(`${url}/`, GET);
+        const res = await hostHttpsFetch({ machineRoots: trusted })(`${url}/`, GET);
         expect([res.ok, res.status]).toEqual([false, 404]);
     });
 
     it('a redirect is REFUSED (`redirect: error`): a token is never carried to where a server points', async () => {
         const url = await tlsServer(GENIE_CA, answers(302, {}, { Location: 'https://elsewhere.example/' }));
-        await expect(hostHttpsFetch({ genieCaFile: caFile })(`${url}/`, GET)).rejects.toThrow(/redirect/i);
+        await expect(hostHttpsFetch({ machineRoots: trusted })(`${url}/`, GET)).rejects.toThrow(/redirect/i);
     });
 
     it('a call that is cancelled rejects, and one already cancelled never connects', async () => {
         let reached = 0;
         const url = await tlsServer(GENIE_CA, () => { reached += 1; /* never answers */ });
-        const send = hostHttpsFetch({ genieCaFile: caFile });
+        const send = hostHttpsFetch({ machineRoots: trusted });
         const already = new AbortController();
         already.abort();
         await expect(send(`${url}/`, { ...GET, signal: already.signal })).rejects.toThrow();
@@ -151,7 +150,7 @@ describe('it answers as the window’s fetch did', () => {
     });
 
     it('it speaks only https: a plain http URL is refused, so a token is never sent in the clear', async () => {
-        await expect(hostHttpsFetch({ genieCaFile: caFile })('http://localhost:1/', GET)).rejects.toThrow(/https/i);
+        await expect(hostHttpsFetch({ machineRoots: trusted })('http://localhost:1/', GET)).rejects.toThrow(/https/i);
     });
 });
 
@@ -175,23 +174,23 @@ describe('env proxies', () => {
     it.runIf(proxyEnvWorks)('HTTPS_PROXY carries the call through a tunnel, and TLS is still verified end to end', async () => {
         const proxy = await connectProxy();
         const good = await tlsServer(GENIE_CA, answers(200, { through: true }));
-        const res = await hostHttpsFetch({ genieCaFile: caFile, env: { HTTPS_PROXY: proxy.url } })(`${good}/`, GET);
+        const res = await hostHttpsFetch({ machineRoots: trusted, env: { HTTPS_PROXY: proxy.url } })(`${good}/`, GET);
         expect(res.status).toBe(200);
         expect(proxy.tunnels).toHaveLength(1);
         const bad = await tlsServer(STRANGER_CA, answers(200, {}));
-        await expect(hostHttpsFetch({ genieCaFile: caFile, env: { HTTPS_PROXY: proxy.url } })(`${bad}/`, GET)).rejects.toThrow();
+        await expect(hostHttpsFetch({ machineRoots: trusted, env: { HTTPS_PROXY: proxy.url } })(`${bad}/`, GET)).rejects.toThrow();
     });
 
     it.runIf(proxyEnvWorks)('NO_PROXY keeps a host off it', async () => {
         const proxy = await connectProxy();
         const url = await tlsServer(GENIE_CA, answers(200, {}));
-        await hostHttpsFetch({ genieCaFile: caFile, env: { HTTPS_PROXY: proxy.url, NO_PROXY: 'localhost' } })(`${url}/`, GET);
+        await hostHttpsFetch({ machineRoots: trusted, env: { HTTPS_PROXY: proxy.url, NO_PROXY: 'localhost' } })(`${url}/`, GET);
         expect(proxy.tunnels).toEqual([]);
     });
 
     it('no proxy in the environment: direct', async () => {
         const url = await tlsServer(GENIE_CA, answers(200, {}));
-        expect((await hostHttpsFetch({ genieCaFile: caFile, env: {} })(`${url}/`, GET)).status).toBe(200);
+        expect((await hostHttpsFetch({ machineRoots: trusted, env: {} })(`${url}/`, GET)).status).toBe(200);
     });
 });
 
@@ -213,7 +212,7 @@ describe('the host’s account over it, against a real TLS server', () => {
         return { url, state };
     }
     const openAccount = (url: string, secrets: ReturnType<typeof fakeKeychain>) => TynnAccount.open({
-        ...hostTynnPorts({ file: join(dir, 'tynn.json'), host: () => url, secrets, genieCaFile: caFile }),
+        ...hostTynnPorts({ file: join(dir, 'tynn.json'), host: () => url, secrets, machineRoots: trusted }),
         credentials: plainCredentialStore,
     });
 

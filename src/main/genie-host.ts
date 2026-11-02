@@ -237,7 +237,6 @@ async function main(): Promise<void> {
             file: join(home, 'credentials', 'tynn.json'),
             host: () => TYNN_HOST,
             secrets: keychain,
-            genieCaFile: join(runtime, 'gen-ca', 'ca.crt'),
             schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
         })), { host: TYNN_HOST }),
         // The window's files, read in the clear: the agent's binding and who is signed in. The key is in the keychain.
