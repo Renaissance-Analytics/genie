@@ -36,6 +36,7 @@ describe('the sidebar lists workspaces, not agents', () => {
     it('on an agent’s page its workspace stays marked, and only that one (the positive control: the rows are drawn)', () => {
         const html = sidebar('genie://agent/a1?tab=stream');
         expect(workspaceRow(html, 'tynn')).toContain('data-active="true"');
-        expect(workspaceRow(html, 'fancy')).toContain('data-active="false"');
+        expect(workspaceRow(html, 'fancy')).toContain('data-workspace="fancy"');
+        expect(workspaceRow(html, 'fancy')).not.toMatch(/data-active="true"|aria-current="page"/);
     });
 });
