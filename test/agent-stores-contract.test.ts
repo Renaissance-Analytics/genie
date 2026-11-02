@@ -171,9 +171,11 @@ describe('the attention replica answers what the store answers', () => {
         // The write behind markSeen lands 100 ms late: the replica hears it only then.
         slowWrites.ms = 100;
         r.replica.attention.markSeen(finishedId);
-        await tick(8);
-        expect(r.attention.finished()[0]!.seen).toBe(true);
-        expect(r.replica.attention.finished()).toEqual(r.attention.finished());
+        // The replica hears the change once the store's write lands: waited for, bounded, never a fixed number of ticks.
+        await vi.waitFor(() => {
+            expect(r.attention.finished()[0]!.seen).toBe(true);
+            expect(r.replica.attention.finished()).toEqual(r.attention.finished());
+        }, { timeout: 5_000, interval: 5 });
         r.close();
     });
 });
