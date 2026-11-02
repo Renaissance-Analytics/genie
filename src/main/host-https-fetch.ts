@@ -1,5 +1,6 @@
 import { Agent, request } from 'node:https';
 import tls from 'node:tls';
+import type { ProxyRoute } from '../core/proxy-answer.js';
 import type { SessionFetch } from './tynn-account.js';
 
 /**
@@ -23,6 +24,9 @@ export interface HostHttpsOptions {
     readonly machineRoots?: () => readonly string[];
     /** Where proxies are read from. Default: the host's own environment. */
     readonly env?: NodeJS.ProcessEnv;
+    /** What the OS said for this URL, as a window last heard it. */
+    readonly proxyRoutes?: (url: string) => readonly ProxyRoute[];
+    readonly log?: (line: string) => void;
 }
 
 /** Each of these is cached by Node for the process; so is this. A root added to the OS store is read at the next host start. */

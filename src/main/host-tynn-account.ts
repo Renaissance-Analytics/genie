@@ -1,4 +1,4 @@
-import { hostHttpsFetch } from './host-https-fetch.js';
+import { hostHttpsFetch, type HostHttpsOptions } from './host-https-fetch.js';
 import type { SessionFetch, TynnAccountPorts, TynnSecrets } from './tynn-account.js';
 
 /**
@@ -12,6 +12,8 @@ export interface HostTynnOptions {
     readonly secrets: TynnSecrets;
     /** The roots to trust, for tests; the default is the machine's (host-https-fetch.ts). */
     readonly machineRoots?: () => readonly string[];
+    readonly env?: NodeJS.ProcessEnv;
+    readonly proxyRoutes?: HostHttpsOptions['proxyRoutes'];
     /** Tests of the account's logic; the real one speaks TLS. */
     readonly fetch?: SessionFetch;
     readonly schedule?: TynnAccountPorts['schedule'];

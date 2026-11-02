@@ -83,6 +83,8 @@ export const ENGINE_METHODS = [
     'engine.mcpStatus',
     // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.
     'engine.runTool',
+    // What the OS said about proxies, handed over by a window: `[{ origin: answer }]`.
+    'engine.proxyRemember',
     // The host's Tynn account, as a window asks it (P3.4 cut c): `[method, args]`.
     'engine.tynn',
     // The host's keychain, from the window (P3.4): an agent's key only, by name; compare answers same-or-not.

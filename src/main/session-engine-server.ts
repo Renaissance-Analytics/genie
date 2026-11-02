@@ -65,6 +65,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** What the OS said about proxies, as a window hands it over. */
+    readonly proxy?: { remember(answers: Record<string, string>): Promise<void> };
     /** The host's Tynn account (P3.4 cut c). */
     readonly tynn?: TynnAccountService;
     /** The host's keychain (P3.4), which a window reaches for an agent's key. Absent = refused, which a window reads as unavailable. */

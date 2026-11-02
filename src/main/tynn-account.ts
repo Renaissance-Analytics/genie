@@ -271,6 +271,8 @@ export class TynnAccount implements TynnAccountPort {
         });
     }
 
+    unreachableThrough(): string | null { return null; }
+
     async recheck(): Promise<TynnStatus> {
         this.#retry?.cancel(); this.#retry = null;
         try { await this.#whoami(); } catch { this.#retryAfter(0); }
