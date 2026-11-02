@@ -39,7 +39,7 @@ export interface HostHttpsOptions {
 
 /** Each of these is cached by Node for the process; so is this. A root added to the OS store is read at the next host start. */
 let machineRoots: readonly string[] | null = null;
-function rootsOfThisMachine(): readonly string[] {
+export function rootsOfThisMachine(): readonly string[] {
     if (machineRoots) return machineRoots;
     const read = (kind: 'bundled' | 'system'): readonly string[] => { try { return tls.getCACertificates(kind); } catch { return []; } };
     const bundled = read('bundled');

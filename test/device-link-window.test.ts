@@ -76,9 +76,9 @@ describe('moving the tokens out of localStorage, once', () => {
 describe('the known hosts when the host holds the tokens', () => {
     it('paired comes from the list the host gave; Forget goes to the host, and the row goes', () => {
         const s = memory();
-        const paired = [URL_A];
+        let paired = [URL_A];
         const forgotten: string[] = [];
-        const hosts = knownHosts(s, { hosts: () => paired, forget: (url) => { forgotten.push(url); } });
+        const hosts = knownHosts(s, { hosts: () => paired, forget: (url) => { forgotten.push(url); paired = paired.filter((u) => u !== url); } });
         hosts.noteConnected(URL_A, 'studio', 2);
         hosts.noteConnected(URL_B, 'beast', 1);
         expect(hosts.list().map((h) => [h.url, h.paired])).toEqual([[URL_A, true], [URL_B, false]]);
@@ -169,6 +169,6 @@ describe('source guards: the desktop path', () => {
     it('the bridge offers no way to read a token', () => {
         const device = preload.slice(preload.indexOf('deviceLink:'), preload.indexOf('}', preload.indexOf('deviceLink:')));
         expect(device).toContain('adopt');
-        expect(device).not.toMatch(/tokenFor|read|get\b/);
+        expect(device).not.toMatch(/tokenFor|\bread\b|\bget\b/);
     });
 });

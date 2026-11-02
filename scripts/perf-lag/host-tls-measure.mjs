@@ -34,8 +34,10 @@ if (!process.env.HOST_TLS_CHILD) {
     try {
         const out = join(dir, 'bundle.mjs');
         require('esbuild').buildSync({
-            stdin: { contents: "export { hostHttpsFetch } from './src/main/host-https-fetch.ts'; export { issueCa, issueLeaf } from './src/main/x509.ts'; export { parseProxyAnswer } from './src/core/proxy-answer.ts';", resolveDir: join(here, '..', '..'), loader: 'ts' },
+            stdin: { contents: "export { hostHttpsFetch } from './src/main/host-https-fetch.ts'; export { deviceSocket } from './src/main/device-socket.ts'; export { WebSocketServer } from 'ws'; export { issueCa, issueLeaf } from './src/main/x509.ts'; export { parseProxyAnswer } from './src/core/proxy-answer.ts';", resolveDir: join(here, '..', '..'), loader: 'ts' },
             bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'silent',
+            // ws is CommonJS, and an ESM bundle has no require of its own.
+            banner: { js: "import { createRequire as hostTlsRequire } from 'node:module'; const require = hostTlsRequire(import.meta.url);" },
         });
         const electron = require('electron');
         const child = spawnSync(electron, [fileURLToPath(import.meta.url)], {
@@ -52,6 +54,19 @@ if (!process.env.HOST_TLS_CHILD) {
     process.exit(status);
 }
 
+/** The same, for the socket to another machine: did the dial get past the certificate? */
+const dialOutcome = (deviceSocket, url) => new Promise((resolve) => {
+    const socket = deviceSocket(url);
+    const timer = setTimeout(() => resolve('no answer'), 15_000);
+    socket.onopen = () => { clearTimeout(timer); socket.close(); resolve('open'); };
+    socket.onerror = (ev) => { clearTimeout(timer); resolve(String(ev?.message ?? 'error')); };
+});
+if (process.env.HOST_TLS_STORE_WSS) {
+    const { deviceSocket } = await import(process.env.HOST_TLS_CHILD);
+    console.log(`STORE-PROBE ${await dialOutcome(deviceSocket, process.env.HOST_TLS_STORE_WSS)}`);
+    process.exit(0);
+}
+
 /** THE STORE PROBE: a child whose OS store really holds the test CA, by OpenSSL's own variable. It answers and leaves. */
 if (process.env.HOST_TLS_STORE_URL) {
     const { hostHttpsFetch } = await import(process.env.HOST_TLS_CHILD);
@@ -65,7 +80,7 @@ const line = (name, verdict, detail = '') => console.log(`### host-tls ${name}=$
 const check = (name, ok, detail = '') => { line(name, ok ? 'PASS' : 'FAIL', detail); if (!ok) failures.push(name); };
 const errorOf = (error) => { const cause = error?.cause ?? error; return `${cause?.code ?? ''} ${cause?.message ?? String(error)}`.trim(); };
 
-const { hostHttpsFetch, issueCa, issueLeaf, parseProxyAnswer } = await import(process.env.HOST_TLS_CHILD);
+const { hostHttpsFetch, deviceSocket, WebSocketServer, issueCa, issueLeaf, parseProxyAnswer } = await import(process.env.HOST_TLS_CHILD);
 const dir = process.env.HOST_TLS_DIR;
 const NOW = Date.now();
 const notBefore = new Date(NOW - 86_400_000);
@@ -76,8 +91,8 @@ const caFile = join(dir, 'ca.crt');
 writeFileSync(caFile, genieCa.certPem);
 const inTheStore = () => [genieCa.certPem];
 /** The same fetch in a child of this binary, with SSL_CERT_FILE as the OS store. Asynchronous: this process serves the TLS it calls. */
-const storeProbe = (url, env) => new Promise((resolve) => {
-    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, ...env, HOST_TLS_STORE_URL: url }, stdio: ['ignore', 'pipe', 'pipe'] });
+const storeProbe = (url, env, asks = 'HOST_TLS_STORE_URL') => new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url)], { env: { ...process.env, ...env, [asks]: url }, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (chunk) => { out += chunk; });
     child.stderr.on('data', (chunk) => { out += chunk; });
@@ -118,6 +133,22 @@ try {
         check('a-ca-really-in-the-os-store-answers', withIt === '200', withIt);
         const without = await storeProbe(good.url, { SSL_CERT_FILE: join(dir, 'absent.crt') });
         check('control-the-same-child-without-it-is-refused', without !== '200', without);
+        // THE SOCKET TO ANOTHER MACHINE: the same set. A root ONLY in the OS store: not bundled, not injected, and NODE_EXTRA_CA_CERTS unset.
+        const leaf = issueLeaf(genieCa, ['localhost'], notBefore, notAfter);
+        const wssServer = createHttpsServer({ key: leaf.keyPem, cert: leaf.certPem });
+        const dials = { connections: 0 };
+        new WebSocketServer({ server: wssServer }).on('connection', () => { dials.connections += 1; });
+        await new Promise((r) => wssServer.listen(0, '127.0.0.1', r));
+        const wssUrl = `wss://localhost:${wssServer.address().port}/genie`;
+        const noExtra = { NODE_EXTRA_CA_CERTS: '' };
+        const wssWith = await storeProbe(wssUrl, { ...noExtra, SSL_CERT_FILE: caFile }, 'HOST_TLS_STORE_WSS');
+        check('a-wss-machine-whose-root-is-only-in-the-os-store-connects', wssWith === 'open' && dials.connections === 1, `${wssWith}; ${dials.connections} connection(s)`);
+        const wssWithout = await storeProbe(wssUrl, { ...noExtra, SSL_CERT_FILE: join(dir, 'absent.crt') }, 'HOST_TLS_STORE_WSS');
+        check('control-the-same-wss-dial-without-that-root-is-refused', wssWithout !== 'open' && dials.connections === 1, `${wssWithout}; ${dials.connections} connection(s)`);
+        const wssForced = await storeProbe(wssUrl, { ...noExtra, SSL_CERT_FILE: join(dir, 'absent.crt'), NODE_TLS_REJECT_UNAUTHORIZED: '0' }, 'HOST_TLS_STORE_WSS');
+        check('and-the-env-variable-turns-nothing-off-for-wss', wssForced !== 'open' && dials.connections === 1, `${wssForced}; ${dials.connections} connection(s)`);
+        wssServer.closeAllConnections();
+        wssServer.close();
     } else line('a-ca-really-in-the-os-store-answers', 'INFO', 'measured here by HOST_TLS_TYNN=expect-answer with the alias up');
     const refused = await hostHttpsFetch({ machineRoots: inTheStore, env: {} })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
     check('an-unknown-ca-is-refused', !refused.startsWith('answered'), refused);
@@ -173,6 +204,12 @@ try {
     const certificate = /CERT|UNABLE_TO|SELF_SIGNED|ALTNAME|verify/i.test(String(tynn));
     if (typeof tynn === 'number') check('tynn-ai-answers-and-the-chain-verifies', tynn === 404 || tynn < 500, `http ${tynn} (no credential: 404 is Tynn's answer)`);
     else if (certificate || process.env.HOST_TLS_TYNN === 'expect-answer') check('tynn-ai-answers-and-the-chain-verifies', false, String(tynn));
+    // The wss dial with the REAL store, on either OS: on a test VM tynn.ai is the alias, whose CA is in the OS store only. It need not be a Genie to show the certificate passed:
+    // "Unexpected server response" comes after the TLS handshake. A certificate failure comes before it.
+    if (process.env.HOST_TLS_TYNN === 'expect-answer') {
+        const dialled = await dialOutcome(deviceSocket, 'wss://tynn.ai/genie');
+        check('a-wss-dial-to-tynn-ai-passes-the-certificate', dialled === 'open' || /Unexpected server response/.test(dialled), dialled);
+    }
     else line('tynn-ai-answers-and-the-chain-verifies', 'INFO', `no network here: ${tynn}`);
 } catch (error) {
     check('the-measure-threw', false, errorOf(error));

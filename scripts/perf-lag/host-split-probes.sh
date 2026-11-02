@@ -374,7 +374,7 @@ probe "the-heard-thread-is-resumed" src/main/host-tynn-recovery.ts \
     test/host-tynn-recovery.test.ts "A THREAD THE HOST HEARD WITH NO WINDOW"
 
 probe "it-keeps-asking-while-someone-waits" src/main/host-tynn-recovery.ts \
-    "                await ports.recheck().catch(() => {});" "" \
+    "            await ports.recheck().catch(() => {});" "" \
     test/host-tynn-recovery.test.ts "with an agent waiting on Tynn"
 
 probe "a-start-waits-for-the-write" src/main/agent-tynn-prep.ts \
@@ -455,6 +455,36 @@ probe "no-method-hands-out-the-key" src/main/workstation-service.ts \
     "            case 'identity': return this.identity(host);" "            case 'identity': return this.identity(host);
             case 'read': return this.#options.store.read(host);" \
     test/workstation-host.test.ts "no method hands out the key"
+
+# Recovery: when it asks, and that it waits. never-through-a-running-turn, above, is the probe that a restart does not happen mid-turn.
+probe "a-wait-ends-at-idle" src/main/host-tynn-recovery.ts \
+    "    ports.host.subscribe((id) => settle(id));" "" \
+    test/host-tynn-recovery.test.ts "mid-turn it waits"
+
+probe "a-nudge-replaces-its-timer" src/main/host-tynn-recovery.ts \
+    "        cancelTimer?.();" "" \
+    test/host-tynn-recovery.test.ts "the timer it replaced does not also fire"
+
+probe "a-nudge-only-while-someone-waits" src/main/host-tynn-recovery.ts \
+    "        if (checking || !ports.waiting()) return;" "        if (checking) return;" \
+    test/host-tynn-recovery.test.ts "a nudge with nobody waiting does nothing"
+
+# The socket to another machine: the host's trust set, and no way to turn it off
+probe "device-socket-verifies" src/main/device-socket.ts \
+    "rejectUnauthorized: true, followRedirects: false" "rejectUnauthorized: false, followRedirects: false" \
+    test/device-socket.test.ts "a machine nobody vouches for is refused"
+
+probe "device-socket-uses-the-host-roots" src/main/device-socket.ts \
+    "{ ca: [...(options.machineRoots ?? rootsOfThisMachine)()], rejectUnauthorized" "{ rejectUnauthorized" \
+    test/device-socket.test.ts "a machine whose certificate chains to a trusted root connects"
+
+probe "device-socket-follows-no-redirect" src/main/device-socket.ts \
+    "rejectUnauthorized: true, followRedirects: false" "rejectUnauthorized: true, followRedirects: true" \
+    test/device-socket.test.ts "a redirect is not followed"
+
+probe "device-socket-survives-its-own-close" src/main/device-socket.ts \
+    "    socket.on('error', () => {});" "" \
+    test/device-socket.test.ts "cannot take the host down"
 
 # P3.4 cut e: the host dials other machines, and their tokens never reach a window
 probe "the-welcome-loses-its-token" src/main/device-link-service.ts \

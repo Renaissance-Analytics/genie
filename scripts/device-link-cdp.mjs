@@ -11,7 +11,8 @@
  * - a token an earlier Genie left in localStorage moves to the keychain when a window opens, and leaves localStorage;
  * - a remote window, opened the real way, connects with no PIN and the machine hears that token, on a socket the HOST's process holds;
  * - a PIN pairing leaves the window with a welcome and no token, and the keychain with the token;
- * - a wss:// machine: trusted by the OS's extra roots it connects, and one nobody vouches for hears nothing. This is Node's WebSocket now and no longer Chromium's;
+ * - a wss:// machine whose root is ONLY in the OS store (SSL_CERT_FILE, which is what this Node reads as that store: scripts/perf-lag/host-tls-measure.mjs measured it, and
+ *   measures Windows' real store through the alias) connects, and one nobody vouches for hears nothing;
  * - the window dying takes its sockets with it, and the host lives;
  * - a whole restart, host included: still paired, still no PIN.
  *
@@ -188,8 +189,9 @@ try {
     const URL_STRANGER = `wss://localhost:${strangerPort}/genie`;
     for (const url of [URL_OLD, URL_PIN, URL_TRUSTED, URL_STRANGER]) written.add(url);
 
-    const env = { ...process.env, NODE_EXTRA_CA_CERTS: caFile, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' };
+    const env = { ...process.env, SSL_CERT_FILE: caFile, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' };
     delete env.ELECTRON_RUN_AS_NODE;
+    delete env.NODE_EXTRA_CA_CERTS;
     const cdp = await launch(env);
     // Main is a drone until Tynn's first answer (fail closed), and signed out that answer is "not on the network".
     const dialable = await until('main to allow a dial', 30_000, async () => (await cdp.evaluate(`window.genie.deviceLink.open(${JSON.stringify(URL_OLD)}).then((o) => { if (o.ok) window.genie.tynnNetwork.close(o.channel); return o.ok; })`)) === true);
@@ -234,9 +236,9 @@ try {
     const claimed = await dialFrom(cdp, URL_PIN, { kind: 'token', token: 'made-up', label: 'vm' });
     check(claimed.closed !== null && plain.hellos.length === hellos, '13-a-window-cannot-say-a-token', `closed: ${JSON.stringify(claimed.closed)}; hellos ${hellos} -> ${plain.hellos.length}`);
 
-    say('wss://, through the host, which is Node now');
+    say('wss://, through the host, with the host trust set');
     const seenTrusted = await dialFrom(cdp, URL_TRUSTED, { kind: 'pin', code: PIN, label: 'vm' });
-    check(seenTrusted.opened?.ok === true && trusted.hellos.length === 1, '14-CONTROL-a-machine-whose-cert-chains-to-a-trusted-root-connects', JSON.stringify(seenTrusted.opened));
+    check(seenTrusted.opened?.ok === true && trusted.hellos.length === 1, '14-a-machine-whose-root-is-only-in-the-os-store-connects', JSON.stringify(seenTrusted.opened));
     const seenStranger = await dialFrom(cdp, URL_STRANGER, { kind: 'pin', code: PIN, label: 'vm' });
     check(seenStranger.opened?.ok === false && stranger.hellos.length === 0, '15-a-machine-nobody-vouches-for-hears-nothing', JSON.stringify(seenStranger.opened));
 

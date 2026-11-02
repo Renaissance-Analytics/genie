@@ -49,10 +49,11 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileText } from './toolchain-runner.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
-import { DeviceLinkService, type DeviceSocket } from './device-link-service.js';
+import { DeviceLinkService } from './device-link-service.js';
+import { deviceSocket } from './device-socket.js';
 import { deviceTokenStore } from './device-tokens.js';
 import { KeyringService } from './keyring-service.js';
-import { hostTynnRecovery } from './host-tynn-recovery.js';
+import { hostTynnRecovery, wallClockJumps } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
 import { TynnAccount } from './tynn-account.js';
@@ -264,6 +265,7 @@ async function main(): Promise<void> {
     });
     // THE HOST BRINGS TYNN TOOLS BACK, with no window (host-tynn-recovery.ts). Built once the session host exists.
     let tynnRecovery: ReturnType<typeof hostTynnRecovery> | null = null;
+    let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
     const engine = new SessionEngineServer({
@@ -272,7 +274,13 @@ async function main(): Promise<void> {
         pid: process.pid,
         log: say,
         onShutdown: () => void shutdown('a window asked'),
-        onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
+        onClients: (n) => {
+            lastBusy = Date.now();
+            say(`windows connected: ${n}`);
+            // A window linking is a good moment to ask Tynn again, for an agent still waiting on it.
+            if (n > windowsLinked) tynnRecovery?.nudge();
+            windowsLinked = n;
+        },
         // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
         // A window reaches the `processes` child only: `supervised` and `terminals` are this host's own (P3.3b, P3.3e).
         spawn: { send: (profile, frame) => { if (profile === 'processes') relay?.send('processes', frame); }, windowGone: () => relay?.windowGone() },
@@ -289,7 +297,7 @@ async function main(): Promise<void> {
         // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
         deviceLink: new DeviceLinkService({
             tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),
-            socket: (url) => new WebSocket(url) as unknown as DeviceSocket,
+            socket: (url) => deviceSocket(url),
             send: (owner, event) => engine.deviceEvent(owner, event),
             log: say,
         }),
@@ -378,6 +386,7 @@ async function main(): Promise<void> {
     });
     engine.attach(host);
     tynnRecovery = hostTynnRecovery({
+        watchWake: wallClockJumps,
         names: (asked) => agentKeys.recovery(asked),
         waiting: () => agentKeys.waiting(),
         recheck: async () => { await hostTynn?.recheck(); },
