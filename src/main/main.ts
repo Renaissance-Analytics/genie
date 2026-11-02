@@ -128,7 +128,6 @@ import { readV1Catalog, readV1Knowledge } from './v1-import.js';
 import { readV1Inbox } from './v1-inbox.js';
 import { planV1Import, v1DefaultAgents } from '../core/v1-import.js';
 import { v1Leftovers } from '../core/v1-reap.js';
-import { workspaceDisplayName } from '../core/workspace-name.js';
 import { TITLE_BAR_HEIGHT, mainWindowOptions, overlayColorsOk } from '../core/window.js';
 import { createTray, loginName, trayImages as buildTrayImages, trayMenuTemplate, trayTooltip, trayUpdate, type TrayHandlers } from './tray.js';
 import { needsYouCount } from '../core/deck.js';
@@ -195,6 +194,7 @@ import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { WindowView } from './host-mcp.js';
@@ -746,17 +746,6 @@ async function setWorkspaceColor(rawId: unknown, color: unknown): Promise<{ ok: 
     return workspaceColors.set(workspace.path, color);
 }
 
-/** A workspace's display name from its envelope (project.json `name`), else its folder; read once per path. */
-const manifestNames = new Map<string, string>();
-function workspaceNameFor(path: string): string {
-    const cached = manifestNames.get(path);
-    if (cached !== undefined) return cached;
-    let manifest: string | null = null;
-    try { manifest = readFileSync(join(path, 'project.json'), 'utf8'); } catch { manifest = null; }
-    const name = workspaceDisplayName(manifest, path);
-    manifestNames.set(path, name);
-    return name;
-}
 
 /** The tray icon: shipped beside the app as an extra resource; the repo's build/ in a dev run; the embedded mark otherwise. */
 function trayIconPath(): string | null {
