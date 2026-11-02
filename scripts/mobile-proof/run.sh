@@ -3,6 +3,9 @@
 #   OMARCHY_FETCH='mobile-evidence=<local dir>' scripts/vm-fifo.sh omarchy <tree> 'bash scripts/mobile-proof/run.sh'
 #   MOBILE_PROOF=confirm … — the pairing confirm and the expiry mark instead (drive-confirm.mjs, genie#1366): a device
 #   last seen 80 days ago is seeded before Genie starts, so its pairing is 10 days from the end of its 90.
+#   MOBILE_PROOF=scroll … — every phone screen scrolls by touch on an iPhone 13 and a Pixel 7 profile (drive-scroll.mjs;
+#   the owner, 2026-11-01: "it won't scroll at all so I am stuck"). Fourteen more agents, a folder of sixty files, and a
+#   long markdown and code file are seeded so every screen is taller than a phone. Evidence: mobile-evidence/scroll/.
 #
 # 1. Build Genie. 2. Give the VM a tailnet address: a CGNAT IPv4 on its loopback, and a `tailscale` on PATH whose
 # `status --json` reports it (what Genie's listener reads — nothing in src/ knows this script exists). 3. Seed a workspace
@@ -79,6 +82,25 @@ fs.writeFileSync('$WS/spec.pdf', pdf);
 "
 ( cd "$WS" && node "$TREE/scripts/smoke-seed.mjs" )
 
+if [ "${MOBILE_PROOF:-}" = scroll ]; then
+    echo "=== taller than a phone: fourteen more agents, a folder of sixty files, a long markdown and a long code file"
+    mkdir -p "$WS/many"
+    node -e "
+const fs = require('fs');
+const f = process.env.HOME + '/.genie/runtime/agents.json';
+const agents = JSON.parse(fs.readFileSync(f, 'utf8'));
+const now = new Date().toISOString();
+for (let i = 0; i < 14; i++) agents.push({ id: 'agent_' + (i.toString(16).padStart(2, '0') + 'c0ffee').repeat(4), workspaceId: 'tynn', provider: 'claude', name: 'scout-' + (i + 1), instructions: null, threadId: null, createdAt: now, lastUsedAt: null, mode: 'manual', accessScope: 'none' });
+fs.writeFileSync(f, JSON.stringify(agents, null, 2));
+const ws = process.argv[1];
+const NL = String.fromCharCode(10);
+for (let i = 1; i <= 58; i++) fs.writeFileSync(ws + '/many/file-' + String(i).padStart(2, '0') + '.txt', 'file ' + i + NL);
+fs.writeFileSync(ws + '/many/00-long.md', '# A long document' + NL + NL + Array.from({ length: 120 }, (_, i) => '- item ' + (i + 1) + ': a line of markdown long enough to wrap on a phone screen at least once').join(NL) + NL);
+fs.writeFileSync(ws + '/many/00-long.ts', Array.from({ length: 300 }, (_, i) => 'export const line' + (i + 1) + ' = ' + (i + 1) + ';').join(NL) + NL);
+console.log(agents.length + ' agents; ' + fs.readdirSync(ws + '/many').length + ' files in many/');
+" "$WS"
+fi
+
 if [ "${MOBILE_PROOF:-}" = confirm ]; then
     echo "=== seed a paired device last seen 80 days ago (10 of its 90 days left): the time near expiry, simulated"
     export OLD_DEVICE_TOKEN=proof-old-device-token OLD_DEVICE_LABEL='Pixel 6 (old)'
@@ -118,6 +140,8 @@ if [ "${MOBILE_PROOF:-}" = confirm ]; then
     grep -E "^Window|class:|title:|mapped:|hidden:|workspace:|dpmsStatus" "$EVIDENCE/hypr-state.txt" | head -20
     # The renewal step dials the socket from node; the VM's fake `tailscale cert` is self-signed.
     NODE_TLS_REJECT_UNAUTHORIZED=0 TAILNET_IP="$IP" node scripts/mobile-proof/drive-confirm.mjs
+elif [ "${MOBILE_PROOF:-}" = scroll ]; then
+    TAILNET_IP="$IP" node scripts/mobile-proof/drive-scroll.mjs
 else
     MOBILE_WS="$WS" TAILNET_IP="$IP" node scripts/mobile-proof/drive.mjs
 fi

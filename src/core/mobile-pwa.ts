@@ -57,7 +57,9 @@ const escapeHtml = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g,
 export function mobileHtml(html: string, hostName: string): string {
     const host = escapeHtml(hostName.trim() || 'Genie');
     const head = [
-        '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />',
+        // `interactive-widget=resizes-content`: the on-screen keyboard shrinks the layout viewport (Android Chrome; iOS Safari
+        // ignores it and pans instead), so every screen's `h-dvh` shrinks with it and the chat's composer stays above the keys.
+        '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content, viewport-fit=cover" />',
         '<link rel="manifest" href="/mobile/manifest.webmanifest" />',
         `<meta name="theme-color" content="${PWA_THEME}" />`,
         '<meta name="mobile-web-app-capable" content="yes" />',
