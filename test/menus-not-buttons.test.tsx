@@ -37,8 +37,12 @@ describe('the Settings nav is a react-fancy Sidebar, not Buttons', () => {
     const values = Object.fromEntries(SETTINGS.map((s) => [s.key, s.default]));
     const html = renderToStaticMarkup(<SettingsSurface data={{ ...EMPTY_FEATURES, settings: { values } }} onAction={() => {}} onNavigate={() => {}} section="remote" workspaces={[]} />);
 
-    it('sits in <nav aria-label="Settings"> as an embedded Sidebar', () => {
-        expect(html).toMatch(/<nav[^>]*aria-label="Settings"[^>]*>[\s\S]*data-react-fancy-sidebar=""[^>]*data-embedded="true"/);
+    it('is an embedded Sidebar whose own <nav aria-label="Settings"> (react-fancy 6.1 `navLabel`) holds the items', () => {
+        expect(html).toMatch(/<aside[^>]*data-react-fancy-sidebar=""[^>]*data-embedded="true"[^>]*>\s*<nav data-react-fancy-sidebar-nav="" aria-label="Settings"/);
+        // ONE Settings landmark: the search box sits above the Sidebar, outside it, and is not a second nav.
+        expect(html.match(/aria-label="Settings"/g)).toHaveLength(1);
+        const nav = html.slice(html.indexOf('data-react-fancy-sidebar-nav'));
+        expect(nav.indexOf('data-settings-nav="general"')).toBeLessThan(nav.indexOf('</nav>'));
     });
 
     it('each section is a Sidebar item; the page on screen (and only it) is aria-current="page"', () => {
@@ -50,7 +54,7 @@ describe('the Settings nav is a react-fancy Sidebar, not Buttons', () => {
         const general = control(html, 'data-settings-nav="general"')!;
         expect(general.open).toContain('data-react-fancy-sidebar-item=""');
         expect(general.open).not.toContain('aria-current');
-        const nav = html.slice(html.indexOf('data-settings-sidebar'), html.indexOf('</nav>', html.indexOf('data-settings-sidebar')));
+        const nav = html.slice(html.indexOf('data-react-fancy-sidebar-nav'), html.indexOf('</nav>', html.indexOf('data-react-fancy-sidebar-nav')));
         expect(nav.match(/aria-current="page"/g)).toHaveLength(1);
     });
 

@@ -1675,12 +1675,13 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                 {/* GENIE 1'S SIDEBAR: grouped sections, one page each (core/settings-nav.ts). */}
                 {/* A MENU, NOT BUTTONS (the owner, 2026-11-01: "those should not be buttons, it's a menu"): react-fancy's
                     Sidebar, embedded in the page; its items sit left, the page on screen is aria-current="page", and they ring on
-                    keyboard focus only. */}
-                <nav data-settings-sidebar="" aria-label="Settings" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
+                    keyboard focus only. The Sidebar draws the <nav aria-label="Settings"> itself (`navLabel`), and `keyboardNav` makes
+                    the items one tab stop that Up / Down / Home / End move through. The search box sits above it, outside the nav. */}
+                <div data-settings-sidebar="" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
                     <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" leading={<Icon name="search" size="xs" />} />
-                    <Sidebar embedded className="gap-3">
+                    <Sidebar embedded navLabel="Settings" keyboardNav>
                         {NAV_GROUPS.map((g) => (
-                            <div key={g.label} data-settings-nav-group={g.label}>
+                            <div key={g.label} data-settings-nav-group={g.label} className="mb-3 last:mb-0">
                                 <Sidebar.Group label={g.label} className="flex flex-col gap-0.5 py-0">
                                     {g.items.map((i) => (
                                         <Sidebar.Item key={i.id} data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} active={i.id === active && results === null}
@@ -1694,7 +1695,7 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
                             </div>
                         ))}
                     </Sidebar>
-                </nav>
+                </div>
                 <div className="min-w-0 flex-1 overflow-auto">
                     {results !== null ? (
                         results.length === 0 ? (
