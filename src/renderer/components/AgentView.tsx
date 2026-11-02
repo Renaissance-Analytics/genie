@@ -11,7 +11,7 @@ import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core
 import { FidelityDot } from './Dashboard.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
-import { Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
+import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
@@ -90,6 +90,14 @@ const TAB_LABEL: Record<AgentTab, string> = {
     activity: 'Activity',
     settings: 'Settings',
 };
+
+/**
+ * A `title` for a react-fancy Breadcrumbs crumb. The crumb spreads its rest props onto the element (react-fancy 6.1.1), so a
+ * title works at runtime, but `BreadcrumbsItemProps` does not admit HTML attributes yet; asked of the fancy agent
+ * (2026-11-01). Remove this once the type takes `title`. A truncated crumb needs it: it is the only way to read the whole
+ * name.
+ */
+const titled = (title: string): object => ({ title });
 
 const PILL_TONE = {
     ok: 'text-[var(--success)]',
@@ -600,10 +608,18 @@ function AgentViewBody({
                     pinned the header is ~286px, and the crumb squeezed to nothing while the rest spilled past the header). The
                     path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
                 <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-                {/* Back to its workspace (Tynn #805): the crumb is a link. */}
-                {workspace ? <Button variant="ghost" size="xs" labelClassName="truncate" data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] justify-start">{workspace.name ?? workspace.id} /</Button> : null}
+                {/* THE BREADCRUMB, react-fancy's (the owner, 2026-11-01: menus and crumbs are navigation, not Buttons): back to its
+                    workspace (Tynn #805) by onNavigate — a genie:// address is routed by the app, not followed as a link — then the
+                    agent, the page you are on. Below md react-fancy folds it into a menu that keeps the way back. */}
+                <Breadcrumbs separator={<span className="text-[13px] text-[var(--fg-4)]">/</span>} className="min-w-0 shrink items-center gap-1.5 overflow-hidden">
+                    {workspace ? (
+                        <Breadcrumbs.Item data-crumb={workspace.id} data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} {...titled(`Back to ${workspace.name ?? workspace.id}`)} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
+                            {workspace.name ?? workspace.id}
+                        </Breadcrumbs.Item>
+                    ) : null}
+                    <Breadcrumbs.Item active data-agent-name="" {...titled(agent.name)} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium text-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Breadcrumbs.Item>
+                </Breadcrumbs>
                 <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                <span data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium">{agent.name}</span>
                 <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
                 <span className="min-w-0 shrink-[1000] truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
