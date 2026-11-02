@@ -44,12 +44,24 @@ const said = (error: unknown): string => (error instanceof Error ? error.message
 export class Keychain {
     readonly #load: () => Promise<KeyringModule>;
     #module: Promise<KeyringModule> | null = null;
+    #answers: boolean | null = null;
+    readonly #answerListeners = new Set<(answers: boolean) => void>();
 
     constructor(load: () => Promise<KeyringModule> = () => import('@napi-rs/keyring') as unknown as Promise<KeyringModule>) {
         this.#load = load;
     }
 
-    onAnswerChange(_listener: (answers: boolean) => void): () => void { return () => {}; }
+    /** Whether it answered, each time that changes: what a read finds is the one way to hear that a keyring went away while Genie runs. */
+    onAnswerChange(listener: (answers: boolean) => void): () => void {
+        this.#answerListeners.add(listener);
+        return () => { this.#answerListeners.delete(listener); };
+    }
+
+    #answered(answers: boolean): void {
+        if (this.#answers === answers) return;
+        this.#answers = answers;
+        for (const listener of [...this.#answerListeners]) listener(answers);
+    }
 
     async #entry(name: string) {
         // A load that failed is tried again next time (a package just installed, a module that was briefly unreadable).
@@ -61,8 +73,10 @@ export class Keychain {
     async #read(name: string): Promise<KeychainRead> {
         try {
             const value = await (await this.#entry(name)).getPassword();
+            this.#answered(true);
             return value === null || value === undefined ? { kind: 'missing' } : { kind: 'value', value };
         } catch (error) {
+            this.#answered(false);
             return { kind: 'unavailable', reason: said(error) };
         }
     }
@@ -75,8 +89,10 @@ export class Keychain {
         if (value.length === 0) return { ok: false, reason: 'An empty secret is not kept: reading it back could not tell it from nothing.' };
         try {
             await (await this.#entry(name)).setPassword(value);
+            this.#answered(true);
             return { ok: true };
         } catch (error) {
+            this.#answered(false);
             return { ok: false, reason: `${NO_KEYCHAIN}: ${said(error)}` };
         }
     }
@@ -85,8 +101,10 @@ export class Keychain {
     async delete(name: SecretName): Promise<KeychainResult> {
         try {
             await (await this.#entry(name)).deletePassword();
+            this.#answered(true);
             return { ok: true };
         } catch (error) {
+            this.#answered(false);
             return { ok: false, reason: `${NO_KEYCHAIN}: ${said(error)}` };
         }
     }

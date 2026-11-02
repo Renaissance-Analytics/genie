@@ -34,6 +34,7 @@ const runProgram: RealKeyringDeps['run'] = (binary, args, timeoutMs) => execFile
 export async function openHostKeychain(options: HostKeychainOptions = {}): Promise<HostKeychain> {
     const keychain = options.keychain ?? new Keychain(options.load);
     let answers = false;
+    keychain.onAnswerChange((now) => { answers = now; });
     const ask = async (): Promise<void> => { answers = (await keychain.probe()).ok; };
 
     if ((options.platform ?? process.platform) !== 'linux') {
@@ -50,5 +51,7 @@ export async function openHostKeychain(options: HostKeychainOptions = {}): Promi
         ...(options.pathEnv !== undefined ? { pathEnv: options.pathEnv } : {}),
     });
     const keyring = await LinuxKeyring.open({ ...base, facts: async () => { await ask(); return base.facts(); } });
+    // A keyring that goes away while Genie runs, or comes back: the card follows with no restart. A failure to re-read leaves the card as it was.
+    keychain.onAnswerChange(() => { void keyring.recheck().catch(() => {}); });
     return { keychain, keyring, state: () => keyring.state() };
 }
