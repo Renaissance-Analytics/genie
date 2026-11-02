@@ -65,7 +65,8 @@ afterEach(async () => { await rm(dir, { recursive: true, force: true }); vi.rest
 
 async function signedIn(over: { accessExpiresAt?: number; refreshExpiresAt?: number; refresh?: string | null; token?: string } = {}) {
     KEYS.held.set('github/access', over.token ?? TOKEN);
-    if (over.refresh !== null) KEYS.held.set('github/refresh', over.refresh ?? REFRESH);
+    if (over.refresh === null) KEYS.held.delete('github/refresh');
+    else KEYS.held.set('github/refresh', over.refresh ?? REFRESH);
     await writeFile(file, JSON.stringify({
         version: 1, state: 'signed-in', login: 'ada', name: 'Ada', source: 'sign-in',
         ...(over.accessExpiresAt !== undefined ? { accessExpiresAt: over.accessExpiresAt } : {}),

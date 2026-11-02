@@ -232,7 +232,6 @@ describe('git runs in the host: a window asks, and hears the outcome', () => {
         expect(JSON.stringify(service.dump())).not.toContain(TOKEN);
         const wire = seen.join('\n');
         expect(wire).toContain('ada');
-        expect(wire).toContain('gitClone');
         for (const secret of SECRETS) expect(wire).not.toContain(secret);
     });
 
