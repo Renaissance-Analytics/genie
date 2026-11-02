@@ -9,6 +9,8 @@ import { allUserItemsOf, askedOf, finishedOf, lastHandoffOf, pendingOf, scopedLi
 import type { Answer, AskedRecord, AttentionData, Finished, ListAddResult, PendingQuestion, QuestionLeft } from './attention-store.js';
 import type { InboxMessage, ReceiveInput, ReceivePage, Receipt, SendInput } from './inbox-store.js';
 import type { AddInput, Hit, KnowledgeNode, LinkResult, ListInput, SearchInput, Unresolved } from './knowledge-store.js';
+import { settingOf, snapshotForOf, snapshotOf, workspaceValuesOf, type SettingValue, type SettingsData } from './settings-read.js';
+import type { ChatDrafts } from '../core/chat-drafts.js';
 
 /**
  * THE WINDOW'S REPLICAS OF THE HOST'S STORES (the host split, P3.1: plan §11d).
@@ -237,11 +239,72 @@ export class KnowledgeRemote {
     async list(input: ListInput): Promise<{ nodes: KnowledgeNode[]; nextCursor: string | null }> { return (await this.#call('knowledge', 'list', [input])) as { nodes: KnowledgeNode[]; nextCursor: string | null }; }
 }
 
+/**
+ * THE SETTINGS, AS THIS WINDOW READS THEM (the host split, P3.2): the host's data, the same reads as the store
+ * (settings-read.ts), and HOT-SWAP kept — a change by whoever reaches here, the data first, then the listeners, so a
+ * listener that applies a setting live reads the new value.
+ */
+export class SettingsReplica {
+    #data: SettingsData = { values: {}, workspaces: {}, carriedOver: null };
+    readonly #listeners = new Set<(key: string, value: SettingValue, workspaceId?: string) => void>();
+    readonly #call: StoresCall;
+
+    constructor(call: StoresCall) {
+        this.#call = call;
+    }
+
+    rebase(data: SettingsData): void { this.#data = data; }
+
+    apply(event: Extract<StoresEvent, { store: 'settings' }>): void {
+        this.#data = event.data;
+        for (const l of [...this.#listeners]) {
+            if (event.workspaceId === null) l(event.key, event.value); else l(event.key, event.value, event.workspaceId);
+        }
+    }
+
+    get(key: string): SettingValue { return settingOf(this.#data, key); }
+    snapshot(): Record<string, SettingValue> { return snapshotOf(this.#data); }
+    snapshotFor(workspaceId: string): Record<string, SettingValue> { return snapshotForOf(this.#data, workspaceId); }
+    workspaceValues(workspaceId: string): Record<string, SettingValue> { return workspaceValuesOf(this.#data, workspaceId); }
+    data(): SettingsData { return this.#data; }
+
+    async set(key: string, value: unknown): Promise<void> { await this.#call('settings', 'set', [key, value]); }
+    async setFor(workspaceId: string, key: string, value: unknown): Promise<void> { await this.#call('settings', 'setFor', [workspaceId, key, value]); }
+    async resetFor(workspaceId: string, key: string): Promise<void> { await this.#call('settings', 'resetFor', [workspaceId, key]); }
+    async reset(key: string): Promise<void> { await this.#call('settings', 'reset', [key]); }
+
+    onChange(listener: (key: string, value: SettingValue, workspaceId?: string) => void): () => void {
+        this.#listeners.add(listener);
+        return () => { this.#listeners.delete(listener); };
+    }
+}
+
+/** Every chat's unsent draft, kept in the host (P3.2): read and written by call (only async handlers use them). */
+export class DraftsRemote {
+    readonly #call: StoresCall;
+
+    constructor(call: StoresCall) {
+        this.#call = call;
+    }
+
+    async all(): Promise<ChatDrafts> { return (await this.#call('drafts', 'all', [])) as ChatDrafts; }
+    async save(agentId: string, raw: unknown): Promise<void> { await this.#call('drafts', 'save', [agentId, raw]); }
+    async putFile(bytes: Uint8Array): Promise<string> { return (await this.#call('drafts', 'putFile', [Buffer.from(bytes).toString('base64')])) as string; }
+    async readFile(ref: unknown): Promise<Uint8Array | null> {
+        const b = (await this.#call('drafts', 'readFile', [ref])) as string | null;
+        return b === null ? null : new Uint8Array(Buffer.from(b, 'base64'));
+    }
+    async release(refs: readonly unknown[]): Promise<void> { await this.#call('drafts', 'release', [refs]); }
+    async prune(agentIds: Iterable<string>): Promise<void> { await this.#call('drafts', 'prune', [[...agentIds]]); }
+}
+
 export interface StoreReplicas {
     readonly inbox: InboxReplica;
     readonly attention: AttentionReplica;
     readonly approvals: ApprovalsReplica;
     readonly knowledge: KnowledgeRemote;
+    readonly settings: SettingsReplica;
+    readonly drafts: DraftsRemote;
     rebase(dump: StoresDump): void;
     apply(event: StoresEvent): void;
 }
@@ -251,12 +314,15 @@ export function storeReplicas(call: StoresCall): StoreReplicas {
     const attention = new AttentionReplica(call);
     const approvals = new ApprovalsReplica(call);
     const knowledge = new KnowledgeRemote(call);
+    const settings = new SettingsReplica(call);
+    const drafts = new DraftsRemote(call);
     return {
-        inbox, attention, approvals, knowledge,
-        rebase: (dump) => { inbox.rebase(dump.inbox); attention.rebase(dump.attention); approvals.rebase(dump.approvals); },
+        inbox, attention, approvals, knowledge, settings, drafts,
+        rebase: (dump) => { inbox.rebase(dump.inbox); attention.rebase(dump.attention); approvals.rebase(dump.approvals); if (dump.settings) settings.rebase(dump.settings); },
         apply: (event) => {
             if (event.store === 'inbox') inbox.apply(event);
             else if (event.store === 'attention') attention.apply(event);
+            else if (event.store === 'settings') settings.apply(event);
             else approvals.rebase(event.view);
         },
     };

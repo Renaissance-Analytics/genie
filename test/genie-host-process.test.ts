@@ -172,7 +172,7 @@ describe('genie-host as its own process', () => {
         const first = await window();
         await first.client.call('engine.records', [[agent]]);
         // A Take Over terminal's agent: the window says whose terminal it is; it calls Genie's tools over HTTP by its id.
-        expect(await first.client.pushWindowView({ workspaces: [{ id: 'ws', path: workspace, slug: 'ws', defaultAgentId: null }], settings: { global: {}, byWorkspace: {} }, userActive: true, callers: { 'term-teller': caller }, pluginTools: [] })).toBe(true);
+        expect(await first.client.pushWindowView({ workspaces: [{ id: 'ws', path: workspace, slug: 'ws', defaultAgentId: null }], userActive: true, callers: { 'term-teller': caller }, pluginTools: [] })).toBe(true);
         const status = await first.client.mcpStatus();
         expect(status?.endpoint).not.toBeNull();
         const endpoint = status!.endpoint!;

@@ -275,6 +275,9 @@ export type FrontDoorStatus =
  * What compose built. `S` is the stores agents write to as this window holds them: genie-host's replicas (engine mode,
  * `WindowServices`) or the stores themselves (`OwnAgentStores`, the default: the emergency path, and every test that composes alone).
  */
+/** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
+type S_Settings = NonNullable<WindowAgentStores['settings']>;
+
 export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
@@ -292,7 +295,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly own: OwnAgentStores | null;
     readonly flows: FlowStore;
     readonly flowScheduler: FlowScheduler;
-    readonly settings: SettingsStore;
+    readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: ProcessSupervisor;
     readonly sites: SiteManager;
     /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
@@ -716,8 +719,14 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const iso = () => new Date(now()).toISOString();
     await mkdir(runtimeDir(input.userData), { recursive: true });
 
-    const settings = await SettingsStore.open(input.userData, iso);
-    await settings.carryOverFromV1(input.v1Settings());
+    // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
+    // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
+    let ownSettings: SettingsStore | null = null;
+    if (!input.agentStores?.settings) {
+        ownSettings = await SettingsStore.open(input.userData, iso);
+        await ownSettings.carryOverFromV1(input.v1Settings());
+    }
+    const settings: S_Settings = input.agentStores?.settings ?? ownSettings!;
 
     // THE STORES AGENTS WRITE TO (the host split, P3.1): genie-host's, through this window's replicas — or, only when no
     // host could start, this window's own, opened here with Genie 1's history taken once.

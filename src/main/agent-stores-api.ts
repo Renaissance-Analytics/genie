@@ -4,6 +4,7 @@ import type { ApprovalQueue } from './approval-queue.js';
 import type { AttentionStore } from './attention-store.js';
 import type { InboxStore } from './inbox-store.js';
 import type { KnowledgeStore } from './knowledge-store.js';
+import type { SettingsStore } from './settings-store.js';
 
 /**
  * WHAT THE WINDOW USES OF THE STORES AGENTS WRITE TO (the host split, P3.1). In engine mode these are the replicas of
@@ -38,7 +39,12 @@ export interface KnowledgeApi {
 /** The stores themselves: what a window that opened them (the emergency path) holds, and what genie-host holds. */
 export type OwnAgentStores = AgentStores;
 
+/** The settings as a window uses them (P3.2): reads synchronous (a replica), writes the host's, change listeners kept. */
+export type SettingsApi = Pick<SettingsStore, 'get' | 'set' | 'setFor' | 'resetFor' | 'reset' | 'workspaceValues' | 'snapshotFor' | 'snapshot' | 'onChange'>;
+
 export interface WindowAgentStores {
+    /** Absent = this window opens the settings itself (the emergency path, and a window composed before P3.2). */
+    readonly settings?: SettingsApi;
     readonly inbox: InboxApi;
     readonly attention: AttentionApi;
     readonly knowledge: KnowledgeApi;

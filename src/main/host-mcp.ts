@@ -31,7 +31,6 @@ type SettingValue = boolean | string;
 
 export interface WindowView {
     readonly workspaces: ReadonlyArray<{ readonly id: string; readonly path: string; readonly slug: string; readonly defaultAgentId: string | null }>;
-    readonly settings: { readonly global: Readonly<Record<string, SettingValue>>; readonly byWorkspace: Readonly<Record<string, Readonly<Record<string, SettingValue>>>> };
     /** The person is at the computer (the window's own measure). No window = nobody is. */
     readonly userActive: boolean;
     /** Terminals the window runs whose agents call Genie (Take Over windows, flow runs): terminal id → caller. */
@@ -41,6 +40,8 @@ export interface WindowView {
 
 export interface HostMcpPorts {
     readonly stores: AgentStores;
+    /** The settings: the host's own since P3.2 (dnd, inbox access, workspace tabs are read here, live). */
+    readonly settings: Pick<import('./settings-store.js').SettingsStore, 'snapshot' | 'snapshotFor'>;
     readonly records: () => readonly AgentRecord[];
     readonly probe: (agentId: AgentId) => Parameters<typeof livenessOf>[0];
     readonly lastRowAt: (agentId: AgentId) => number | null;
@@ -94,10 +95,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
         const session = sessionCallerOf(book, id, { find: (agentId) => records.find((r) => r.id === agentId) ?? null, workspace }, osaHomeDir());
         return session ?? view?.callers[id] ?? null;
     };
-    const settings = {
-        snapshot: () => ({ ...(view?.settings.global ?? {}) }),
-        snapshotFor: (workspaceId: string) => ({ ...(view?.settings.global ?? {}), ...(view?.settings.byWorkspace[workspaceId] ?? {}) }),
-    };
+    const settings = ports.settings;
 
     const build = () => {
         const s = ports.stores;

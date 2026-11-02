@@ -36,6 +36,16 @@ describe('compose', () => {
     });
 });
 
+describe('the settings and the chat drafts are genie-host\'s (P3.2)', () => {
+    it('compose opens the settings only when it was given none; genie-host opens them and the drafts; the window\'s drafts are the host\'s', () => {
+        expect(code('src/main/compose.ts')).toMatch(/if \(!input\.agentStores\?\.settings\) \{\s*ownSettings = await SettingsStore\.open\(/);
+        const host = code('src/main/genie-host.ts');
+        expect(host).toMatch(/await SettingsStore\.open\(home\)/);
+        expect(host).toMatch(/await ChatDraftStore\.open\(home\)/);
+        expect(code('src/main/main.ts')).toMatch(/const drafts = agentEngineLink \? agentEngineLink\.client\.stores\(\)\.drafts : await ChatDraftStore\.open\(/);
+    });
+});
+
 describe('genie-host', () => {
     it('opens the stores, serves them, and starts Genie\'s MCP server', () => {
         const host = code('src/main/genie-host.ts');

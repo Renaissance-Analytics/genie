@@ -1465,7 +1465,8 @@ async function boot(): Promise<void> {
      * Opened only once the roster is in, so a prune never reads a registry not loaded yet as "every agent deleted"; then a
      * deleted agent's draft and files go on the change that removes it. Answered before any window exists.
      */
-    const drafts = await ChatDraftStore.open(genieHome());
+    // genie-host's when it runs (P3.2): one writer for the drafts file; this window's own only on the emergency path.
+    const drafts = agentEngineLink ? agentEngineLink.client.stores().drafts : await ChatDraftStore.open(genieHome());
     const draftAgents = (): string[] => theRegistry.listAgents().map((a) => a.id);
     const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
     await drafts.prune(draftAgents()).catch(pruneFailed);
@@ -3177,7 +3178,6 @@ async function boot(): Promise<void> {
                 const slugs = registry?.workspaceSlugs() ?? new Map<string, string>();
                 return {
                     workspaces: workspaces.map((w) => ({ id: w.id, path: w.path, slug: slugs.get(w.id) ?? w.id, defaultAgentId: registry?.defaultAgentOf(w.id) ?? null })),
-                    settings: { global: composed.settings.snapshot(), byWorkspace: Object.fromEntries(workspaces.map((w) => [w.id, composed.settings.snapshotFor(w.id)])) },
                     userActive: powerMonitor.getSystemIdleTime() < 120,
                     callers: takeOvers?.callers() ?? {},
                     pluginTools: composed.plugins.tools(),
@@ -3189,7 +3189,6 @@ async function boot(): Promise<void> {
                 pushTimer = setTimeout(() => { pushTimer = null; void engineLink.pushWindowView(view()); }, 250);
             };
             registry?.subscribe(() => pushHostView());
-            composed.settings.onChange(() => pushHostView());
             // Whether the person is at the computer, for ForceTheQuestion's "they are away": re-said every half minute.
             setInterval(() => pushHostView(), 30_000).unref?.();
             // A reconnect (the host restarted): it learns all of it again.
