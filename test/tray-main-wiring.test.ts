@@ -63,11 +63,13 @@ describe('main.ts wiring', () => {
         // EXIT, not quit: a quit would run this process's before-quit, which clears the RUNNING Genie's genie-running file.
         expect(block(src, "if (launch.kind === 'exit') {", '\n}\n')).toMatch(/app\.exit\(0\);/);
         expect(block(src, "if (launch.kind === 'exit') {", '\n}\n')).not.toMatch(/app\.quit\(/);
-        // Only a boot launch boots; only boot() creates the main window.
+        // Only a boot launch boots; only boot() creates the main window — through mountMainWindow, the one place a main window
+        // is created (P1b: also when the person opens Genie again from the tray, a reveal only a booted Genie can make).
         expect(src).toMatch(/if \(launch\.kind === 'boot'\) \{\s*\n\s*app\.whenReady\(\)\.then\(boot\)/);
         expect(src.match(/app\.whenReady\(\)\.then\(boot\)/g)).toHaveLength(1);
-        expect(block(src, 'async function boot', '\n}\n')).toMatch(/window = createWindow\(/);
+        expect(block(src, 'async function boot', '\n}\n')).toMatch(/mountMainWindow\(showOnBoot\(/);
         expect(src.match(/window = createWindow\(/g)).toHaveLength(1);
+        expect(block(src, 'function mountMainWindow(', '\n}\n')).toMatch(/window = createWindow\(show\);/);
         // And a launch that never booted owns nothing to shut down.
         expect(block(src, "app.on('before-quit'")).toMatch(/^app\.on\('before-quit', \(event\) => \{\s*\n\s*if \(launch\.kind !== 'boot'\) return;/);
     });
