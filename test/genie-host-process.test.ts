@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { mkdtemp, readFile, rm, stat, readdir } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, stat, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import type { ClientTransport } from '../src/core/remote-protocol.js';
 import { connectSocket, pidAlive } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SpawnHostClient } from '../src/main/spawn-host-client.js';
+import type { FilesHubEvent } from '../src/main/files-watch-hub.js';
 
 /**
  * THE HOST IS ITS OWN PROCESS, AND AN AGENT OUTLIVES ITS WINDOW (the host split, phase 1).
@@ -142,6 +143,24 @@ describe('genie-host as its own process', () => {
         await until('the process to end', () => !pidAlive(pid), 15_000);
         second.transport.close();
     }, 120_000);
+
+    it('the FILE WATCHER runs in the host: a write in a watched workspace arrives as a batch; after the last view leaves, writes arrive nowhere (P2.2)', async () => {
+        const w = await window();
+        const heard: FilesHubEvent[] = [];
+        w.client.onFilesEvent((e) => heard.push(e));
+        expect(await w.client.filesWatch('panel-1', { id: 'ws', path: workspace }, {})).toBe(true);
+        await writeFile(join(workspace, 'seen.txt'), 'one\n');
+        // POSITIVE CONTROL: the gauge hears a write while a view watches.
+        await until('the batch for seen.txt', () => heard.some((e) => e.kind === 'changed' && e.changes.some((c) => c.path === 'seen.txt')), 15_000);
+
+        expect(await w.client.filesUnwatch('panel-1')).toBe(true);
+        await sleep(500); // a batch already in flight lands, or is dropped, before the line is drawn
+        const before = heard.length;
+        await writeFile(join(workspace, 'unseen.txt'), 'two\n');
+        await sleep(1_500); // six batch windows: long enough that a live watcher would have spoken
+        expect(heard.slice(before).filter((e) => e.kind === 'changed' && e.changes.some((c) => c.path === 'unseen.txt'))).toEqual([]);
+        w.transport.close();
+    }, 60_000);
 
     it('an agent keeps running and writing while no window is connected, and the next window adopts it', async () => {
         const first = await window();

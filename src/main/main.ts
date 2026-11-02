@@ -174,6 +174,8 @@ import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
 import { FilesHost } from './files-host.js';
+import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch-hub.js';
+import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
 import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
 import { TerminalSnapshots } from './terminal-snapshots.js';
@@ -564,6 +566,25 @@ let terminals: TerminalHost | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let loginHost: LoginHost | null = null;
 let filesHost: FilesHost | null = null;
+/**
+ * THE FILE WATCHER'S VIEWS (the host split, P2.2; plan §11b): genie-host's hub over the engine link, or — only when no host
+ * could start — a hub of this window's own. Each renderer view holds one subscription (keyed by its webContents).
+ */
+let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): void; unwatch(viewId: string): void; close(): void } | null = null;
+const filesViewsBySender = new Map<number, Set<string>>();
+const filesSendersHooked = new Set<number>();
+/** A window (webContents) that closed or reloaded: every view it held lets go, so nothing is watched for nobody. */
+function dropFilesViewsOf(senderId: number): void {
+    const views = filesViewsBySender.get(senderId);
+    if (!views) return;
+    filesViewsBySender.delete(senderId);
+    for (const view of views) filesWatch?.unwatch(view);
+}
+const wantFrom = (raw: unknown): FilesWant => {
+    const w = (raw ?? {}) as { git?: unknown; repos?: unknown };
+    const repos = Array.isArray(w.repos) ? w.repos.filter((r): r is string => typeof r === 'string') : [];
+    return { ...(w.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) };
+};
 let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
@@ -1481,8 +1502,36 @@ async function boot(): Promise<void> {
             return fileEventsOf(host.rowsFor(record.id), { id: record.id, name: record.name });
         },
     });
-    // One broadcast per batch, with the paths that changed (genie#921): the panel re-lists once and re-reads the open file only if it changed.
-    filesHost.onChange((workspaceId, paths) => broadcast('genie:files-changed', workspaceId, paths));
+    /*
+     * WHAT CHANGED ON DISK, AND GIT, PUSHED (the host split, P2.2): the watcher and git run in genie-host (files-watch-hub.ts);
+     * here a batch is recorded for `state()` and broadcast once — the panel re-lists once and re-reads the open file only
+     * if it changed (genie#921) — and git's result goes to the views that asked for it, which no longer run git per batch.
+     */
+    const onFilesEvent = (event: FilesHubEvent): void => {
+        if (event.kind === 'changed') {
+            filesHost?.recordDiskChanges(event.workspaceId, event.changes);
+            broadcast('genie:files-changed', event.workspaceId, event.changes.map((c) => c.path));
+            return;
+        }
+        broadcast('genie:files-git', event.workspaceId, { ...(event.tree ? { tree: event.tree } : {}), ...(event.repos ? { repos: event.repos } : {}) });
+    };
+    if (agentEngineLink) {
+        const link = agentEngineLink.client;
+        link.onFilesEvent(onFilesEvent);
+        filesWatch = {
+            watch: (viewId, workspace, want) => { void link.filesWatch(viewId, workspace, want); },
+            unwatch: (viewId) => { void link.filesUnwatch(viewId); },
+            close: () => {},
+        };
+    } else {
+        // The emergency path only (no host could start, §4.1): the same hub, in this window.
+        const local = new FilesWatchHub({ send: (_owner, event) => onFilesEvent(event), gitTree: gitTreeStatus, repoStatus, log: lifecycleLog });
+        filesWatch = {
+            watch: (viewId, workspace, want) => local.subscribe('window', viewId, workspace, want),
+            unwatch: (viewId) => local.unsubscribe('window', viewId),
+            close: () => local.close(),
+        };
+    }
     // The popped-out panels (§4.3): tracked here, pushed as the whole list.
     // The Files panel's pop-out button: the person's click (genie#1235).
     filesWindows = new FilesWindows({ openWindow: (route) => openFilesWindow(route, 'user-gesture'), closeWindow: closeWindowAt });
@@ -2002,7 +2051,38 @@ async function boot(): Promise<void> {
     ipcMain.handle('genie:artboard-review', (_event, workspaceId: unknown, postId: unknown, verdict: unknown, comment: unknown) => artboardReview(panelsHost(), workspaceId, postId, verdict, comment));
     ipcMain.handle('genie:files-git-status', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.gitStatus(workspaceId) ?? {} : {}));
     ipcMain.handle('genie:files-state', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.state(workspaceId) ?? null : null));
-    ipcMain.handle('genie:files-watch', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? filesHost?.watch(workspaceId) : undefined));
+    // A VIEW'S SUBSCRIPTION (the host split, P2.2): held while it is shown, let go when it is not — or when its window
+    // closes or reloads (dropFilesViewsOf). The view id is scoped by the webContents that holds it.
+    ipcMain.handle('genie:files-watch', (event, viewId: unknown, workspaceId: unknown, want: unknown) => {
+        if (typeof viewId !== 'string' || typeof workspaceId !== 'string' || !filesWatch) return false;
+        const w = registry?.workspace(workspaceId);
+        if (!w) return false;
+        const sender = event.sender;
+        let views = filesViewsBySender.get(sender.id);
+        if (!views) {
+            views = new Set();
+            filesViewsBySender.set(sender.id, views);
+        }
+        if (!filesSendersHooked.has(sender.id)) {
+            // Once per webContents: its close, and a reload (which ends every view without its cleanup running; the new
+            // page subscribes its own), let go of what it held.
+            filesSendersHooked.add(sender.id);
+            const senderId = sender.id;
+            sender.once('destroyed', () => { filesSendersHooked.delete(senderId); dropFilesViewsOf(senderId); });
+            sender.on('did-navigate', () => dropFilesViewsOf(senderId));
+        }
+        const key = `${sender.id}:${viewId}`;
+        views.add(key);
+        filesWatch.watch(key, { id: w.id, path: w.path }, wantFrom(want));
+        return true;
+    });
+    ipcMain.handle('genie:files-unwatch', (event, viewId: unknown) => {
+        if (typeof viewId !== 'string') return false;
+        const key = `${event.sender.id}:${viewId}`;
+        filesViewsBySender.get(event.sender.id)?.delete(key);
+        filesWatch?.unwatch(key);
+        return true;
+    });
     // The rail's Browser row (beta.35 item 36): the Genie browser window, a typed address checked by its own rule.
     // WHICH BROWSER is decided by the window that asked (core/browser-connection.ts): this machine's sites, or — for a window
     // driving a Tynn workstation — that workstation's, over that window's own relay channel. Never by what it says.
@@ -3772,6 +3852,7 @@ app.on('before-quit', (event) => {
     void spawnHostNow?.stop();
     void remoteSocketNow?.stop();
     void filesHost?.close();
+    filesWatch?.close();
     // §7.1: nothing Genie spawned may outlive it. An upgrade jammed on 31 orphaned
     // OpenConsole.exe processes with no message, because nothing reaped them.
     terminals?.closeAll();

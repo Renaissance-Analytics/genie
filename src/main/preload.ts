@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { FEATURE_CHANNELS, type AgentDetail, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
+import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
@@ -15,6 +15,8 @@ type AgentPayload = AgentPushPayload<Omit<AgentDetail, 'rows'>, TimedEvent>;
  * patch — and the page rebuilds the detail on its side (core/agent-push-wire.ts `AgentDetailViews`): whatever is handed
  * across `contextBridge` is copied into the page on the renderer's one thread, and a rebuilt detail is the whole ledger.
  */
+/** Each files view's own id (the host split, P2.2): a subscription is one view, unwatched on its own. */
+let filesViewSeq = 0;
 const watching = new Map<string, { subscribers: Set<(payload: AgentPayload) => void>; off: () => void }>();
 
 /**
@@ -341,7 +343,22 @@ const bridge: PreloadBridge = {
         trash: (workspaceId, path) => ipcRenderer.invoke('genie:files-trash', workspaceId, path) as Promise<never>,
         lastCommitted: (workspaceId, path) => ipcRenderer.invoke('genie:files-last-committed', workspaceId, path) as Promise<string | null>,
         state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,
-        watch: (workspaceId) => ipcRenderer.invoke('genie:files-watch', workspaceId) as Promise<void>,
+        // ONE SUBSCRIPTION PER VIEW (the host split, P2.2): watched while held, unwatched when let go; its batches and the
+        // git it asked for come back on the two channels, for its workspace only.
+        subscribe: (workspaceId, want, listener) => {
+            filesViewSeq += 1;
+            const viewId = `view-${filesViewSeq}`;
+            const onChanged = (_e: unknown, id: string, paths?: readonly string[]) => { if (id === workspaceId) listener({ ...(paths ? { paths } : {}) }); };
+            const onGit = (_e: unknown, id: string, git: NonNullable<FilesViewEvent['git']>) => { if (id === workspaceId) listener({ git }); };
+            ipcRenderer.on('genie:files-changed', onChanged);
+            ipcRenderer.on('genie:files-git', onGit);
+            void ipcRenderer.invoke('genie:files-watch', viewId, workspaceId, want);
+            return () => {
+                ipcRenderer.removeListener('genie:files-changed', onChanged);
+                ipcRenderer.removeListener('genie:files-git', onGit);
+                void ipcRenderer.invoke('genie:files-unwatch', viewId);
+            };
+        },
         write: (workspaceId, path, text, expectedSha) => ipcRenderer.invoke('genie:files-write', workspaceId, path, text, expectedSha) as Promise<never>,
         gitStatus: (workspaceId) => ipcRenderer.invoke('genie:files-git-status', workspaceId) as Promise<never>,
         readBytes: (workspaceId, pluginId, path) => ipcRenderer.invoke('genie:files-read-bytes', workspaceId, pluginId, path) as Promise<never>,

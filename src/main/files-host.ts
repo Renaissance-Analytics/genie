@@ -1,6 +1,5 @@
 import type { GitFileState, GitTreeState } from './git-ports.js';
 import { createHash } from 'node:crypto';
-import { watch, type FSWatcher } from 'node:fs';
 import { access, copyFile, mkdir, open as openFile, readdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises';
 import { uploadName, uploadSizeRefusal } from '../core/mobile-wire.js';
 import { dirname, join } from 'node:path';
@@ -40,8 +39,6 @@ export interface FilesHostPorts {
     readonly sizeCap?: number;
     /** How many entries a listing may hold; absent = TREE_BUDGET (genie#921). Injected so a test proves the cap without 5,000 files. */
     readonly treeBudget?: number;
-    /** Genie's clock, for when a disk change was seen; injected so a test can read the stamp. */
-    readonly now?: () => number;
     /** A file's git state (`git-ports.ts` `gitFileStatus`); absent = opened files carry none. */
     readonly gitStatus?: (root: string, rel: string) => Promise<GitFileState | null>;
     /** A file's last committed text (`git-ports.ts` `gitShowHead`); absent = no `Show diff` baseline. */
@@ -93,8 +90,6 @@ export const IGNORED_NAMES: ReadonlySet<string> = new Set([
 export const TREE_BUDGET = 5000;
 /** How deep a listing goes below the workspace (Genie 1's DEFAULT_MAX_DEPTH). */
 export const TREE_MAX_DEPTH = 6;
-/** The window changes are coalesced over before the panel is told (Genie 1's DEBOUNCE_MS). */
-export const WATCH_BATCH_MS = 250;
 const SKIP = IGNORED_NAMES;
 const OUTSIDE = 'that path is outside the workspace; Genie opens nothing there';
 const CHANGES_OUTSIDE = 'that path is outside the workspace; Genie changes nothing there';
@@ -104,7 +99,6 @@ const messageOf = (error: unknown): string => (error instanceof Error ? error.me
 export class FilesHost {
     readonly #ports: FilesHostPorts;
     readonly #cap: number;
-    readonly #watchers = new Map<string, FSWatcher>();
     readonly #changedOnDisk = new Map<string, Map<string, number>>();
     /** Files YOU wrote through the panel, per workspace — yours in Changed, never `?`. */
     readonly #mine = new Map<string, Set<string>>();
@@ -420,46 +414,18 @@ export class FilesHost {
         };
     }
 
-    /** Start recording what changes on disk in this workspace; idempotent. */
-    async watch(workspaceId: string): Promise<void> {
-        const ws = this.#ports.workspace(workspaceId);
-        if (!ws || this.#watchers.has(workspaceId)) return;
-        // Only what changes AFTER this moment is a change — on macOS, where FSEvents replays writes made just before
-        // the watcher attached (the v2.0.0-beta.5 release run saw a set-up write come back as "unreported"). Nowhere
-        // else: Linux stamps file times from a coarse clock that lags Date.now(), so a write made just after watch()
-        // can carry an earlier time and was dropped (the WSL suite timed out on it 2 runs in 5). inotify and Windows
-        // do not replay, so there is nothing for the filter to remove there.
-        const since = process.platform === 'darwin' ? Date.now() : Number.NEGATIVE_INFINITY;
-        const watcher = watch(ws.path, { recursive: true }, (_type, filename) => {
-            if (typeof filename !== 'string') return;
-            const rel = confine(ws.path, filename);
-            if (rel === null || rel === '' || rel.split('/').some((seg) => SKIP.has(seg))) return;
-            // Windows reports the parent DIRECTORIES of a written file as changed too; only files are "changes" here.
-            // A path that no longer exists is a deletion and still counts. countsAsDiskChange holds the rule.
-            void stat(join(ws.path, ...rel.split('/'))).then(
-                (info) => { if (countsAsDiskChange({ mtimeMs: info.mtimeMs, isDirectory: info.isDirectory() }, since)) this.#recordChange(workspaceId, rel); },
-                () => { if (countsAsDiskChange(null, since)) this.#recordChange(workspaceId, rel); },
-            );
-        });
-        watcher.on('error', () => { /* a lost watcher means no new unreported marks; the tree still opens */ });
-        this.#watchers.set(workspaceId, watcher);
-    }
-
-    #recordChange(workspaceId: string, rel: string): void {
+    /**
+     * WHAT CHANGED ON DISK, as the watcher saw it (the host split, P2.2): one batch, each path with when Genie saw it.
+     * The watcher is not here any more — it is `files-watch-hub.ts`, in genie-host — so the batch is TOLD to this host,
+     * which keeps it for `state()` (unreported changes, the Activity tab's disk changes) and tells its listeners.
+     */
+    recordDiskChanges(workspaceId: string, changes: ReadonlyArray<{ readonly path: string; readonly at: number }>): void {
+        if (changes.length === 0) return;
         const set = this.#changedOnDisk.get(workspaceId) ?? new Map<string, number>();
-        set.set(rel, (this.#ports.now ?? Date.now)());
+        for (const c of changes) set.set(c.path, c.at);
         this.#changedOnDisk.set(workspaceId, set);
-        // COALESCED (genie#921; Genie 1's debounced files:tree-changed): one notification per window carrying every
-        // path that changed in it — a build's thousand writes are one re-list, not a thousand. A fixed window, not a
-        // sliding one, so steady churn still updates the panel every WATCH_BATCH_MS: live, and bounded.
-        const pending = this.#pending.get(workspaceId);
-        if (pending) { pending.paths.add(rel); return; }
-        const paths = new Set([rel]);
-        const timer = setTimeout(() => {
-            this.#pending.delete(workspaceId);
-            for (const l of this.#listeners) l(workspaceId, [...paths]);
-        }, WATCH_BATCH_MS);
-        this.#pending.set(workspaceId, { paths, timer });
+        const paths = changes.map((c) => c.path);
+        for (const l of this.#listeners) l(workspaceId, paths);
     }
 
     /** Told once per batch of changes in a workspace, with the paths that changed (relative, forward-slashed). */
@@ -469,9 +435,6 @@ export class FilesHost {
     }
 
     async close(): Promise<void> {
-        for (const w of this.#watchers.values()) w.close();
-        this.#watchers.clear();
-        for (const p of this.#pending.values()) clearTimeout(p.timer);
-        this.#pending.clear();
+        this.#listeners.clear();
     }
 }

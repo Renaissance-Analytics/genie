@@ -361,7 +361,9 @@ function AgentViewBody({
         let live = true;
         const read = () => { void files.state(workspace.id).then((s) => { if (live) { setChanges(agentChanges(s, agent.name)); setDiskChanges(s?.diskChanges ?? null); } }); };
         read();
-        const off = files.onChange((id) => { if (id === workspace.id) read(); });
+        // ITS OWN subscription (the host split, P2.2): it only listened before, so its disk changes depended on another
+        // view's watcher being open. Batches only; no git.
+        const off = files.subscribe ? files.subscribe(workspace.id, {}, (event) => { if (!event.git) read(); }) : files.onChange((id) => { if (id === workspace.id) read(); });
         return () => { live = false; off(); };
     }, [files, workspace, agent.name]);
     const pill = statePill(session, now ?? (() => Date.now()), { turns, takeOver: agent.fidelity === 'observed' ? takeOver : null });

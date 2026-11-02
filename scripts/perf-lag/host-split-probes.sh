@@ -66,8 +66,25 @@ probe "relay-logs-ready" src/main/spawn-relay.ts \
     "                    log(\`spawn host ready pid=" "                    void (\`spawn host ready pid=" \
     test/spawn-relay.test.ts "named in the lifecycle log"
 
+# P2.2: the file watcher and git behind per-view subscriptions
+probe "hub-refcount" src/main/files-watch-hub.ts \
+    "        if ([...this.#views.values()].some((v) => v.workspaceId === workspaceId)) return;" "        if (false) return;" \
+    test/files-watch-hub.test.ts "CLOSED when the last view leaves"
+
+probe "hub-git-once" src/main/files-watch-hub.ts \
+    "        if (w.gitRunning) { w.gitDirty = true; return; }" "" \
+    test/files-watch-hub.test.ts "does not start a second run"
+
+probe "engine-drops-closed-window-views" src/main/session-engine-server.ts \
+    "            if (was) this.#options.files?.dropOwner(conn.id);" "" \
+    test/engine-files-tunnel.test.ts "drops every view it had"
+
+probe "client-resubscribes" src/main/session-engine-client.ts \
+    "        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);" "" \
+    test/engine-files-tunnel.test.ts "subscribes its views again"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

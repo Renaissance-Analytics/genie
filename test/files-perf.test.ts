@@ -3,7 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { reloadsOpenFile } from '../src/core/files-panel.js';
-import { FilesHost, IGNORED_NAMES, TREE_BUDGET, TREE_MAX_DEPTH, WATCH_BATCH_MS } from '../src/main/files-host.js';
+import { FilesHost, IGNORED_NAMES, TREE_BUDGET, TREE_MAX_DEPTH } from '../src/main/files-host.js';
+import { WATCH_BATCH_MS, type FilesWatchHub } from '../src/main/files-watch-hub.js';
+import { watchInto } from './helpers/watch-into.js';
 import type { TreeNode } from '../src/core/files-panel.js';
 
 /**
@@ -78,11 +80,12 @@ describe('the tree', () => {
 });
 
 describe('live updates, coalesced', () => {
+    const hubs: FilesWatchHub[] = [];
+    afterEach(() => { for (const h of hubs.splice(0)) h.close(); });
     it('a burst of writes is ONE notification carrying every changed path (COUNTED), not one per event', async () => {
         expect(WATCH_BATCH_MS).toBe(250);
         const heard: Array<{ ws: string; paths: readonly string[] }> = [];
-        host.onChange((ws, paths) => { heard.push({ ws, paths }); });
-        await host.watch('w');
+        hubs.push(watchInto(host, { id: 'w', path: root }, { onBatch: (ws, paths) => { heard.push({ ws, paths }); } }));
         await Promise.all(Array.from({ length: 40 }, (_, i) => writeFile(join(root, `burst${i}.ts`), `export const n = ${i};\n`)));
         await vi.waitFor(() => { expect(heard.flatMap((h) => h.paths).filter((p) => p.startsWith('burst')).length).toBeGreaterThanOrEqual(40); }, { timeout: 5_000, interval: 50 });
         // Every path, in as few notifications as the batch window allows — a 40-file burst is not 40 re-walks.
@@ -94,8 +97,7 @@ describe('live updates, coalesced', () => {
         await mkdir(join(root, 'vendor', 'pkg'), { recursive: true });
         await mkdir(join(root, 'dist'), { recursive: true });
         const heard: string[] = [];
-        host.onChange((_ws, paths) => { heard.push(...paths); });
-        await host.watch('w');
+        hubs.push(watchInto(host, { id: 'w', path: root }, { onBatch: (_ws, paths) => { heard.push(...paths); } }));
         await writeFile(join(root, 'vendor', 'pkg', 'a.php'), 'x');
         await writeFile(join(root, 'dist', 'app.js'), 'x');
         await writeFile(join(root, 'real.ts'), 'x');

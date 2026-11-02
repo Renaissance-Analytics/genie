@@ -17,6 +17,7 @@ import type { ClientTransport } from '../core/remote-protocol.js';
 import type { TimedEvent } from '../core/stream-view.js';
 import type { SessionHost } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
+import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -59,6 +60,15 @@ export interface EngineServerOptions {
      * `windowGone` says a window's link closed (its streams' lines now go nowhere). Absent = `engine.spawn` is refused.
      */
     readonly spawn?: { send(profile: string, frame: SpawnFrame): void; windowGone?(): void };
+    /**
+     * genie-host's file-watch hub (the host split, P2.2: files-watch-hub.ts). Views are owned by their CONNECTION: a window
+     * whose link closes drops them all. Absent = `engine.filesWatch` is refused.
+     */
+    readonly files?: {
+        subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
+        unsubscribe(owner: string, viewId: string): void;
+        dropOwner(owner: string): void;
+    };
 }
 
 /** The most rows one frame carries: a longer patch is cut into several (see `#updatesFor`). */
@@ -149,6 +159,7 @@ export class SessionEngineServer {
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
             if (was) this.#options.spawn?.windowGone?.();
+            if (was) this.#options.files?.dropOwner(conn.id);
         });
     }
 
@@ -317,6 +328,18 @@ export class SessionEngineServer {
                 this.#options.spawn.send(str(0), args[1] as SpawnFrame);
                 return true;
             }
+            case 'engine.filesWatch': {
+                if (!this.#options.files) throw new Error('This host runs no file watcher.');
+                const ws = (args[1] ?? {}) as { id?: unknown; path?: unknown };
+                if (typeof ws.id !== 'string' || typeof ws.path !== 'string') throw new Error('engine.filesWatch needs a workspace id and path');
+                const want = (args[2] ?? {}) as { git?: unknown; repos?: unknown };
+                const repos = Array.isArray(want.repos) ? want.repos.filter((r): r is string => typeof r === 'string') : [];
+                this.#options.files.subscribe(conn.id, str(0), { id: ws.id, path: ws.path }, { ...(want.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) });
+                return true;
+            }
+            case 'engine.filesUnwatch':
+                this.#options.files?.unsubscribe(conn.id, str(0));
+                return true;
             case 'client.prepareMcpServers':
                 throw new Error('client.prepareMcpServers is the window\'s to answer');
         }
@@ -331,6 +354,11 @@ export class SessionEngineServer {
             conn.pending.set(id, { resolve, reject });
             conn.transport.send(JSON.stringify({ kind: 'call', id, method, args }));
         });
+    }
+
+    /** A batch or a git result of the file-watch hub, to the window (connection) that owns the views it is for. */
+    filesEvent(owner: string, event: FilesHubEvent): void {
+        for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'files.event', event);
     }
 
     /** A frame from genie-host's spawn-host child of `profile`, to every window. */

@@ -57,6 +57,10 @@ export const ENGINE_METHODS = [
     // The spawn host's frames, tunnelled (the host split, P2.1): `[profile, frame]` to genie-host's child of that profile.
     // Sent with call id 0, a notification: no result per keystroke. Its children's frames come back as `spawn.frame`.
     'engine.spawn',
+    // The file watcher's per-view subscriptions (the host split, P2.2): `[viewId, {id, path}, want]` / `[viewId]`, under the
+    // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
+    'engine.filesWatch',
+    'engine.filesUnwatch',
     // Host → window.
     'client.prepareMcpServers',
 ] as const;

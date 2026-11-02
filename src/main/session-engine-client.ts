@@ -24,6 +24,7 @@ import type { CancelOutcome, PromptContext, StopVerdict } from '../core/session.
 import type { TimedEvent } from '../core/stream-view.js';
 import { commsFields } from './session-host.js';
 import type { SpawnFrame } from './spawn-host-protocol.js';
+import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -104,6 +105,9 @@ export class SessionEngineClient {
     /** The spawn host's frames by profile (the host split, P2.1), and who hears the link come and go. */
     readonly #spawnListeners = new Map<string, Set<(frame: SpawnFrame) => void>>();
     readonly #linkListeners = new Set<{ up: () => void; down: (reason: string) => void }>();
+    /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
+    readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
+    readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -239,6 +243,7 @@ export class SessionEngineClient {
         }
         void this.call('engine.records', [this.#options.records?.() ?? []]);
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
+        for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -258,6 +263,9 @@ export class SessionEngineClient {
                 if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
                 return;
             }
+            case 'files.event':
+                for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
+                return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
                 return;
@@ -343,6 +351,26 @@ export class SessionEngineClient {
                 t.send(JSON.stringify({ kind: 'call', id: 0, method: 'engine.spawn', args: [profile, frame] }));
             },
         };
+    }
+
+    /**
+     * A view wants a workspace's disk changes (the host split, P2.2): genie-host's watcher runs while any view holds one.
+     * Kept here too, so a reconnect subscribes it again.
+     */
+    filesWatch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): Promise<boolean> {
+        this.#filesViews.set(viewId, { workspace: { id: workspace.id, path: workspace.path }, want });
+        return this.#value('engine.filesWatch', [viewId, workspace, want], false).then((v) => v === true);
+    }
+
+    filesUnwatch(viewId: string): Promise<boolean> {
+        this.#filesViews.delete(viewId);
+        return this.#value('engine.filesUnwatch', [viewId], false).then((v) => v === true);
+    }
+
+    /** The batches and git results for this window's views. */
+    onFilesEvent(listener: (event: FilesHubEvent) => void): () => void {
+        this.#filesListeners.add(listener);
+        return () => { this.#filesListeners.delete(listener); };
     }
 
     /** The frames of genie-host's spawn-host child of `profile`. */
