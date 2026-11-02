@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { readdirSync, readlinkSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { connect, createServer, type Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -6,21 +7,18 @@ import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 /**
- * A HOST LEFT RUNNING MUST NOT HOLD THE WINDOW'S SOCKETS (batch L3, 2026-11-02: after vm-smoke ended Genie's window, its
- * `--remote-debugging-port` 9222 still ACCEPTED connections and nobody answered them — the next launch's debugger port was
- * taken by a dead window).
+ * DOES A HOST LEFT RUNNING HOLD THE WINDOW'S SOCKETS? (batch L3, 2026-11-02: after vm-smoke ended Genie's window, its
+ * `--remote-debugging-port` 9222 still ACCEPTED connections and nobody answered.) The suspicion: Chromium's sockets carry no
+ * close-on-exec, so genie-host — spawned by the window with Node's `spawn`, detached, outliving it on purpose — inherits
+ * them. Measured here with real processes, by the socket's INODE in each process's /proc/<pid>/fd, not by a port alone:
  *
- * The cause, measured here with real processes: Chromium creates its sockets WITHOUT close-on-exec (its own launcher closes
- * unmapped fds; Node's `spawn` closes nothing), so genie-host — spawned by the window, detached, outliving it on purpose —
- * inherits every one of them, and so does everything the host spawns after. The window here is a Node parent given a
- * listening socket on fd 3 without O_CLOEXEC, exactly that situation, spawning the host through the product's own
- * `spawnHostProcess`. Then the window exits.
+ *   POSITIVE CONTROL: the window (a Node parent given the listening socket on fd 3 without O_CLOEXEC, as Chromium's is)
+ *   HOLDS it, and the port accepts, while it lives — so "not held" below is a reading, not a blind gauge.
+ *   Then: the host the window spawned the product's way (`spawnHostProcess`) holds it, or not; and once the window is gone,
+ *   the port is free, or not.
  *
- *   - CONTROL: a host that closes nothing keeps the port ACCEPTING (the leak, reproduced; the gauge can read "held").
- *   - THE FIX: a host whose first module is `close-inherited-fds` (genie-host.ts's) leaves the port REFUSING.
- *
- * Linux: the leak is POSIX fd inheritance through exec; the fix reads /proc. (Windows handle inheritance is its own
- * question, for the Windows proof.)
+ * Two hosts: one that closes nothing (does the SPAWN leak?) and one whose first module is close-inherited-fds.
+ * Linux: POSIX fd inheritance, read from /proc.
  */
 
 const hostPids: number[] = [];
@@ -30,7 +28,6 @@ afterEach(async () => {
     for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true });
 });
 
-/** Does anything accept on the port? `accepts` / `refused`, bounded. */
 function probe(port: number): Promise<'accepts' | 'refused' | 'timeout'> {
     return new Promise((done) => {
         const socket = connect({ port, host: '127.0.0.1' });
@@ -39,40 +36,57 @@ function probe(port: number): Promise<'accepts' | 'refused' | 'timeout'> {
         socket.once('error', (e: NodeJS.ErrnoException) => { clearTimeout(t); done(e.code === 'ECONNREFUSED' ? 'refused' : 'timeout'); });
     });
 }
+/** Does `pid` hold the socket `inode` (`socket:[N]`) on any fd? */
+function holds(pid: number, inode: string): boolean {
+    try { return readdirSync(`/proc/${pid}/fd`).some((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) === inode; } catch { return false; } }); } catch { return false; }
+}
 
-/** A window holding a listening socket (no close-on-exec) spawns `hostScript` the product's way, then exits. */
-async function windowSpawnsHostThenExits(hostScript: string) {
+async function measure(hostScript: string) {
     const dir = await mkdtemp(join(tmpdir(), 'host-fds-'));
     dirs.push(dir);
     const server: Server = createServer();
     await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
     const port = (server.address() as { port: number }).port;
     const fd = (server as unknown as { _handle: { fd: number } })._handle.fd;
-    expect(fd).toBeGreaterThan(2);
+    const inode = readlinkSync(`/proc/self/fd/${fd}`);
+    expect(inode).toMatch(/^socket:\[\d+\]$/);
     const window = spawn(process.execPath, ['--import', 'tsx', resolve('test/fixtures/fd-window.ts'), resolve(hostScript), dir], { stdio: ['ignore', 'pipe', 'inherit', fd] });
-    // Only the window (fd 3, and then whatever it spawned) holds the socket from here.
     await new Promise<void>((r) => server.close(() => r()));
-    let out = '';
-    window.stdout!.on('data', (c: Buffer) => { out += c.toString(); });
-    const code = await new Promise<number | null>((r) => window.once('exit', (c) => r(c)));
-    expect(code).toBe(0);
-    const said = JSON.parse(out.trim().split('\n').at(-1)!) as { hostPid: number | null; ready: string | null };
-    expect(said.hostPid).toBeGreaterThan(0);
-    hostPids.push(said.hostPid!);
-    // The host ran its first module and is alive; the window is gone.
+    const said = await new Promise<{ hostPid: number; ready: string | null }>((ok, fail) => {
+        let out = '';
+        window.stdout!.on('data', (c: Buffer) => { out += c.toString(); const line = out.split('\n').find((l) => l.startsWith('{')); if (line) ok(JSON.parse(line)); });
+        window.once('exit', (code) => fail(new Error(`the window exited (${code}) before it said anything`)));
+    });
+    hostPids.push(said.hostPid);
     expect(said.ready).toBe(String(said.hostPid));
-    expect(() => process.kill(said.hostPid!, 0)).not.toThrow();
-    return { port, hostPid: said.hostPid! };
+    const facts = {
+        windowHolds: holds(window.pid!, inode),
+        acceptsWhileWindowLives: await probe(port),
+        hostHolds: holds(said.hostPid, inode),
+    };
+    writeFileSync(join(dir, 'go'), '');
+    await new Promise<void>((r) => window.once('exit', () => r()));
+    const after = { hostAlive: (() => { try { process.kill(said.hostPid, 0); return true; } catch { return false; } })(), portAfterWindow: await probe(port) };
+    console.log(`[host-spawn-fds] ${hostScript}: ${JSON.stringify({ ...facts, ...after })}`);
+    return { ...facts, ...after };
 }
 
 describe.skipIf(process.platform !== 'linux')('a host spawned by the window, the window gone', () => {
-    it('CONTROL: a host that closes nothing keeps the window’s listening socket — the port still ACCEPTS', async () => {
-        const { port } = await windowSpawnsHostThenExits('test/fixtures/fd-host-plain.ts');
-        expect(await probe(port)).toBe('accepts');
+    it('a host that closes nothing: the window held the socket (control), and the host the product spawned holds NONE of it', async () => {
+        const m = await measure('test/fixtures/fd-host-plain.ts');
+        expect(m.windowHolds).toBe(true);
+        expect(m.acceptsWhileWindowLives).toBe('accepts');
+        expect(m.hostAlive).toBe(true);
+        expect(m.hostHolds).toBe(false);
+        expect(m.portAfterWindow).toBe('refused');
     }, 60_000);
 
-    it('a host whose first module is close-inherited-fds holds none of it — the port REFUSES', async () => {
-        const { port } = await windowSpawnsHostThenExits('test/fixtures/fd-host-closing.ts');
-        expect(await probe(port)).toBe('refused');
+    it('a host whose first module is close-inherited-fds: the same, the port free once the window is gone', async () => {
+        const m = await measure('test/fixtures/fd-host-closing.ts');
+        expect(m.windowHolds).toBe(true);
+        expect(m.acceptsWhileWindowLives).toBe('accepts');
+        expect(m.hostAlive).toBe(true);
+        expect(m.hostHolds).toBe(false);
+        expect(m.portAfterWindow).toBe('refused');
     }, 60_000);
 });

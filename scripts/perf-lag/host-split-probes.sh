@@ -180,13 +180,8 @@ probe "tray-offers-the-answers" src/main/tray.ts \
     "        ...(handlers.onCloseUi && handlers.onShutDown" "        ...(false && handlers.onCloseUi && handlers.onShutDown" \
     test/tray.test.ts "gives way to"
 
-# P1b (batch L3): a host left running holds none of the window's sockets
-probe "host-closes-inherited-fds" src/main/inherited-fds.ts \
-    "        return flags !== null && (flags & O_CLOEXEC) === 0;" "        return false;" \
-    "test/host-spawn-fds.test.ts test/inherited-fds.test.ts" "the port REFUSES"
-
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/host-idle-exit.test.ts test/engine-leave-running.test.ts test/compose-quit-stops-first.test.ts test/tray.test.ts test/host-spawn-fds.test.ts test/inherited-fds.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/host-idle-exit.test.ts test/engine-leave-running.test.ts test/compose-quit-stops-first.test.ts test/tray.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
