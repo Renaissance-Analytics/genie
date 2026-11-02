@@ -486,6 +486,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.proxyRemember':
+                if (!this.#options.proxy) throw new Error('This host keeps no proxy answers.');
+                return this.#options.proxy.remember((args[0] ?? {}) as Record<string, string>);
             case 'engine.tynn':
                 if (!this.#options.tynn) throw new Error('This host keeps no Tynn account.');
                 return this.#options.tynn.call(str(0), Array.isArray(args[1]) ? args[1] : []);

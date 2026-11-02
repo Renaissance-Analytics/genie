@@ -34,7 +34,7 @@ if (!process.env.HOST_TLS_CHILD) {
     try {
         const out = join(dir, 'bundle.mjs');
         require('esbuild').buildSync({
-            stdin: { contents: "export { hostHttpsFetch } from './src/main/host-https-fetch.ts'; export { issueCa, issueLeaf } from './src/main/x509.ts';", resolveDir: join(here, '..', '..'), loader: 'ts' },
+            stdin: { contents: "export { hostHttpsFetch } from './src/main/host-https-fetch.ts'; export { issueCa, issueLeaf } from './src/main/x509.ts'; export { parseProxyAnswer } from './src/core/proxy-answer.ts';", resolveDir: join(here, '..', '..'), loader: 'ts' },
             bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'silent',
         });
         const electron = require('electron');
@@ -65,7 +65,7 @@ const line = (name, verdict, detail = '') => console.log(`### host-tls ${name}=$
 const check = (name, ok, detail = '') => { line(name, ok ? 'PASS' : 'FAIL', detail); if (!ok) failures.push(name); };
 const errorOf = (error) => { const cause = error?.cause ?? error; return `${cause?.code ?? ''} ${cause?.message ?? String(error)}`.trim(); };
 
-const { hostHttpsFetch, issueCa, issueLeaf } = await import(process.env.HOST_TLS_CHILD);
+const { hostHttpsFetch, issueCa, issueLeaf, parseProxyAnswer } = await import(process.env.HOST_TLS_CHILD);
 const dir = process.env.HOST_TLS_DIR;
 const NOW = Date.now();
 const notBefore = new Date(NOW - 86_400_000);
@@ -141,6 +141,31 @@ try {
     check('https-proxy-tunnels', via === 200 && tunnels.length === 1, `${via}, ${tunnels.length} tunnel(s)`);
     const viaBad = await hostHttpsFetch({ machineRoots: inTheStore, env: { HTTPS_PROXY: `http://127.0.0.1:${proxy.address().port}` } })(bad.url, GET).then((r) => `answered ${r.status}`, (error) => errorOf(error));
     check('through-a-proxy-an-unknown-ca-is-still-refused', !viaBad.startsWith('answered'), viaBad);
+
+    // THE OS'S ANSWER, as a window hands it over (the owner: "Yes, cover it."). Explicit env wins; then this; then direct.
+    const proxyPort = proxy.address().port;
+    const said = (answer, extra = {}) => hostHttpsFetch({ machineRoots: inTheStore, env: {}, proxyRoutes: () => parseProxyAnswer(answer), ...extra });
+    tunnels.length = 0;
+    const named = await said(`PROXY 127.0.0.1:${proxyPort}`)(good.url, GET).then((r) => r.status, (error) => errorOf(error));
+    check('the-os-answer-goes-through-the-proxy', named === 200 && tunnels.length === 1, `${named}, ${tunnels.length} tunnel(s)`);
+    tunnels.length = 0;
+    const direct = await said('DIRECT')(good.url, GET).then((r) => r.status, (error) => errorOf(error));
+    check('control-a-direct-answer-does-not-touch-it', direct === 200 && tunnels.length === 0, `${direct}, ${tunnels.length} tunnel(s)`);
+    const explicitPort = await new Promise((r) => { const other = createHttpServer(); other.on('connect', (_req, client) => client.end('HTTP/1.1 502 No\r\n\r\n')); other.listen(0, '127.0.0.1', () => { const port = other.address().port; other.close(() => r(port)); }); });
+    const gone = await said(`PROXY 127.0.0.1:${explicitPort}`)(good.url, GET).then((r) => `answered ${r.status}`, (error) => `${error?.proxy ?? 'no proxy named'}: ${error?.message}`);
+    check('a-dead-proxy-is-named-and-nothing-goes-around-it', gone.startsWith(`127.0.0.1:${explicitPort}`), gone);
+    const sayings = [];
+    const around = await said(`PROXY 127.0.0.1:${explicitPort}; DIRECT`, { log: (l) => sayings.push(l) })(good.url, GET).then((r) => r.status, (error) => errorOf(error));
+    check('dead-then-direct-goes-direct-only-as-the-answer-allows-and-says-so', around === 200 && sayings.join().includes(`127.0.0.1:${explicitPort}`), `${around}; ${sayings.join(' ').slice(0, 160)}`);
+    tunnels.length = 0;
+    const envWins = await hostHttpsFetch({ machineRoots: inTheStore, env: { HTTPS_PROXY: `http://127.0.0.1:${proxyPort}` }, proxyRoutes: () => parseProxyAnswer(`PROXY 127.0.0.1:${explicitPort}`) })(good.url, GET).then((r) => r.status, (error) => errorOf(error));
+    check('an-explicit-https-proxy-wins-over-the-os-answer', envWins === 200 && tunnels.length === 1, `${envWins}, ${tunnels.length} tunnel(s)`);
+    const asks = createHttpServer();
+    asks.on('connect', (_req, client) => client.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\n'));
+    await new Promise((r) => asks.listen(0, '127.0.0.1', r));
+    const signIn = await said(`PROXY 127.0.0.1:${asks.address().port}`)(good.url, GET).then((r) => `answered ${r.status}`, (error) => `${error?.proxy ?? 'no proxy named'}: ${error?.message}`);
+    check('a-proxy-asking-for-a-sign-in-says-so', signIn.includes('407') && !signIn.startsWith('no proxy'), signIn);
+    asks.closeAllConnections(); asks.close();
     proxy.closeAllConnections(); proxy.close();
 
     // The public chain, or a test VM's alias, whose CA is only in the OS store.

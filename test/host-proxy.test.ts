@@ -15,7 +15,7 @@ import { reportProxyAnswers } from '../src/main/proxy-report.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
-import { TynnAccount } from '../src/main/tynn-account.js';
+import { TynnAccount, unreachableThroughMessage } from '../src/main/tynn-account.js';
 import { issueCa, issueLeaf, type IssuedPem } from '../src/main/x509.js';
 import { fakeKeychain, plainCredentialStore } from './helpers/tynn-storage.js';
 
@@ -374,6 +374,11 @@ describe('the window hands the answer over', () => {
 
 describe('where it is wired', () => {
     const strip = (text: string) => text.split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+
+    it('Settings says which proxy, and that the sign-in stands', () => {
+        expect(unreachableThroughMessage('a.example:8080')).toMatch(/a\.example:8080[\s\S]*sign-in is kept/);
+        expect(strip(readFileSync('src/main/feature-ipc.ts', 'utf8'))).toMatch(/through \? unreachableThroughMessage\(through\)/);
+    });
 
     it('main asks at each connect and at wake, and genie-host uses what it remembers', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));

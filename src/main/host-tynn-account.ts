@@ -14,6 +14,7 @@ export interface HostTynnOptions {
     readonly machineRoots?: () => readonly string[];
     readonly env?: NodeJS.ProcessEnv;
     readonly proxyRoutes?: HostHttpsOptions['proxyRoutes'];
+    readonly log?: (line: string) => void;
     /** Tests of the account's logic; the real one speaks TLS. */
     readonly fetch?: SessionFetch;
     readonly schedule?: TynnAccountPorts['schedule'];
@@ -21,7 +22,12 @@ export interface HostTynnOptions {
 
 export function hostTynnPorts(options: HostTynnOptions): TynnAccountPorts {
     const jar = new Map<string, Map<string, string>>();
-    const send = options.fetch ?? hostHttpsFetch(options.machineRoots ? { machineRoots: options.machineRoots } : {});
+    const send = options.fetch ?? hostHttpsFetch({
+        ...(options.machineRoots ? { machineRoots: options.machineRoots } : {}),
+        ...(options.env ? { env: options.env } : {}),
+        ...(options.proxyRoutes ? { proxyRoutes: options.proxyRoutes } : {}),
+        ...(options.log ? { log: options.log } : {}),
+    });
     return {
         file: options.file,
         host: options.host,

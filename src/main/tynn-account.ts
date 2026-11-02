@@ -67,6 +67,8 @@ export type TynnResponse = { ok: boolean; status: number; json(): Promise<unknow
 
 /** What the Settings surface and the IPC need — the account as a port, faked in tests. */
 export interface TynnAccountPort {
+    /** The proxy Tynn cannot be reached through, while that is so. */
+    unreachableThrough?(): string | null;
     status(): TynnStatus;
     host(): string;
     startSignIn(): Promise<{ url: string }>;
@@ -83,6 +85,8 @@ interface Me {
 const trimHost = (h: string) => h.trim().replace(/\/+$/, '');
 const UNREACHABLE = 'Tynn could not be reached. Check your connection and try again.';
 /** No keyring: refused BEFORE the code is exchanged, so the code is not spent (the owner, 2026-11-01). */
+/** What a person reads when Tynn is out of reach through a proxy: not signed out, and which proxy to look at. */
+export const unreachableThroughMessage = (proxy: string): string => `Tynn could not be reached through the proxy ${proxy}, the one this computer's settings name. Your sign-in is kept. Check that proxy, or the proxy settings.`;
 export const NO_KEYRING_FOR_TYNN = 'Genie needs a keyring to keep your sign-in safe, and this computer has none running. Set one up in the card above, then sign in again.';
 const REQUIRED_SCOPES = ['genie:discovery', 'genie:projects', 'genie:workstations', 'genie:agents', 'genie:agent-tokens', 'genie:issue-watch', 'genie:issues', 'genie:inbox'];
 const tokenValid = (s: unknown): s is string => typeof s === 'string' && /^gpk_[0-9A-HJKMNP-TV-Z]{26}\.[a-f0-9]{64}$/i.test(s);
@@ -132,6 +136,7 @@ export class TynnAccount implements TynnAccountPort {
     #credential: Credential | null = null;
     /** Whose the record on disk says it is, whether or not the keychain has answered: a locked keychain is not signed out. */
     #savedUser: string | null = null;
+    #through: string | null = null;
     #usedCodes: string[] = [];
     #authWork: Promise<unknown> = Promise.resolve();
     #diskWork: Promise<unknown> = Promise.resolve();
@@ -271,7 +276,13 @@ export class TynnAccount implements TynnAccountPort {
         });
     }
 
-    unreachableThrough(): string | null { return null; }
+    /** The proxy Tynn could not be reached through, while that is so. Not signed out: the sign-in and the credential stand. */
+    unreachableThrough(): string | null { return this.#through; }
+    #noteRoute(through: string | null): void {
+        if (this.#through === through) return;
+        this.#through = through;
+        for (const l of this.#listeners) l();
+    }
 
     async recheck(): Promise<TynnStatus> {
         this.#retry?.cancel(); this.#retry = null;
@@ -378,18 +389,25 @@ export class TynnAccount implements TynnAccountPort {
             clearTimeout(timer);
             init.signal?.removeEventListener('abort', interrupt);
         };
-        const failure = () => init.signal?.aborted ? cancelled() : new Error(UNREACHABLE);
+        const failure = (named?: string) => init.signal?.aborted ? cancelled() : new Error(named ?? UNREACHABLE);
         try {
             const res = await Promise.race([this.#ports.fetch(url.href, {
                 method: init.method, headers, credentials: credential ? 'omit' : 'include', redirect: 'error', signal: controller.signal,
                 ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
             }), interrupted]);
+            this.#noteRoute(null);
             // Return headers promptly for auth handling; the body retains the same deadline and cancellation.
             const body = Promise.race([res.text(), interrupted]).catch(() => { throw failure(); }).finally(cleanup);
             // A status-only caller need not read json(), but its failed/aborted body must still be handled.
             void body.catch(() => {});
             return { ok: res.ok, status: res.status, json: async () => { const text = await body; return text === '' ? null : JSON.parse(text) as unknown; } };
-        } catch { cleanup(); throw failure(); }
+        } catch (error) {
+            cleanup();
+            const proxy = (error as { proxy?: unknown } | null)?.proxy;
+            if (typeof proxy !== 'string') throw failure();
+            this.#noteRoute(proxy);
+            throw failure((error as Error).message);
+        }
     }
 
     /** The person's projects — Genie 1's GET /api/v1/projects. Signed out is refused before any request. */

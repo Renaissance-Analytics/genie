@@ -71,6 +71,8 @@ import { readRememberedPasswordStore, rememberPasswordStore } from './password-s
 import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
 import { osCipher } from './os-cipher.js';
 import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
+import { reportProxyAnswers } from './proxy-report.js';
+import type { SessionEngineClient } from './session-engine-client.js';
 import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { Keychain } from './keychain.js';
 import { hostVault } from './keychain-migration.js';
@@ -696,6 +698,19 @@ let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
 let agentEngineLink: AgentEngineLink | null = null;
+/** Electron reports no change of proxy settings: asked when a window links and when the machine wakes. */
+let handProxyAnswers: (() => Promise<void>) | null = null;
+function reportProxies(client: SessionEngineClient, log: (line: string) => void): Promise<void> {
+    return reportProxyAnswers({
+        hosts: [TYNN_HOST, 'https://github.com', 'https://api.github.com'],
+        resolve: (url) => (url === TYNN_HOST ? session.fromPartition('persist:tynn') : session.defaultSession).resolveProxy(url),
+        send: async (answers) => {
+            const reply = await client.call('engine.proxyRemember', [answers]);
+            if (!reply.ok) throw new Error(reply.reason);
+        },
+        log,
+    });
+}
 /** The plan keepalive (core/plan-keepalive.ts), so the quit sequence can stop a nudge waiting out its grace. */
 let keepaliveNow: PlanKeepalive | null = null;
 /** Every agent's activity feed (core/activity-feed.ts): what the workspace Dashboard's lanes draw (beta.33 item 10). */
@@ -1420,6 +1435,8 @@ async function boot(): Promise<void> {
      */
     {
         agentEngineLink = await connectAgentEngine({
+            // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
+            onLinked: (client) => { handProxyAnswers = () => reportProxies(client, lifecycleLog); void handProxyAnswers(); },
             callbacks: engineCallbacks,
             launch: {
                 runtimeDir: runtimeDir(genieHome()),
@@ -4164,7 +4181,7 @@ app.on('window-all-closed', () => { /* Genie stays in the tray */ });
 
 // macOS and Linux announce a shutdown, restart or sign-out: delay it, quit without a question nothing could answer.
 // Waking from sleep: a Genie that shows signed out to Tynn asks again (the network is often what was missing).
-powerMonitor.on('resume', () => { if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
+powerMonitor.on('resume', () => { void handProxyAnswers?.(); if (tynnAccount && !tynnAccount.status().signedIn) void tynnAccount.recheck(); });
 powerMonitor.on('shutdown', (event?: { preventDefault(): void }) => {
     event?.preventDefault();
     quit.force();

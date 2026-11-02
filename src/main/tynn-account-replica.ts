@@ -10,7 +10,7 @@ const cancelled = (): Error => Object.assign(new Error('Tynn request cancelled.'
  */
 export class TynnAccountReplica implements TynnAccountPort {
     readonly #call: Call;
-    #dump: TynnAccountDump = { status: { signedIn: false }, host: '', userId: null, savedUserId: null };
+    #dump: TynnAccountDump = { status: { signedIn: false }, host: '', userId: null, savedUserId: null, unreachableThrough: null };
     #openExternal: ((url: string) => Promise<void>) | null = null;
     readonly #listeners = new Set<() => void>();
 
@@ -28,6 +28,7 @@ export class TynnAccountReplica implements TynnAccountPort {
     host(): string { return this.#dump.host; }
     userId(): string | null { return this.#dump.userId; }
     savedUserId(): string | null { return this.#dump.savedUserId; }
+    unreachableThrough(): string | null { return this.#dump.unreachableThrough; }
     onChange(listener: () => void): () => void { this.#listeners.add(listener); return () => { this.#listeners.delete(listener); }; }
 
     async startSignIn(): Promise<{ url: string }> {

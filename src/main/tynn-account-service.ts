@@ -9,6 +9,8 @@ export interface TynnAccountDump {
     readonly host: string;
     readonly userId: string | null;
     readonly savedUserId: string | null;
+    /** The proxy Tynn cannot be reached through, while that is so. */
+    readonly unreachableThrough: string | null;
 }
 /** A response, carried: `bodyFailed` is a body that could not be read, which `json()` must still reject on the far side. */
 export interface TynnCarriedResponse {
@@ -40,8 +42,8 @@ export class TynnAccountService {
 
     dump(): TynnAccountDump {
         const account = this.#account;
-        if (!account) return { status: { signedIn: false }, host: this.#host, userId: null, savedUserId: null };
-        return { status: account.status(), host: account.host(), userId: account.userId(), savedUserId: account.savedUserId() };
+        if (!account) return { status: { signedIn: false }, host: this.#host, userId: null, savedUserId: null, unreachableThrough: null };
+        return { status: account.status(), host: account.host(), userId: account.userId(), savedUserId: account.savedUserId(), unreachableThrough: account.unreachableThrough() };
     }
 
     onEvent(listener: (dump: TynnAccountDump) => void): () => void {

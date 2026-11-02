@@ -41,6 +41,7 @@ import { FilesWatchHub } from './files-watch-hub.js';
 import { openHostKeychain } from './host-keychain.js';
 import { hostAgentKeys } from './host-agent-keys.js';
 import { hostTynnPorts } from './host-tynn-account.js';
+import { ProxyMemory } from './proxy-memory.js';
 import { TynnAccount } from './tynn-account.js';
 import { TynnAccountService } from './tynn-account-service.js';
 import { Keychain } from './keychain.js';
@@ -216,6 +217,15 @@ async function main(): Promise<void> {
     // The book as the host's own `processes` tool reads and drives it: the service's list, its actions in place.
     const hostBook = new ProcessBookReplica((method, args) => processesService.call(method, args));
     processesService.onEvent((dump) => hostBook.rebase(dump));
+    const proxyMemory = ProxyMemory.open(join(runtime, 'host-proxy.json'), say);
+    const tynnOpening = proxyMemory.then((memory) => TynnAccount.open(hostTynnPorts({
+        file: join(home, 'credentials', 'tynn.json'),
+        host: () => TYNN_HOST,
+        secrets: keychain,
+        proxyRoutes: (url) => memory.routesFor(url),
+        log: say,
+        schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
+    })));
     const engine = new SessionEngineServer({
         token,
         build,
@@ -233,12 +243,15 @@ async function main(): Promise<void> {
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
-        tynn: new TynnAccountService(TynnAccount.open(hostTynnPorts({
-            file: join(home, 'credentials', 'tynn.json'),
-            host: () => TYNN_HOST,
-            secrets: keychain,
-            schedule: (ms, fn) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); },
-        })), { host: TYNN_HOST }),
+        tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST }),
+        // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
+        proxy: {
+            remember: async (answers) => {
+                await (await proxyMemory).remember(answers);
+                const account = await tynnOpening.catch(() => null);
+                if (account && !account.status().signedIn && account.savedUserId() !== null) await account.recheck();
+            },
+        },
         // The window's files, read in the clear: the agent's binding and who is signed in. The key is in the keychain.
         agentKeys: hostAgentKeys({ vaultFile: join(home, 'agent-credentials', 'agents.json'), accountFile: join(home, 'credentials', 'tynn.json'), tynnHost: TYNN_HOST, keychain }),
         mcp: {
