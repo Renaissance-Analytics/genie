@@ -1,6 +1,6 @@
-import { execFile } from 'node:child_process';
 import { Keychain, type KeyringModule } from './keychain.js';
 import { LinuxKeyring, realKeyringPorts, type KeyringState, type RealKeyringDeps } from './linux-keyring.js';
+import { execFileRunner } from './toolchain-runner.js';
 
 /**
  * GENIE-HOST'S KEYCHAIN (P3.4 cut a), with decision 3's refusal and offer: no keychain means no secret is kept, and on Linux
@@ -25,13 +25,9 @@ export interface HostKeychain {
     state(): KeyringState;
 }
 
-const runProgram: RealKeyringDeps['run'] = (binary, args, timeoutMs) => new Promise((resolve, reject) => {
-    execFile(binary, [...args], { timeout: timeoutMs ?? 5_000, windowsHide: true }, (error, stdout, stderr) => {
-        const code = (error as (NodeJS.ErrnoException & { code?: number | string }) | null)?.code;
-        if (code === 'ENOENT') { reject(error as Error); return; }
-        resolve({ exitCode: error ? (typeof code === 'number' ? code : 1) : 0, stdout, stderr });
-    });
-});
+/** The same runner the window hands this flow; in genie-host it runs in-process (toolchain-runner.ts). */
+const runProgram: RealKeyringDeps['run'] = (binary, args, timeoutMs) => execFileRunner(binary, args, { timeoutMs: timeoutMs ?? 5_000 })
+    .then((r) => ({ exitCode: r.exitCode, stdout: r.streams.stdout, stderr: r.streams.stderr }));
 
 export async function openHostKeychain(options: HostKeychainOptions = {}): Promise<HostKeychain> {
     const keychain = new Keychain(options.load);
