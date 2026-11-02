@@ -36,7 +36,8 @@ import { SessionEngineClient } from '../src/main/session-engine-client.js';
 const electron = createRequire(import.meta.url)('electron') as unknown as string;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function alive(pid: number): boolean { try { process.kill(pid, 0); return true; } catch { return false; } }
+// Never pid ≤ 0: kill(0) addresses THIS process group — a first version's cleanup SIGKILLed the vitest worker that way.
+function alive(pid: number): boolean { if (!(pid > 0)) return false; try { process.kill(pid, 0); return true; } catch { return false; } }
 function cmdline(pid: number): string { try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim(); } catch { return ''; } }
 function ppid(pid: number): number { try { return Number(readFileSync(`/proc/${pid}/stat`, 'utf8').split(') ')[1]!.split(' ')[1]); } catch { return 0; } }
 function children(pid: number): number[] {
@@ -148,12 +149,13 @@ async function rig(): Promise<Rig> {
     const client = new SessionEngineClient();
     expect(await within(15_000, 'the client connecting to the host', client.connect(transport, token), tell)).toMatchObject({ ok: true });
     const opened = await within(30_000, 'a terminal opening in the host', client.terminals().openReady({ workspaceId: 'ws', cwd: home }), tell);
-    // The reported pid is the shell's or the helper's: whichever it is, the other is found by parentage.
-    const reported = opened.pid;
-    const isHelper = /fancy-pty-helper/.test(cmdline(reported));
-    const helperPid = isHelper ? reported : ppid(reported);
-    const shellPid = isHelper ? await until('the shell under the helper', () => children(helperPid)[0] ?? null, 15_000) : reported;
+    // The helper and its shell, found in the process table by this run's marker — not by the pid the open reported (CI
+    // measured it 0 on this path). The tree is printed, so a run that finds no helper still says what it did find.
+    const helperPid = await until('the terminal\'s fancy-pty helper', () => processesOfThisRun().find((p) => /fancy-pty-helper/.test(p.cmd))?.pid ?? null, 15_000)
+        .catch((e: unknown) => { throw new Error(`${String(e)}\nopened ${JSON.stringify(opened)}\nthis run: ${JSON.stringify(processesOfThisRun().map((p) => ({ ...p, ppid: ppid(p.pid) })))}\n${tell()}`); });
+    const shellPid = await until('the shell under the helper', () => children(helperPid)[0] ?? null, 15_000);
     const spawnHosts = children(record.pid).filter((p) => /spawn-host/.test(cmdline(p)));
+    console.log(`[host-pty-fds] the run's processes: ${JSON.stringify(processesOfThisRun().map((p) => ({ ...p, ppid: ppid(p.pid) })))}; opened reported pid ${opened.pid}; shell ${shellPid}: ${cmdline(shellPid).slice(0, 80)}`);
     const r: Rig = { home, port, inode, window, hostPid: record.pid, client, transport, shellPid, helperPid, spawnHosts };
     rigs.push(r);
     return r;
