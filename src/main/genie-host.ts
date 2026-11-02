@@ -257,14 +257,14 @@ async function main(): Promise<void> {
                 appEnv: (p: { readonly id: string }) => appEnvCache.get(p.id) ?? {},
                 asleep: (workspaceId: string) => hostRegistry.workspace(workspaceId)?.asleep === true,
             };
-            const book = await ProcessBook.open(home, {
+            const processBook = await ProcessBook.open(home, {
                 ...deps,
                 limit: (workspaceId) => limitOf(settings.snapshotFor(workspaceId), 'processes'),
                 v1: { database: databasePath, workspaces: () => hostRegistry.listWorkspaces(), roster: () => hostRegistry.listAgents() },
             });
             const scheduler = new ProcessScheduler({
                 ...deps,
-                book,
+                book: processBook,
                 // A nudge reaches its agent by its address, on the host's roster, at its turn's end.
                 nudge: (address, text, from) => {
                     const found = resolveOnRoster(address, hostRegistry.listAgents(), hostRegistry.workspaceSlugs());
@@ -276,10 +276,10 @@ async function main(): Promise<void> {
             scheduler.plan();
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
-            processesService.attach({ book, scheduler, supervisor: processSupervisor });
+            processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             // Each kept process's app-inbox credential, minted by the window that is here, BEFORE they are restored.
-            await refreshAppEnvs(book);
-            const restored = book.restore();
+            await refreshAppEnvs(processBook);
+            const restored = processBook.restore();
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
         })();
         return bookOpening;

@@ -15,8 +15,9 @@ const main = code('../src/main/main.ts');
 
 describe('no raw activation anywhere in src/main', () => {
     it('no window.focus() / restore() / moveTop() / app.focus() — only bringUp may (core/window-activation.ts)', () => {
-        // The process book's restore() is not a window's; it is the only other `.restore()` in src/main.
-        const found = sources.flatMap(({ file, text }) => (text.match(/\b[\w!.]+\.(focus|restore|moveTop)\(\)|\bapp\.focus\(/g) ?? []).filter((m) => m !== 'processBook.restore()').map((m) => `${file}: ${m}`));
+        // The process book's restore() is not a window's; it is the only other `.restore()` in src/main — called
+        // `processBook` in genie-host and `ownBook` in a window's emergency path (the host split, P3.3c).
+        const found = sources.flatMap(({ file, text }) => (text.match(/\b[\w!.]+\.(focus|restore|moveTop)\(\)|\bapp\.focus\(/g) ?? []).filter((m) => m !== 'processBook.restore()' && m !== 'ownBook.restore()').map((m) => `${file}: ${m}`));
         expect(found).toEqual([]);
     });
 
