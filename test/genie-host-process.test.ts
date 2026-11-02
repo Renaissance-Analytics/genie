@@ -262,6 +262,22 @@ describe('genie-host as its own process', () => {
         second.transport.close();
     }, 120_000);
 
+    it('A WORKSPACE JUST ADDED IS NEVER REFUSED: a window writes it and starts an agent in it straight away, against the real host', async () => {
+        const first = await window();
+        const added = await mkdtemp(join(tmpdir(), 'genie-host-added-'));
+        // Not awaited, and on the same socket as the start, as an add and a click can be: the host runs the two concurrently.
+        const written = first.client.call('engine.stores', ['registry', 'writeWorkspaces', [[{ id: 'ws', path: workspace }, { id: 'added', path: added }]]]);
+        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'added', provider: 'codex', name: 'newcomer' });
+        expect(await first.client.start(agent, added)).toEqual({ ok: true });
+        expect(await written).toMatchObject({ ok: true });
+        await until('the agent to take a prompt', () => first.client.promptable(agent.id) !== null, 60_000);
+        expect(first.client.refusals.has(agent.id)).toBe(false);
+        expect(JSON.stringify(first.client.rowsFor(agent.id))).not.toMatch(/workspace or Tynn project link is unavailable/);
+        await first.client.stop(agent.id);
+        first.transport.close();
+        await rm(added, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
+    }, 120_000);
+
     it('an agent keeps running and writing while no window is connected, and the next window adopts it', async () => {
         const first = await window();
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'busy' });
