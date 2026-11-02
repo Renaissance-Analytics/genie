@@ -14,6 +14,7 @@ import type { AgentId } from '../core/identity.js';
 import { HUMAN, type Participant } from '../core/inbox.js';
 import type { InboxStore } from './inbox-store.js';
 import { runtimeDir } from './paths.js';
+import { allUserItemsOf, askedOf, finishedOf, lastHandoffOf, pendingOf, scopedListOf } from './attention-read.js';
 import { readJson, reportFlush, writeJsonAtomic } from './store.js';
 
 /**
@@ -192,6 +193,9 @@ export interface AskedRecord {
 /** How many decided questions are kept (oldest go first): a year of heavy use, a few hundred kB. */
 export const ASKED_KEPT = 2_000;
 
+/** What attention keeps (its file), and what genie-host sends the window's replica whole (P3.1: it is bounded). */
+export type AttentionData = AttentionFile;
+
 interface AttentionFile {
     lists: ListRecord[];
     questions: PendingQuestion[];
@@ -278,12 +282,12 @@ export class AttentionStore {
 
     /** Every user-list item in every workspace, with its workspace — the Deck's user-list source. */
     allUserItems(): Array<{ workspaceId: string; item: ListItem }> {
-        return this.#data.lists.filter((r) => r.list === 'user').map((r) => ({ workspaceId: r.workspaceId, item: r.item }));
+        return allUserItemsOf(this.#data);
     }
 
     /** Every finish, oldest first — the Deck's "Since you looked" band reads the unseen ones. */
     finished(): readonly Finished[] {
-        return this.#data.finished;
+        return finishedOf(this.#data);
     }
 
     /**
@@ -291,15 +295,7 @@ export class AttentionStore {
      * when. A finish without a handoff is skipped; none at all = `null`.
      */
     lastHandoff(agentId: AgentId): { text: string; at: number } | null {
-        for (let i = this.#data.finished.length - 1; i >= 0; i -= 1) {
-            const f = this.#data.finished[i]!;
-            if (f.agentId !== agentId || f.handoff === null) continue;
-            const text = f.handoff.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0);
-            const at = Date.parse(f.at);
-            if (text === undefined || Number.isNaN(at)) continue;
-            return { text: text.slice(0, 200), at };
-        }
-        return null;
+        return lastHandoffOf(this.#data, agentId);
     }
 
     markSeen(id: string): void {
@@ -341,7 +337,7 @@ export class AttentionStore {
 
     /** A decided question's record, by the id its mail names; `null` when none is kept (decided before records were). */
     asked(questionId: string): AskedRecord | null {
-        return (this.#data.asked ?? []).find((r) => r.id === questionId) ?? null;
+        return askedOf(this.#data, questionId);
     }
 
     /** Keep a decided question (written by the caller's flush). */
@@ -355,7 +351,7 @@ export class AttentionStore {
     }
 
     pending(): readonly PendingQuestion[] {
-        return this.#data.questions;
+        return pendingOf(this.#data);
     }
 
     /**
@@ -528,12 +524,12 @@ export class AttentionStore {
     }
 
     #scoped(input: { list: ListKind; workspaceId: string; agentId: AgentId }): ListRecord[] {
-        return this.#data.lists.filter(
-            (r) =>
-                r.list === input.list &&
-                r.workspaceId === input.workspaceId &&
-                (input.list === 'user' || r.item.askedBy === input.agentId),
-        );
+        return scopedListOf(this.#data, input);
+    }
+
+    /** The data as it is (the host split, P3.1): what genie-host sends the window's replica. Read-only. */
+    snapshot(): Readonly<AttentionData> {
+        return this.#data;
     }
 
     async #addToList(input: { list: ListKind; workspaceId: string; agentId: AgentId; text: string }): Promise<ListAddResult> {

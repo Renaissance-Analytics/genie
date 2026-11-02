@@ -165,6 +165,50 @@ describe('genie-host as its own process', () => {
         w.transport.close();
     }, 60_000);
 
+    it('GENIE\'S TOOLS OUTLIVE THE WINDOW (P3.1): with the window gone, agentinbox, ForceTheQuestion and knowledge answer over real HTTP; a window tool refuses at once; the next window sees the question; the endpoint is the same', async () => {
+        const META = { 'io.modelcontextprotocol/protocolVersion': '2026-07-28', 'io.modelcontextprotocol/clientCapabilities': {} };
+        const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'teller' });
+        const caller = { agentId: agent.id, agentName: agent.name, workspaceId: 'ws', workspacePath: workspace };
+        const first = await window();
+        await first.client.call('engine.records', [[agent]]);
+        // A Take Over terminal's agent: the window says whose terminal it is; it calls Genie's tools over HTTP by its id.
+        expect(await first.client.pushWindowView({ workspaces: [{ id: 'ws', path: workspace, slug: 'ws', defaultAgentId: null }], settings: { global: {}, byWorkspace: {} }, userActive: true, callers: { 'term-teller': caller }, pluginTools: [] })).toBe(true);
+        const status = await first.client.mcpStatus();
+        expect(status?.endpoint).not.toBeNull();
+        const endpoint = status!.endpoint!;
+        const call = async (name: string, args: Record<string, unknown>) => {
+            const res = await fetch(endpoint.url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${endpoint.token}` }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: { ...args, terminalId: 'term-teller' }, _meta: META } }) });
+            const body = (await res.json()) as { result?: { content: Array<{ text: string }>; isError?: boolean }; error?: unknown };
+            return { isError: body.result?.isError ?? true, text: body.result?.content[0]?.text ?? JSON.stringify(body.error) };
+        };
+        // POSITIVE CONTROL: with the window here, the host's tool answers (the gauge can see a success).
+        expect((await call('knowledge', { action: 'add', title: 'Before', body: 'with a window', scope: 'workspace' })).isError).toBe(false);
+
+        first.transport.close(); // the window goes
+        await sleep(500);
+
+        const sent = await call('agentinbox', { action: 'send', to: 'human', text: 'shipped while you were away' });
+        expect(sent).toMatchObject({ isError: false });
+        const asked = await call('ForceTheQuestion', { questions: [{ header: 'Ship', question: 'Ship it?', options: [{ label: 'Yes' }, { label: 'No' }] }] });
+        expect(asked.isError).toBe(false);
+        const questionId = (JSON.parse(asked.text) as { questionId: string }).questionId;
+        expect((await call('knowledge', { action: 'add', title: 'After', body: 'no window at all', scope: 'workspace' })).isError).toBe(false);
+        // A window tool: refused AT ONCE, in words (timed: a hang would be the failure).
+        const t0 = Date.now();
+        const refused = await call('manageTerminals', { action: 'list' });
+        expect(refused.isError).toBe(true);
+        expect(refused.text).toMatch(/Genie's window, which is closed/);
+        expect(Date.now() - t0).toBeLessThan(5_000);
+
+        // The next window: the question waits, the mail is there, the endpoint is the one agents were configured with.
+        const second = await window();
+        expect(second.client.stores().attention.pending().map((q) => q.id)).toContain(questionId);
+        expect(second.client.stores().inbox.unread('human').map((m) => m.text)).toContain('shipped while you were away');
+        expect((await second.client.stores().knowledge.search({ query: 'no window', scopes: 'all' } as never)).hits.length).toBeGreaterThan(0);
+        expect((await second.client.mcpStatus())?.endpoint).toEqual(endpoint);
+        second.transport.close();
+    }, 120_000);
+
     it('an agent keeps running and writing while no window is connected, and the next window adopts it', async () => {
         const first = await window();
         const agent = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'codex', name: 'busy' });

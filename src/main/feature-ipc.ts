@@ -38,7 +38,7 @@ import type { MachinePathOutcome } from './machine-path.js';
 import { LANG_LABEL, type DefaultLang } from '../core/toolchain-defaults.js';
 import type { NodeInstallOutcome, NodeRemoveOutcome, NodeVersionsView } from './node-versions.js';
 import type { PhpInstallOutcome, PhpRemoveOutcome, PhpVersionsView, SitePin } from './php-versions.js';
-import type { ComposedServices } from './compose.js';
+import type { WindowServices as ComposedServices } from './compose.js';
 import {
     createService, createSite, detachService, openSite, removeService, removeSite, restartSite, serviceLogs, setActiveService, siteDefaultsIn, siteEditTarget, siteLogs, startService, startSite, stopService, stopSite, updateService, updateSite, useService,
     type OpenInBrowser,
@@ -524,8 +524,8 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
     // No query = what the graph holds, newest first (the owner: "the knowledge graph is empty or not rendering" — it held
     // 108 memories and drew skeletons until a search). A query searches.
     const hits = state.knowledgeQuery
-        ? services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' }).hits
-        : services.knowledge.list({ scopes: 'all', limit: 200 }).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
+        ? (await services.knowledge.search({ query: state.knowledgeQuery, scopes: 'all' })).hits
+        : (await services.knowledge.list({ scopes: 'all', limit: 200 })).nodes.map((n) => ({ id: n.id, title: n.title, snippet: n.body.replace(/\s+/g, ' ').trim().slice(0, 160), score: 0, tags: n.tags, class: n.class }));
     const roster = services.agentAddresses();
     const peers = roster.map((a) => ({ address: a.address, agentId: a.agentId, name: a.name, reachable: true }));
     // THE AGENTINBOX'S THREADS (beta.33 item 19, core/inbox-threads.ts): every pair's thread, the person's and the agents'.
@@ -1500,7 +1500,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 next.knowledgeAdding = { defaults: action.form, problems };
                 break;
             }
-            const added = services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
+            const added = await services.knowledge.add({ title: action.form.title.trim(), body: action.form.body, class: action.form.class, scope: action.form.scope, source: 'user' });
             next.knowledgeAdding = null;
             // Show what was done: the search lands on the new title, and every link that did not
             // resolve is named with why — an ambiguous link resolves to nothing rather than guessing.
@@ -1509,7 +1509,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         }
         case 'knowledge.add': {
-            const r = services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
+            const r = await services.knowledge.add({ title: action.title, body: action.body, ...(action.class ? { class: action.class } : {}), ...(action.tags ? { tags: action.tags } : {}), scope: action.scope, source: 'user' });
             void r;
             break;
         }

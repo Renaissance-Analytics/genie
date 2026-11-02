@@ -50,7 +50,6 @@ import { Baton, PairingPins } from '../core/remote.js';
 import { PairApprovals } from '../core/pair-confirm.js';
 import type { ServerTransport } from '../core/remote-protocol.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
-import { AttentionStore } from './attention-store.js';
 import { Elevator, realHostsIo, runElevatedBatch, stepOutcome, type ElevationOutcome, type PrivilegedStep } from './elevate.js';
 import { agentPrompter, createFlowRunner, supervisedCommand, type AgentSessionsPort } from './flow-runner.js';
 import { FlowScheduler } from './flow-scheduler.js';
@@ -62,8 +61,8 @@ import { GenRouterServer } from './gen-router-server.js';
 import { GenLeafContexts } from './browser-trust.js';
 import { FRONT_DOOR_PORTS, bindFailure, heldReason, realFrontDoorPorts, type FrontDoorBlocked, type FrontDoorPort, type FrontDoorPorts } from './front-door-port.js';
 import { HostsSync, type HostsIo, type HostsSyncResult } from './hosts-file.js';
-import { InboxStore } from './inbox-store.js';
-import { KnowledgeStore } from './knowledge-store.js';
+import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
+import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { runtimeDir } from './paths.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
@@ -120,6 +119,11 @@ export interface ComposeInput {
     readonly v1Knowledge?: () => V1Knowledge | null;
     /** Reads Genie 1's AgentInbox history (`readV1Inbox`), or `null`; called at boot until the inbox records an import that saw v1. */
     readonly v1Inbox?: () => V1Inbox | null;
+    /**
+     * The stores agents write to, when genie-host owns them (the host split, P3.1): the window's replicas. Absent = this
+     * window opens them itself — only on the emergency path, when no host could start.
+     */
+    readonly agentStores?: WindowAgentStores;
     /**
      * Genie 1's database, for TAKING OVER its service engines in place and stopping its sandbox/site containers
      * (main/v1-services.ts) — at boot until services.json records a take-over that saw Genie 1 and Docker. Before the
@@ -267,7 +271,11 @@ export type FrontDoorStatus =
      */
     | { running: false; reason: string; blocked?: { port: FrontDoorPort; holder: string | null } };
 
-export interface ComposedServices {
+/**
+ * What compose built. `S` is the stores agents write to as this window holds them: genie-host's replicas (engine mode,
+ * `WindowServices`) or the stores themselves (`OwnAgentStores`, the default: the emergency path, and every test that composes alone).
+ */
+export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
     /** Why this agent's last start went without its Tynn server, for a note in its chat; `null` when it has it (genie#1234). */
@@ -277,9 +285,11 @@ export interface ComposedServices {
      * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
      */
     tynnRecovery(): Promise<string[]>;
-    readonly inbox: InboxStore;
-    readonly attention: AttentionStore;
-    readonly knowledge: KnowledgeStore;
+    readonly inbox: S['inbox'];
+    readonly attention: S['attention'];
+    readonly knowledge: S['knowledge'];
+    /** The stores themselves when THIS window opened them (the emergency path); null when genie-host owns them. */
+    readonly own: OwnAgentStores | null;
     readonly flows: FlowStore;
     readonly flowScheduler: FlowScheduler;
     readonly settings: SettingsStore;
@@ -312,7 +322,7 @@ export interface ComposedServices {
     readonly envFiles: DotEnvSync;
     readonly frontDoor: GenRouterServer;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
-    readonly approvals: ApprovalQueue;
+    readonly approvals: S['approvals'];
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
     readonly remote: RemoteHost;
     /** "Pair this device?" — what waits for Allow on this screen (q_8c07b142). */
@@ -688,7 +698,20 @@ function startExternalFrontDoor(input: {
 /** How long a quit waits for in-flight flow runs before it goes on. */
 const FLOW_SETTLE_ON_QUIT_MS = 5_000;
 
-export async function composeServices(input: ComposeInput): Promise<ComposedServices> {
+/** What a window that composed against genie-host's stores holds (the host split, P3.1). */
+export type WindowServices = ComposedServices<WindowAgentStores>;
+
+/** Compose with the stores agents write to opened HERE: the emergency path (no host), and every test that composes alone. */
+export async function composeServices(input: Omit<ComposeInput, 'agentStores'>): Promise<ComposedServices<OwnAgentStores>> {
+    return (await composeWith(input)) as ComposedServices<OwnAgentStores>;
+}
+
+/** Compose with genie-host's stores, through this window's replicas (the host split, P3.1). */
+export async function composeWindowServices(input: ComposeInput & { readonly agentStores: WindowAgentStores }): Promise<WindowServices> {
+    return composeWith(input);
+}
+
+async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
     await mkdir(runtimeDir(input.userData), { recursive: true });
@@ -696,23 +719,17 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const settings = await SettingsStore.open(input.userData, iso);
     await settings.carryOverFromV1(input.v1Settings());
 
-    const inbox = await InboxStore.open(input.userData, iso);
-    const attention = await AttentionStore.open(input.userData, inbox, iso);
-    const knowledge = KnowledgeStore.open(input.userData, iso);
-    // Genie 1's memories, once (knowledge-store.ts records it). Not gated on ~/.genie/v1-import.json: installs that
-    // imported their workspaces before this existed have that file and an empty graph, and must still get theirs.
-    if (input.v1Knowledge && !knowledge.v1Import()?.sawV1) {
-        try {
-            const done = knowledge.importFromV1(planV1KnowledgeImport(input.v1Knowledge()));
-            const notes = knowledge.v1Import()?.notes ?? [];
-            if (!done.alreadyDone) console.log(`[genie] v1 knowledge import: ${done.noV1 ? 'no v1 knowledge graph seen' : `${done.imported} memories imported, ${done.kept} already here`}${notes.length ? `; ${notes.length} noted: ${notes.join(' | ')}` : ''}`);
-        } catch (error) {
-            // Not recorded as done (one transaction), so the next boot tries again; the graph Genie 2 has is untouched.
-            console.error(`[genie] v1 knowledge import failed: ${(error as Error).message}`);
-        }
+    // THE STORES AGENTS WRITE TO (the host split, P3.1): genie-host's, through this window's replicas — or, only when no
+    // host could start, this window's own, opened here with Genie 1's history taken once.
+    let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
+    if (!input.agentStores) {
+        ownStores = await openAgentStores(input.userData, iso);
+        importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
+        await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
     }
-    // Genie 1's AgentInbox history, once (inbox-store.ts records it), mapped onto the roster the v1 agent import already registered.
-    if (input.v1Inbox) await runV1InboxImport(inbox, input.v1Inbox, { roster: input.roster?.() ?? [], now: now() });
+    const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
+    const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
+    const knowledge: WindowAgentStores['knowledge'] = input.agentStores?.knowledge ?? ownStores!.knowledge;
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
     ensureFlowToolKinds();
     let flowToolCall: FlowToolCall | null = null;
@@ -880,7 +897,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
 
     // An autonomous agent's gated actions run without asking, recorded (Tynn #801): read from its record at each ask.
     // A permission switch the person turned on answers its own actions the same way (genie#1294, SWITCH_ANSWERS).
-    const approvals = new ApprovalQueue({
+    const ownApprovals = input.agentStores ? null : new ApprovalQueue({
         now,
         autoApproved: (caller) => (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
         granted: (caller, action) => {
@@ -888,6 +905,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             return flag !== undefined && (input.roster?.() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
         },
     });
+    const approvals: WindowAgentStores['approvals'] = input.agentStores?.approvals ?? ownApprovals!;
 
     const hostName = input.hostName ?? hostname();
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
@@ -1090,7 +1108,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                     { processId: `flow-run:${flow.id}`, name: `flow: ${flow.name}` },
                 ),
                 // The person armed it (an agent never can), so what it writes is theirs.
-                addKnowledge: async (entry) => ({ id: knowledge.add({ ...entry, source: 'user' }).id }),
+                addKnowledge: async (entry) => ({ id: (await knowledge.add({ ...entry, source: 'user' })).id }),
                 // genie#1204: no shell; its own arrival is told to the file source first, so the move does not start the flow again.
                 moveFile: fileMover({ workspacePath: (id) => workspaceRef(id)?.path ?? null, expectArrival: (path) => fileSource.expectArrival(path) }),
                 // Genie's tools as steps (genie#1204): late-bound — main builds the tools after composing (setFlowToolCaller).
@@ -1127,6 +1145,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     let down: Promise<void> | null = null;
 
     return {
+        own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
         inbox,
         prepareAgentMcp,
         tynnNote,
@@ -1329,7 +1348,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             down ??= (async () => {
-                approvals.cancelAll('Genie is shutting down');
+                ownApprovals?.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
                 stopLiveness();
                 driver.unwatch();
@@ -1355,7 +1374,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 await flows.flushed();
                 await remoteDevices.flushed();
                 await portAllocator?.settled();
-                knowledge.close();
+                ownStores?.knowledge.close();
             })();
             return down;
         },

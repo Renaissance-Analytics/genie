@@ -117,7 +117,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { ChatDraftStore, MAX_DRAFT_FILE_BYTES } from './chat-draft-store.js';
-import { composeServices, type ComposedServices } from './compose.js';
+import { composeServices, composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
 import { QuestionWindow } from './question-window.js';
@@ -194,6 +194,13 @@ import { gitAddSubmodule, gitClone, gitFileStatus, gitPushMain, gitSetOrigin, gi
 import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
+import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import type { ForwardedToolCall } from './mcp-host-tools.js';
+import type { WindowView } from './host-mcp.js';
+import type { McpToolResult } from '@particle-academy/prism-mcp';
+import type { InboxStore } from './inbox-store.js';
+import type { AttentionStore } from './attention-store.js';
+import type { KnowledgeStore } from './knowledge-store.js';
 import { allGenieTools } from './mcp-registrations.js';
 import { FlowCallers, createFlowToolCaller } from './flow-tools.js';
 import { genieToolDeps } from './genie-tool-deps.js';
@@ -1097,10 +1104,19 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
     return id ? registry?.find(id as AgentId) ?? null : null;
 }
 
-let services: ComposedServices | null = null;
+let services: WindowServices | null = null;
 // Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
+/** Genie's MCP endpoint when genie-host serves it (P3.1); `mcp` is this window's own only on the emergency path. */
+let hostMcpEndpoint: { url: string; token: string } | null = null;
+const mcpEndpointNow = (): { url: string; token: string } | null => mcp?.endpoint() ?? hostMcpEndpoint;
+/** Tell genie-host what its MCP server needs of this window (P3.1), coalesced; a no-op until the tools are built. */
+let pushHostView: () => void = () => {};
+/** A window tool's call, forwarded by genie-host's MCP server; refused until the tools are built. */
+let windowToolRun: ((call: ForwardedToolCall) => Promise<McpToolResult>) | null = null;
+/** openFileForUser calls that arrived before the tools were built: shown as soon as they are. */
+const openFilesLater: ForwardedToolCall[] = [];
 /** The two variables every terminal gets once the server listens; GENIE_TERMINAL_ID is minted by the pty port itself. */
 /** Every tool Genie's MCP serves (name and description), set once the registrations exist. */
 let mcpToolList: readonly { name: string; description: string }[] = [];
@@ -1110,7 +1126,7 @@ const sessionCallers = new CallerBook();
 function sessionCaller(key: string): Caller | null {
     return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir()) : null;
 }
-const mcpEnv = (): Record<string, string> => { const e = mcp?.endpoint(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
+const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
 /** The Genie browser window (beta.35 item 36): this workstation's Genie sites in a window of their own. */
 let genieBrowserWindow: GenieBrowserWindows | null = null;
@@ -1273,6 +1289,16 @@ async function boot(): Promise<void> {
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
         mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
+        // GENIE'S TOOLS THAT STILL NEED THIS WINDOW, forwarded by genie-host's MCP server (P3.1): run here, answered there.
+        onToolCall: (call: ForwardedToolCall) => (windowToolRun ? windowToolRun(call) : Promise.resolve({ text: `${call.name}: Genie's window is still starting; call it again in a moment. Nothing was done.`, isError: true })),
+        // openFileForUser made while no window was here: shown now (once the tools are built).
+        onOpenFileLater: (call: ForwardedToolCall) => { if (windowToolRun) void windowToolRun(call); else openFilesLater.push(call); },
+        // A tool's moment, from the host's own tools: the glow, the thumbs-up, the action on the agent's row.
+        onToolSignal: (raw: unknown) => {
+            const signal = raw as { kind?: string; terminalId?: string; agentId?: string; action?: string; tool?: string; reason?: string };
+            if (signal.kind === 'glow' && typeof signal.terminalId === 'string') broadcast('genie:glow', signal.terminalId);
+            else if (signal.kind === 'action' && typeof signal.agentId === 'string') broadcast('genie:action', { agentId: signal.agentId, kind: signal.action, ...(signal.tool ? { tool: signal.tool } : {}), ...(signal.reason ? { reason: signal.reason } : {}) });
+        },
         // Both providers wait for their own private Tynn identity. Workspace/cwd config never supplies a fallback key.
         prepareMcpServers: async (record: AgentRecord, _cwd: string, signal: AbortSignal) => {
             if (!services) throw new Error('Agent services are not ready. Restart the agent after startup completes.');
@@ -1280,7 +1306,9 @@ async function boot(): Promise<void> {
             // Without its Tynn server it still starts (genie#1234): the reason is a note in its chat, never Broken.
             const tynnNote = services?.tynnNote(record.id) ?? null;
             if (tynnNote) void host?.notice(record.id, tynnNote);
-            return [...genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)), ...privateServers];
+            // With genie-host, the Genie entry is the HOST's (P3.1: it owns the MCP server and the caller keys); only the
+            // agent's private servers are this window's to prepare.
+            return [...(agentEngineLink ? [] : genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id))), ...privateServers];
         },
         // The Dashboard's comms (§4.1): AgentInbox traffic since the session started, read when the row is built.
         comms: (agentId: AgentId, since: number) => (services ? commsOf(services.inbox.involving(agentId, 2000), agentId, since, Date.now()) : null),
@@ -1565,7 +1593,7 @@ async function boot(): Promise<void> {
         // Take Over is a button the person pressed (genie:take-over); nothing else starts one (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
         // The Take Over contract (§1, §6.9): the loopback MCP endpoint, read at open time so a late-starting server still reaches the TUI.
-        mcp: () => { const e = mcp?.endpoint(); return e ? { mcpUrl: e.url, token: e.token } : null; },
+        mcp: () => { const e = mcpEndpointNow(); return e ? { mcpUrl: e.url, token: e.token } : null; },
     });
     const takeOversNow = takeOvers;
     theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
@@ -1937,7 +1965,10 @@ async function boot(): Promise<void> {
         // The TUI is the provider's own CLI, resolved the way a session resolves it. No MCP
         // URL is set: genie2 has no MCP server yet, and a fake one would be worse than none.
         const tui = providerBinary(record.provider) ?? record.provider;
-        return takeOvers.start(record, workspace.path, tui);
+        const started = takeOvers.start(record, workspace.path, tui);
+        // Its agent calls Genie's tools by this terminal: genie-host must know whose it is (P3.1).
+        pushHostView();
+        return started;
     });
 
     ipcMain.handle('genie:terminal-open', async (_event, rawWorkspaceId: unknown, rawOptions: unknown) => {
@@ -2555,7 +2586,13 @@ async function boot(): Promise<void> {
     }
     /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
     const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
-    const composed = await composeServices({
+    // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
+    // replicas of them. Only the emergency in-process engine opens them here.
+    const engineForStores = agentEngineLink;
+    const composeWith = engineForStores
+        ? (input: ComposeInput) => composeWindowServices({ ...input, agentStores: engineForStores.client.stores() })
+        : composeServices;
+    const composed: WindowServices = await composeWith({
         userData: genieHome(),
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
@@ -2607,7 +2644,7 @@ async function boot(): Promise<void> {
         hostName: hostname(),
         // The tailnet listener, and the Tynn relay while it runs (Tynn #838).
         remoteTransport: remoteHub,
-        mcpEndpoint: () => mcp?.endpoint() ?? null,
+        mcpEndpoint: () => mcpEndpointNow(),
         // The account is opened after compose; private credentials are requested only when an agent starts.
         tynn: () => tynnAccount,
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
@@ -3030,17 +3067,23 @@ async function boot(): Promise<void> {
         // A Take Over terminal, or an agent SESSION by its caller key (`mcp-callers.ts`); anything else is nobody.
         // A FLOW calling Genie's tools as a step (genie#1204, main/flow-tools.ts) is a caller too: its own key, its workspace.
         const flowCallers = new FlowCallers((id) => registry?.workspace(id)?.path ?? null);
-        const resolveCaller = (terminalId: string) => flowCallers.callerFor(terminalId) ?? takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
+        // A caller genie-host vouched for, for a tool it forwarded here (P3.1): its session keys are the host's now.
+        const vouchedCallers = new Map<string, Caller>();
+        const resolveCaller = (terminalId: string) => vouchedCallers.get(terminalId) ?? flowCallers.callerFor(terminalId) ?? takeOvers?.callerFor(terminalId) ?? sessionCaller(terminalId);
+        // The stores agents write to: genie-host's when it runs — its own tools write them there, and in this window they
+        // are never reached (hostOnly says so if anything tries). The stores themselves only on the emergency path.
+        const own = composed.own;
         const roster = () => (registry!.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id));
         // ONE builder for the tools' wiring (genie-tool-deps.ts) — doctor mode builds its agent's tools with it too.
-        const registrations = withActionSignal(allGenieTools(genieToolDeps({
+        const signalled = withActionSignal(allGenieTools(genieToolDeps({
             // agentinbox list: whether each peer is running, read-only — never started by asking (core/liveness.ts).
             liveness: (id) => livenessOf(host?.probe(id as AgentId) ?? null, host?.rowsFor(id as AgentId).at(-1)?.at ?? null),
-            inbox: composed.inbox,
-            attention: composed.attention,
-            knowledge: composed.knowledge,
+            inbox: own?.inbox ?? hostOnly<InboxStore>('the AgentInbox'),
+            attention: own?.attention ?? hostOnly<AttentionStore>('attention (questions, imDone, lists)'),
+            knowledge: own?.knowledge ?? hostOnly<KnowledgeStore>('the knowledge graph'),
             settings: composed.settings,
-            approve: (caller, action, detail, call) => composed.approvals.gate(caller, action, detail, call),
+            // ONE approval queue: genie-host's (a window tool's ask goes there), or this window's own on the emergency path.
+            approve: (caller, action, detail, call) => (own ? own.approvals.gate(caller, action, detail, call) : composed.approvals.gate(caller, action, detail, call)),
             roster,
             workspaceSlugs: () => registry?.workspaceSlugs() ?? new Map(),
             resolveCaller,
@@ -3112,13 +3155,54 @@ async function boot(): Promise<void> {
                 }),
             },
         })), resolveCaller, (agentId, kind, tool) => broadcast('genie:action', { agentId, kind, tool }));
+        // With genie-host the host's own tools are asked of it, with the caller resolved here (a flow's step); the rest run here.
+        const engineLink = agentEngineLink?.client ?? null;
+        const registrations = engineLink ? withHostTools(signalled, engineLink, resolveCaller) : signalled;
         // The endpoint is REMEMBERED across launches (a private file in Genie's home), so the URL and token config sync
         // wrote into workspaces stay valid after a restart.
         mcpToolList = registrations.map((r) => ({ name: r.definition.name, description: r.definition.description ?? '' }));
         // Flows' tool steps call these very registrations, as the flow (genie#1204).
         composed.setFlowToolCaller(createFlowToolCaller({ registrations, callers: flowCallers }));
         const endpointFile = join(genieHome(), 'mcp-endpoint.json');
-        mcp = genieMcpServer({
+        if (engineLink) {
+            /*
+             * GENIE'S MCP SERVER IS GENIE-HOST'S (the host split, P3.1; plan §11d): agents keep its tools when this window
+             * closes. This window runs the tools that still need it (forwarded), and tells the host what those need of the
+             * registry and settings until P3.2 — the first time starts the host's server.
+             */
+            windowToolRun = windowToolRunner(() => registrations, vouchedCallers);
+            for (const call of openFilesLater.splice(0)) void windowToolRun(call);
+            const view = (): WindowView => {
+                const workspaces = registry?.listWorkspaces() ?? [];
+                const slugs = registry?.workspaceSlugs() ?? new Map<string, string>();
+                return {
+                    workspaces: workspaces.map((w) => ({ id: w.id, path: w.path, slug: slugs.get(w.id) ?? w.id, defaultAgentId: registry?.defaultAgentOf(w.id) ?? null })),
+                    settings: { global: composed.settings.snapshot(), byWorkspace: Object.fromEntries(workspaces.map((w) => [w.id, composed.settings.snapshotFor(w.id)])) },
+                    userActive: powerMonitor.getSystemIdleTime() < 120,
+                    callers: takeOvers?.callers() ?? {},
+                    pluginTools: composed.plugins.tools(),
+                };
+            };
+            let pushTimer: ReturnType<typeof setTimeout> | null = null;
+            pushHostView = () => {
+                if (pushTimer) return;
+                pushTimer = setTimeout(() => { pushTimer = null; void engineLink.pushWindowView(view()); }, 250);
+            };
+            registry?.subscribe(() => pushHostView());
+            composed.settings.onChange(() => pushHostView());
+            // Whether the person is at the computer, for ForceTheQuestion's "they are away": re-said every half minute.
+            setInterval(() => pushHostView(), 30_000).unref?.();
+            // A reconnect (the host restarted): it learns all of it again.
+            engineLink.onLink(() => { void engineLink.pushWindowView(view()); }, () => {});
+            await engineLink.pushWindowView(view());
+            // Genie 1's memories and AgentInbox history, once — the host owns the stores; only this window knows where v1 lives.
+            void engineLink.v1Import(v1DatabaseFile());
+            const status = await engineLink.mcpStatus();
+            hostMcpEndpoint = status?.endpoint ?? null;
+            mcpVerified = status?.verified ?? { ok: false, reason: 'genie-host did not start its MCP server' };
+            if (status) mcpToolList = status.tools;
+        }
+        if (!engineLink) mcp = genieMcpServer({
             registrations,
             remember: {
                 read: () => {
@@ -3131,8 +3215,10 @@ async function boot(): Promise<void> {
             },
         });
         try {
-            await mcp.start();
-            mcpVerified = await mcp.verify();
+            if (mcp) {
+                await mcp.start();
+                mcpVerified = await mcp.verify();
+            }
             // THE WORKSPACE AGENT FILES (the owner: Genie 2 manages them all and upgrades Genie 1's): every workspace once the
             // endpoint is live, and every workspace added after — whichever path added it — by watching the registry.
             const synced = new Set<string>();

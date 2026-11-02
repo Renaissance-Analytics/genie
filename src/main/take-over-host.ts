@@ -134,6 +134,11 @@ export class TakeOverHost {
         return this.#callers.get(terminalId) ?? null;
     }
 
+    /** Every Take Over terminal's caller (the host split, P3.1): genie-host resolves these agents' calls to its tools. */
+    callers(): Record<string, { agentId: AgentId; agentName: string; workspaceId: string; workspacePath: string }> {
+        return Object.fromEntries(this.#callers);
+    }
+
     /** What is known about this agent's TUI, or `null` — never a fake Observed row. */
     probe(agentId: AgentId): TakeOverProbe | null {
         const entry = this.#live.get(agentId);
