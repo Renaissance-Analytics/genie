@@ -348,11 +348,15 @@ probe "the-vault-is-read-afresh" src/main/tynn-agent-identities.ts \
     test/host-prepares-agents.test.ts "THE VAULT IS READ AFRESH"
 
 probe "moved-secrets-name-who-could-not-find-a-key" src/main/agent-tynn-prep.ts \
-    "        if (asked.secretsMoved) for (const [id, code] of without) if (code === 'storage') named.add(id);" "" \
+    "            if (!(signedIn && SIGN_IN_CURES.has(code)) && !(asked.secretsMoved && code === 'storage')) continue;" "            if (!(signedIn && SIGN_IN_CURES.has(code))) continue;" \
     test/host-prepares-agents.test.ts "after the one-time move"
 
 
 # P3.4 cut c: the host restores Tynn tools with no window, and a workspace just added is never refused.
+probe "a-restart-only-once-the-key-is-held" src/main/agent-tynn-prep.ts \
+    "            if (result.status === 'failed') without.set(id, result.code ?? 'refused');" "            if (result.status === 'failed') named.add(id);" \
+    test/host-tynn-recovery.test.ts "/ME ANSWERS AND THE AGENT ENDPOINT FAILS"
+
 probe "never-through-a-running-turn" src/main/host-tynn-recovery.ts \
     "        if (live.inTurn === true) return;" "" \
     test/host-tynn-recovery.test.ts "mid-turn it waits"
