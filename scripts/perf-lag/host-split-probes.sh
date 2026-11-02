@@ -324,8 +324,26 @@ probe "only-https" src/main/host-https-fetch.ts \
     test/host-https-fetch.test.ts "it speaks only https"
 
 
+# P3.4 cut c: the OS's proxy. Broken, each of these leaks a credential, or goes around a proxy with nothing said.
+probe "a-proxy-credential-is-dropped" src/core/proxy-answer.ts \
+    "    const bare = text.slice(text.lastIndexOf('@') + 1);" "    const bare = text;" \
+    test/host-proxy.test.ts "CREDENTIALS NEVER SURVIVE"
+
+probe "the-proxy-file-is-0600" src/main/proxy-memory.ts \
+    " origins: Object.fromEntries(this.#origins) }, PRIVATE_FILE);" " origins: Object.fromEntries(this.#origins) });" \
+    test/host-proxy.test.ts "the file is the owner"
+
+probe "no-route-left-is-an-error-not-direct" src/main/host-https-fetch.ts \
+    "            if (!next) throw failure;" "            if (!next) return send(target, init, agentFor({ kind: 'direct' }));" \
+    test/host-proxy.test.ts "is refused by name, not sent direct"
+
+probe "an-unresolved-host-keeps-its-answer" src/main/proxy-report.ts \
+    "            options.log?.(" "            answers[host] = 'DIRECT'; options.log?.(" \
+    test/host-proxy.test.ts "never sent as direct"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
