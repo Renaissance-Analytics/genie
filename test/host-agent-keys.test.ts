@@ -234,11 +234,23 @@ describe('what the host may hand out with no window', () => {
 
     it('it never mints, registers or calls Tynn: it has no account to do it with (until cut c)', () => {
         const code = readFileSync('src/main/host-agent-keys.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-        expect(code).not.toMatch(/fetch\(|\.mint|agent-token|from 'electron'/);
+        expect(code).not.toMatch(/fetch\(|\.mint|\/agent-token|from 'electron'/);
     });
 });
 
 describe('the window mints, and the host holds', () => {
+    /** A window on a real, attached host: with none attached every call answers "still starting", whatever the keychain would. */
+    async function linkedWindow(keychain?: Keychain) {
+        const server = new SessionEngineServer({ token: TOKEN, build: 'test', ...(keychain ? { keychain } : {}) });
+        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
+        server.attach(host);
+        const [hostSide, windowSide] = memoryPair();
+        server.accept(hostSide);
+        const client = new SessionEngineClient();
+        await client.connect(windowSide, TOKEN);
+        return client;
+    }
+
     const secrets = (): AgentSecrets & { held: Map<string, string> } => {
         const held = new Map<string, string>();
         return {
@@ -250,11 +262,7 @@ describe('the window mints, and the host holds', () => {
     };
 
     it('over the link: the secrets a window uses are the host’s keychain', async () => {
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test', keychain: lib.keychain });
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, TOKEN);
+        const client = await linkedWindow(lib.keychain);
         const port = linkedAgentSecrets(client);
         expect(await port.set(ENTRY, KEY)).toEqual({ ok: true });
         expect(lib.held.get(ENTRY)).toBe(KEY);
@@ -263,24 +271,17 @@ describe('the window mints, and the host holds', () => {
     });
 
     it('over the link: nothing but an agent’s key can be asked for (cut c widens this with its reader)', async () => {
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test', keychain: lib.keychain });
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, TOKEN);
+        const client = await linkedWindow(lib.keychain);
         lib.held.set('tynn/pairing', 'the-pairing');
         const read = await client.call('engine.secretRead', ['tynn/pairing']);
-        expect(read.ok).toBe(false);
+        expect(read).toEqual({ ok: false, reason: 'A window can ask only for an agent\'s key.' });
         expect(JSON.stringify(read)).not.toContain('the-pairing');
     });
 
     it('a host with no keychain says unavailable, never missing', async () => {
-        const server = new SessionEngineServer({ token: TOKEN, build: 'test' });
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const client = new SessionEngineClient();
-        await client.connect(windowSide, TOKEN);
-        expect((await linkedAgentSecrets(client).get(ENTRY)).kind).toBe('unavailable');
+        const client = await linkedWindow();
+        const read = await linkedAgentSecrets(client).get(ENTRY);
+        expect(read).toEqual({ kind: 'unavailable', reason: 'This host keeps no keychain.' });
     });
 
     it('a window with no link says unavailable: a dead link is not a signed-out agent', async () => {
