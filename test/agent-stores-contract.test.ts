@@ -173,7 +173,7 @@ describe('approvals and knowledge', () => {
 
     it('knowledge is the host\'s: added from the window, found from the window, there in the host', async () => {
         const r = await rig();
-        const added = await r.replica.knowledge.add({ title: 'Deploy steps', body: 'Run the release script.', scope: 'global', source: 'user' } as never);
+        const added = await r.replica.knowledge.add({ title: 'Deploy steps', body: 'Run the release script.', scope: { kind: 'system' }, source: 'user' } as never);
         expect(r.knowledge.get(added.id)?.title).toBe('Deploy steps');
         const found = await r.replica.knowledge.search({ query: 'release script', scopes: 'all' } as never);
         expect(found.hits.map((h) => h.id)).toContain(added.id);

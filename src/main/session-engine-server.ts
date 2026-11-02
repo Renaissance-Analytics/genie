@@ -65,6 +65,18 @@ export interface EngineServerOptions {
      * genie-host's file-watch hub (the host split, P2.2: files-watch-hub.ts). Views are owned by their CONNECTION: a window
      * whose link closes drops them all. Absent = `engine.filesWatch` is refused.
      */
+    /**
+     * Genie's MCP server in the host (P3.1: host-mcp.ts): told what the window says, asked a session's Genie entry and
+     * its status. Absent = the window's own MCP entry is all a session gets (phase 1's way).
+     */
+    readonly mcp?: {
+        setView(view: unknown): Promise<void>;
+        sessionServers(record: AgentRecord): readonly McpServer[];
+        status(): unknown;
+        runNative(call: never): Promise<unknown>;
+    };
+    /** Genie 1's database path from the window: the host takes its memories and mail once. */
+    readonly v1Import?: (databasePath: string) => Promise<void>;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     readonly files?: {
@@ -119,7 +131,14 @@ export class SessionEngineServer {
             currentRecord: (id) => this.#records.get(id) ?? null,
             // Handed over with each start (the window's engines know the workspace's variables); read inside `start`.
             serviceEnvFor: (workspaceId) => this.#env.get(workspaceId) ?? {},
-            prepareMcpServers: (record, cwd) => this.#reverse('client.prepareMcpServers', [record, cwd]) as Promise<readonly McpServer[]>,
+            // The host's Genie entry first (P3.1: it owns the MCP server and the caller book), then the agent's private servers,
+            // which only a window can prepare — none when no window is there.
+            prepareMcpServers: async (record, cwd) => {
+                const own = this.#options.mcp?.sessionServers(record) ?? [];
+                if (this.#options.mcp && !this.windowConnected()) return own;
+                const fromWindow = (await this.#reverse('client.prepareMcpServers', [record, cwd])) as readonly McpServer[];
+                return [...own, ...fromWindow];
+            },
             onThreadId: (agentId, threadId) => this.callback({ name: 'threadId', agentId, threadId }),
             onPlan: (agentId, steps) => this.callback({ name: 'plan', agentId, steps: steps.map((s) => ({ content: s.content, status: s.status })) }),
             onTurnNumbered: (agentId, n) => this.callback({ name: 'turnNumbered', agentId, n }),
@@ -132,6 +151,21 @@ export class SessionEngineServer {
     attach(host: SessionHost): void {
         this.#host = host;
         host.subscribe((agentId) => this.#markDirty(agentId));
+    }
+
+    /** Whether a window is connected now (the MCP server forwards window tools only then). */
+    windowConnected(): boolean {
+        return this.clients > 0;
+    }
+
+    /** A window tool's call, to the newest window (P3.1). Rejects with no window, or when it closes before it answers. */
+    forwardTool(call: unknown): Promise<unknown> {
+        return this.#reverse('client.toolCall', [call]);
+    }
+
+    /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
+    records(): AgentRecord[] {
+        return [...this.#records.values()];
     }
 
     get clients(): number {
@@ -342,6 +376,19 @@ export class SessionEngineServer {
                 this.#options.files.subscribe(conn.id, str(0), { id: ws.id, path: ws.path }, { ...(want.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) });
                 return true;
             }
+            case 'engine.windowView':
+                if (!this.#options.mcp) return false;
+                await this.#options.mcp.setView(args[0]);
+                return true;
+            case 'engine.v1Import':
+                if (!this.#options.v1Import) return false;
+                await this.#options.v1Import(str(0));
+                return true;
+            case 'engine.runTool':
+                if (!this.#options.mcp) throw new Error('This host runs no MCP server.');
+                return this.#options.mcp.runNative(args[0] as never);
+            case 'engine.mcpStatus':
+                return this.#options.mcp?.status() ?? null;
             case 'engine.stores': {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
@@ -349,6 +396,8 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'client.toolCall':
+                throw new Error('client.toolCall is the window\'s to answer');
             case 'client.prepareMcpServers':
                 throw new Error('client.prepareMcpServers is the window\'s to answer');
         }

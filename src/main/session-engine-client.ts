@@ -27,6 +27,9 @@ import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
+import type { ForwardedToolCall } from './mcp-host-tools.js';
+import type { HostMcp, WindowView } from './host-mcp.js';
+import type { McpToolResult } from '@particle-academy/prism-mcp';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -55,6 +58,12 @@ export interface EngineClientOptions {
     readonly onMcpServers?: (agentId: AgentId, reports: readonly McpServerReport[]) => void;
     readonly mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
     readonly prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
+    /** A window tool's call, forwarded by the host's MCP server (P3.1): run it, answer its result. */
+    readonly onToolCall?: (call: ForwardedToolCall) => Promise<McpToolResult>;
+    /** openFileForUser, made while no window was there (P3.1). */
+    readonly onOpenFileLater?: (call: ForwardedToolCall) => void;
+    /** A tool's moment: a glow, a thumbs-up, an action signal. */
+    readonly onToolSignal?: (signal: unknown) => void;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
@@ -307,6 +316,8 @@ export class SessionEngineClient {
             case 'headroom': o.onHeadroom?.(c.provider, c.headroom as Headroom); return;
             case 'mcpServers': o.onMcpServers?.(c.agentId as AgentId, c.reports as readonly McpServerReport[]); return;
             case 'stopUnverified': o.onStopUnverified?.(c.agentId as AgentId, c.reason); return;
+            case 'openFileForUser': o.onOpenFileLater?.(c.call as ForwardedToolCall); return;
+            case 'toolSignal': o.onToolSignal?.(c.signal); return;
         }
     }
 
@@ -314,6 +325,12 @@ export class SessionEngineClient {
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
+            if (method === 'client.toolCall') {
+                if (!this.#options.onToolCall) throw new Error('this window runs no tools');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.onToolCall(args[0] as ForwardedToolCall) };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
             if (method !== 'client.prepareMcpServers') throw new Error(`${method} is not the window's to answer`);
             const record = args[0] as AgentRecord;
             const cwd = typeof args[1] === 'string' ? args[1] : '';
@@ -387,6 +404,27 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#replicas;
+    }
+
+    /** What Genie's MCP server in the host needs of this window until P3.2 (host-mcp.ts `WindowView`); the first starts it. */
+    pushWindowView(view: WindowView): Promise<boolean> {
+        return this.#value('engine.windowView', [view], false).then((v) => v === true);
+    }
+
+    /** One of the host's own tools, for a caller this window resolved (a flow's step). Refused in words with no host. */
+    async runHostTool(call: ForwardedToolCall): Promise<McpToolResult> {
+        const reply = await this.call('engine.runTool', [call]);
+        return reply.ok ? (reply.value as McpToolResult) : { text: `${call.name}: genie-host did not answer (${reply.reason}); nothing was done`, isError: true };
+    }
+
+    /** Genie 1's database: the host takes its memories and AgentInbox history once. */
+    v1Import(databasePath: string): Promise<boolean> {
+        return this.#value('engine.v1Import', [databasePath], false).then((v) => v === true);
+    }
+
+    /** The host MCP server's endpoint, verification and tools; null when it has not started. */
+    mcpStatus(): Promise<ReturnType<HostMcp['status']> | null> {
+        return this.#value<ReturnType<HostMcp['status']> | null>('engine.mcpStatus', [], null);
     }
 
     /** The batches and git results for this window's views. */

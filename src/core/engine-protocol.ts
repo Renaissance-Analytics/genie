@@ -64,8 +64,18 @@ export const ENGINE_METHODS = [
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
+    // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
+    'engine.windowView',
+    // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.
+    'engine.v1Import',
+    // The MCP server's endpoint, whether it verified, and its tools (the window's Deck and terminal env read them).
+    'engine.mcpStatus',
+    // One of the host's own tools for a caller the window knows (a flow's step): `[ForwardedToolCall]`.
+    'engine.runTool',
     // Host → window.
     'client.prepareMcpServers',
+    // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
+    'client.toolCall',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];
@@ -141,10 +151,14 @@ export type EngineCallback =
     | { readonly name: 'action'; readonly agentId: string; readonly kind: string }
     | { readonly name: 'headroom'; readonly provider: string; readonly headroom: unknown }
     | { readonly name: 'mcpServers'; readonly agentId: string; readonly reports: readonly unknown[] }
-    | { readonly name: 'stopUnverified'; readonly agentId: string; readonly reason: string };
+    | { readonly name: 'stopUnverified'; readonly agentId: string; readonly reason: string }
+    // openFileForUser while no window was there (P3.1): shown when the next one connects.
+    | { readonly name: 'openFileForUser'; readonly call: unknown }
+    // A tool's moment for the window: a glow, a thumbs-up, an action signal (moment-only).
+    | { readonly name: 'toolSignal'; readonly signal: unknown };
 
 /** Callbacks that change the window's stores: queued while no window is connected. The rest are moment-only. */
-export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'plan', 'turnNumbered', 'stopUnverified']);
+export const DURABLE_CALLBACKS: ReadonlySet<EngineCallback['name']> = new Set(['threadId', 'plan', 'turnNumbered', 'stopUnverified', 'openFileForUser']);
 
 /** An attachment on the wire: its bytes as base64 (JSON has no bytes). */
 export interface WireAttachment {

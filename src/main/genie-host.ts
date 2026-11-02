@@ -16,10 +16,13 @@ import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { AgentStoresService } from './agent-stores-host.js';
-import { InboxStore } from './inbox-store.js';
-import { AttentionStore } from './attention-store.js';
-import { KnowledgeStore } from './knowledge-store.js';
 import { ApprovalQueue, SWITCH_ANSWERS } from './approval-queue.js';
+import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
+import { startHostMcp, type HostMcp } from './host-mcp.js';
+import type { ForwardedToolCall } from './mcp-host-tools.js';
+import type { McpToolResult } from '@particle-academy/prism-mcp';
+import { readV1Knowledge } from './v1-import.js';
+import { readV1Inbox } from './v1-inbox.js';
 import { gitTreeStatus } from './git-ports.js';
 import { repoStatus } from './repo-git.js';
 
@@ -107,6 +110,22 @@ async function main(): Promise<void> {
      * it, one batch per 250 ms to the windows watching, git once per batch. Here, so none of it runs in the window.
      */
     let files: FilesWatchHub | null = null;
+    /*
+     * THE STORES AGENTS WRITE TO, AND GENIE'S MCP SERVER (the host split, P3.1; plan §11d): their one writer is this host,
+     * so an agent's agentinbox, ForceTheQuestion, imDone, lists, plan and knowledge work with or without a window.
+     */
+    const own = await openAgentStores(home, () => new Date().toISOString());
+    let engineRef: SessionEngineServer | null = null;
+    const approvals = new ApprovalQueue({
+        autoApproved: (caller) => (engineRef?.records() ?? []).some((a) => a.id === caller.agentId && a.autoApprove === true),
+        granted: (caller, action) => {
+            const flag = SWITCH_ANSWERS[action];
+            return flag !== undefined && (engineRef?.records() ?? []).some((a) => a.id === caller.agentId && a[flag] === true);
+        },
+    });
+    const stores = new AgentStoresService({ ...own, approvals });
+    let mcp: HostMcp | null = null;
+    let v1Done = false;
     const engine = new SessionEngineServer({
         token,
         build,
@@ -115,12 +134,27 @@ async function main(): Promise<void> {
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => { lastBusy = Date.now(); say(`windows connected: ${n}`); },
         spawn: { send: (profile, frame) => relay?.send(profile, frame), windowGone: () => relay?.windowGone() },
+        stores,
+        mcp: {
+            setView: (view) => mcp!.setView(view as never),
+            sessionServers: (record) => mcp!.sessionServers(record),
+            status: () => mcp!.status(),
+            runNative: (call) => mcp!.runNative(call),
+        },
+        // Genie 1's memories and AgentInbox history, once, from the database only the window can locate.
+        v1Import: async (databasePath) => {
+            if (v1Done) return;
+            v1Done = true;
+            importV1Knowledge(own.knowledge, () => readV1Knowledge(databasePath), say);
+            await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), engineRef?.records() ?? [], Date.now());
+        },
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
             dropOwner: (owner) => files?.dropOwner(owner),
         },
     });
+    engineRef = engine;
     files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), gitTree: gitTreeStatus, repoStatus, log: say });
     const host = new SessionHost({
         userData: home,
@@ -151,6 +185,18 @@ async function main(): Promise<void> {
         },
     });
     engine.attach(host);
+    mcp = startHostMcp({
+        stores: stores.stores,
+        records: () => engine.records(),
+        probe: (id) => host.probe(id),
+        lastRowAt: (id) => host.rowsFor(id).at(-1)?.at ?? null,
+        reportPlan: (id, steps) => host.reportPlan(id, steps),
+        window: { connected: () => engine.windowConnected(), call: (call: ForwardedToolCall) => engine.forwardTool(call) as Promise<McpToolResult> },
+        openFileLater: (call) => engine.callback({ name: 'openFileForUser', call }),
+        signal: (signal) => engine.callback({ name: 'toolSignal', signal }),
+        endpointFile: join(home, 'mcp-endpoint.json'),
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
     host.subscribe(() => { lastBusy = Date.now(); });
     /*
      * EVERY PROCESS THE WINDOW STARTS, STARTED HERE (the host split, P2.1; plan §11a): #1405's spawn host as THIS
@@ -183,6 +229,9 @@ async function main(): Promise<void> {
         await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
         // Then every process the window started ("Shut down everything"): the spawn-host children end their ptys.
         files?.close();
+        await mcp?.stop();
+        approvals.cancelAll('Genie is shutting down');
+        own.knowledge.close();
         await relay?.stop().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
