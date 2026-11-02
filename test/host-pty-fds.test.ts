@@ -99,13 +99,34 @@ const homes: string[] = [];
  * evidence for B in its own right).
  */
 const RUN = `host-pty-fds-${process.pid}-${Date.now()}`;
+/**
+ * This run's processes: those carrying the marker, AND those working in one of its homes. A terminal's shell (and its
+ * helper) get an environment of their own, so the marker does not reach them (CI: none found by marker); a shell opened
+ * in a rig's home works there, and an orphan re-parented to init is still found by it.
+ */
 function processesOfThisRun(): Array<{ pid: number; cmd: string }> {
     const out: Array<{ pid: number; cmd: string }> = [];
     for (const name of readdirSync('/proc')) {
         if (!/^\d+$/.test(name) || Number(name) === process.pid) continue;
-        try { if (readFileSync(`/proc/${name}/environ`, 'utf8').split('\0').includes(`HOST_PTY_FDS_RUN=${RUN}`)) out.push({ pid: Number(name), cmd: cmdline(Number(name)).slice(0, 120) }); } catch { /* gone, or not ours */ }
+        const pid = Number(name);
+        let ours = false;
+        try { ours = readFileSync(`/proc/${name}/environ`, 'utf8').split('\0').includes(`HOST_PTY_FDS_RUN=${RUN}`); } catch { /* gone, or not ours */ }
+        if (!ours) { try { const cwd = readlinkSync(`/proc/${name}/cwd`); ours = homes.some((h) => cwd === h || cwd.startsWith(`${h}/`)); } catch { /* gone */ } }
+        if (ours) out.push({ pid, cmd: cmdline(pid).slice(0, 120) });
     }
     return out;
+}
+/** Every process below `root` in the tree now. */
+function descendants(root: number): number[] {
+    const all = readdirSync('/proc').filter((n) => /^\d+$/.test(n)).map(Number);
+    const below: number[] = [];
+    let frontier = [root];
+    while (frontier.length) {
+        const next = all.filter((p) => frontier.includes(ppid(p)));
+        below.push(...next);
+        frontier = next;
+    }
+    return below;
 }
 afterAll(async () => {
     if (process.platform !== 'linux') return;
@@ -151,8 +172,8 @@ async function rig(): Promise<Rig> {
     const opened = await within(30_000, 'a terminal opening in the host', client.terminals().openReady({ workspaceId: 'ws', cwd: home }), tell);
     // The helper and its shell, found in the process table by this run's marker — not by the pid the open reported (CI
     // measured it 0 on this path). The tree is printed, so a run that finds no helper still says what it did find.
-    const helperPid = await until('the terminal\'s fancy-pty helper', () => processesOfThisRun().find((p) => /fancy-pty-helper/.test(p.cmd))?.pid ?? null, 15_000)
-        .catch((e: unknown) => { throw new Error(`${String(e)}\nopened ${JSON.stringify(opened)}\nthis run: ${JSON.stringify(processesOfThisRun().map((p) => ({ ...p, ppid: ppid(p.pid) })))}\n${tell()}`); });
+    const helperPid = await until('the terminal\'s fancy-pty helper', () => descendants(record.pid).find((p) => /fancy-pty-helper/.test(cmdline(p))) ?? null, 15_000)
+        .catch((e: unknown) => { throw new Error(`${String(e)}\nopened ${JSON.stringify(opened)}\nbelow the host: ${JSON.stringify(descendants(record.pid).map((p) => ({ pid: p, ppid: ppid(p), cmd: cmdline(p).slice(0, 100) })))}\n${tell()}`); });
     const shellPid = await until('the shell under the helper', () => children(helperPid)[0] ?? null, 15_000);
     const spawnHosts = children(record.pid).filter((p) => /spawn-host/.test(cmdline(p)));
     console.log(`[host-pty-fds] the run's processes: ${JSON.stringify(processesOfThisRun().map((p) => ({ ...p, ppid: ppid(p.pid) })))}; opened reported pid ${opened.pid}; shell ${shellPid}: ${cmdline(shellPid).slice(0, 80)}`);
