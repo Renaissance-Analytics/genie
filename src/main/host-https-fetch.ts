@@ -31,6 +31,8 @@ export interface HostHttpsOptions {
     /** What the OS said for this URL, as a window last heard it. */
     readonly proxyRoutes?: (url: string) => readonly ProxyRoute[];
     readonly log?: (line: string) => void;
+    /** Follow this many redirects on the same origin. Absent: every redirect is refused. */
+    readonly followSameOrigin?: number;
 }
 
 /** Each of these is cached by Node for the process; so is this. A root added to the OS store is read at the next host start. */
