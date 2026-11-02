@@ -412,6 +412,35 @@ describe('what a window can ask for over the link', () => {
         expect(await replica.hosts()).toEqual([URL_A]);
     });
 
+    it('a window dropping off the link closes its sockets at the host, and the channel it held says closed when the host goes', async () => {
+        const sockets: FakeSocket[] = [];
+        let server: SessionEngineServer | null = null;
+        const service = new DeviceLinkService({
+            tokens: deviceTokenStore(file, keychain()),
+            socket: () => { const s = new FakeSocket(); sockets.push(s); setImmediate(() => s.opens()); return s; },
+            send: (owner, event) => server?.deviceEvent(owner, event),
+            log: () => {},
+        });
+        const TOKEN = 'a'.repeat(64);
+        server = new SessionEngineServer({ token: TOKEN, build: 'test', deviceLink: service });
+        const host = new SessionHost({ userData: dir, driverFor: () => null, processTree: { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) }, ...server.hostOptions() });
+        server.attach(host);
+        const [hostSide, windowSide] = memoryPair();
+        server.accept(hostSide);
+        const client = new SessionEngineClient();
+        await client.connect(windowSide, TOKEN);
+        const replica = client.deviceLink();
+        const closed: { channel: string; reason: string | null }[] = [];
+        replica.onClosed((channel, reason) => closed.push({ channel, reason }));
+        const opened = await replica.open(URL_A);
+        if (!opened.ok) throw new Error(opened.reason);
+        expect(sockets[0]!.closed).toBe(0);
+        windowSide.close();
+        await settle();
+        expect(sockets[0]!.closed, 'the host let go of the socket').toBe(1);
+        expect(closed).toEqual([{ channel: opened.channel, reason: 'the host closed the connection' }]);
+    });
+
     it('the host going away closes the channels the window holds, with its words', async () => {
         const replica = new SessionEngineClient().deviceLink();
         const closed: { channel: string; reason: string | null }[] = [];

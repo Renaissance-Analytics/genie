@@ -49,6 +49,8 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileText } from './toolchain-runner.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
+import { DeviceLinkService, type DeviceSocket } from './device-link-service.js';
+import { deviceTokenStore } from './device-tokens.js';
 import { KeyringService } from './keyring-service.js';
 import { hostTynnRecovery } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
@@ -284,6 +286,13 @@ async function main(): Promise<void> {
         tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
         github: new GithubAccountService(githubOpening),
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
+        // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
+        deviceLink: new DeviceLinkService({
+            tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),
+            socket: (url) => new WebSocket(url) as unknown as DeviceSocket,
+            send: (owner, event) => engine.deviceEvent(owner, event),
+            log: say,
+        }),
         workstation: new WorkstationService({
             store: workstationKeyStore(join(home, 'workstation.json'), keychain),
             request: async (path, init) => (await tynnOpening).request(path, init),

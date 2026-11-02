@@ -289,6 +289,7 @@ export class SessionEngineServer {
             if (was) this.#options.onClients?.(this.clients);
             if (was) this.#options.spawn?.windowGone?.();
             if (was) this.#options.files?.dropOwner(conn.id);
+            if (was) this.#options.deviceLink?.dropOwner(conn.id);
         });
     }
 
@@ -508,6 +509,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.deviceLink':
+                if (!this.#options.deviceLink) throw new Error('This host dials no other machines.');
+                return this.#options.deviceLink.call(conn.id, str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.workstation':
                 if (!this.#options.workstation) throw new Error('This host keeps no workstation identity.');
                 return this.#options.workstation.call(str(0), Array.isArray(args[1]) ? args[1] : []);
@@ -554,7 +558,10 @@ export class SessionEngineServer {
     }
 
     /** A batch or a git result of the file-watch hub, to the window (connection) that owns the views it is for. */
-    deviceEvent(_owner: string, _event: DeviceLinkEvent): void {}
+    /** A socket to another machine said something: to the window that opened it, and no other. */
+    deviceEvent(owner: string, event: DeviceLinkEvent): void {
+        for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);
+    }
 
     filesEvent(owner: string, event: FilesHubEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'files.event', event);

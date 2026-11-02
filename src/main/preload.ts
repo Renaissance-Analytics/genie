@@ -293,6 +293,12 @@ const bridge: PreloadBridge = {
         revokeKey: (workspaceId, keyId) => ipcRenderer.invoke('genie:app-inbox-revoke-key', workspaceId, keyId) as Promise<never>,
         source: (workspaceId, op, kind, id) => ipcRenderer.invoke('genie:app-inbox-source', workspaceId, op, kind, id) as Promise<never>,
     },
+    deviceLink: {
+        open: (url) => ipcRenderer.invoke('genie:device-open', url) as Promise<never>,
+        hosts: () => ipcRenderer.invoke('genie:device-hosts') as Promise<never>,
+        forget: (url) => ipcRenderer.invoke('genie:device-forget', url) as Promise<never>,
+        adopt: (url, token) => ipcRenderer.invoke('genie:device-adopt', url, token) as Promise<never>,
+    },
     tynnNetwork: {
         workstations: () => ipcRenderer.invoke('genie:tynn-workstations') as Promise<never>,
         open: (workstationId) => ipcRenderer.invoke('genie:relay-open', workstationId) as Promise<never>,

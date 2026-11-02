@@ -456,6 +456,55 @@ probe "no-method-hands-out-the-key" src/main/workstation-service.ts \
             case 'read': return this.#options.store.read(host);" \
     test/workstation-host.test.ts "no method hands out the key"
 
+# P3.4 cut e: the host dials other machines, and their tokens never reach a window
+probe "the-welcome-loses-its-token" src/main/device-link-service.ts \
+    "        const heard = JSON.stringify(rest);" "        const heard = JSON.stringify(message);" \
+    test/device-link.test.ts "the welcome reaches the window WITHOUT the minted token"
+
+probe "a-window-cannot-say-a-token" src/main/device-link-service.ts \
+    "        if (!message || !auth || (auth.kind !== 'pin' && auth.kind !== 'saved')) {" "        if (!message || !auth) {" \
+    test/device-link.test.ts "closes the channel and nothing reaches the machine"
+
+probe "a-locked-keychain-is-not-a-pin" src/main/device-link-service.ts \
+    "read.kind === 'missing' ? PIN_NEEDED :" "true ? PIN_NEEDED :" \
+    test/device-link.test.ts "a saved hello on a locked keychain says the keychain"
+
+probe "nothing-overtakes-the-welcome" src/main/device-link-service.ts \
+    "        if (channel.inbound) { channel.inbound.push(text); return; }" "" \
+    test/device-link.test.ts "what follows the welcome keeps its order"
+
+probe "only-the-window-that-opened-it" src/main/device-link-service.ts \
+    "        if (!channel || channel.owner !== owner || channel.closed) return;" "        if (!channel || channel.closed) return;" \
+    test/device-link.test.ts "another window cannot speak on"
+
+probe "only-ws-is-dialled" src/main/device-link-service.ts \
+    "        if (!isDeviceUrl(url)) return Promise.resolve({ ok: false, reason: 'another machine is reached over ws:// or wss://' });" "" \
+    test/device-link.test.ts "only ws:// and wss:// are dialled"
+
+probe "no-method-returns-a-device-token" src/main/device-link-service.ts \
+    "            default: throw new Error(`The device link has no ${method}.`);" "            default: return this.#options.tokens.tokenFor(String(args[0] ?? ''));" \
+    test/device-link.test.ts "no method returns a token"
+
+probe "a-dropped-window-lets-its-sockets-go" src/main/session-engine-server.ts \
+    "            if (was) this.#options.deviceLink?.dropOwner(conn.id);" "" \
+    test/device-link.test.ts "a window dropping off the link closes its sockets"
+
+probe "a-device-token-must-read-back" src/main/device-tokens.ts \
+    "            if (back.kind !== 'value' || back.value !== token) return { ok: false, reason: back.kind === 'unavailable' ? back.reason : 'the keychain did not read back what was written' };" "" \
+    test/device-link.test.ts "a read-back that differs by a byte"
+
+probe "localStorage-only-after-the-read-back" src/renderer/remote-session.ts \
+    "        if (moved) tokens.forget(url);" "        tokens.forget(url);" \
+    test/device-link-window.test.ts "a token the host did not read back stays"
+
+probe "a-drone-stops-before-the-host" src/main/device-link-gate.ts \
+    "    if (refused) return Promise.resolve({ ok: false, reason: refused });" "" \
+    test/device-link-window.test.ts "a drone is refused and the host is asked nothing"
+
+probe "the-desktop-hook-holds-no-token" src/renderer/App.tsx \
+    "                const auth = deviceAuth(pin, label, pairedNow.current, url.url);" "                const auth = deviceAuth(pin, label, pairedNow.current, url.url); rememberedTokens(window.localStorage).tokenFor(url.url);" \
+    test/device-link-window.test.ts "the desktop hook keeps no token"
+
 
 echo "=== restored: every probed test file (green expected)"
 if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then

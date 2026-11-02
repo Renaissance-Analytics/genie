@@ -14,6 +14,7 @@ import type { DeckItem, SignalState } from '../core/deck.js';
 import type { RailWorkspace, Surface } from '../core/rail-view.js';
 import { EMPTY_FEATURES, type FeatureAction, type FeatureData } from './features.js';
 import type { TynnNetworkBridge } from './relay-transport.js';
+import type { DeviceLinkBridge } from './remote-session.js';
 import type { AppInboxCardState } from './components/AppInboxCard.js';
 
 /** The workspace card's door to the host's app keys (main.ts `genie:app-inbox-*`). */
@@ -162,6 +163,8 @@ export interface GenieBridge {
     /** One folder of the HOST this window drives (Tynn #835) — what every file and folder picker reads. */
     host?: { listDir(path: string): Promise<import('../main/host-fs.js').HostListing>; /** The folder picker's New folder: `name` made inside `parent` on the host. */ mkdir?(parent: string, name: string): Promise<import('../main/host-fs.js').HostMade>; /** The host's home folder: a picker's last-resort start. Absent on a remote host. */ home?(): Promise<string> };
     /** The Tynn network (Tynn #837): the workstations Tynn lists, and a channel to one over the relay. Desktop only. */
+    /** Other machines, dialled by the host (P3.4 cut e). A window holds a channel and addresses, and never a token. */
+    deviceLink?: DeviceLinkBridge;
     tynnNetwork?: TynnNetworkBridge;
     /** A workspace's Apps and scripts (genie#1345): keys are this host's, so a remote bridge has none. */
     appInbox?: AppInboxBridge;

@@ -1,5 +1,6 @@
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
+import type { DeviceLinkEvent } from './device-link-service.js';
 import { KeyringReplica } from './keyring-replica.js';
 import type { KeyringDump } from './keyring-service.js';
 import { GithubAccountReplica } from './github-account-replica.js';
@@ -141,6 +142,7 @@ export class SessionEngineClient {
     #github: GithubAccountReplica | null = null;
     #keyring: KeyringReplica | null = null;
     #workstation: WorkstationReplica | null = null;
+    #deviceLink: DeviceLinkReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -224,6 +226,7 @@ export class SessionEngineClient {
                 for (const p of this.#pending.values()) p({ ok: false, reason: NOT_CONNECTED });
                 this.#pending.clear();
                 for (const l of [...this.#linkListeners]) l.down('the host closed the connection');
+                this.#deviceLink?.lost('the host closed the connection');
                 this.#options.onDisconnected?.('the host closed the connection');
             }));
             transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'token', token }, label: 'genie window' }));
@@ -332,6 +335,9 @@ export class SessionEngineClient {
                 return;
             case 'tynn.event':
                 this.tynn().rebase(payload as TynnAccountDump);
+                return;
+            case 'device.event':
+                this.deviceLink().deliver(payload as DeviceLinkEvent);
                 return;
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
@@ -502,7 +508,15 @@ export class SessionEngineClient {
         return this.#terminals;
     }
 
-    deviceLink(): DeviceLinkReplica { return new DeviceLinkReplica(async () => null); }
+    /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */
+    deviceLink(): DeviceLinkReplica {
+        this.#deviceLink ??= new DeviceLinkReplica(async (method, args) => {
+            const reply = await this.call('engine.deviceLink', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#deviceLink;
+    }
 
     /** This machine as a workstation: genie-host holds the key and signs (P3.4). */
     workstation(): WorkstationReplica {

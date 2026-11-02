@@ -51,7 +51,7 @@ import type { AuthRequest } from '../core/remote-protocol.js';
 import type { DeckItem } from '../core/deck.js';
 import type { TreeNode } from '../core/files-panel.js';
 import { fromBase64 } from '../core/mobile-wire.js';
-import { knownHosts, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
+import { deviceAuth, knownHosts, moveRememberedTokens, openRemoteHost, relayWorkstationOf, remoteFromSearch, remoteNameFromSearch, remoteUrl, rememberedTokens, type KnownHost } from './remote-session.js';
 import { RelayConnecting } from './components/RelayConnecting.js';
 import type { RelayConnect } from '../core/relay-connect.js';
 import { ipcRelayTransport, watchTynnSignIn, type RoleChange, type TynnWorkstationList, type TynnWorkstationRow } from './relay-transport.js';
@@ -254,9 +254,21 @@ function useAgentDetail(
 function useRemote(): { client: RemoteClient | null; state: RemoteState | null; remembered: string[]; known: KnownHost[]; bound: string | null; connect: (input: { host: string; pin: string; label: string }) => Promise<boolean>; disconnect: () => void; reconnect: () => void; forget: (url: string) => void; upgrade: HostUpgradeStep | null; upgradeHost: () => void; tynnWorkstations: TynnWorkstationList | null; reloadTynnWorkstations: () => void; tynnRefresh: ConnectProgress; boundName: string | null; relayConnect: RelayConnect } {
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
-    const tokens = typeof window === 'undefined' ? null : rememberedTokens(window.localStorage);
-    const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage);
-    const [remembered, setRemembered] = useState<string[]>(() => tokens?.hosts() ?? []);
+    // THE HOST DIALS OTHER MACHINES AND HOLDS THEIR TOKENS (P3.4 cut e): this window has a channel, and the addresses that are paired.
+    const link = typeof window === 'undefined' ? undefined : window.genie?.deviceLink;
+    const pairedNow = useRef<string[]>([]);
+    const unmoved = useRef<string[]>([]);
+    const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage, {
+        hosts: () => pairedNow.current,
+        forget: (url) => {
+            pairedNow.current = pairedNow.current.filter((u) => u !== url);
+            void link?.forget(url).then((forgot) => {
+                if (!forgot) setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'This machine’s keychain would not forget that pairing, so it is still kept.' }));
+                return readPaired();
+            });
+        },
+    });
+    const [remembered, setRemembered] = useState<string[]>([]);
     // The hosts this device has connected to (Tynn #819), and the host THIS window is bound to (a remote host's window).
     const [known, setKnown] = useState<KnownHost[]>(() => hosts?.list() ?? []);
     const [bound] = useState<string | null>(() => (typeof window === 'undefined' ? null : remoteFromSearch(window.location.search)));
@@ -295,15 +307,25 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
 
     useEffect(() => {
         if (!client) return;
-        const off = client.onState((s) => {
-            setState(s);
-            if (s.connected && s.token && s.host && tokens) {
-                // The URL is the key; the welcome carries the host's name, the hello went to the URL.
-                setRemembered(tokens.hosts());
-            }
-        });
+        const off = client.onState(setState);
         return off;
-    }, [client, tokens]);
+    }, [client]);
+
+    const readPaired = async (): Promise<void> => {
+        if (!link) return;
+        pairedNow.current = await link.hosts().catch(() => pairedNow.current);
+        setRemembered(pairedNow.current);
+        setKnown(hosts?.list() ?? []);
+    };
+    // Before the first connection: an earlier Genie's tokens move to the host, and the host says what is paired. What did not move is tried again at the next connection.
+    const preparing = useRef<Promise<void> | null>(null);
+    const prepare = (): Promise<void> => {
+        if (!link) return Promise.resolve();
+        if (preparing.current && unmoved.current.length === 0) return preparing.current;
+        preparing.current = moveRememberedTokens(window.localStorage, link).then((left) => { unmoved.current = left; return readPaired(); });
+        return preparing.current;
+    };
+    useEffect(() => { void prepare(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
     const connectWith = ({ host, pin, label }: { host: string; pin: string; label: string }): Promise<boolean> => {
             const url = remoteUrl(host);
@@ -342,21 +364,31 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
                     });
                 });
             }
-            const token = tokens?.tokenFor(url.url) ?? null;
-            const auth = pin.trim() ? { kind: 'pin' as const, code: pin.trim(), label } : token ? { kind: 'token' as const, token, label } : null;
-            if (!auth) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'type the PIN shown on that machine — this device has not paired with it yet' })); return Promise.resolve(false); }
-            const next = connectRemote(webSocketTransport(url.url), auth, label || 'another screen');
-            last.current = { url: url.url, label };
-            setClient(next);
-            setState(next.state());
-            return next.ready.then((r) => {
-                if (r.ok) {
-                    const t = next.state().token;
-                    if (t && tokens) { tokens.remember(url.url, t); setRemembered(tokens.hosts()); }
-                    // A known host, with its own name and when (Genie 1's remote.known).
-                    if (hosts) { hosts.noteConnected(url.url, next.state().host, Date.now()); setKnown(hosts.list()); }
+            if (!link || !net) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: 'other machines open from Genie on a desktop' })); return Promise.resolve(false); }
+            return prepare().then(async () => {
+                const auth = deviceAuth(pin, label, pairedNow.current, url.url);
+                if (!auth) {
+                    const lastRefusal = unmoved.current.includes(url.url)
+                        ? 'This device is paired with that machine, and this machine’s keychain has not taken the pairing yet. Unlock it, then try again.'
+                        : 'type the PIN shown on that machine — this device has not paired with it yet';
+                    setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal }));
+                    return false;
                 }
-                else setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: r.reason }));
+                last.current = { url: url.url, label };
+                const opened = await link.open(url.url);
+                if (!opened.ok) { setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: opened.reason })); return false; }
+                const transport = ipcRelayTransport(net, opened.channel);
+                const next = connectRemote(transport, auth, label || 'another screen');
+                setClient(next);
+                setState(next.state());
+                const r = await next.ready;
+                if (r.ok) {
+                    // A known host, with its own name and when (Genie 1's remote.known). The host kept any token before it said welcome.
+                    hosts?.noteConnected(url.url, next.state().host, Date.now());
+                    await readPaired();
+                }
+                // The host's own words beat the protocol's generic close.
+                else setState((s) => ({ ...(s ?? EMPTY_REMOTE), lastRefusal: transport.closedBecause() ?? r.reason }));
                 return r.ok;
             });
     };
@@ -404,7 +436,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
         reconnect: () => { const l = last.current ?? (bound ? { url: bound, label: '' } : null); if (l) void connectTo(l.url, l.label); },
         upgrade,
         upgradeHost: startUpgrade,
-        forget: (url: string) => { hosts?.forget(url); setKnown(hosts?.list() ?? []); setRemembered(tokens?.hosts() ?? []); },
+        forget: (url: string) => { hosts?.forget(url); setKnown(hosts?.list() ?? []); setRemembered(pairedNow.current); },
         tynnWorkstations,
         reloadTynnWorkstations,
         tynnRefresh,
