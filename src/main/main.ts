@@ -70,6 +70,7 @@ import { listHostDir, makeHostDir } from './host-fs.js';
 import { applyLinuxPasswordStore, passwordStoreBusNames, probeOwnedBusNames } from './linux-password-store.js';
 import { readRememberedPasswordStore, rememberPasswordStore } from './password-store-memo.js';
 import { LinuxKeyring, realKeyringPorts, takeResumeSignIn, markResumeSignIn } from './linux-keyring.js';
+import type { KeyringReplica } from './keyring-replica.js';
 import { osCipher } from './os-cipher.js';
 import { linkedAgentSecrets, linkedVault } from './agent-secrets.js';
 import { reportProxyAnswers } from './proxy-report.js';
@@ -1073,7 +1074,7 @@ let tynnAccount: TynnAccount | TynnAccountReplica | null = null;
 /** This Genie's GitHub sign-in (main/github-account.ts, beta.33 item 25): Genie 1's carried over, or the device flow. */
 let githubAccount: GithubAccount | GithubAccountReplica | null = null;
 /** Linux: the keyring card (linux-keyring.ts) — null off Linux. Opened before the Tynn account, which refuses without it. */
-let keyring: LinuxKeyring | null = null;
+let keyring: LinuxKeyring | KeyringReplica | null = null;
 /** This machine on the Tynn network (Tynn #836): registered, or why not; `null` until first read. */
 let tynnWorkstationNow: TynnWorkstationState | null = null;
 /** Every Tynn workstation id this machine holds (this-machine.ts); replaced once the identity store is open. */
@@ -2967,7 +2968,8 @@ async function boot(): Promise<void> {
     // shows when there is none, and its one button — install (pkexec), start, Restart Genie. Never fatal to boot.
     if (process.platform === 'linux') {
         try {
-            keyring = await LinuxKeyring.open(realKeyringPorts({
+            // With a host, the card is the host's: the secrets are in its keychain, and Chromium's store says nothing about them. Only a window running its own engine reads that store for it.
+            keyring = agentEngineLink ? agentEngineLink.client.keyring() : await LinuxKeyring.open(realKeyringPorts({
                 run: (binary, args, timeoutMs) => execFileRunner(binary, args, { timeoutMs: timeoutMs ?? 5_000 }).then((r) => ({ exitCode: r.exitCode, stdout: r.streams.stdout, stderr: r.streams.stderr })),
                 storage: () => ({ backend: safeStorage.getSelectedStorageBackend(), available: safeStorage.isEncryptionAvailable() }),
                 relaunch: () => {
@@ -2981,7 +2983,11 @@ async function boot(): Promise<void> {
         } catch (error) {
             console.warn('[genie] the keyring check failed', error);
         }
-        console.log(`[genie] keyring: ${keyring?.state() ?? 'unknown'} (backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'})`);
+        keyring?.onChange(() => {
+            pushFeatures();
+            if (keyring?.canKeepSecrets()) void services?.moveSecretsAgain();
+        });
+        console.log(`[genie] keyring: ${keyring?.canKeepSecrets() ? 'can keep secrets' : 'cannot keep secrets'} (backend ${safeStorage.getSelectedStorageBackend()}, encryption ${safeStorage.isEncryptionAvailable() ? 'available' : 'unavailable'})`);
     }
     // The scoped desktop credential stays encrypted in the main process. This isolated cookie jar is used only for
     // the one-time pairing exchange; ordinary API requests explicitly omit it.

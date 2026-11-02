@@ -216,6 +216,10 @@ probe "keychain-pin-is-secret-service" src/main/keychain.ts \
     "export const ENTRY_OPTIONS = { linux: { store: 'secret-service' } } as const;" "export const ENTRY_OPTIONS = { linux: { store: 'keyutils' } } as const;" \
     test/keychain.test.ts "cannot fall back to the kernel keyring"
 
+probe "a-bus-error-from-the-constructor-is-unavailable" src/main/keychain.ts \
+    "            return { kind: 'unavailable', reason: said(error) };" "            throw error;" \
+    test/keychain.test.ts "not missing, which would read as signed out, and not a throw"
+
 probe "keychain-unavailable-is-not-missing" src/main/keychain.ts \
     "            return { kind: 'unavailable', reason: said(error) };" "            return { kind: 'missing' };" \
     test/keychain.test.ts "never as missing"
@@ -415,8 +419,26 @@ probe "the-seal-is-left-until-it-opens" src/main/github-account.ts \
     test/github-account-host.test.ts "a seal that will not open"
 
 
+# P3.4 cut c: GitHub follows same-origin redirects only, and the keyring card reads the host.
+probe "a-cross-origin-redirect-is-refused" src/main/host-https-fetch.ts \
+    "        if (next.origin !== target.origin) throw" "        if (next.origin === 'never') throw" \
+    test/host-https-fetch.test.ts "A CROSS-ORIGIN REDIRECT IS REFUSED"
+
+probe "a-redirect-loop-stops" src/main/host-https-fetch.ts \
+    "        if (hops >= REDIRECT_LIMIT) throw" "        if (hops >= 1000) throw" \
+    test/host-https-fetch.test.ts "a loop stops at the limit"
+
+probe "the-card-is-there-as-a-window-connects" src/main/session-engine-server.ts \
+    "        if (this.#options.keyring) this.#event(conn, 'keyring.event', this.#options.keyring.dump());" "" \
+    test/keyring-host.test.ts "the card is there as the window connects"
+
+probe "the-keychain-coming-back-wakes-the-readers" src/main/keyring-service.ts \
+    "                if (now && !ready) options.onReady?.();" "" \
+    test/keyring-host.test.ts "whoever reads secrets reads again"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

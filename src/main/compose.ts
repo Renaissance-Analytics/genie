@@ -302,6 +302,8 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
      * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
      */
     tynnRecovery(asked?: { readonly secretsMoved?: boolean }): Promise<string[]>;
+    /** The keychain answers now: the one-time move tries what it could not do before. */
+    moveSecretsAgain(): Promise<void>;
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
@@ -1089,6 +1091,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         prepareAgentMcp,
         tynnNote,
         tynnRecovery,
+        moveSecretsAgain: moveAgentKeys,
         attention,
         knowledge,
         flows,

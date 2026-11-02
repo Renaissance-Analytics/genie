@@ -32,6 +32,31 @@ function fakeModule(store = new Map<string, string>(), failWith: Error | null | 
     return { module: { AsyncEntry } as unknown as KeyringModule, made, store };
 }
 
+describe('with nothing on the bus, the library throws from its constructor', () => {
+    // The real words, omarchy-test, batch V: the service not running and its activation file gone.
+    const NOT_ACTIVATABLE = 'Platform failure: DBus error: The name is not activatable';
+    const refusing = {
+        AsyncEntry: class { constructor() { throw new Error(NOT_ACTIVATABLE); } },
+    } as unknown as KeyringModule;
+
+    it('a read is unavailable, in those words: not missing, which would read as signed out, and not a throw', async () => {
+        const k = new Keychain(async () => refusing);
+        expect(await k.get('tynn/pairing')).toEqual({ kind: 'unavailable', reason: expect.stringContaining(NOT_ACTIVATABLE) });
+    });
+
+    it('a write, a delete and the probe all refuse, and none of them throws', async () => {
+        const k = new Keychain(async () => refusing);
+        expect((await k.set('tynn/pairing', 'v')).ok).toBe(false);
+        expect((await k.delete('tynn/pairing')).ok).toBe(false);
+        expect((await k.probe()).ok).toBe(false);
+    });
+
+    it('the same words from the read itself are the same answer', async () => {
+        const k = new Keychain(async () => fakeModule(new Map(), new Error(NOT_ACTIVATABLE)).module);
+        expect((await k.get('tynn/pairing')).kind).toBe('unavailable');
+    });
+});
+
 describe('every entry is pinned to the Secret Service', () => {
     it('the options say secret-service, the one value that cannot fall back to the kernel keyring', () => {
         expect(ENTRY_OPTIONS).toEqual({ linux: { store: 'secret-service' } });

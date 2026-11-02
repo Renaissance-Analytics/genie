@@ -43,6 +43,7 @@ import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
+import { KeyringService } from './keyring-service.js';
 import { hostTynnRecovery } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
@@ -122,7 +123,8 @@ async function main(): Promise<void> {
     lifecycleLog(`host boot pid=${process.pid} build=${build} endpoint=${endpoint}`);
     // THE KEYCHAIN (P3.4 cut a): said in the log, off the boot path. No keychain refuses secrets; it never stops the host.
     const keychain = new Keychain();
-    void openHostKeychain({ keychain }).then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
+    const keychainOpening = openHostKeychain({ keychain });
+    void keychainOpening.then((opened) => { const line = `keychain: ${opened.state()}`; say(line); lifecycleLog(line); }, (error: unknown) => { const line = `keychain: could not open: ${error instanceof Error ? error.message : String(error)}`; say(line); lifecycleLog(line); });
     /*
      * THE SPAWN LEDGER AND ITS SWEEP, here now (they were main.ts's): what a previous host left running — a crash, a
      * kill, an installer — is ended BEFORE any agent starts, from the record only (pid, start time and name must match).
@@ -275,6 +277,14 @@ async function main(): Promise<void> {
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
         tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
         github: new GithubAccountService(githubOpening),
+        // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
+        keyring: new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
+            onReady: () => {
+                void tynnOpening.then((account) => account.reload()).catch(() => {});
+                void githubOpening.then((account) => account.reload()).catch(() => {});
+                void tynnRecovery?.recover({ secretsMoved: true });
+            },
+        }),
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {
