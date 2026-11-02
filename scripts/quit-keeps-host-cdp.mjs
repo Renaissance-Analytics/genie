@@ -362,6 +362,8 @@ console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming
 step('0.6', `the ticker marker, holding this script's pid ${process.pid}`);
 writeFileSync(TICKER, String(process.pid));
 let cannot = null;
+/** Failures from before the run (a held port, 0.4/0.5) are reported, never mistaken for the run's own controls failing. */
+const failuresBeforeRun = failures.length;
 try {
     // -------------------------------------------------------------------------------- A: three agents streaming
     a = await open('first', 1);
@@ -406,7 +408,10 @@ try {
         check(later !== null && later.pids.length === 1 && later.pids[0] === ag.pid, `9. CONTROL: ${ag.name} is streaming NOW (its ledger grew within seconds, same pid)`, `${ag.before.max} → ${later?.max}`);
         ag.before = later ?? ag.before;
     }
-    if (failures.length) throw new Error('the controls failed: nothing after them could mean anything');
+    // Only THIS run's setup and controls gate what follows. A port finding at 0.4/0.5 is its own failed check and the run
+    // carries on past it on a free port (batch L4 aborted here on it, with every control passing).
+    const controlFailures = failures.slice(failuresBeforeRun);
+    if (controlFailures.length) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
 
     // -------------------------------------------------------------------------------- "Just close the UI"
     // The logs are read from HERE on: an older line (an earlier launch's adopt of the same host) must not answer for this one.
