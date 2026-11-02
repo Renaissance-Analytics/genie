@@ -1,4 +1,9 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import type { ProcessTree } from '../src/core/process-tree.js';
+import { SessionHost } from '../src/main/session-host.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import { ProcessSupervisor, type ProcessSpec } from '../src/main/process-supervisor.js';
 import { SupervisorService } from '../src/main/supervisor-host.js';
@@ -45,6 +50,9 @@ function rig() {
     const supervisor = new ProcessSupervisor(pty.port, { now: () => 1_000, schedule: (fn) => { timers.push(fn); return () => {}; } });
     const service = new SupervisorService(supervisor);
     const server = new SessionEngineServer({ token: TOKEN, build: 't', supervisor: service });
+    // The engine answers once its agent host is attached, as it always is in genie-host.
+    const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+    server.attach(new SessionHost({ userData: mkdtempSync(join(tmpdir(), 'supervisor-contract-')), driverFor: () => null, processTree: noProcessTree, ...server.hostOptions() }));
     const window = async () => {
         const [h, w] = memoryPair();
         server.accept(h);
