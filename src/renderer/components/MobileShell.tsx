@@ -63,11 +63,13 @@ export interface MobileShellProps {
     reconnecting?: boolean | undefined;
 }
 
-const TONE: Record<'ok' | 'warn' | 'bad' | 'muted', string> = {
+const TONE: Record<'ok' | 'warn' | 'bad' | 'muted' | 'cool', string> = {
     ok: 'text-[var(--success)]',
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-4)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 };
 
 const BUTTON = 'rounded-lg border border-[var(--border-1)] px-3 py-2 text-sm font-medium active:bg-[var(--bg-2)]';

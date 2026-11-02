@@ -20,6 +20,8 @@ const TONE = {
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 } as const;
 
 const LABEL = 'w-10 shrink-0 text-[10px] font-semibold uppercase tracking-[.04em] text-[var(--fg-4)]';
@@ -54,7 +56,7 @@ const FEED_TONE: Record<FeedKind, string> = {
 const MONO: ReadonlySet<FeedKind> = new Set(['edit', 'command', 'tool']);
 
 /** The heartbeat's line: the state's own colour, so a lane reads at a glance. */
-const BEAT_COLOUR: Record<DashLane['tone'], string> = { ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)', muted: 'var(--fg-4)' };
+const BEAT_COLOUR: Record<DashLane['tone'], string> = { ok: 'var(--success)', warn: 'var(--warning)', bad: 'var(--danger)', muted: 'var(--fg-4)', cool: 'var(--sky-400)' };
 
 export interface WorkspaceDashboardProps {
     /** The workspace's display name, for the sentences. */

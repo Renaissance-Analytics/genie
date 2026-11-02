@@ -114,7 +114,7 @@ export function waitingStepLabel(step: string): string {
 
 export interface ChatContext {
     text: string;
-    tone: 'ok' | 'warn' | 'bad' | 'muted';
+    tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
     /** The hover: the full date and time a rate-limit hold resumes. Absent = no hover. */
     title?: string;
 }
@@ -164,6 +164,8 @@ export function chatContext(detail: ChatDetail): ChatContext {
     if (s.designLogin) return { text: 'Claude Design login needed', tone: 'warn' };
     // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21).
     if (s.running && (s.background ?? 0) > 0) return { text: `Working · ${s.background} in the background`, tone: 'ok' };
+    // COOLING (core/session.ts COOLING_MS): the 15 s after a turn that replied.
+    if (s.running && s.cooling === true) return { text: 'Cooling', tone: 'cool' };
     return { text: 'Idle', tone: 'muted' };
 }
 

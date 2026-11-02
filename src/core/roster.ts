@@ -51,6 +51,11 @@ export interface LiveSession {
     running: boolean;
     turnState: TurnState;
     /**
+     * COOLING (core/session.ts COOLING_MS): its turn ended cleanly under 15 s ago — the board shows `Cooling` and sorts it
+     * with Working. Display only: `turnState` is `idle` and nothing waits for it. Absent = not cooling (or an older host).
+     */
+    cooling?: boolean | undefined;
+    /**
      * A turn in flight by Genie's own record (`AgentSession.inTurn`) — not `working`, which provider activity before any
      * turn of the run reads as too. A Restart that cuts one tells the agent (genie#1238). Absent = not reported.
      */
@@ -143,7 +148,8 @@ function durationOf(startedAt: number | null, now: number): string | null {
  *  3. **`working` requires the protocol to have said so.** `turnState: 'unknown'` means it has
  *     not, and rendering `Working` there would be Genie asserting activity it cannot see,
  *     which is the one thing it must never do.
- *  4. **Everything else is `idle`.** A session that simply ended is idle, not broken: painting
+ *  4. **`cooling` for 15 s after a turn that replied** (`LiveSession.cooling`): the board's Working rank, its own word.
+ *  5. **Everything else is `idle`.** A session that simply ended is idle, not broken: painting
  *     a stopped agent red is how a board learns to cry wolf, and then nobody reads the reds.
  */
 export function agentRowFor(
@@ -162,6 +168,8 @@ export function agentRowFor(
         : session.pendingApproval !== null ? 'waiting'
         : session.failure !== null ? 'broken'
         : session.running && session.turnState === 'working' ? 'working'
+        // Between turns: Cooling for COOLING_MS, sorted with Working, so a turn ending does not reorder the board.
+        : session.running && session.turnState === 'idle' && session.cooling === true ? 'cooling'
         : 'idle';
 
     return {
