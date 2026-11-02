@@ -30,7 +30,7 @@
  * silently ignores an unexpected frame would make a protocol change look like a UI bug.
  */
 
-import { appendFileSync, existsSync, rmSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -44,12 +44,20 @@ function recordMethod(method, unhandled = false) {
 }
 
 /**
- * TICKER MODE (scripts/quit-keeps-host-cdp.mjs, the host split P1b): while `<tmpdir>/genie-stub-codex-ticker` exists when this
+ * TICKER MODE (scripts/quit-keeps-host-cdp.mjs, the host split P1b): while `<tmpdir>/genie-stub-codex-ticker` names a LIVE pid when this
  * stub STARTS, a turn asks nothing and streams `tick <n> pid <pid>` four times a second, for ever — an agent that is
  * visibly streaming, whose ledger names the very process that streams for it. Each process gets its own thread id, so
  * three ticker agents are three threads. Without the file nothing below changes (smoke-cdp's one reply, its approval).
  */
-const TICKER = existsSync(join(tmpdir(), 'genie-stub-codex-ticker'));
+const TICKER = (() => {
+    // The marker holds the pid of the script that wrote it; a marker whose script is gone (killed before its cleanup)
+    // is ignored, so it can never turn a later smoke's provider into a ticker.
+    const marker = join(tmpdir(), 'genie-stub-codex-ticker');
+    if (!existsSync(marker)) return false;
+    const owner = Number(readFileSync(marker, 'utf8').trim());
+    if (!Number.isInteger(owner) || owner <= 0) return false;
+    try { process.kill(owner, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+})();
 const THREAD_ID = TICKER ? `stub_thread_${process.pid}` : 'stub_thread_0001';
 const TURN_ID = 'stub_turn_0001';
 
