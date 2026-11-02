@@ -76,6 +76,14 @@ export const WINDOW_CALLS: Readonly<Record<StoreName, readonly string[]>> = {
 };
 
 export class AgentStoresService {
+    /** The registry writes in flight, in the order they came. */
+    #registryWrites: Promise<unknown> = Promise.resolve();
+
+    /** Once the registry writes already asked for have landed, and the host's model has followed. A failed write is its caller's to hear. */
+    registrySettled(): Promise<void> {
+        return this.#registryWrites.then(() => {}, () => {});
+    }
+
     readonly #stores: AgentStores;
     readonly #forwardedCall: (id: string) => import('./mcp-tools.js').McpCall | undefined;
     readonly #listeners = new Set<(event: StoresEvent) => void>();
@@ -160,14 +168,21 @@ export class AgentStoresService {
             case 'registry': {
                 const reg = s.registry;
                 if (!reg) throw new Error('this host keeps no registry');
-                const result = await (reg.store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
-                if (method.startsWith('write')) {
-                    // The host's own model follows the files (its tools and approvals read it with no window), then every
-                    // window re-reads: two windows, one registry.
-                    await reg.model.refresh();
-                    this.#emit({ store: 'registry', kind: 'written' });
-                }
-                return result;
+                const run = async (): Promise<unknown> => {
+                    const result = await (reg.store as unknown as Record<string, (...a: unknown[]) => Promise<unknown>>)[method]!(...args);
+                    if (method.startsWith('write')) {
+                        // The host's own model follows the files (its tools and approvals read it with no window), then every
+                        // window re-reads: two windows, one registry.
+                        await reg.model.refresh();
+                        this.#emit({ store: 'registry', kind: 'written' });
+                    }
+                    return result;
+                };
+                if (!method.startsWith('write')) return run();
+                // Counted before the first await: a start right behind this on the same socket must find it.
+                const written = run();
+                this.#registryWrites = Promise.allSettled([this.#registryWrites, written]);
+                return written;
             }
             case 'approvals':
                 // A window tool's gated action (forwarded from the host) asks this one queue; no MCP call to watch here.

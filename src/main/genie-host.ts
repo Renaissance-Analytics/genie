@@ -40,6 +40,7 @@ import { pidAlive } from './engine-launch.js';
 import { FilesWatchHub } from './files-watch-hub.js';
 import { openHostKeychain } from './host-keychain.js';
 import { hostAgentKeys } from './host-agent-keys.js';
+import { hostTynnRecovery } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
 import { ProxyMemory } from './proxy-memory.js';
 import { TynnAccount } from './tynn-account.js';
@@ -235,7 +236,13 @@ async function main(): Promise<void> {
         tynn: () => hostTynn,
         workspaces: () => hostRegistry.listWorkspaces(),
         ready: () => tynnOpening.catch(() => null),
+        settled: () => stores.registrySettled(),
+        onPrepared: () => tynnRecovery?.kick(),
     });
+    // THE HOST BRINGS TYNN TOOLS BACK, with no window (host-tynn-recovery.ts). Built once the session host exists.
+    let tynnRecovery: ReturnType<typeof hostTynnRecovery> | null = null;
+    /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
+    const threadsHeard = new Map<string, string>();
     const engine = new SessionEngineServer({
         token,
         build,
@@ -253,7 +260,7 @@ async function main(): Promise<void> {
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
-        tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: (asked) => agentKeys.recovery(asked) }),
+        tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
         // What the OS said about proxies, from the last window. A new answer may be the cure, so Tynn is asked again if it is out of reach.
         proxy: {
             remember: async (answers) => {
@@ -288,9 +295,11 @@ async function main(): Promise<void> {
     });
     engineRef = engine;
     files = new FilesWatchHub({ send: (owner, event) => engine.filesEvent(owner, event), gitTree: gitTreeStatus, repoStatus, log: say });
+    const engineHostOptions = engine.hostOptions();
     const host = new SessionHost({
         userData: home,
-        ...engine.hostOptions(),
+        ...engineHostOptions,
+        onThreadId: (agentId, threadId) => { threadsHeard.set(agentId, threadId); engineHostOptions.onThreadId(agentId, threadId); },
         // Doctor mode beside Genie holds the workspace it runs an agent in (core/genie-running.ts): a file read, here.
         heldElsewhere: (record) => {
             const hold = doctorHoldNow(home);
@@ -317,6 +326,22 @@ async function main(): Promise<void> {
         },
     });
     engine.attach(host);
+    tynnRecovery = hostTynnRecovery({
+        names: (asked) => agentKeys.recovery(asked),
+        waiting: () => agentKeys.waiting(),
+        recheck: async () => { await hostTynn?.recheck(); },
+        host,
+        record: (id) => hostRegistry.find(id),
+        threadOf: (id) => threadsHeard.get(id) ?? null,
+        cwdFor: (record) => hostRegistry.workspace(record.workspaceId)?.path ?? osaHomeDir(),
+        log: say,
+    });
+    void tynnOpening.then((account) => {
+        account.onChange(() => { void tynnRecovery?.recover(); });
+        // Agents may have started while it opened.
+        void tynnRecovery?.recover();
+        tynnRecovery?.kick();
+    }, () => {});
     /** Kept processes' app-inbox credentials, as a window minted them (P3.3c); none with no window since the host began. */
     const appEnvCache = new Map<string, Readonly<Record<string, string>>>();
     const refreshAppEnvs = async (book: ProcessBook): Promise<void> => {

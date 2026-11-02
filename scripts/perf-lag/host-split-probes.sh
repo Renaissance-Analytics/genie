@@ -348,12 +348,38 @@ probe "the-vault-is-read-afresh" src/main/tynn-agent-identities.ts \
     test/host-prepares-agents.test.ts "THE VAULT IS READ AFRESH"
 
 probe "moved-secrets-name-who-could-not-find-a-key" src/main/agent-tynn-prep.ts \
-    "        if (asked.secretsMoved) for (const [id, code] of without) if (code === 'storage') named.add(id);" "" \
+    "            if (!(signedIn && SIGN_IN_CURES.has(code)) && !(asked.secretsMoved && code === 'storage')) continue;" "            if (!(signedIn && SIGN_IN_CURES.has(code))) continue;" \
     test/host-prepares-agents.test.ts "after the one-time move"
 
 
+# P3.4 cut c: the host restores Tynn tools with no window, and a workspace just added is never refused.
+probe "a-restart-only-once-the-key-is-held" src/main/agent-tynn-prep.ts \
+    "            if (result.status === 'failed') without.set(id, result.code ?? 'refused');" "            if (result.status === 'failed') named.add(id);" \
+    test/host-tynn-recovery.test.ts "/ME ANSWERS AND THE AGENT ENDPOINT FAILS"
+
+probe "never-through-a-running-turn" src/main/host-tynn-recovery.ts \
+    "        if (live.inTurn === true) return;" "" \
+    test/host-tynn-recovery.test.ts "mid-turn it waits"
+
+probe "a-stopped-agent-stays-stopped" src/main/host-tynn-recovery.ts \
+    "        if (!live || live.running === false) { owed.delete(id); return; }" "" \
+    test/host-tynn-recovery.test.ts "A STOPPED AGENT IS NOT STARTED"
+
+probe "the-heard-thread-is-resumed" src/main/host-tynn-recovery.ts \
+    "threadId: ports.threadOf(id) ?? known.threadId" "threadId: known.threadId" \
+    test/host-tynn-recovery.test.ts "A THREAD THE HOST HEARD WITH NO WINDOW"
+
+probe "it-keeps-asking-while-someone-waits" src/main/host-tynn-recovery.ts \
+    "                await ports.recheck().catch(() => {});" "" \
+    test/host-tynn-recovery.test.ts "with an agent waiting on Tynn"
+
+probe "a-start-waits-for-the-write" src/main/agent-tynn-prep.ts \
+    "{ await options.settled?.(); workspace = known(); checkStop(); }" "{ workspace = known(); checkStop(); }" \
+    test/host-tynn-recovery.test.ts "the write has not landed when the start arrives"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

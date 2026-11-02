@@ -15,6 +15,16 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this breaks src/; test machines only'); process.exit(2); }
+// `recovery`: the other bug, an agent left without its tools once Tynn is back. It names nobody to restart.
+if (process.argv[2] === 'recovery') {
+    const RECOVERY = 'src/main/host-tynn-recovery.ts';
+    const held = readFileSync(RECOVERY, 'utf8');
+    const anchor = 'for (const id of await ports.names(asked)) {';
+    if (held.split(anchor).length !== 2) { console.error(`the recovery is not where it was in ${RECOVERY}`); process.exit(1); }
+    writeFileSync(RECOVERY, held.replace(anchor, () => 'for (const id of (await ports.names(asked)).slice(0, 0)) {'));
+    console.log(`### agent-key-bug-back=PASS  ${RECOVERY} restarts nobody`);
+    process.exit(0);
+}
 const FILE = 'src/main/session-engine-server.ts';
 const raw = readFileSync(FILE, 'utf8');
 const crlf = raw.includes('\r\n');

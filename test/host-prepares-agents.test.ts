@@ -261,10 +261,14 @@ describe('recovery, from the host', () => {
         const agent = record();
         await keys(agent, workspace);
         // Keychain says nothing for its key: an older Genie's copy has not moved yet.
+        const [entry, key] = [...secrets.held.entries()][0]!;
         secrets.held.clear();
         const result = await keys(agent, workspace);
         expect(result.note).toContain('Tynn unavailable');
         expect(await keys.recovery()).toEqual([]);
+        // CONTROL: told the move finished with the key still not there, nobody is restarted for nothing.
+        expect(await keys.recovery({ secretsMoved: true })).toEqual([]);
+        secrets.held.set(entry, key);
         expect(await keys.recovery({ secretsMoved: true })).toEqual([agent.id]);
     });
 });
