@@ -169,7 +169,13 @@ async function rig(): Promise<Rig> {
     const transport = await within(10_000, 'the socket to the host', connectSocket(record.endpoint), tell);
     const client = new SessionEngineClient();
     expect(await within(15_000, 'the client connecting to the host', client.connect(transport, token), tell)).toMatchObject({ ok: true });
+    // What the terminal says and how it ends, heard from before it opens: a terminal that ends at once says why here.
+    const heard: string[] = [];
+    client.terminals().onData((id, data) => { heard.push(`${id.slice(5, 13)} data ${JSON.stringify(data).slice(0, 300)}`); });
+    client.terminals().onExit((id, code) => { heard.push(`${id.slice(5, 13)} exit ${code}`); });
     const opened = await within(30_000, 'a terminal opening in the host', client.terminals().openReady({ workspaceId: 'ws', cwd: home }), tell);
+    await sleep(1_000);
+    console.log(`[host-pty-fds] opened ${JSON.stringify(opened)}; the terminal said: ${JSON.stringify(heard)}`);
     // The helper and its shell, found in the process table by this run's marker — not by the pid the open reported (CI
     // measured it 0 on this path). The tree is printed, so a run that finds no helper still says what it did find.
     const helperPid = await until('the terminal\'s fancy-pty helper', () => descendants(record.pid).find((p) => /fancy-pty-helper/.test(cmdline(p))) ?? null, 15_000)
