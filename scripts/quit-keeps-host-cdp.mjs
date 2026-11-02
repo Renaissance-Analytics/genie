@@ -4,11 +4,14 @@
  *
  *   node scripts/quit-keeps-host-cdp.mjs
  *
- * Three agents stream, the person answers the quit "Just close the UI", Genie is opened again, and:
- *   the SAME genie-host pid, the SAME provider pid per agent, and every ledger has grown — with every tick the providers
- *   streamed while no window was open, in order. Then "Shut down everything": the host and the providers are gone.
+ * Three agents stream; the person answers the quit "Just close the UI" (the owner, 2026-11-02: "Keep the tray up"), and:
+ *   every window closes, the window process STAYS as the tray, and the tray says the host runs the agents;
+ *   Open Genie from the tray builds the window again in that same process: the SAME genie-host pid, the SAME provider pid per
+ *   agent, and every ledger has grown — with every tick the providers streamed while no window was open, in order;
+ *   closed again from the tray, a SECOND LAUNCH builds the window again in the same process (the single-instance lock);
+ *   "Shut down everything" from the tray ends the window process, the host and the providers.
  *
- * HOW IT RUNS. It launches Genie itself, twice (the UI is closed in between, so the launch cannot be the caller's), from the
+ * HOW IT RUNS. It launches Genie itself, from the
  * root of a built and SEEDED tree (smoke-seed.mjs), with nothing of Genie's on the debugger port: vm-smoke stops its own
  * Electron first. Launch flags follow the caller's session: `--no-sandbox` on Linux, `--ozone-platform=$XDG_SESSION_TYPE`
  * when that is x11 or wayland, anything else in QUIT_CDP_ARGS. Providers are the stub app server (scripts/stub-codex.mjs)
@@ -19,8 +22,10 @@
  * HOW IT ANSWERS THE QUIT. The question is a native dialog CDP cannot click. The WINDOW process is launched with
  * `--inspect` (a launch flag, like `--remote-debugging-port`; the host is spawned without it). Over that inspector the
  * script replaces the person's CLICK — `dialog.showMessageBoxSync` answers a button index and writes down what it was asked
- * — and calls `app.quit()`. Everything after the click is the product's own: before-quit, quitPlan, quitAnswer, runQuit,
- * engine.leaveRunning. What the dialog was asked is checked, so a two-answer question (no host) cannot pass.
+ * — and calls `app.quit()`. Everything after the click is the product's own: before-quit, quitPlan, quitAnswer, closeUi.
+ * What the dialog was asked is checked, so a two-answer question (no host) cannot pass. The TRAY is read and clicked the
+ * same way: main.ts's read-only probe (`Symbol.for('genie.tray')`) says what it shows, and an item's click is the very
+ * handler the tray's menu runs — Electron's Tray can be neither asked nor clicked from outside.
  *
  * IT NEVER HANGS SILENTLY (batch L2: a first version printed nothing for 600 s before `timeout` killed it). Every step prints
  * a line BEFORE it acts, with the time since start. Every fetch, CDP call and wait has its own deadline, and a missed one
@@ -274,6 +279,51 @@ function whyStillRunning(app) {
         : 'still running after 60 s (no debugger hold in its log: the product did not exit)';
 }
 
+// ---------------------------------------------------------------- the tray-only Genie, read over the main process's inspector
+/** How many windows the window process has now. */
+const windowsIn = (inspector) => inspector.evaluate(`(() => {
+    const require = process.getBuiltinModule('node:module').createRequire(process.execPath);
+    return require('electron').BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length;
+})()`, 10_000);
+/** The tray, as main.ts's read-only probe says it (Electron's Tray cannot be asked): present, tooltip, menu labels. */
+const trayState = (inspector) => inspector.evaluate(`(() => {
+    const t = globalThis[Symbol.for('genie.tray')];
+    return t ? { present: t.present(), tooltip: t.tooltip(), labels: t.labels() } : null;
+})()`, 10_000).catch(() => null);
+/** A tray menu item's own click, after `delayMs` (so an inspector session can let go first). 'ok' when the item is there. */
+const trayClick = (inspector, label, delayMs) => inspector.evaluate(`(() => {
+    const t = globalThis[Symbol.for('genie.tray')];
+    if (!t) return 'no tray probe in this build';
+    if (!t.labels().includes(${JSON.stringify(label)})) return 'the tray offers no ' + ${JSON.stringify(label)} + ': ' + JSON.stringify(t.labels());
+    setTimeout(() => t.click(${JSON.stringify(label)}), ${delayMs});
+    return 'ok';
+})()`, 10_000).catch((e) => String(e?.message ?? e));
+/** Is there a page on the debugger port now? (Bounded.) */
+async function pageOn(port) {
+    try {
+        const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3_000) })).json();
+        return targets.some((t) => t.type === 'page' && t.webSocketDebuggerUrl);
+    } catch { return false; }
+}
+/** The window built again in the SAME process: its new page, its inspector (the same one), its pid. */
+async function reopened(first, label, id) {
+    step(`${id}w`, `waiting for the window to come back on the debugger port ${PORT} (≤ 60 s)`);
+    const page = await targetOn(PORT, 'page', 60_000);
+    const cdp = await Cdp.connect(page.webSocketDebuggerUrl, `${label} page`);
+    const ready = await until(() => cdp.evaluate('typeof window.genie === "object" && document.readyState === "complete"', 5_000), 60_000);
+    if (ready !== true) throw new Error(`${label}: window.genie never appeared within 60 s`);
+    const inspector = first.inspector ?? await Cdp.connect((await targetOn(INSPECT, 'node', 15_000)).webSocketDebuggerUrl, `${label} inspector`);
+    const windowPid = await inspector.evaluate('process.pid', 10_000);
+    return { app: first.app, cdp, inspector, windowPid };
+}
+/** A second launch, as a person makes one: it hands over through the single-instance lock and exits. */
+function launchSecond() {
+    mkdirSync(OUT, { recursive: true });
+    const out = openSync(join(OUT, 'quit-keeps-host-second-launch.log'), 'a');
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', ['electron', '.', ...launchArgs()], { stdio: ['ignore', out, out], shell: WIN, windowsHide: true });
+    return new Promise((r) => { child.once('exit', (code, signal) => r({ code, signal })); child.once('error', (e) => r({ error: String(e) })); });
+}
+
 // ---------------------------------------------------------------- the ledger's word: which pid streams, up to which tick
 async function ticksOf(cdp, agentId) {
     const json = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(agentId)}).then((d) => JSON.stringify({ running: d?.session?.running ?? null, rows: d?.rows ?? [] }))`, 10_000);
@@ -438,34 +488,42 @@ try {
     const controlFailures = failures.slice(failuresBeforeRun);
     if (controlFailures.length) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
 
-    // -------------------------------------------------------------------------------- "Just close the UI"
-    // The logs are read from HERE on: an older line (an earlier launch's adopt of the same host) must not answer for this one.
-    const hostLogAt = readOr(HOST_LOG).length;
-    const lifecycleAt = readOr(LIFECYCLE).length;
+    // -------------------------------------------------------------------------------- "Just close the UI": the tray stays
+    // The logs are read from HERE on: an older line must not answer for this run.
+    let lifecycleAt = readOr(LIFECYCLE).length;
     step('10', 'answering the quit "Just close the UI" (button 1)');
     const took = await answerTheQuit(a.inspector, 1);
     check(took === 'ok', '10. the quit is answered by button 1 (the person\'s click, substituted)', String(took));
-    step('11', 'waiting for the window process to exit (≤ 60 s)');
-    const exit = await exitWithin(a.app, 60_000);
-    check(exit !== null, '11. the UI closed: the window process exited', exit ? `code ${exit.code} signal ${exit.signal}` : whyStillRunning(a.app));
+    // The window process stays (the tray): a new inspector session on the same process.
+    a.inspector = await Cdp.connect((await targetOn(INSPECT, 'node', 15_000)).webSocketDebuggerUrl, 'first inspector (tray)');
+    step('11', 'waiting for every window to close while the window process lives (≤ 30 s)');
+    const closed = await until(async () => (await windowsIn(a.inspector)) === 0 ? true : null, 30_000);
+    check(closed === true && !a.app.gone && alive(a.windowPid), '11. the UI closed: no window, and the window process ALIVE (Genie stays in the tray)', `windows ${await windowsIn(a.inspector).catch(() => '?')}, process ${a.windowPid} ${alive(a.windowPid) ? 'alive' : 'GONE'}`);
     const q = asked();
     check(JSON.stringify(q?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '12. the quit ASKED the two answers, and button 1 was "Just close the UI"', JSON.stringify(q));
-    check(!alive(a.windowPid), '13. the window process is gone (the OS says so)', `pid ${a.windowPid}`);
-    a.cdp.close(); a.inspector.close();
+    const t1 = await trayState(a.inspector);
+    // At least this run's agents (an earlier smoke step may have left its own agent running too).
+    const runningSaid = Number(/host running: (\d+) agents?/.exec(t1?.tooltip ?? '')?.[1] ?? 0);
+    check(t1?.present === true && runningSaid >= AGENTS && ['Open Genie', 'Restart', 'Shut down everything'].every((l) => t1.labels.includes(l)) && !t1.labels.includes('Just close the UI'),
+        '13. the TRAY is there, says the host runs the agents, and offers Open Genie, Restart, Shut down everything (no "Just close the UI")', JSON.stringify(t1));
+    a.cdp.close();
 
-    // -------------------------------------------------------------------------------- no window open
-    step('14', `no window open: waiting ${Math.round(CLOSED_MS / 1000)} s`);
+    // -------------------------------------------------------------------------------- tray only
+    step('14', `tray only: waiting ${Math.round(CLOSED_MS / 1000)} s`);
     await sleep(CLOSED_MS);
     check(alive(hostPid), `14. with NO window for ${Math.round(CLOSED_MS / 1000)} s, the host is alive`, `pid ${hostPid}`);
     for (const ag of agents) check(alive(ag.pid), `15. with no window, ${ag.name}'s provider is alive`, `pid ${ag.pid}`);
-    check(/left running: a window closed and kept this host/.test(readOr(HOST_LOG).slice(hostLogAt)), '16. the host heard it was left running (its own log)', HOST_LOG);
-    check(/agent host left running: the UI closed/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '17. the window let go saying so (lifecycle log)', LIFECYCLE);
+    check(/ui closed \(the quit’s answer\): Genie stays in the tray/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '16. the window process said so (lifecycle log)', LIFECYCLE);
+    check(!(await pageOn(PORT)), '17. no page on the debugger port while tray-only (the window really went)');
 
-    // -------------------------------------------------------------------------------- open Genie again
-    const reopenAt = readOr(LIFECYCLE).length;
-    b = await open('second', 18);
-    check(hostRecord()?.pid === hostPid, '18. the SAME host pid (host.json)', `${hostPid} → ${hostRecord()?.pid}`);
-    check(readOr(LIFECYCLE).slice(reopenAt).includes(`agent host adopted pid=${hostPid} `), '19. the new window ADOPTED that host (lifecycle log)', `adopted pid=${hostPid}`);
+    // -------------------------------------------------------------------------------- Open Genie, from the tray
+    lifecycleAt = readOr(LIFECYCLE).length;
+    step('18', 'Open Genie from the tray: the window built again in the SAME process (≤ 60 s)');
+    check(await trayClick(a.inspector, 'Open Genie', 0) === 'ok', '18a. the tray\'s Open Genie was clicked (its own handler)');
+    b = await reopened(a, 'second', 18);
+    check(b.windowPid === a.windowPid, '18. the window came back in the SAME window process (no second Genie)', `${a.windowPid} → ${b.windowPid}`);
+    check(hostRecord()?.pid === hostPid, '19. the SAME host pid (host.json)', `${hostPid} → ${hostRecord()?.pid}`);
+    check(/window built again \(tray: Open\): the same host/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '19b. the window process built it again for the tray\'s Open (lifecycle log)');
     for (const ag of agents) {
         step('20', `${ag.name} after the reopen: its ledger past tick ${ag.before.max} (≤ 30 s)`);
         const after = await until(async () => { const x = await ticksOf(b.cdp, ag.id); return x.max > ag.before.max ? x : null; }, 30_000) ?? await ticksOf(b.cdp, ag.id);
@@ -477,15 +535,30 @@ try {
         check(gap === null, `23. ${ag.name}: every tick streamed while no window was open is in the ledger, in order`, gap === null ? `${ag.before.max + 1}..${after.max}` : `tick ${gap} missing`);
     }
 
-    // -------------------------------------------------------------------------------- "Shut down everything" (the other answer)
-    step('24', 'answering the quit "Shut down everything" (button 2)');
-    const took2 = await answerTheQuit(b.inspector, 2);
-    check(took2 === 'ok', '24. the quit is answered by button 2', String(took2));
-    step('25', 'waiting for the window process to exit (≤ 60 s)');
-    const exit2 = await exitWithin(b.app, 60_000);
-    check(exit2 !== null, '25. the window process exited', exit2 ? `code ${exit2.code}` : whyStillRunning(b.app));
-    const q2 = asked();
-    check(JSON.stringify(q2?.buttons) === JSON.stringify(['Cancel', 'Just close the UI', 'Shut down everything']), '26. it asked the two answers; button 2 was "Shut down everything"', JSON.stringify(q2));
+    // -------------------------------------------------------------------------------- tray-only again, then a SECOND LAUNCH
+    step('24', 'Just close the UI from the tray, then launch Genie again: the window comes back in the same process (≤ 60 s)');
+    check(await trayClick(b.inspector, 'Just close the UI', 0) === 'ok', '24a. the tray\'s Just close the UI was clicked');
+    const closedAgain = await until(async () => (await windowsIn(b.inspector)) === 0 ? true : null, 30_000);
+    check(closedAgain === true && alive(a.windowPid), '24. the UI closed again from the tray; the window process alive');
+    b.cdp.close();
+    lifecycleAt = readOr(LIFECYCLE).length;
+    const second = launchSecond();
+    const secondExit = await Promise.race([second, sleep(30_000).then(() => null)]);
+    check(secondExit !== null, '25a. the second launch handed over and exited (the single-instance lock)', JSON.stringify(secondExit));
+    const c = await reopened(a, 'third', 25);
+    check(c.windowPid === a.windowPid, '25. a second launch built the window again in the SAME process', `${a.windowPid} → ${c.windowPid}`);
+    check(/window built again \(second launch\): the same host/.test(readOr(LIFECYCLE).slice(lifecycleAt)), '25b. for the second launch (lifecycle log)');
+    c.cdp.close();
+    b.cdp = null;
+
+    // -------------------------------------------------------------------------------- Shut down everything, from the tray
+    step('26', 'Shut down everything from the tray (its own handler), then wait for the window process to exit (≤ 60 s)');
+    check(await trayClick(c.inspector, 'Shut down everything', 1_000) === 'ok', '26a. the tray\'s Shut down everything was clicked');
+    // The inspector session lets go before the quit (batch M: an attached session holds a quitting Node process).
+    await c.inspector.closed(5_000);
+    a.inspector = null; b.inspector = null;
+    const exit = await exitWithin(a.app, 60_000);
+    check(exit !== null, '26. the window process EXITED', exit ? `code ${exit.code}` : whyStillRunning(a.app));
     step('27', `waiting for the host pid ${hostPid} to end (≤ 30 s)`);
     const hostGone = await until(() => !alive(hostPid), 30_000);
     check(hostGone === true, '27. "Shut down everything" ENDED the host', `pid ${hostPid}`);

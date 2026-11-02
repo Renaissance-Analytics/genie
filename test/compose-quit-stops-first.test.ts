@@ -95,19 +95,3 @@ it('while the `.env` pass still waits on git, every supervised process is alread
     await shutting;
 });
 
-/**
- * "JUST CLOSE THE UI" (the host split, P1b) closes the window's own work and LEAVES what the host supervises: genie-host's
- * supervisor keeps the sites and workers running with the UI closed (P3.3b), so the window must not stop them on the way
- * out. Counted against what ran: the same site that a full shutdown stops (above) is left running here.
- */
-it('shutdown("window") stops no supervised process — the host keeps them', async () => {
-    const site = { name: 'example', mode: 'proxy' as const, devServer: { stack: 'node' as const, command: 'npm run dev -- --port {port}' }, hostPort: null, root: null, spa: false };
-    await handleFeatureAction(services, { kind: 'hosting.createSite', workspaceId: 'example', repoPath: join(dir, 'example'), form: site }, state);
-    for (let i = 0; i < 200 && opened.length === 0; i++) await new Promise((r) => setTimeout(r, 0));
-    const running = [...opened];
-    // Positive control: the site's dev server runs in a pty.
-    expect(running.length).toBeGreaterThan(0);
-    release();
-    await services.shutdown('window');
-    expect(killed).toEqual([]);
-});

@@ -70,7 +70,7 @@ function hostPlan(runningAgents: readonly string[], terminals: number, processes
         ends.push(processes === 1 ? 'stops it' : 'stops the processes');
     }
     const one = agents + terminals + processes === 1;
-    const message = `${listed(parts)}. Just close the UI and ${one ? 'it keeps' : 'they keep'} running in Genie’s host; the next Genie window picks ${one ? 'it' : 'them'} up. Shut down everything ${listed(ends)}.`;
+    const message = `${listed(parts)}. Just close the UI and ${one ? 'it keeps' : 'they keep'} running, and Genie stays in the tray. Shut down everything ${listed(ends)}.`;
     return { confirm: true, defaultChoice: 'cancel', title: 'Quit Genie?', message, buttons: ['Cancel', 'Just close the UI', 'Shut down everything'] };
 }
 
@@ -90,8 +90,8 @@ export function quitAnswer(plan: Extract<QuitPlan, { confirm: true }>, index: nu
  * write is in flight. Whatever the sequence, the person is asked at most once, the running set is
  * recorded at most once, and the shutdown (sessions, services, terminals) runs EXACTLY once.
  *
- * "Just close the UI" records nothing — the agents go on running in the host, and nothing has to be revived — and runs
- * its own step once: the window closes, the host is told it is left running.
+ * "Just close the UI" is NOT a quit (the owner, 2026-11-02: "Keep the tray up"): the windows close and this process stays as
+ * the tray while genie-host runs anything (core/tray-only.ts). Nothing is recorded or confirmed, and a later quit asks again.
  *
  * `quitting` is what the main window's close reads (core/tray-resident.ts): until a quit is
  * confirmed, closing the window hides it; once confirmed, the close is real, or Electron would
@@ -104,7 +104,7 @@ export type QuitStep =
     | 'record'
     /** Run the shutdown now and let the quit proceed. */
     | 'shut-down'
-    /** "Just close the UI": close this window's work, leave the host running, then let the quit proceed. */
+    /** "Just close the UI": prevent this quit and close the windows; the process stays as the tray. Nothing is confirmed. */
     | 'close-ui'
     /** The shutdown already ran: let the quit proceed, do nothing twice. */
     | 'pass';
@@ -113,15 +113,15 @@ export interface QuitSequence {
     readonly quitting: boolean;
     /** The OS is ending the session (shutdown, restart, sign-out): no question is asked — nothing could answer it. Shuts everything down. */
     force(): void;
-    /** The answer is already given (the tray's "Just close the UI" / "Shut down everything"): the quit asks nothing. */
-    choose(answer: Exclude<QuitAnswer, 'cancel'>): void;
+    /** The answer is already given (the tray's Shut down everything and Restart, the tray-only exit): the quit asks nothing. */
+    choose(answer: 'shut-down'): void;
     /** An upgrade's drain recorded the running set itself; a later quit must not overwrite it with the empty set it leaves. */
     markRecorded(): void;
     beforeQuit(input: { readonly ready: boolean; readonly plan: () => QuitPlan; readonly ask: (plan: Extract<QuitPlan, { confirm: true }>) => QuitAnswer }): QuitStep;
 }
 
 export function quitSequence(): QuitSequence {
-    let chosen: Exclude<QuitAnswer, 'cancel'> | null = null;
+    let chosen: 'shut-down' | null = null;
     let forced = false;
     let recorded = false;
     let done = false;
@@ -139,11 +139,9 @@ export function quitSequence(): QuitSequence {
                     if (p.confirm) answer = ask(p);
                 }
                 if (answer === 'cancel') return 'cancel';
+                // Not a quit: the windows close, the process stays as the tray, and the next quit asks again.
+                if (answer === 'close-ui') return 'close-ui';
                 chosen = answer;
-            }
-            if (chosen === 'close-ui') {
-                done = true;
-                return 'close-ui';
             }
             if (!recorded && ready) {
                 recorded = true;
@@ -159,34 +157,23 @@ export function quitSequence(): QuitSequence {
 export interface QuitPorts {
     /** Every agent session stopped (in the host, or in this process on the emergency path). */
     stopAgents(): void;
-    /**
-     * What this window process runs: `everything` stops what it drives in the host too (the supervised processes);
-     * `window` leaves those to the host.
-     */
-    closeWindow(how: 'everything' | 'window'): void;
+    /** What this window process runs, and what it drives in the host (the supervised processes). */
+    closeWindow(): void;
     /** Every terminal ended (§7.1). */
     closeTerminals(): void;
     /** The stops' writes landed (SessionHost.drained), bounded by the caller. */
     drained(): Promise<unknown>;
     /** The host ended gracefully (`engine.shutdown`). */
     shutDownHost(): Promise<unknown>;
-    /** The host told it is left running, and the link let go — never `engine.shutdown`. */
-    leaveHostRunning(): Promise<unknown>;
 }
 
 /**
- * RUN THE ANSWER. "Just close the UI" stops no agent, closes no terminal and never ends the host. "Shut down everything" is
- * the graceful stop it always was: agents first, then this window's work and the terminals, the writes drained, and only
- * then the host ended — a drain that fails still ends it, so a quit is never left half done.
+ * SHUT DOWN EVERYTHING: the graceful stop it always was — agents first, then this window's work and the terminals, the
+ * writes drained, and only then the host ended (a drain that fails still ends it, so a quit is never left half done).
  */
-export async function runQuit(step: 'shut-down' | 'close-ui', ports: QuitPorts): Promise<void> {
-    if (step === 'close-ui') {
-        ports.closeWindow('window');
-        await ports.leaveHostRunning();
-        return;
-    }
+export async function runQuit(ports: QuitPorts): Promise<void> {
     ports.stopAgents();
-    ports.closeWindow('everything');
+    ports.closeWindow();
     ports.closeTerminals();
     await ports.drained().catch(() => undefined);
     await ports.shutDownHost();

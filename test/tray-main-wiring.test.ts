@@ -22,7 +22,9 @@ describe('main.ts wiring', () => {
 
     it('the main window boots by showOnBoot (start minimised) and its close goes through wireCloseToTray with the quit sequence', () => {
         const src = main();
-        expect(src).toMatch(/window = createWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
+        // Built by mountMainWindow (P1b: built again after "Just close the UI"), shown at boot by showOnBoot.
+        expect(src).toMatch(/mountMainWindow\(showOnBoot\(\{ startMinimized: composed\.settings\.snapshot\(\)\.start_minimized === true, argv: process\.argv \}\)\);/);
+        expect(src).toMatch(/window = createWindow\(show\);/);
         // Shown ACTIVE: this is the launch the person made (genie#1235: only a gesture may take focus).
         expect(src).toMatch(/if \(show\) onceShowable\(win, process\.platform, \(\) => showWhenReady\(win, \{ activation: 'user-gesture'/);
         expect(src).toMatch(/wireCloseToTray\(window, \{[\s\S]*?quitting: \(\) => quit\.quitting,/);
@@ -76,7 +78,7 @@ describe('main.ts wiring', () => {
         expect(src).toMatch(/if \(step === 'cancel'\) \{ event\.preventDefault\(\); return; \}/);
         // The shutdown pass holds the quit until the sessions' writes land (quit-drains-writes.test.ts), then runs the answer:
         // the stops are core/quit.ts runQuit's, in order (quit-sequence.test.ts), through main's quitPorts (P1b).
-        expect(src).toMatch(/if \(step === 'pass'\) return;\s*\n\s*event\.preventDefault\(\);\s*\n\s*let bound: ReturnType<typeof setTimeout> \| undefined;\s*\n\s*const done = runQuit\(step, quitPorts\)/);
+        expect(src).toMatch(/if \(step === 'pass'\) return;\s*\n\s*event\.preventDefault\(\);\s*\n\s*let bound: ReturnType<typeof setTimeout> \| undefined;\s*\n\s*const done = runQuit\(quitPorts\)/);
         expect(src).not.toMatch(/quitConfirmed|runningRecorded/);
     });
 

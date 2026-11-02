@@ -151,7 +151,7 @@ const count = (re: RegExp) => (main.match(re) ?? []).length;
 describe('the quit’s shutdown pass (main.ts before-quit)', () => {
     it('holds the quit, drains the sessions’ writes (bounded), and only then quits again', () => {
         // The hold is taken in the shutdown pass, and the answer's work (core/quit.ts runQuit: the stops, then the drain) starts.
-        expect(count(/if \(step === 'pass'\) return;\s*event\.preventDefault\(\);\s*let bound: ReturnType<typeof setTimeout> \| undefined;\s*const done = runQuit\(step, quitPorts\)/g)).toBe(1);
+        expect(count(/if \(step === 'pass'\) return;\s*event\.preventDefault\(\);\s*let bound: ReturnType<typeof setTimeout> \| undefined;\s*const done = runQuit\(quitPorts\)/g)).toBe(1);
         // The pass ends by starting the bounded wait: the race is the handler's last statement.
         expect(count(/void Promise\.race\(\[done, new Promise<void>\(\(r\) => \{ bound = setTimeout\(r, QUIT_WRITES_MS\); \}\)\]\)\s*\.finally\(\(\) => \{ clearTimeout\(bound\); app\.quit\(\); \}\);\s*\}\);/g)).toBe(1);
         // The stop that precedes the drain is the agents' (quit-sequence.test.ts holds the order).

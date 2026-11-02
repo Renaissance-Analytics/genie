@@ -1,5 +1,6 @@
 import { Menu, Tray, nativeImage, type NativeImage } from 'electron';
 import { withAttentionDot } from '../core/tray-attention.js';
+import { activityWords, type HostActivity } from '../core/tray-only.js';
 import type { UpdateState } from './updater.js';
 
 /**
@@ -20,11 +21,16 @@ export interface TrayHandlers {
     readonly onCheckUpdates: () => void;
     readonly onQuit: () => void;
     /**
-     * QUIT KEEPS THE HOST (P1b; the owner's decision 5): while genie-host runs the agents, the tray offers the quit's two
-     * answers instead of Quit — "Just close the UI" (the host keeps what runs) and "Shut down everything". Both or neither.
+     * THE TRAY WHILE GENIE-HOST RUNS (P1b; the owner, 2026-11-02: "as long as any genie services are running, that tray
+     * should be there so users can shut them down or restart if needed"). In place of Quit: "Just close the UI" while a
+     * window is open (`uiOpen`), then Restart and Shut down everything. With no window (tray-only) Open Genie rebuilds one.
+     * All three, or none.
      */
     readonly onCloseUi?: () => void;
+    readonly onRestart?: () => void;
     readonly onShutDown?: () => void;
+    /** Whether a Genie window is open now: without one, "Just close the UI" has nothing to close. */
+    readonly uiOpen?: () => boolean;
     /** `Resume now` for a held provider login (Tynn #794): open it at once, its held agents go on. */
     readonly onResumeLimit?: (provider: string) => void;
     /** `⬆ Update to vX…` (Tynn #761): opens Genie, where the title bar's chip downloads and restarts it. */
@@ -109,20 +115,25 @@ export function trayMenuTemplate(handlers: TrayHandlers, held: readonly HeldLogi
         { label: 'Settings…', click: handlers.onSettings },
         ...(handlers.onTaskManager ? [{ label: 'Task Manager…', click: handlers.onTaskManager }] : []),
         { label: 'Check for updates', click: handlers.onCheckUpdates },
-        ...(handlers.onCloseUi && handlers.onShutDown
-            ? [{ type: 'separator' as const }, { label: 'Just close the UI', click: handlers.onCloseUi }, { label: 'Shut down everything', click: handlers.onShutDown }]
+        ...(handlers.onCloseUi && handlers.onRestart && handlers.onShutDown
+            ? [
+                { type: 'separator' as const },
+                ...(handlers.uiOpen?.() !== false ? [{ label: 'Just close the UI', click: handlers.onCloseUi }] : []),
+                { label: 'Restart', click: handlers.onRestart },
+                { label: 'Shut down everything', click: handlers.onShutDown },
+            ]
             : [{ label: 'Quit Genie', click: handlers.onQuit }]),
     ];
 }
 
 /**
- * The tray's tooltip: how many Deck items wait on the person (first), what is held, or just Genie. With genie-host
- * (`hostAgents` not null, P1b) it says the host is running and how many agents it runs — what a person with no window
- * open can see.
+ * The tray's tooltip: how many Deck items wait on the person (first), what is held, or just Genie. With genie-host (`host`
+ * not null, P1b) it says the host is running and WHAT it runs — what a person with no window open can see.
  */
-export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false, waiting = 0, hostAgents: number | null = null): string {
-    const host = hostAgents === null ? [] : [hostAgents > 0 ? `host running ${hostAgents} ${hostAgents === 1 ? 'agent' : 'agents'}` : 'host running'];
-    const parts = [...(waiting > 0 ? [`${waiting} waiting on you`] : []), ...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : []), ...host];
+export function trayTooltip(held: readonly HeldLogin[], signedOut: readonly string[] = [], paused: readonly string[] = [], designLogin = false, waiting = 0, host: HostActivity | null = null): string {
+    const words = host === null ? null : activityWords(host);
+    const hostPart = words === null ? [] : [words ? `host running: ${words}` : 'host running'];
+    const parts = [...(waiting > 0 ? [`${waiting} waiting on you`] : []), ...held.map((h) => `${loginName(h.provider)}: ${h.words}`), ...signedOut.map((p) => `${loginName(p)}: signed out`), ...paused.map((p) => `${loginName(p)}: account paused`), ...(designLogin ? ['Claude Design: login needed'] : []), ...hostPart];
     return parts.length === 0 ? 'Genie' : `Genie — ${parts.join('; ')}`;
 }
 
