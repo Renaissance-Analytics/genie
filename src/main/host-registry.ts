@@ -1,6 +1,6 @@
 import { slugsFor } from '../core/address.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
-import { folderName } from '../core/workspace-name.js';
+import { workspaceNameFor } from './workspace-names.js';
 import type { Store, WorkspaceRecord } from './store.js';
 
 /**
@@ -8,9 +8,8 @@ import type { Store, WorkspaceRecord } from './store.js';
  * agents.json (windows write through it, agent-stores-host.ts); this is what it reads of them — the roster its tools and
  * approvals use, a workspace's path and default agent — with or without a window. It re-reads after every write.
  *
- * The workspaces' address slugs come from their NAMES, which the window reads from each envelope's project.json; the
- * window says them (host-mcp.ts `WindowView`). With no window yet the folder name stands in, as Genie names a workspace
- * whose project.json it has not read.
+ * The workspaces' address slugs come from their NAMES: project.json's `name`, else the folder (workspace-names.ts) — read
+ * here as the window reads them, so an address resolves the same with no window (P3.3a). A name a window says wins.
  */
 export class HostRegistry {
     readonly #store: Pick<Store, 'readWorkspaces' | 'readAgents'>;
@@ -53,6 +52,6 @@ export class HostRegistry {
     }
 
     workspaceSlugs(): Map<string, string> {
-        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#names.get(w.id) ?? folderName(w.path) })));
+        return slugsFor(this.#workspaces.map((w) => ({ id: w.id, path: w.path, name: this.#names.get(w.id) ?? workspaceNameFor(w.path) })));
     }
 }
