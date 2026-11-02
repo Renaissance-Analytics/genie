@@ -1,5 +1,6 @@
 import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
+import type { KeyringService } from './keyring-service.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
@@ -66,6 +67,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** The keyring card, as the host found it (P3.4 cut c). */
+    readonly keyring?: KeyringService;
     /** The host's GitHub account (P3.4 cut c). */
     readonly github?: GithubAccountService;
     /** What the OS said about proxies, as a window hands it over. */

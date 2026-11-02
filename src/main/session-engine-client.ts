@@ -1,3 +1,4 @@
+import { KeyringReplica } from './keyring-replica.js';
 import { GithubAccountReplica } from './github-account-replica.js';
 import type { GithubAccountDump } from './github-account-service.js';
 import { TynnAccountReplica } from './tynn-account-replica.js';
@@ -135,6 +136,7 @@ export class SessionEngineClient {
     #flows: FlowsReplica | null = null;
     #tynn: TynnAccountReplica | null = null;
     #github: GithubAccountReplica | null = null;
+    #keyring: KeyringReplica | null = null;
     #terminals: TerminalsReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
@@ -491,6 +493,12 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#terminals;
+    }
+
+    /** The keyring card, as genie-host found it (P3.4 cut c). */
+    keyring(): KeyringReplica {
+        this.#keyring ??= new KeyringReplica();
+        return this.#keyring;
     }
 
     /** genie-host's GitHub account (P3.4 cut c). */
