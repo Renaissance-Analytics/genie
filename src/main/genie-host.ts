@@ -1,3 +1,4 @@
+import { hostname } from 'node:os';
 import './close-inherited-fds.js';
 // ^ FIRST (bug A, VM job 76): the window's sockets — its DevTools port among them — never live on in this host or below it.
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
@@ -43,6 +44,11 @@ import { GithubAccount } from './github-account.js';
 import { GithubAccountService } from './github-account-service.js';
 import { hostHttpsFetch } from './host-https-fetch.js';
 import { hostAgentKeys } from './host-agent-keys.js';
+import { readFile as readFileText } from 'node:fs/promises';
+import { machineKeyOf, readMachineId } from './machine-key.js';
+import { execFileText } from './toolchain-runner.js';
+import { workstationKeyStore } from './workstation-identity.js';
+import { WorkstationService } from './workstation-service.js';
 import { KeyringService } from './keyring-service.js';
 import { hostTynnRecovery } from './host-tynn-recovery.js';
 import { hostTynnPorts } from './host-tynn-account.js';
@@ -277,6 +283,18 @@ async function main(): Promise<void> {
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
         tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
         github: new GithubAccountService(githubOpening),
+        // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
+        workstation: new WorkstationService({
+            store: workstationKeyStore(join(home, 'workstation.json'), keychain),
+            request: async (path, init) => (await tynnOpening).request(path, init),
+            host: () => TYNN_HOST,
+            hostname,
+            machineKey: () => readMachineId({
+                platform: process.platform,
+                readFile: (path) => readFileText(path, 'utf8'),
+                exec: (command, args) => execFileText(command, [...args], { timeoutMs: 10_000 }),
+            }).then((id) => (id ? machineKeyOf(id) : null)),
+        }),
         // THE KEYRING CARD READS THIS HOST (P3.4 cut c). When the keychain comes to answer, what reads secrets reads again, with nobody restarting anything.
         keyring: new KeyringService(keychainOpening.then((opened) => opened.keyring, () => null), {
             onReady: () => {

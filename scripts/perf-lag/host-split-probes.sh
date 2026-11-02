@@ -437,8 +437,28 @@ probe "the-keychain-coming-back-wakes-the-readers" src/main/keyring-service.ts \
     test/keyring-host.test.ts "whoever reads secrets reads again"
 
 
+# P3.4: this machine's key is the host's, and a key that cannot be read never enrolls a new workstation.
+probe "a-locked-keychain-never-enrolls" src/main/workstation-identity.ts \
+    "            if (key.kind === 'unavailable') throw new Error(" "            if (key.kind === 'unavailable') return null; if (false as boolean) throw new Error(" \
+    test/workstation-host.test.ts "a locked keychain REFUSES to read"
+
+probe "an-unmoved-seal-never-enrolls" src/main/workstation-identity.ts \
+    "                if (row.keyEnc) throw new Error(" "                if (false as boolean) throw new Error(" \
+    test/workstation-host.test.ts "A SEAL THAT HAS NOT MOVED YET"
+
+probe "only-a-real-key-moves" src/main/workstation-identity.ts \
+    "                    createPrivateKey(pem);
+                    return { kind: 'value', value: pem };" "                    return { kind: 'value', value: pem };" \
+    test/workstation-host.test.ts "a seal that will not open"
+
+probe "no-method-hands-out-the-key" src/main/workstation-service.ts \
+    "            case 'identity': return this.identity(host);" "            case 'identity': return this.identity(host);
+            case 'read': return this.#options.store.read(host);" \
+    test/workstation-host.test.ts "no method hands out the key"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1

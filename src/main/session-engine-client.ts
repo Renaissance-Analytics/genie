@@ -503,7 +503,11 @@ export class SessionEngineClient {
 
     /** This machine as a workstation: genie-host holds the key and signs (P3.4). */
     workstation(): WorkstationReplica {
-        this.#workstation ??= new WorkstationReplica();
+        this.#workstation ??= new WorkstationReplica(async (method, args) => {
+            const reply = await this.call('engine.workstation', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
         return this.#workstation;
     }
 

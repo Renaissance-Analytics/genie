@@ -140,13 +140,13 @@ export interface RelayHostPorts {
 }
 
 /** The host's own calls to Tynn: its proof header, no session, no cookies. */
-export function relayHostPorts(input: { tynnHost: string; workstationId: string; authHeader: () => string; fetch: typeof fetch }): RelayHostPorts {
+export function relayHostPorts(input: { tynnHost: string; workstationId: string; authHeader: () => string | Promise<string>; fetch: typeof fetch }): RelayHostPorts {
     const base = input.tynnHost.replace(/\/+$/, '');
     return {
         async ticket() {
             let res: Response;
             try {
-                res = await input.fetch(`${base}/api/v1/workstations/${encodeURIComponent(input.workstationId)}/relay-ticket`, { method: 'POST', headers: { accept: 'application/json', authorization: input.authHeader() } });
+                res = await input.fetch(`${base}/api/v1/workstations/${encodeURIComponent(input.workstationId)}/relay-ticket`, { method: 'POST', headers: { accept: 'application/json', authorization: await input.authHeader() } });
             } catch (error) {
                 throw new Error(`Tynn could not be reached (${error instanceof Error ? error.message : String(error)})`);
             }
@@ -210,7 +210,7 @@ export function startRelayHost(input: {
     socket: RelaySocketFactory;
     workstationId: string;
     fingerprint: string;
-    sign: (data: Buffer) => Buffer;
+    sign: (data: Buffer) => Buffer | Promise<Buffer>;
     attach?: (transport: ServerTransport) => () => void;
     onStatus?: (status: RelayHostStatus) => void;
     reconnect?: { minMs: number; maxMs: number };

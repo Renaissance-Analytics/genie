@@ -1,6 +1,8 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import type { MigrationSource, OldRead } from './keychain-migration.js';
+import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
 
 /**
  * THIS MACHINE AS A TYNN WORKSTATION (Tynn #836) — Genie 1's Tynn network, as it was
@@ -13,7 +15,7 @@ import { dirname } from 'node:path';
  * hello with the same key.
  *
  * One identity per Tynn host (tynn.ai and a dev Tynn are different workstations). The private key is stored only after
- * enroll succeeds, and only encrypted (Electron's safeStorage, passed in); without OS encryption nothing is written.
+ * enroll succeeds, and only in the keychain (P3.4); without one nothing is written.
  */
 
 /** Domain separator — MUST match Tynn's `EnsureWorkstationHost::PROOF_CONTEXT` and genie-cloud's host-auth. */
@@ -83,8 +85,9 @@ export function identityFrom(stored: StoredIdentity): WorkstationIdentity {
 
 /** Where identities live, per Tynn host. */
 export interface IdentityStore {
-    /** Can a key be stored at all (OS encryption)? Asked BEFORE Tynn is (Tynn #847). */
-    canWrite(): boolean;
+    /** Can a key be stored at all (a keychain answering)? Asked BEFORE Tynn is (Tynn #847). */
+    canWrite(): boolean | Promise<boolean>;
+    /** `null` means this machine has no identity with that Tynn, which enrolls a new one. A key that cannot be read REJECTS: it is not that. */
     read(host: string): Promise<StoredIdentity | null>;
     write(host: string, identity: StoredIdentity): Promise<void>;
     /** The Genie 1 record already settled with this Tynn (genie#1278 adopt), or null. */
@@ -122,9 +125,56 @@ export function readGenie1Identity(settings: Readonly<Record<string, string>> | 
     return { workstationId, privateKeyPem };
 }
 
-/** RED STUB. */
-export type WorkstationSecrets = { probe(): Promise<unknown>; get(name: never): Promise<unknown>; set(name: never, value: string): Promise<unknown> };
-export async function workstationSealedSources(_options: { file: string; cipher: { decrypt(bytes: Buffer): string } }): Promise<import('./keychain-migration.js').MigrationSource[]> { return []; }
+/** The keychain, as far as this file uses it. */
+export interface WorkstationSecrets {
+    probe(): Promise<KeychainResult>;
+    get(name: SecretName): Promise<KeychainRead>;
+    set(name: SecretName, value: string): Promise<KeychainResult>;
+}
+
+const entryFor = (host: string): SecretName => `workstation/${host}`;
+
+/**
+ * THE KEY AN OLDER GENIE SEALED, per Tynn host, for the one-time move (keychain-migration.ts). Only a window can open it. The delete takes the field out and leaves the row: which
+ * workstation this is, and what is settled, are still true.
+ */
+export async function workstationSealedSources(options: { file: string; cipher: { decrypt(bytes: Buffer): string } }): Promise<MigrationSource[]> {
+    const load = async (): Promise<IdentityFile> => {
+        try {
+            const parsed = JSON.parse(await readFile(options.file, 'utf8')) as unknown;
+            return parsed && typeof parsed === 'object' ? (parsed as IdentityFile) : {};
+        } catch { return {}; }
+    };
+    const all = await load();
+    return Object.entries(all).filter(([, row]) => typeof row?.keyEnc === 'string' && row.keyEnc !== '').map(([host]) => ({
+        name: entryFor(host),
+        old: {
+            read: async (): Promise<OldRead> => {
+                const enc = (await load())[host]?.keyEnc;
+                if (!enc) return { kind: 'none' };
+                try {
+                    const pem = options.cipher.decrypt(Buffer.from(enc, 'base64'));
+                    createPrivateKey(pem);
+                    return { kind: 'value', value: pem };
+                } catch { return { kind: 'unreadable' }; }
+            },
+            remove: async () => {
+                const now = await load();
+                const row = now[host];
+                if (!row) return;
+                const { keyEnc: _gone, ...kept } = row;
+                await saveIdentities(options.file, { ...now, [host]: kept });
+            },
+        },
+    }));
+}
+
+async function saveIdentities(file: string, all: IdentityFile): Promise<void> {
+    await mkdir(dirname(file), { recursive: true });
+    const tmp = `${file}.tmp`;
+    await writeFile(tmp, JSON.stringify(all, null, 2), { mode: 0o600 });
+    await rename(tmp, file);
+}
 
 /** Electron's safeStorage, as a port. */
 export interface IdentityCipher {
@@ -135,9 +185,8 @@ export interface IdentityCipher {
 
 type IdentityFile = Record<string, { workstationId?: string; keyEnc?: string; legacyDone?: string }>;
 
-/** The identities file: the workstation id in the clear, the private key encrypted; fail closed. */
-export function workstationKeyStore(file: string, cipher: IdentityCipher | WorkstationSecrets): IdentityStore & { canWrite(): boolean | Promise<boolean> } {
-    if (!('isAvailable' in cipher)) throw new Error('RED STUB: not built');
+/** The identities file holds which workstation this is; the private key is in the keychain. Fail closed. */
+export function workstationKeyStore(file: string, secrets: WorkstationSecrets): IdentityStore {
     const load = async (): Promise<IdentityFile> => {
         try {
             const parsed = JSON.parse(await readFile(file, 'utf8')) as unknown;
@@ -147,27 +196,33 @@ export function workstationKeyStore(file: string, cipher: IdentityCipher | Works
         }
     };
     return {
-        canWrite: () => cipher.isAvailable(),
+        canWrite: async () => (await secrets.probe()).ok,
         async read(host) {
             const row = (await load())[host];
-            if (!row?.workstationId || !row.keyEnc) return null;
+            if (!row?.workstationId) return null;
+            const key = await secrets.get(entryFor(host));
+            if (key.kind === 'unavailable') throw new Error(`The keychain did not answer, so this machine's workstation key could not be read: ${key.reason}`);
+            if (key.kind === 'missing') {
+                // Sealed by an older Genie and not moved yet: this machine HAS an identity. Enrolling now would make it a second workstation.
+                if (row.keyEnc) throw new Error('This machine\'s workstation key has not yet moved to the keychain.');
+                return null;
+            }
             try {
-                const privateKeyPem = cipher.decrypt(Buffer.from(row.keyEnc, 'base64'));
-                createPrivateKey(privateKeyPem);
-                return { workstationId: row.workstationId, privateKeyPem };
+                createPrivateKey(key.value);
+                return { workstationId: row.workstationId, privateKeyPem: key.value };
             } catch {
-                // Another OS user's keychain, or a damaged file: not registered, so the next ensure enrolls afresh.
+                // Not a key: not registered, so the next ensure enrolls afresh.
                 return null;
             }
         },
         async write(host, identity) {
-            if (!cipher.isAvailable()) {
-                throw new Error('OS encryption is unavailable; refusing to store the workstation key unencrypted (on Linux, install gnome-keyring / libsecret)');
-            }
+            const held = await secrets.set(entryFor(host), identity.privateKeyPem);
+            if (!held.ok) throw new Error(`No keyring answered, so the workstation key was not stored: ${held.reason}`);
             const all = await load();
             // A new key keeps what else this host's row says (the Genie 1 record already settled).
-            all[host] = { ...all[host], workstationId: identity.workstationId, keyEnc: cipher.encrypt(identity.privateKeyPem).toString('base64') };
-            await save(all);
+            const { keyEnc: _gone, ...kept } = all[host] ?? {};
+            all[host] = { ...kept, workstationId: identity.workstationId };
+            await saveIdentities(file, all);
         },
         async legacyDone(host) {
             const done = (await load())[host]?.legacyDone;
@@ -176,15 +231,9 @@ export function workstationKeyStore(file: string, cipher: IdentityCipher | Works
         async markLegacyDone(host, workstationId) {
             const all = await load();
             all[host] = { ...all[host], legacyDone: workstationId };
-            await save(all);
+            await saveIdentities(file, all);
         },
     };
-    async function save(all: IdentityFile): Promise<void> {
-        await mkdir(dirname(file), { recursive: true });
-        const tmp = `${file}.tmp`;
-        await writeFile(tmp, JSON.stringify(all, null, 2), { mode: 0o600 });
-        await rename(tmp, file);
-    }
 }
 
 type TynnRequest = (path: string, init: { method: 'GET' | 'POST'; body?: unknown }) => Promise<{ ok: boolean; status: number; json(): Promise<unknown> }>;
@@ -265,7 +314,7 @@ export async function ensureWorkstation(ports: EnsureWorkstationPorts): Promise<
 
     // Without OS encryption the key could not be kept: ask Tynn NOTHING, or it holds an enrolled, keyless workstation
     // after every attempt (the two-VM proof, 2026-10-20; Tynn #847).
-    if (!ports.store.canWrite()) return { ok: false, reason: 'this machine cannot encrypt a key (no OS keyring answering), so it is not registered with Tynn' };
+    if (!(await ports.store.canWrite())) return { ok: false, reason: 'this machine cannot encrypt a key (no OS keyring answering), so it is not registered with Tynn' };
     // Genie 1's record of this machine, when there is one: Tynn hands that record back instead of minting another.
     const registered = await ports.request('/api/v1/workstations/self-register', { method: 'POST', body: { name: ports.hostname(), ...(machineKey ? { machine_key: machineKey } : {}), ...legacyBody } });
     // Tynn answers an unauthenticated session route 404 (tynn.ai#303), 401/419 before that.

@@ -54,8 +54,9 @@ type HostOptions = ConstructorParameters<typeof SessionHost>[0];
  * What a window may ask the keychain for: an agent's key. The accounts' tokens only go the other way, in the one-time move: a
  * window can hand one over and have it compared, and it cannot read it back.
  */
-function movableName(name: string): `tynn/agent/${string}` | 'tynn/pairing' | 'github/access' | 'github/refresh' {
-    return name === 'tynn/pairing' || name === 'github/access' || name === 'github/refresh' ? name : agentKeyName(name);
+function movableName(name: string): `tynn/agent/${string}` | 'tynn/pairing' | 'github/access' | 'github/refresh' | `workstation/${string}` {
+    if (name === 'tynn/pairing' || name === 'github/access' || name === 'github/refresh') return name;
+    return name.startsWith('workstation/') ? name as `workstation/${string}` : agentKeyName(name);
 }
 /** An agent's key, by name. */
 function agentKeyName(name: string): `tynn/agent/${string}` {
@@ -504,6 +505,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.workstation':
+                if (!this.#options.workstation) throw new Error('This host keeps no workstation identity.');
+                return this.#options.workstation.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.keyring':
                 if (!this.#options.keyring) throw new Error('This host keeps no keyring card.');
                 return this.#options.keyring.call(str(0), Array.isArray(args[1]) ? args[1] : []);
