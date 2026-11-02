@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityTotal, activityWords, trayOnlyStep, TRAY_ONLY_GRACE_MS, type HostActivity } from '../src/core/tray-only.js';
+import { activityTotal, activityWords, trayOnlyStep, trayProbeEnabled, TRAY_ONLY_GRACE_MS, type HostActivity } from '../src/core/tray-only.js';
 
 /**
  * TRAY-ONLY GENIE (P1b; the owner, 2026-11-02: "as long as any genie services are running, that tray should be there so
@@ -42,5 +42,20 @@ describe('trayOnlyStep', () => {
 
     it('the grace is a minute', () => {
         expect(TRAY_ONLY_GRACE_MS).toBe(60_000);
+    });
+});
+
+/**
+ * THE TRAY PROBE IS FOR THE VM PROOF ONLY. main.ts can expose a read-only view of the tray (and its items' own clicks) on the
+ * main process's globalThis, for scripts/quit-keeps-host-cdp.mjs over the inspector — but only when the launch says so
+ * with GENIE_TRAY_PROBE=1. Without it (every real launch) the hook does not exist.
+ */
+describe('trayProbeEnabled', () => {
+    it('only GENIE_TRAY_PROBE=1 turns it on; absent, empty, other values and GENIE_E2E do not', () => {
+        expect(trayProbeEnabled({})).toBe(false);
+        expect(trayProbeEnabled({ GENIE_TRAY_PROBE: '' })).toBe(false);
+        expect(trayProbeEnabled({ GENIE_TRAY_PROBE: 'true' })).toBe(false);
+        expect(trayProbeEnabled({ GENIE_E2E: '1' })).toBe(false);
+        expect(trayProbeEnabled({ GENIE_TRAY_PROBE: '1' })).toBe(true);
     });
 });

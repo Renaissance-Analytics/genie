@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 /**
@@ -82,8 +83,17 @@ describe('main.ts', () => {
         expect(request).toMatch(/if \(answer\) quit\.choose\(answer\);\s*\n\s*app\.quit\(\);/);
     });
 
-    it('the tray’s state is readable from the main process (a read-only probe: present, tooltip, its menu), for the VM proof', () => {
-        expect(main()).toMatch(/\(globalThis as Record<symbol, unknown>\)\[Symbol\.for\('genie\.tray'\)\] = \{/);
+    it('the tray probe (for the VM proof) is ABSENT without GENIE_TRAY_PROBE=1: installed only inside that gate', () => {
+        const src = main();
+        // The one assignment, inside the gate (trayProbeEnabled: only GENIE_TRAY_PROBE=1 — tray-only.test.ts).
+        expect(src).toMatch(/if \(trayProbeEnabled\(process\.env\)\) \{\s*\n\s*\(globalThis as Record<symbol, unknown>\)\[Symbol\.for\('genie\.tray'\)\] = \{/);
+        expect(src.match(/Symbol\.for\('genie\.tray'\)/g) ?? []).toHaveLength(1);
+    });
+
+    it('nothing else reaches the tray probe: no preload, renderer, remote method or MCP tool names it', () => {
+        const files = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.(ts|tsx)$/.test(e.name) ? [join(dir, e.name)] : []));
+        const naming = files('src').filter((f) => /genie\.tray/.test(readFileSync(f, 'utf8')));
+        expect(naming.map((f) => f.split('\\').join('/'))).toEqual(['src/main/main.ts']);
     });
 });
 

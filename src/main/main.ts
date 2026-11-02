@@ -134,7 +134,7 @@ import { needsYouCount } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
-import { trayOnlyStep, type HostActivity } from '../core/tray-only.js';
+import { trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -3901,15 +3901,19 @@ async function boot(): Promise<void> {
     trayImages = buildTrayImages(trayIconPath());
     tray = createTray(trayHandlers, trayWaiting > 0 ? trayImages.attention : trayImages.plain);
     trayMenuNow = trayMenuTemplate(trayHandlers);
-    // THE TRAY PROBE (read-only; for the VM proof, scripts/quit-keeps-host-cdp.mjs, over the main process's inspector):
-    // Electron's Tray cannot be asked what it shows. Whether it is there, what it says, its menu — and an item's own click,
-    // the very handler the menu runs. Nothing here changes what Genie does.
-    (globalThis as Record<symbol, unknown>)[Symbol.for('genie.tray')] = {
-        present: () => tray !== null && !tray.isDestroyed(),
-        tooltip: () => trayTooltipNow,
-        labels: () => trayMenuNow.map((i) => i.label ?? '-'),
-        click: (label: string) => { const item = trayMenuNow.find((i) => i.label === label && i.click); item?.click?.(); return item !== undefined; },
-    };
+    // THE TRAY PROBE — ONLY for the VM proof (scripts/quit-keeps-host-cdp.mjs, over the main process's inspector), and ONLY
+    // in a launch with GENIE_TRAY_PROBE=1 (core/tray-only.ts trayProbeEnabled): every real launch has none. Electron's Tray
+    // cannot be asked what it shows, nor clicked from outside: whether it is there, what it says, its menu — and an item's
+    // own click, the very handler the menu runs. On the main process's globalThis, which no renderer (context-isolated,
+    // sandboxed), no IPC handler, remote method or MCP tool reaches; nothing else in src/ names it (a source guard).
+    if (trayProbeEnabled(process.env)) {
+        (globalThis as Record<symbol, unknown>)[Symbol.for('genie.tray')] = {
+            present: () => tray !== null && !tray.isDestroyed(),
+            tooltip: () => trayTooltipNow,
+            labels: () => trayMenuNow.map((i) => i.label ?? '-'),
+            click: (label: string) => { const item = trayMenuNow.find((i) => i.label === label && i.click); item?.click?.(); return item !== undefined; },
+        };
+    }
     // GENIE'S APPLICATION MENU (Tynn #759, main/app-menu.ts): without one Electron's default is in force, and its Ctrl+W
     // closes — on this window, hides — Genie from any field. Settings… on Ctrl+, (⌘, on macOS).
     Menu.setApplicationMenu(Menu.buildFromTemplate(appMenuTemplate(process.platform, app.getVersion(), {

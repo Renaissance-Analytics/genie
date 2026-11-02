@@ -48,3 +48,16 @@ export function trayOnlyStep(input: { readonly uiOpen: boolean; readonly activit
     const since = quietSince ?? now;
     return { quietSince: since, exit: now - since >= graceMs };
 }
+
+/**
+ * THE TRAY PROBE'S GATE. main.ts exposes a read-only view of the tray — and its menu items' own clicks — on the main
+ * process's globalThis, ONLY for the VM proof (scripts/quit-keeps-host-cdp.mjs, which reaches it over the main process's
+ * inspector: Electron's Tray can be neither asked what it shows nor clicked from outside). Only a launch with
+ * GENIE_TRAY_PROBE=1 installs it; every real launch has none. Its own name, never GENIE_E2E: Genie 1's GENIE_E2E changed
+ * what the product did, and a proof of a product that behaves differently proves nothing.
+ */
+export const TRAY_PROBE_ENV = 'GENIE_TRAY_PROBE';
+
+export function trayProbeEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
+    return env[TRAY_PROBE_ENV] === '1';
+}
