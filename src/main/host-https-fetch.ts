@@ -16,7 +16,9 @@ import type { SessionFetch } from './tynn-account.js';
  * NODE_TLS_REJECT_UNAUTHORIZED=0 would turn it off for the host, and Chromium never read that variable. A source guard holds this
  * (test/host-https-fetch.test.ts).
  *
- * ONLY https, and a redirect is refused: this carries bearer tokens, as the window's `redirect: 'error'` asked.
+ * ONLY https, and a redirect is refused: this carries bearer tokens, as the window's `redirect: 'error'` asked. GitHub's port asks to follow one on the same
+ * origin (`followSameOrigin`), because a renamed repository is ordinary there: same scheme, host and port, a small limit, and the token stays with that origin
+ * because nothing else is ever called. Anything else is refused, and says so.
  *
  * PROXIES: an explicit HTTPS_PROXY or NO_PROXY wins, then what the OS last said (`proxyRoutes`, proxy-memory.ts), then direct. A route
  * that fails to connect goes to the next one in the answer, and that is logged; with none left the error names the proxy, and nothing
@@ -84,12 +86,30 @@ export function hostHttpsFetch(options: HostHttpsOptions = {}): SessionFetch {
         return options.proxyRoutes?.(url) ?? [{ kind: 'direct' }];
     };
 
-    const send = (target: URL, init: Parameters<SessionFetch>[1], agent: Agent): ReturnType<SessionFetch> => new Promise((resolve, reject) => {
+    /** Where a redirect points, when it may be followed, by the fetch standard's rules for the method. */
+    const REDIRECT_LIMIT = options.followSameOrigin ?? 0;
+    const redirected = (target: URL, init: Parameters<SessionFetch>[1], status: number, location: string | undefined, hops: number): { target: URL; init: Parameters<SessionFetch>[1] } => {
+        if (REDIRECT_LIMIT === 0 || !location) throw new Error(`${target.host} answered with a redirect (${status}), which is refused.`);
+        if (hops >= REDIRECT_LIMIT) throw new Error(`${target.host} sent too many redirects (${REDIRECT_LIMIT}).`);
+        const next = new URL(location, target);
+        if (next.origin !== target.origin) throw new Error(`${target.host} answered with a redirect (${status}) to another origin, ${next.origin}, which is refused: a token is never carried there.`);
+        if ((status === 301 || status === 302) && init.method !== 'GET' || status === 303) {
+            const { body: _body, ...rest } = init;
+            const headers = Object.fromEntries(Object.entries(init.headers).filter(([name]) => name.toLowerCase() !== 'content-type'));
+            return { target: next, init: { ...rest, method: 'GET', headers } };
+        }
+        return { target: next, init };
+    };
+
+    const send = (target: URL, init: Parameters<SessionFetch>[1], agent: Agent, hops = 0): ReturnType<SessionFetch> => new Promise((resolve, reject) => {
         const ask = request(target, { method: init.method, headers: init.headers, agent, rejectUnauthorized: true, signal: init.signal }, (res) => {
             const status = res.statusCode ?? 0;
             if (status >= 300 && status < 400) {
                 res.destroy();
-                reject(new Error(`${target.host} answered with a redirect (${status}), which is refused.`));
+                try {
+                    const next = redirected(target, init, status, res.headers.location, hops);
+                    resolve(send(next.target, next.init, agent, hops + 1));
+                } catch (error) { reject(error as Error); }
                 return;
             }
             const chunks: Buffer[] = [];

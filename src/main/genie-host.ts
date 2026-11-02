@@ -232,7 +232,7 @@ async function main(): Promise<void> {
     })));
     // GITHUB'S ACCOUNT (P3.4 cut c): its tokens and the authenticated git are here, and never cross to a window.
     const githubOpening = proxyMemory.then((memory) => {
-        const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say });
+        const send = hostHttpsFetch({ proxyRoutes: (url) => memory.routesFor(url), log: say, followSameOrigin: 5 });
         return GithubAccount.open({
             file: join(home, 'github.json'),
             secrets: keychain,
