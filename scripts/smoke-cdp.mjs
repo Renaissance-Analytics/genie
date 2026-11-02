@@ -252,7 +252,9 @@ check(named === true, '9. the snapshot came from the real registry, not the empt
 
 // 9. Stylesheet actually applied. A wrong Tailwind `@source` ships a stylesheet with none of
 //    the board's metrics in it, and every surface silently collapses to unstyled blocks.
-const railWidth = await cdp.evaluate('(() => { const n = document.querySelector("nav"); return n ? Math.round(n.getBoundingClientRect().width) : 0; })()');
+// The rail CONTAINER (`data-rail`, w-52): since the rail became react-fancy's Sidebar (#1430) the first <nav> is Sidebar's
+// landmark inside it (191px = 208 − 1px border − 16px padding), so the container is what the 208 is about.
+const railWidth = await cdp.evaluate('(() => { const n = document.querySelector("[data-rail=expanded]"); return n ? Math.round(n.getBoundingClientRect().width) : 0; })()');
 check(railWidth === 208, '10. the rail is 208px — the stylesheet applied', `${railWidth}px`);
 
 const barHeight = await cdp.evaluate('(() => { const n = document.querySelector("[data-route]")?.parentElement; return n ? Math.round(n.getBoundingClientRect().height) : 0; })()');
@@ -365,7 +367,7 @@ if (typeof agentRow === 'string') {
             const body = document.querySelector('[data-stream]');
             return JSON.stringify({
                 tab: Boolean(tab),
-                active: tab?.getAttribute('data-active') === 'true',
+                active: tab?.getAttribute('aria-selected') === 'true',
                 body: body?.getAttribute('data-stream') ?? null,
             });
         })()
@@ -401,7 +403,7 @@ if (typeof agentRow === 'string') {
     // Undo exactly those two, or check 24's "Back again returns to the Dashboard" lands on a tab instead — the first
     // CI run of this check did precisely that. `go(-2)`, not a click on Stream, which would be a third entry.
     await cdp.evaluate('history.go(-2); true');
-    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('data-active') === 'true'`, 'the Stream tab again, by history');
+    await waitFor(cdp, `document.querySelector('[data-tab="stream"]')?.getAttribute('aria-selected') === 'true'`, 'the Stream tab again, by history');
 
     /*
      * The composer is REACHABLE from here.
@@ -486,7 +488,7 @@ if (typeof agentRow === 'string') {
     // workspace; Back returns to the Dashboard.
     const doors = await cdp.evaluate(`JSON.stringify({
         open: document.querySelectorAll('button[data-open-workspace]').length,
-        toggle: Boolean(document.querySelector('[data-group-toggle="status"]')),
+        toggle: Boolean(document.querySelector('[data-group-toggle] [role="radio"]')),
         chat: Boolean(document.querySelector('button[data-action="chat-genie"]')),
         header: (document.querySelector('[data-workspace] .font-semibold')?.textContent ?? ''),
     })`);
@@ -697,7 +699,7 @@ if (!approvalEnabled) {
         await cdp.evaluate(`document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]').click(); true`);
         const toTab = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'the codex agent tab with its chat docked');
         await new Promise((r) => setTimeout(r, 750));
-        const landed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agent: Boolean(document.querySelector('[data-surface="agent"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, stream: document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('data-active') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
+        const landed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agent: Boolean(document.querySelector('[data-surface="agent"]')), deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, stream: document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('aria-selected') ?? null, address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
         check(typeof codexWs === 'string' && chatBefore !== codexRow && onLane && stillBlocking === true && toTab && landed.agent && !landed.deck && !landed.workspace
             && landed.agentId === codexRow && landed.stream === 'true' && !String(landed.address ?? '').includes('deck') && landed.subject === codexRow,
             '32b. clicking a WAITING agent on its workspace dashboard opens that agent’s tab (stream), not the Deck, and the docked chat follows', JSON.stringify({ codexWs, chatBefore, onLane, stillBlocking, toTab, ...landed }));
@@ -707,7 +709,7 @@ if (!approvalEnabled) {
         await cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(String(codexWs))}; true`);
         await waitFor(cdp, `Boolean(document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'))`, 'the codex lane again');
         const focused = await cdp.evaluate(`(() => { const l = document.querySelector('[data-surface="workspace"] [data-dash-lane="${codexRow}"]'); l.focus(); const ok = document.activeElement === l; l.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); return ok; })()`);
-        const byKey = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="deck"]') && document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') === '${codexRow}' && document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('data-active') === 'true' && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'Enter on the lane: the codex agent tab with its chat docked');
+        const byKey = await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]')) && !document.querySelector('[data-surface="deck"]') && document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') === '${codexRow}' && document.querySelector('[data-surface="agent"] [data-tab="stream"]')?.getAttribute('aria-selected') === 'true' && Boolean(document.querySelector('[data-chat="pinned"][data-chat-subject="${codexRow}"]'))`, 'Enter on the lane: the codex agent tab with its chat docked');
         const keyed = JSON.parse(await cdp.evaluate(`JSON.stringify({ agentId: document.querySelector('[data-surface="agent"]')?.getAttribute('data-agent') ?? null, deck: Boolean(document.querySelector('[data-surface="deck"]')), workspace: Boolean(document.querySelector('[data-surface="workspace"]')), address: document.querySelector('[data-route]')?.textContent ?? null, subject: document.querySelector('[data-chat="pinned"]')?.getAttribute('data-chat-subject') ?? null })`) || '{}');
         check(focused === true && byKey, '32c. Enter on a focused workspace-dashboard lane does what the click does: the agent’s tab, its chat, never the Deck', JSON.stringify({ focused, byKey, ...keyed }));
         // Back to its page, where the approval card is answered below.

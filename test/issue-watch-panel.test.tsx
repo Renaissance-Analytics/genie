@@ -58,9 +58,9 @@ describe('where it lives', () => {
         expect(tabStrip({ tabs: [] }, [], { github: true }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'github', 'add', 'settings']);
         expect(tabStrip({ tabs: [] }, [], { github: false }).map((t) => t.kind)).toEqual(['dashboard', 'files', 'add', 'settings']);
         const html = renderToStaticMarkup(<WorkspaceTabs designed={{ tabs: [] }} agents={[]} current={{ kind: 'view', view: 'github' }} canDesign hasSettings github onView={() => {}} onAdd={() => {}} onOpenAgent={() => {}} />);
-        expect(control(html, 'data-workspace-tab="github"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-workspace-tab="github"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-workspace-tab="github"')!.text).toMatch(/^GitHub(?![\w])/);
-        expect(control(html, 'data-workspace-tab="github"')!.open).toContain('data-current="true"');
+        expect(control(html, 'data-workspace-tab="github"')!.open).toContain('aria-selected="true"');
     });
 
     it('the panel: the state line, the counts, every open item linked out to GitHub (COUNTED), the recent activity', () => {

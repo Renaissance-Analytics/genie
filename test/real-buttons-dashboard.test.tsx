@@ -31,7 +31,13 @@ const h = (leftPct: number): Headroom => {
     return { plan: null, window: '5h', leftPct, resetsAtMs, over: false, windows: [{ window: '5h', usedPct: 100 - leftPct, leftPct, resetsAtMs, over: false }] };
 };
 const noop = () => {};
-const notFancy = (html: string) => buttonTags(html).filter((t) => !/\sdata-react-fancy-button=""/.test(t));
+/**
+ * A react-fancy MultiSwitch (By workspace | By status) is a radio group whose options are react-fancy's own <button
+ * role="radio">s: a choice between views, not a pair of action Buttons (the owner, 2026-11-01). Everything else must be a
+ * react-fancy Button.
+ */
+const MULTI_SWITCH = /<div[^>]*data-react-fancy-multi-switch=""[^>]*>[\s\S]*?<\/div>/g;
+const notFancy = (html: string) => buttonTags(html.replace(MULTI_SWITCH, '')).filter((t) => !/\sdata-react-fancy-button=""/.test(t));
 
 describe('the Dashboard draws only react-fancy Buttons', () => {
     it('first run: Add a workspace, From a git URL, From Tynn', () => {
@@ -55,7 +61,8 @@ describe('the Dashboard draws only react-fancy Buttons', () => {
             />,
         );
         // POSITIVE CONTROL: each kind of button this state offers is in the markup.
-        for (const attr of ['data-group-toggle="workspace"', 'data-group-toggle="status"', 'data-action="chat-genie"', 'data-rate-limit="claude"', 'data-open-workspace="tynn"', 'data-action="locate-repo"', 'data-add-agent="moic"', 'data-fix="Sign in to kimi"', 'data-door="agent"']) {
+        expect(html.match(MULTI_SWITCH)?.[0].match(/<button[^>]*role="radio"/g)).toHaveLength(2);
+        for (const attr of ['data-group-toggle=""', 'data-action="chat-genie"', 'data-rate-limit="claude"', 'data-open-workspace="tynn"', 'data-action="locate-repo"', 'data-add-agent="moic"', 'data-fix="Sign in to kimi"', 'data-door="agent"']) {
             expect(html, attr).toContain(attr);
         }
         expect(buttonTags(html).length).toBeGreaterThanOrEqual(9);

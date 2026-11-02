@@ -67,9 +67,21 @@ export function readRememberedPasswordStore(userDataDir: string): string | null 
 export function rememberPasswordStore(
     userDataDir: string,
     selectedBackend: string | null | undefined,
+    /**
+     * Whether this launch could ENCRYPT on that store (`safeStorage.isEncryptionAvailable()`). A selected store is not a
+     * working one: a KWallet nobody runs, or a locked collection, is selected and gives no key. Pinned, it was re-asserted
+     * on every launch whose probe found nothing. `false` never writes, and clears a memo naming this same store.
+     */
+    available = true,
 ): void {
     const store = switchValueForSelectedBackend(selectedBackend);
     if (!store) return;
+    if (!available) {
+        if (readRememberedPasswordStore(userDataDir) === store) {
+            try { fs.rmSync(memoPath(userDataDir), { force: true }); } catch { /* best-effort */ }
+        }
+        return;
+    }
     if (readRememberedPasswordStore(userDataDir) === store) return;
     try {
         fs.writeFileSync(memoPath(userDataDir), JSON.stringify({ store }), 'utf8');

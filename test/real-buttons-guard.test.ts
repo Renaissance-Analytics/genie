@@ -66,6 +66,18 @@ describe('the scanner (positive and negative controls: it can see each violation
         expect(rules(src)).toEqual(['click-on-non-interactive']);
     });
 
+    it('sees a menu or tab item made into a Button (aria-current, role tab/menuitem), and not a Sidebar item', () => {
+        const src = [
+            'const A = () => <>',
+            '  <Button aria-current="page" onClick={go}>Dashboard</Button>',
+            '  <Button role="tab" aria-selected onClick={go}>Files</Button>',
+            '  <Sidebar.Item active onClick={go}>Deck</Sidebar.Item>',
+            '  <Button onClick={go}>Save</Button>',
+            '</>;',
+        ].join('\n');
+        expect(rules(src)).toEqual(['menu-as-button', 'menu-as-button']);
+    });
+
     it('reports the line of the element, so a failure points at it', () => {
         const [f] = scanSource('const A = () => (\n  <div>\n    <button>x</button>\n  </div>\n);', 'x.tsx');
         expect(f).toMatchObject({ rule: 'raw-button', line: 3, owner: 'A' });

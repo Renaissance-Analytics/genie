@@ -3,7 +3,7 @@ import { droneRefusal, mayBrowse } from '../../core/workstation-role.js';
 import { PathBrowse, useHostPathPicker } from './HostPathPicker.js';
 import { SOUND_FILE_EXTENSIONS } from '../../core/custom-sound.js';
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
+import { Avatar, Badge, Button, Icon, Input, QrCode, Select, Sidebar, Skeleton, Switch, Tabs, Textarea, Tooltip, browserPlatformHints, detectPlatform } from '@particle-academy/react-fancy';
 import { BINDING_SETTING, DEFAULT_HOTKEYS, bindingProblem, bindingsFrom, type BindingName, type HotkeyBindings } from '../../core/hotkeys.js';
 import { acceleratorFromPress, hotkeyLabel, hotkeyProblem, newPromptId, parsePromptLibrary, removePrompt, serializePromptLibrary, upsertPrompt, type SavedPrompt } from '../../core/prompt-library.js';
 import { browserRoute, classifyNavigation } from '../../core/browser-policy.js';
@@ -15,6 +15,7 @@ import { ALERT_KINDS, SOUND_GROUPS, isAlertSoundKey, previewSound, type AlertKin
 import { playAlertSound } from '../alert-sound.js';
 import type { GithubCapability } from '../../core/github.js';
 import type { FeatureAction, FeatureData, FrontDoorStatus, HostedSite, SiteEditing, ToolchainRefusal } from '../features.js';
+import type { KeyringView } from '../../main/linux-keyring.js';
 import { useSiteActions, type SitePending, type SiteRefusal } from '../site-actions.js';
 import type { RemoteState } from '../remote-bridge.js';
 import type { KnownHost } from '../remote-session.js';
@@ -1673,25 +1674,29 @@ export function SettingsSurface({ data, onAction, onNavigate, section, workspace
             <Header title="Settings" />
             <div className="flex min-h-0 flex-1">
                 {/* GENIE 1'S SIDEBAR: grouped sections, one page each (core/settings-nav.ts). */}
-                <nav data-settings-sidebar="" aria-label="Settings sections" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
+                {/* A MENU, NOT BUTTONS (the owner, 2026-11-01: "those should not be buttons, it's a menu"): react-fancy's
+                    Sidebar, embedded in the page; its items sit left, the page on screen is aria-current="page", and they ring on
+                    keyboard focus only. The Sidebar draws the <nav aria-label="Settings"> itself (`navLabel`), and `keyboardNav` makes
+                    the items one tab stop that Up / Down / Home / End move through. The search box sits above it, outside the nav. */}
+                <div data-settings-sidebar="" className="flex w-56 shrink-0 flex-col gap-3 overflow-auto border-r border-[var(--border-1)] px-2 py-3">
                     <Input data-settings-search type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings" leading={<Icon name="search" size="xs" />} />
-                    {NAV_GROUPS.map((g) => (
-                        <div key={g.label} data-settings-nav-group={g.label} className="flex flex-col gap-0.5">
-                            <div className="px-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-4)]">{g.label}</div>
-                            {g.items.map((i) => {
-                                const on = i.id === active && results === null;
-                                return (
-                                    <Button variant="ghost" size="xs" labelClassName="contents" key={i.id} type="button" data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} {...(on ? { 'aria-current': 'page' as const } : {})}
-                                        onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
-                                        className={`flex h-[30px] items-center gap-2 rounded-md px-2 text-left text-[13px] ${on ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
-                                        <Icon name={i.icon} size="sm" className="shrink-0 text-[var(--fg-4)]" />
-                                        <span className="truncate">{i.label}</span>
-                                    </Button>
-                                );
-                            })}
-                        </div>
-                    ))}
-                </nav>
+                    <Sidebar embedded navLabel="Settings" keyboardNav>
+                        {NAV_GROUPS.map((g) => (
+                            <div key={g.label} data-settings-nav-group={g.label} className="mb-3 last:mb-0">
+                                <Sidebar.Group label={g.label} className="flex flex-col gap-0.5 py-0">
+                                    {g.items.map((i) => (
+                                        <Sidebar.Item key={i.id} data-settings-nav={i.id} data-nav-target={`genie://settings/${i.id}`} active={i.id === active && results === null}
+                                            icon={<Icon name={i.icon} size="sm" className="text-[var(--fg-4)]" />}
+                                            onClick={() => { setQ(''); onNavigate(`genie://settings/${i.id}`); }}
+                                            className="h-[30px] px-2 text-[13px]">
+                                            {i.label}
+                                        </Sidebar.Item>
+                                    ))}
+                                </Sidebar.Group>
+                            </div>
+                        ))}
+                    </Sidebar>
+                </div>
                 <div className="min-w-0 flex-1 overflow-auto">
                     {results !== null ? (
                         results.length === 0 ? (
@@ -2262,6 +2267,44 @@ function TynnSignIn({ tynn, onAction }: { tynn: NonNullable<FeatureData['integra
     );
 }
 
+/** The keyring card's button, per state: what it does, and what it says while it does it. */
+const KEYRING_ACTION: Record<KeyringView['state'], string> = { 'not-installed': 'Install keyring', 'not-running': 'Start keyring', 'restart-needed': 'Restart Genie', refused: 'Check again' };
+const KEYRING_STEP: Record<NonNullable<KeyringView['step']>, string> = { installing: 'Installing…', starting: 'Starting…', restarting: 'Restarting…' };
+/** One line per state: why the sign-in waits, in the fewest words (the owner: reduce reading). */
+const KEYRING_LINE: Record<KeyringView['state'], string> = {
+    'not-installed': 'Genie needs a keyring to keep your sign-ins safe. This computer has none.',
+    'not-running': 'Genie needs a keyring to keep your sign-ins safe. Yours is installed but not running.',
+    'restart-needed': 'Keyring ready. Restart Genie to use it.',
+    refused: 'Genie needs a keyring to keep your sign-ins safe. Yours is locked.',
+};
+
+/**
+ * NO KEYRING, THE CARD (the owner, 2026-11-01): one line saying why the sign-in waits, ONE button whose words say what it
+ * does (Install keyring / Start keyring / Restart Genie / Check again), busy with the step while it runs, then the
+ * failure in words with Retry, and the command to run by hand with a Copy when Genie cannot. Genie never asks for a
+ * password: Install opens the system's own prompt. The sign-in is not offered behind it: nothing could keep it.
+ */
+function KeyringCard({ keyring, onAction }: { keyring: KeyringView; onAction: SurfaceProps['onAction'] }) {
+    const command = useCopyText();
+    const busy = keyring.step !== null;
+    const label = busy ? KEYRING_STEP[keyring.step!] : keyring.failure ? 'Retry' : KEYRING_ACTION[keyring.state];
+    return (
+        <div data-keyring-card={keyring.state} className="flex flex-col gap-2 rounded-md border border-[var(--border-1)] p-3 text-sm">
+            <span>{KEYRING_LINE[keyring.state]}</span>
+            {keyring.state === 'not-installed' ? <span className="text-xs text-[var(--fg-3)]">Installs {keyring.packages}. Your system asks for your password.</span> : null}
+            <div><Button type="button" data-action="keyring-fix" size="sm" disabled={busy} loading={busy} onClick={() => onAction({ kind: 'keyring.fix' })}>{label}</Button></div>
+            {keyring.failure ? <span data-keyring-failure="" role="status" className="text-xs text-[var(--danger)]">{keyring.failure}</span> : null}
+            {keyring.failure && keyring.manual ? (
+                <div data-keyring-manual={keyring.manual} className="flex min-w-0 items-center gap-1.5">
+                    <span className="flex-1 truncate font-mono text-xs" title={keyring.manual}>{keyring.manual}</span>
+                    <Button type="button" data-action="keyring-copy-command" variant="ghost" size="xs" onClick={() => { void command.copy(keyring.manual ?? ''); }}>{copyWords(command.state, 'Copy')}</Button>
+                    <CopyAnnounce state={command.state} />
+                </div>
+            ) : null}
+        </div>
+    );
+}
+
 /** The Settings pages' card: a titled block, one per concern (Genie 1's SetSection). */
 function SetSection({ title, desc, children, ...rest }: { title: string; desc?: string; children: React.ReactNode } & Record<`data-${string}`, string>) {
     return (
@@ -2320,7 +2363,7 @@ function TynnBlock({ integrations, onAction }: { integrations: FeatureData['inte
     if (integrations === null) return <div data-integrations=""><Skeletons rows={2} /></div>;
     return (
         <div data-integrations="" className="flex flex-col gap-2">
-            <TynnSignIn tynn={integrations.tynn} onAction={onAction} />
+            {integrations.keyring && !integrations.tynn.user ? <KeyringCard keyring={integrations.keyring} onAction={onAction} /> : <TynnSignIn tynn={integrations.tynn} onAction={onAction} />}
                         <ul className="mt-2 divide-y divide-[var(--border-1)]">
                             {integrations.gated.map((row) => (
                                 <li key={row.id} data-gated={row.id} data-gated-enabled={row.enabled ? 'true' : 'false'} className="flex items-center gap-3 py-1.5 text-sm">
@@ -2377,7 +2420,8 @@ function GithubBlock({ integrations, onAction }: { integrations: FeatureData['in
         return (
             <div data-integrations="" data-github-status="signed-out" className="flex flex-col gap-2 text-sm">
                 <p className="text-[var(--fg-3)]">One click: GitHub shows a code, you approve the Genie AOS app in your browser, and Genie reads where it is installed. No token to paste.</p>
-                <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in with GitHub</Button></div>
+                {/* No keyring: nothing could keep the GitHub sign-in either — the same card, in its place. */}
+                {integrations.keyring ? <KeyringCard keyring={integrations.keyring} onAction={onAction} /> : <div><Button type="button" data-action="github-sign-in" size="sm" onClick={() => onAction({ kind: 'integrations.githubSignIn' })}>Sign in with GitHub</Button></div>}
                 {message}
                 {githubCapabilityList(gh.capabilities)}
             </div>

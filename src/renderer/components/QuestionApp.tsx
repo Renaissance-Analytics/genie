@@ -167,7 +167,7 @@ export function QuestionApp({ view, sending, refusal, onAnswer, onLater, onDismi
                                 data-question-queue-item={q.id}
                                 aria-current={on ? 'true' : undefined}
                                 onClick={() => onPick?.(q.id)}
-                                className={`flex min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left text-[12px] ${on ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
+                                className={`justify-start flex min-w-0 items-baseline gap-2 rounded-md px-2 py-1 text-left text-[12px] ${on ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}
                             >
                                 <span className="shrink-0 font-semibold">{q.agentName ?? 'An agent'}</span>
                                 {q.workspaceName ? <span className="flex shrink-0 items-center gap-1.5 self-center text-[var(--fg-3)]"><WorkspaceSwatch color={q.workspaceColor} />{q.workspaceName}</span> : null}

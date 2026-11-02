@@ -35,7 +35,12 @@ export type Fidelity =
     /** On another workstation. Presence only. */
     | 'remote';
 
-export type AgentState = 'waiting' | 'broken' | 'working' | 'idle' | 'remote';
+/**
+ * `cooling` (the owner, 2026-11-01): the 15 s after a turn that replied (core/session.ts COOLING_MS). It has its own word
+ * and colour, and it is WORKING for every order, group and count on the board (`rankOf`), so an agent between turns does
+ * not jump; the move to Idle 15 s later is the only reorder.
+ */
+export type AgentState = 'waiting' | 'broken' | 'working' | 'cooling' | 'idle' | 'remote';
 
 export type DeliveryKind = 'commit' | 'file' | 'handoff' | 'answer';
 
@@ -119,15 +124,26 @@ export const CONTEXT_DANGER_AT = 180_000;
  * waiting on a human is the only state where the human is the bottleneck, so it leads.
  */
 const STATE_ORDER: Record<AgentState, number> = {
-    waiting: 0, broken: 1, working: 2, idle: 3, remote: 4,
+    waiting: 0, broken: 1, working: 2, cooling: 2, idle: 3, remote: 4,
 };
 
+/**
+ * THE STATE A ROW IS SORTED, GROUPED AND COUNTED AS: its own, except Cooling, which is Working (the owner: "Cooling is
+ * treated the same as Working in terms of how the dashboard list is sorted"). Counted with Working too, rather than as a
+ * chip of its own: a `1 cooling` chip would appear and vanish every turn, the flicker this state exists to remove, and
+ * the count then always agrees with the Working group the row sits in.
+ */
+export function rankOf(state: AgentState): Exclude<AgentState, 'cooling'> {
+    return state === 'cooling' ? 'working' : state;
+}
+
 export interface StatusCell {
-    /** The word. `Working`/`Idle` for declared; `Active`/`Quiet` for observed. */
+    /** The word. `Working`/`Cooling`/`Idle` for declared; `Active`/`Quiet` for observed. */
     word: string;
     /** The detail beside it: a duration, the question, the failure reason. */
     detail: string | null;
-    tone: 'ok' | 'warn' | 'bad' | 'muted';
+    /** `cool`: Cooling's own colour, distinct from Working's `ok` and Idle's `muted`. */
+    tone: 'ok' | 'warn' | 'bad' | 'muted' | 'cool';
     /** The hover on the detail: the full date and time a rate-limit hold resumes. Absent = no hover. */
     title?: string;
 }
@@ -152,7 +168,7 @@ export function statusOf(row: AgentRow): StatusCell {
     if (row.signedOut && row.state !== 'waiting') return { word: 'Signed out', detail: 'log in to continue', tone: 'warn' };
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): only once its turn is over — a refused tool does not end the turn, and an
     // agent still working reads Working. The Agent view, the chat and the tray offer `Log in to Claude Design`.
-    if (row.designLogin && row.state === 'idle') return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
+    if (row.designLogin && (row.state === 'idle' || row.state === 'cooling')) return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
     switch (row.state) {
         case 'waiting':
             return { word: 'Waiting on you', detail: row.ask, tone: 'warn' };
@@ -160,6 +176,10 @@ export function statusOf(row: AgentRow): StatusCell {
             return { word: 'Broken', detail: row.reason, tone: 'bad' };
         case 'working':
             return { word: row.fidelity === 'observed' ? 'Active' : 'Working', detail: row.duration, tone: 'ok' };
+        case 'cooling':
+            // Background work still running is the stronger fact (below): it reads Working, as it does once Idle.
+            if ((row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
+            return { word: 'Cooling', detail: null, tone: 'cool' };
         default:
             // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks still running read Working.
             if (row.fidelity !== 'observed' && (row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
@@ -312,7 +332,7 @@ export function groupByWorkspace(
             .slice()
             .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state]);
 
-        const count = (s: AgentState): number => mine.filter((r) => r.state === s).length;
+        const count = (s: AgentState): number => mine.filter((r) => rankOf(r.state) === s).length;
         const parts: string[] = [];
         if (mine.length > 0) parts.push(`${mine.length} ${mine.length === 1 ? 'agent' : 'agents'}`);
         if (count('waiting') > 0) parts.push(`${count('waiting')} waiting`);
@@ -324,7 +344,7 @@ export function groupByWorkspace(
 
 export interface SummaryChip {
     label: string;
-    state: AgentState;
+    state: Exclude<AgentState, 'cooling'>;
 }
 
 /**
@@ -334,19 +354,20 @@ export interface SummaryChip {
  * only when true; a strip of zeroes is furniture that trains people to stop reading it.
  */
 export function summaryChips(rows: readonly AgentRow[]): readonly SummaryChip[] {
-    const label: Record<AgentState, string> = {
+    const label: Record<Exclude<AgentState, 'cooling'>, string> = {
         waiting: 'waiting on you', broken: 'broken', working: 'working', idle: 'idle', remote: 'unreachable',
     };
-    const order: AgentState[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
+    const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
 
     return order.flatMap((state) => {
-        const n = rows.filter((r) => r.state === state).length;
+        const n = rows.filter((r) => rankOf(r.state) === state).length;
         return n > 0 ? [{ label: `${n} ${label[state]}`, state }] : [];
     });
 }
 
 export interface StatusGroup {
-    state: AgentState;
+    /** Never `cooling`: a Cooling row is in the Working group (`rankOf`). */
+    state: Exclude<AgentState, 'cooling'>;
     /** `Waiting on you` / `Broken` / `Working` / `Idle` / `Unreachable`. */
     label: string;
     rows: readonly AgentRow[];
@@ -357,10 +378,11 @@ export interface StatusGroup {
  * state with no agents — an empty heading would be a count of zero wearing a label.
  */
 export function groupByStatus(rows: readonly AgentRow[]): readonly StatusGroup[] {
-    const label: Record<AgentState, string> = { waiting: 'Waiting on you', broken: 'Broken', working: 'Working', idle: 'Idle', remote: 'Unreachable' };
-    const order: AgentState[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
+    const label: Record<Exclude<AgentState, 'cooling'>, string> = { waiting: 'Waiting on you', broken: 'Broken', working: 'Working', idle: 'Idle', remote: 'Unreachable' };
+    const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
     return order.flatMap((state) => {
-        const mine = rows.filter((r) => r.state === state);
+        // In the order given: a row going Working -> Cooling keeps its place in the Working group.
+        const mine = rows.filter((r) => rankOf(r.state) === state);
         return mine.length > 0 ? [{ state, label: label[state], rows: mine }] : [];
     });
 }

@@ -47,7 +47,7 @@ describe('the agent header', () => {
 
     it('the crumb and the name truncate but never vanish', () => {
         const crumb = classOf(/data-crumb="ws"/);
-        const name = html.match(/<span data-agent-name=""[^>]*class="([^"]*)"/)?.[1]?.split(' ') ?? [];
+        const name = classOf(/data-agent-name=""/);
         for (const c of [crumb, name]) {
             expect(c).toContain('truncate');
             expect(c.some((k) => /^min-w-(?:\d|\[)/.test(k)), c.join(' ')).toBe(true);
