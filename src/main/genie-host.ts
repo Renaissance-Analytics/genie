@@ -1,9 +1,9 @@
-import { hostname } from 'node:os';
 import './close-inherited-fds.js';
 // ^ FIRST (bug A, VM job 76): the window's sockets — its DevTools port among them — never live on in this host or below it.
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
+import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ENGINE_PROTOCOL, hostEndpoint, parseHostRecord, type HostRecord } from '../core/engine-protocol.js';
