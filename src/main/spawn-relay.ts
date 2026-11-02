@@ -44,6 +44,11 @@ export interface SpawnRelayOptions {
     readonly log?: (line: string) => void;
     /** A child exited (it is started again): whoever drives it stops sending into a child between lives (P3.3b). */
     readonly onChildExit?: (profile: SpawnProfile) => void;
+    /**
+     * The ptys its children run changed (bug B, VM job 76): every live pty with a known pid, across profiles. The host writes
+     * it to disk so the NEXT host can reap what this one leaves if it dies without ending them (main/pty-ledger.ts).
+     */
+    readonly onPtys?: (ptys: Array<{ profile: SpawnProfile; id: string; pid: number }>) => void;
 }
 
 /** How long a lost child's killed helpers are waited for before their ptys are reported exited anyway (#1405's bound). */
@@ -95,8 +100,8 @@ export function startSpawnRelay(options: SpawnRelayOptions): SpawnRelay {
             if (frame.kind === 'event') {
                 const payload = (frame.payload ?? {}) as Record<string, unknown>;
                 const id = typeof payload['id'] === 'string' ? payload['id'] : null;
-                if (id !== null && frame.channel === 'pty.opened') slot.ptys.set(id, typeof payload['pid'] === 'number' ? payload['pid'] : null);
-                if (id !== null && frame.channel === 'pty.exit') slot.ptys.delete(id);
+                if (id !== null && frame.channel === 'pty.opened') { slot.ptys.set(id, typeof payload['pid'] === 'number' ? payload['pid'] : null); ptysChanged(); }
+                if (id !== null && frame.channel === 'pty.exit') { slot.ptys.delete(id); ptysChanged(); }
                 if (frame.channel === 'host.ready') {
                     slot.failures = 0;
                     // The same words the window's own spawn host logs when it is ready: "it started" is one line to look for.
@@ -113,11 +118,19 @@ export function startSpawnRelay(options: SpawnRelayOptions): SpawnRelay {
             log(`spawn relay: the ${profile} child (pid ${child.pid ?? '?'}) exited (code ${code ?? '?'}${signal ? `, ${signal}` : ''})`);
             const lost = [...slot.ptys];
             slot.ptys.clear();
+            ptysChanged();
             options.onChildExit?.(profile);
             for (const [, pid] of lost) if (pid !== null && pid > 0) killPid(pid);
             void reportWhenGone(profile, lost);
             restartLater(profile);
         });
+    };
+
+    const ptysChanged = (): void => {
+        if (!options.onPtys) return;
+        const all: Array<{ profile: SpawnProfile; id: string; pid: number }> = [];
+        for (const [profile, slot] of slots) for (const [id, pid] of slot.ptys) if (pid !== null && pid > 0) all.push({ profile, id, pid });
+        options.onPtys(all);
     };
 
     const reportWhenGone = async (profile: SpawnProfile, lost: Array<[string, number | null]>): Promise<void> => {

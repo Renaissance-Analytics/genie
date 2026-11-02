@@ -46,7 +46,10 @@ cleanup() {
     for d in /proc/[0-9]*; do
         local p=${d#/proc/}
         [ "$p" = "$$" ] && continue
-        if tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qx "GENIE_PTY_PROBE=$MARK"; then kill -KILL "$p" 2>/dev/null && killed="$killed $p"; fi
+        # Only this user's processes: another user's environ is unreadable, and the `<` redirection would complain before
+        # any 2>/dev/null applied (job 76 printed "Permission denied" for every root process).
+        [ -O "$d" ] && [ -r "$d/environ" ] || continue
+        if tr '\0' '\n' 2>/dev/null < "$d/environ" | grep -qx "GENIE_PTY_PROBE=$MARK"; then kill -KILL "$p" 2>/dev/null && killed="$killed $p"; fi
     done
     # A helper re-parented to init that started during this run (its env is its own, so the marker may not reach it).
     local run_secs=$(( $(date +%s) - T0 + 1 ))

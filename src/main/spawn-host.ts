@@ -1,3 +1,5 @@
+import './close-inherited-fds.js';
+// ^ FIRST (bug A, VM job 76): whatever its parent held (a window's, on the emergency path) never reaches a pty helper or a shell.
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from './fancy-term-port.js';
 import { processChannel } from './spawn-host-protocol.js';
