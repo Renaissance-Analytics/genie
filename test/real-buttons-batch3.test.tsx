@@ -77,7 +77,8 @@ describe('the Sidebar’s runtime pill: real buttons BESIDE the row, not spans i
 
     it('neither sits inside the workspace row’s button (no interactive content nested in a button)', () => {
         const rowButton = control(html, 'data-workspace="tynn"');
-        expect(rowButton).toMatchObject({ tag: 'button', fancy: true });
+        expect(rowButton).toMatchObject({ tag: 'button' });
+        expect(rowButton!.open).toContain('data-react-fancy-sidebar-item=""');
         expect(rowButton!.inner).not.toContain('data-ws-processes');
         expect(rowButton!.inner).not.toContain('data-ws-sites');
         expect(rowButton!.inner).not.toMatch(/<button\b/);

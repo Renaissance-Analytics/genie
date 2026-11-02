@@ -24,7 +24,8 @@ const render = (props: Partial<Parameters<typeof AgentView>[0]> = {}) =>
 describe('the header', () => {
     it('breadcrumb, fidelity dot, name, provider chip, the pill in turns', () => {
         const html = render();
-        expect(control(html, 'data-crumb="tynn"')).toMatchObject({ tag: 'button', fancy: true, text: 'Tynn.ai /' });
+        expect(control(html, 'data-crumb="tynn"')).toMatchObject({ tag: 'button', fancy: false, text: 'Tynn.ai' });
+        expect(control(html, 'data-crumb="tynn"')!.open).toContain('data-react-fancy-breadcrumbs-item=""');
         expect(html).toContain('data-fidelity="declared"');
         // The provider is its LOGO, then the engine (genie#1266): no provider word.
         expect(html).toMatch(/data-provider-chip="claude"[^>]*><span[^>]*data-provider-logo="claude"[\s\S]*?<\/svg><\/span>ACP</);

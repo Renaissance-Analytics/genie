@@ -85,7 +85,7 @@ describe('the workspace tab strip and its agent tabs', () => {
         const html = tabs(TEAL);
         expect(marked(html)).toBe(true);
         const tab = control(html, 'data-workspace-tab="agent:a1"');
-        expect(tab!.open).toContain('data-current="true"');
+        expect(tab!.open).toContain('aria-selected="true"');
         expect(tab!.open).toMatch(/\sclass="[^"]*border-\[var\(--ws\)\]/);
         expect(html).toContain('kai');
     });

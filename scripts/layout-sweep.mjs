@@ -109,7 +109,8 @@ const PROBE = `
             }
         }
 
-        const rail = document.querySelector('nav');
+        // The rail CONTAINER (data-rail, w-52): since #1430 the first <nav> is react-fancy Sidebar's landmark inside it (191px).
+        const rail = document.querySelector('[data-rail=expanded]');
         const doc = document.documentElement;
 
         /*

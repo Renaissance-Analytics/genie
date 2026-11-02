@@ -1,6 +1,6 @@
 import { trayOf } from '../../core/row-tray.js';
 import { ageLabel, lanesFor, revealOf, type LaneSegment, type Reveal } from '../../core/reveal.js';
-import { ActivityLight, Button, Icon, Popover } from '@particle-academy/react-fancy';
+import { ActivityLight, Button, Icon, MultiSwitch, Popover } from '@particle-academy/react-fancy';
 import { Fragment, useEffect, useState } from 'react';
 import { limitLevel, limitRows, resetsIn, tightestWindow, windowWords, type Headroom, type LimitLevel } from '../../core/headroom.js';
 import { shortDateTime } from '../../core/clock-words.js';
@@ -23,6 +23,7 @@ import {
     targetOf,
     type AgentRow,
     type AgentState,
+    type SummaryChip,
     type Delivery,
     type Fidelity,
     type WorkspaceFault,
@@ -75,6 +76,8 @@ const GRID =
 /** Dot colour carries STATE. Shape (below) carries what Genie can see. */
 const STATE_DOT: Record<AgentState, string> = {
     working: 'text-[var(--success)]',
+    // Cooling: the 15 s after a turn that replied — its own colour, sorted with Working.
+    cooling: 'text-[var(--sky-400)]',
     waiting: 'text-[var(--warning)]',
     broken: 'text-[var(--danger)]',
     idle: 'text-[var(--zinc-400)]',
@@ -86,6 +89,8 @@ const STATUS_TONE = {
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 } as const;
 
 /**
@@ -414,7 +419,7 @@ function GroupHeader({
     );
 }
 
-const CHIP_DOT: Record<AgentState, string> = {
+const CHIP_DOT: Record<SummaryChip['state'], string> = {
     waiting: 'bg-[var(--warning)]',
     broken: 'bg-[var(--danger)]',
     working: 'bg-[var(--success)]',
@@ -604,14 +609,12 @@ export function Dashboard({ rows: reportedRows, genie = null, workspaces: knownW
                 <span data-key-hints="" className="flex items-center gap-1 text-[10px] text-[var(--fg-4)]" title="J / K move the cursor · ↵ opens the agent · G cycles the grouping">
                     {['J', 'K', '↵', 'G'].map((k) => <kbd key={k} className="rounded border border-[var(--border-1)] px-1 font-mono">{k}</kbd>)}
                 </span>
-                {/* The board's segmented control. The grouping lives in the route (`group=`), so it is linkable. */}
-                <div className="flex overflow-hidden rounded-lg border border-[var(--border-1)] text-xs">
-                    {(['workspace', 'status'] as const).map((g, i) => (
-                        <Button key={g} type="button" variant="ghost" size="xs" aria-pressed={g === group} data-group-toggle={g} {...(g === group ? { 'data-current': 'true' } : {})} onClick={() => onGroup?.(g)} className={`rounded-none ${i > 0 ? 'border-l border-[var(--border-1)] ' : ''}${g === group ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-3)]'}`}>
-                            {g === 'workspace' ? 'By workspace' : 'By status'}
-                        </Button>
-                    ))}
-                </div>
+                {/* The board's segmented control: a react-fancy MultiSwitch, a radio group with the grouping in use checked (the
+                    owner, 2026-11-01: a choice between views is not a pair of Buttons). The grouping lives in the route (`group=`),
+                    so it is linkable. */}
+                <MultiSwitch<DashboardGroup> size="xs" data-group-toggle="" aria-label="Group the agents" value={group}
+                    list={[{ value: 'workspace', label: 'By workspace' }, { value: 'status', label: 'By status' }]}
+                    onValueChange={(g) => onGroup?.(g)} />
                 <RateLimitPills limits={rateLimits ?? {}} />
                 {/* `py-1`, not a row-height class: the row-height census counts ` h-7 ` as "28px header rows", and this is a button. */}
                 <Button type="button" size="xs" icon="message-square" data-action="chat-genie" onClick={() => onChat?.()} title="Chat with genie — the composer, one click from the board">

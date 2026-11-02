@@ -39,7 +39,7 @@ export function TynnProjectPicker({ state, onPick, onOpen, onCancel }: { state: 
                                         type="button"
                                         data-tynn-project={p.id}
                                         {...(added ? { 'data-tynn-added': added } : {})}
-                                        className="flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--bg-2)]"
+                                        className="flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-[var(--bg-2)] justify-start"
                                         onClick={() => (added ? onOpen?.(added) : onPick(p.id))}
                                     >
                                         <span className="font-medium">{p.name}</span>

@@ -90,6 +90,11 @@ export interface FeaturePorts {
     readonly tynnAccount?: TynnAccountPort;
     /** This Genie's GitHub sign-in (main/github-account.ts). Absent = none (doctor mode): signed out, and sign-in refuses. */
     readonly githubAccount?: GithubAccountPort;
+    /**
+     * Linux with no keyring (main/linux-keyring.ts, the owner 2026-11-01): the card's view (null = fine, or not Linux) and
+     * its one button. Absent = no card (doctor mode, tests that do not wire it).
+     */
+    readonly keyring?: { view(): import('./linux-keyring.js').KeyringView | null; fix(): Promise<void> };
     /** The background processes the person keeps (§6.6): written down, restored on launch. */
     readonly processes?: ProcessBook;
     /** Scheduled tasks' clock (genie#1204): the person's Run now. Absent = none (doctor mode). */
@@ -549,7 +554,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         settings: { values: services.settings.snapshot() },
         browser: { url: state.browserUrl ?? null, routes: services.routes(), canGoBack: state.browserCanGoBack ?? false, canGoForward: state.browserCanGoForward ?? false },
         // GitHub as the account read it from GitHub (beta.33 item 25) — never a value a window sent.
-        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null },
+        integrations: { ...tynnIntegration(services, state, ports.tynnAccount), github: ports.githubAccount ? ports.githubAccount.view() : signedOutGithubView(NO_GITHUB), ...services.integrations(), lastSync: state.lastSync ?? null, keyring: ports.keyring?.view() ?? null },
         issueWatch: ports.issueWatch ? ports.issueWatch() : null,
         version: ports.appVersion ? ports.appVersion() : null,
         whatsNew: ports.whatsNew ? ports.whatsNew(state.whatsNewShown === true) : null,
@@ -1643,9 +1648,18 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         // TYNN SIGN-IN, the way Genie 1 did it: open Tynn in the browser, take the code back, Sign out revokes the key.
         case 'integrations.tynnSignIn': {
+            // NO KEYRING: no trip to Tynn for a sign-in that could not be kept. The keyring card says why, and its button
+            // is the next step (the owner, 2026-11-01).
+            if (ports.keyring?.view()) { next.tynnSignInUrl = null; next.tynnMessage = null; break; }
             const { url } = await tynnAccountOf(ports).startSignIn();
             next.tynnSignInUrl = url;
             next.tynnMessage = null;
+            break;
+        }
+        // THE KEYRING CARD'S ONE BUTTON: install, start, restart or check again, whichever the session needs next.
+        case 'keyring.fix': {
+            if (!ports.keyring) throw new Error('this Genie has no keyring to set up here');
+            await ports.keyring.fix();
             break;
         }
         case 'integrations.tynnCode': {

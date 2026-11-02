@@ -49,7 +49,7 @@ export function TimelineStrip({ timeline, lanesOpen, onToggleLanes, onOpenRow, l
                         title={`Turn ${s.n}`}
                         aria-label={`Turn ${s.n}`}
                         onClick={() => onOpenRow(s.rowId)}
-                        className="absolute inset-y-0 rounded-none border-l border-[var(--border-2)] p-0 text-left hover:bg-[var(--bg-2)]"
+                        className="absolute inset-y-0 rounded-none border-l border-[var(--border-2)] p-0 text-left hover:bg-[var(--bg-2)] justify-start"
                         style={{ left: `${s.x * 100}%`, width: `${s.w * 100}%` }}
                     >
                         {/* A label only where there is room (session-timeline.ts LABEL_GAP); the title names every turn. */}

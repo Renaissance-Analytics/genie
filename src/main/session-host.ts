@@ -1480,6 +1480,9 @@ export class SessionHost {
             designLogin: entry.session.designLogin,
             running: session.running,
             turnState: session.turnState,
+            // COOLING (core/session.ts COOLING_MS): derived here, once, so the window, the remote, the phone and a replica
+            // of this probe all read the same status. Display only: `turnState` is `idle` while it is true.
+            cooling: session.cooling,
             inTurn: session.inTurn,
             starting: session.starting,
             startedAt,

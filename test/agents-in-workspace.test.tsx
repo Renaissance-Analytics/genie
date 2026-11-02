@@ -57,12 +57,12 @@ describe('the strip, drawn', () => {
         const html = render({ kind: 'agent', id: 'a1' });
         expect(html).toContain('data-workspace-tabs=""');
         expect(html.match(/data-workspace-tab="agent:/g)).toHaveLength(2);
-        expect(html).toMatch(/data-workspace-tab="agent:a1"[^>]*data-current="true"/);
-        expect(html).not.toMatch(/data-workspace-tab="agent:a2"[^>]*data-current="true"/);
-        expect(html.match(/data-current="true"/g)).toHaveLength(1);
+        expect(control(html, 'data-workspace-tab="agent:a1"')!.open).toContain('aria-selected="true"');
+        expect(control(html, 'data-workspace-tab="agent:a2"')!.open).toContain('aria-selected="false"');
+        expect(html.match(/aria-selected="true"/g)).toHaveLength(1);
         for (const v of ['home', 'settings']) expect(html).toContain(`data-workspace-tab="${v}"`);
         const ops = controlByText(html, 'Ops');
-        expect(ops).toMatchObject({ tag: 'button', fancy: true });
+        expect(ops).toMatchObject({ tag: 'button', tab: true });
         expect(ops!.open).toMatch(/data-workspace-tab="tab:[^"]+"/);
         // Each agent tab says its state; none is closed away (it is the agent's only door).
         expect(html).not.toContain('data-close-agent-tab');
@@ -71,10 +71,10 @@ describe('the strip, drawn', () => {
 
     it('on a workspace view: that view is current and no agent is', () => {
         const html = render({ kind: 'view', view: 'home' });
-        expect(html).toMatch(/data-workspace-tab="home"[^>]*data-current="true"/);
-        expect(html.match(/data-current="true"/g)).toHaveLength(1);
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="true"');
+        expect(html.match(/aria-selected="true"/g)).toHaveLength(1);
         // The first tab is the workspace DASHBOARD, and says so (the owner: not "Agents").
-        expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
         expect(html).not.toMatch(/>Agents</);
     });

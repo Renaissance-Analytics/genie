@@ -167,6 +167,25 @@ describe.each(['claude', 'codex'] as const)('the inbox push — a %s agent', (pr
         expect(promptsOf(record.id)).toEqual([NOTICE_1]);
     });
 
+    /*
+     * COOLING IS DISPLAY ONLY (the owner, 2026-11-01): the 15 s after a clean turn end reads `Cooling` on the board, and
+     * the push treats it as idle — the notice goes out at once, it does not wait the cooling out.
+     */
+    it('mailed while COOLING (its turn just ended): the notice goes out at once, not after the cooling', async () => {
+        const record = register();
+        await startReady(record);
+        host.prompt(record.id, 'warm up', 'you');
+        // POSITIVE CONTROL: mid-turn it is not cooling.
+        expect(host.probe(record.id)?.cooling).toBe(false);
+        endTurn(record.id);
+        expect(host.probe(record.id)?.cooling).toBe(true);
+        await mail(record.id, 'right after your turn');
+        expect(notices(record.id)).toEqual([NOTICE_1]);
+        // Delivered with no clock moving (real timers, 15 s cooling): it opened its turn now, which ends the cooling.
+        expect(host.probe(record.id)?.turnState).toBe('working');
+        expect(host.probe(record.id)?.cooling).toBe(false);
+    });
+
     it('mailed while it is NOT RUNNING: the notice is delivered once it is started and ready', async () => {
         const record = register();
         await mail(record.id, 'while you were out');

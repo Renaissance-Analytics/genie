@@ -11,7 +11,7 @@ import { readIndexCollapsed, turnNumbers, writeIndexCollapsed } from '../../core
 import { FidelityDot } from './Dashboard.js';
 import { ProviderLogo, providerName } from './ProviderLogo.js';
 import type { TerminalPaneProps } from './TerminalPane.js';
-import { Button, Dropdown, Icon, Select, Switch } from '@particle-academy/react-fancy';
+import { Breadcrumbs, Button, Dropdown, Icon, Select, Switch, Tabs } from '@particle-academy/react-fancy';
 import { ACP_PROVIDERS } from '../../core/engine.js';
 import { agentChanges } from '../../core/agent-changes.js';
 import { IW_DELIVERIES, type IssueWatchPrefs, type IssueWatchSetting, type IwDelivery } from '../../core/issue-watch.js';
@@ -96,6 +96,8 @@ const PILL_TONE = {
     warn: 'text-[var(--warning)]',
     bad: 'text-[var(--danger)]',
     muted: 'text-[var(--fg-3)]',
+    // Cooling (core/session.ts COOLING_MS): its own colour, not Working's green nor Idle's grey.
+    cool: 'text-[var(--sky-400)]',
 } as const;
 
 /**
@@ -602,10 +604,18 @@ function AgentViewBody({
                     pinned the header is ~286px, and the crumb squeezed to nothing while the rest spilled past the header). The
                     path gives way first; then the crumb and the name truncate, keeping a few letters; chip and pill stay whole. */}
                 <div data-header-title="" className="flex min-w-0 flex-1 items-center gap-3 overflow-hidden">
-                {/* Back to its workspace (Tynn #805): the crumb is a link. */}
-                {workspace ? <Button variant="ghost" size="xs" labelClassName="truncate" data-crumb={workspace.id} type="button" data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)]">{workspace.name ?? workspace.id} /</Button> : null}
-                <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
-                <span data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium">{agent.name}</span>
+                {/* THE BREADCRUMB, react-fancy's (the owner, 2026-11-01: menus and crumbs are navigation, not Buttons): back to its
+                    workspace (Tynn #805) by onNavigate — a genie:// address is routed by the app, not followed as a link — then the
+                    agent, the page you are on. Below md react-fancy folds it into a menu that keeps the way back. */}
+                <Breadcrumbs separator={<span className="text-[13px] text-[var(--fg-4)]">/</span>} className="min-w-0 shrink items-center gap-1.5 overflow-hidden">
+                    {workspace ? (
+                        <Breadcrumbs.Item data-crumb={workspace.id} data-nav={`genie://workspace/${workspace.id}`} onClick={() => onNavigate(`genie://workspace/${workspace.id}`)} title={`Back to ${workspace.name ?? workspace.id}`} className="min-w-[3rem] max-w-[12rem] shrink truncate whitespace-nowrap text-left text-[13px] text-[var(--fg-3)] hover:text-[var(--fg-1)] dark:text-[var(--fg-3)] dark:hover:text-[var(--fg-1)]">
+                            {workspace.name ?? workspace.id}
+                        </Breadcrumbs.Item>
+                    ) : null}
+                    <Breadcrumbs.Item active data-agent-name="" title={agent.name} className="min-w-[3rem] shrink truncate whitespace-nowrap font-medium text-[var(--fg-1)] dark:text-[var(--fg-1)]">{agent.name}</Breadcrumbs.Item>
+                </Breadcrumbs>
+                <FidelityDot fidelity={agent.fidelity} state={pill.tone === 'ok' ? 'working' : pill.tone === 'cool' ? 'cooling' : pill.tone === 'warn' ? 'waiting' : pill.tone === 'bad' ? 'broken' : 'idle'} />
                 <span data-provider-chip={agent.provider} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-sm bg-[var(--bg-2)] px-1.5 py-px font-mono text-[11px] text-[var(--fg-3)]"><ProviderLogo provider={agent.provider} size="xs" className="text-[var(--fg-2)]" />{agent.fidelity === 'observed' ? 'pty' : 'ACP'}</span>
                 <span className="min-w-0 shrink-[1000] truncate font-mono text-[11px] text-[var(--fg-4)]" title={agent.cwd}>{agent.cwd}</span>
 
@@ -842,26 +852,28 @@ function AgentViewBody({
                 </form>
             ) : null}
 
-            {/* Tabs. The set itself is the signal — a missing tab says what Genie cannot see. */}
-            <div role="tablist" className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
-                {tabs.map((t) => (
-                    <Button size="xs" labelClassName="contents"
-                        key={t}
-                        type="button"
-                        role="tab"
-                        data-tab={t}
-                        data-active={t === active ? 'true' : 'false'}
-                        aria-selected={t === active}
-                        onClick={() => onNavigate(`genie://agent/${agent.id}?tab=${t}`)}
-                        className={`rounded-md px-2.5 py-1 text-[13px] ${
-                            t === active ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'
-                        }`}
-                    >
-                        {TAB_LABEL[t]}
-                        {/* The indicator: how many it has running now, on the tab, from every tab. */}
-                        {t === 'shells' && shells.count > 0 ? <span data-shells-count={shells.count} className="ml-1.5 rounded-full bg-[var(--success)] px-1.5 text-[10px] font-semibold text-[var(--bg-1)]">{shells.count}</span> : null}
-                    </Button>
-                ))}
+            {/* Tabs. The set itself is the signal — a missing tab says what Genie cannot see. react-fancy Tabs, not Buttons (the
+                owner, 2026-11-01: "those should not be buttons, it's a menu"): role="tab", the one on screen aria-selected; the
+                route (`?tab=`) stays the source of truth, so a pick navigates. */}
+            <div className="flex h-9 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
+                <Tabs activeTab={active} onTabChange={(t) => onNavigate(`genie://agent/${agent.id}?tab=${t}`)} variant="pills">
+                    <Tabs.List className="gap-1 bg-transparent p-0 dark:bg-transparent">
+                        {tabs.map((t) => (
+                            <Tabs.Tab
+                                key={t}
+                                value={t}
+                                data-tab={t}
+                                className={`flex items-center rounded-md px-2.5 py-1 text-[13px] shadow-none ${
+                                    t === active ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)] dark:bg-[var(--bg-3)] dark:text-[var(--fg-1)]' : 'font-normal text-[var(--fg-3)] hover:bg-[var(--bg-2)] dark:text-[var(--fg-3)]'
+                                }`}
+                            >
+                                {TAB_LABEL[t]}
+                                {/* The indicator: how many it has running now, on the tab, from every tab. */}
+                                {t === 'shells' && shells.count > 0 ? <span data-shells-count={shells.count} className="ml-1.5 rounded-full bg-[var(--success)] px-1.5 text-[10px] font-semibold text-[var(--bg-1)]">{shells.count}</span> : null}
+                            </Tabs.Tab>
+                        ))}
+                    </Tabs.List>
+                </Tabs>
                 {/* THE TAB NOTE (the board), right of the tabs: where Files / Changes open; on the Stream, a measurement of the rows. */}
                 {(() => { const n = tabNote(rows, active, agent.name, clock()); return n ? <span data-tab-note={n.kind} className="ml-auto truncate font-mono text-[11px] text-[var(--fg-4)]">{n.text}</span> : null; })()}
             </div>
@@ -904,7 +916,7 @@ function AgentViewBody({
                                             {...(item.live ? { 'data-live': item.live } : {})}
                                             data-nav={door}
                                             onClick={() => onNavigate(door)}
-                                            className={`flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left ${item.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}
+                                            className={`justify-start flex w-full flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left ${item.selected ? 'bg-[var(--bg-2)]' : 'hover:bg-[var(--bg-1)]'}`}
                                         >
                                             <span className="flex w-full items-center gap-1.5 text-[12px] text-[var(--fg-1)]">
                                                 {item.live ? <span className={`size-1.5 shrink-0 animate-pulse rounded-full ${INDEX_LIVE[item.live]}`} /> : null}
@@ -1017,7 +1029,7 @@ function AgentViewBody({
                                     <ul className="flex flex-col gap-0.5">
                                         {changes.map((path) => (
                                             <li key={path}>
-                                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
+                                                <Button variant="ghost" size="xs" labelClassName="contents" type="button" data-agent-change={path} onClick={() => setChangeOpen(path)} className={`justify-start flex w-full items-center gap-2 rounded-md px-2 py-1 text-left font-mono text-[12px] ${changeOpen === path ? 'bg-[var(--bg-3)] text-[var(--fg-1)]' : 'text-[var(--fg-2)] hover:bg-[var(--bg-2)]'}`}>
                                                     <Icon name="file-code" className="h-3.5 w-3.5 shrink-0 text-[var(--success)]" />
                                                     <span className="truncate">{path}</span>
                                                 </Button>
@@ -1108,20 +1120,21 @@ function AgentViewBody({
                                 ) : null}
 
                                 {sections.length > 0 ? (
-                                    <div role="tablist" data-settings-tabs="" className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
-                                        {sections.map((s) => (
-                                            <Button size="xs"
-                                                key={s.id}
-                                                type="button"
-                                                role="tab"
-                                                data-settings-tab={s.id}
-                                                aria-selected={s.id === shown}
-                                                onClick={() => setOwnSettingsSection(s.id)}
-                                                className={`rounded-md px-2 py-0.5 text-[12px] ${s.id === shown ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]' : 'text-[var(--fg-3)] hover:bg-[var(--bg-2)]'}`}
-                                            >
-                                                {s.label}
-                                            </Button>
-                                        ))}
+                                    <div data-settings-tabs="" className="flex h-8 shrink-0 items-center gap-1 border-b border-[var(--border-1)] px-5">
+                                        <Tabs activeTab={shown ?? ''} onTabChange={(id) => setOwnSettingsSection(id as SettingsSection)} variant="pills">
+                                            <Tabs.List className="gap-1 bg-transparent p-0 dark:bg-transparent">
+                                                {sections.map((s) => (
+                                                    <Tabs.Tab
+                                                        key={s.id}
+                                                        value={s.id}
+                                                        data-settings-tab={s.id}
+                                                        className={`rounded-md px-2 py-0.5 text-[12px] shadow-none ${s.id === shown ? 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)] dark:bg-[var(--bg-3)] dark:text-[var(--fg-1)]' : 'font-normal text-[var(--fg-3)] hover:bg-[var(--bg-2)] dark:text-[var(--fg-3)]'}`}
+                                                    >
+                                                        {s.label}
+                                                    </Tabs.Tab>
+                                                ))}
+                                            </Tabs.List>
+                                        </Tabs>
                                     </div>
                                 ) : null}
 

@@ -112,9 +112,9 @@ describe('an agent opened and never prompted', () => {
         expect(agentRowFor(r, busy, now).state).toBe('working');
         expect(chatLine(r)).toBe('Working');
 
-        // And the turn ending puts it back.
+        // And the turn ending ends Working: Cooling for 15 s (test/agent-cooling.test.ts), then Idle.
         endTurn(r.id);
-        expect(agentRowFor(r, host.probe(r.id), now).state).toBe('idle');
+        expect(agentRowFor(r, host.probe(r.id), now).state).toBe('cooling');
     });
 
     it('still STARTING (a driver that declares `ready`, as Codex): not working either; a prompt sent meanwhile opens its turn at ready, and that is announced', async () => {

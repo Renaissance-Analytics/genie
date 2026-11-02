@@ -14,6 +14,8 @@ export interface ControlMarkup {
     inner: string;
     /** Rendered by react-fancy's Button (it marks itself `data-react-fancy-button`). */
     fancy: boolean;
+    /** Rendered by react-fancy's Tabs as a tab (it marks itself `data-react-fancy-tabs-tab`; role="tab", aria-selected). */
+    tab: boolean;
 }
 
 /** The first `<button>` or `<a>` whose opening tag contains `attr` (e.g. `data-door="agent"`), or null. */
@@ -42,7 +44,7 @@ export function control(html: string, attr: string): ControlMarkup | null {
         }
         const open = html.slice(start, openEnd + 1);
         const text = html.slice(openEnd + 1, end).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-        return { tag, open, inner: html.slice(openEnd + 1, end), text, fancy: /\sdata-react-fancy-button=""/.test(open) };
+        return { tag, open, inner: html.slice(openEnd + 1, end), text, fancy: /\sdata-react-fancy-button=""/.test(open), tab: /\sdata-react-fancy-tabs-tab=""/.test(open) };
     }
 }
 

@@ -24,4 +24,11 @@ export const REAL_BUTTONS_ALLOWLIST: readonly AllowlistEntry[] = [
     { file: 'components/TynnBoardPanel.tsx', rule: 'click-on-non-interactive', count: 1, reason: 'special: role="menu" container only stops propagation so a click inside the menu does not close it.' },
     { file: 'components/TynnBoardPanel.tsx', rule: 'raw-button', count: 9, reason: 'debt: converts in the Tynn tab PR' },
     { file: 'components/Workspace.tsx', rule: 'raw-button', count: 32, reason: 'debt: converts in the workspace shell PR' },
+    { file: 'components/AddWorkspaceWizard.tsx', rule: 'menu-as-button', count: 1, reason: 'special: the wizard\'s stepper (aria-current="step"); react-fancy has no stepper component, so it stays a Button until fancy ships one' },
+    { file: 'components/DesignedTab.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
+    { file: 'components/FeatureSurfaces.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: the Browser surface\'s site chips (aria-current on a Button) navigate, so they become links in the menus follow-up PR; the Settings nav is already a react-fancy Sidebar' },
+    { file: 'components/GenieBrowserChrome.tsx', rule: 'menu-as-button', count: 2, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
+    { file: 'components/QuestionApp.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
+    { file: 'components/TynnBoardPanel.tsx', rule: 'menu-as-button', count: 3, reason: 'debt: a menu or tab item made into a Button; held for the open Tynn-tab PRs, then react-fancy Tabs' },
+    { file: 'components/Workspace.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; held for the open Tynn-tab PRs, then react-fancy Tabs' },
 ];

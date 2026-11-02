@@ -71,3 +71,33 @@ describe('password store memo', () => {
         expect(readRememberedPasswordStore(gone)).toBeNull();
     });
 });
+
+/**
+ * A SELECTED STORE IS NOT A WORKING STORE (genie keyring fix, 2026-11-01). `getSelectedStorageBackend()` reports what
+ * Chromium CHOSE, not whether it produced a key: a KWallet nobody runs (Tynn #846) or a locked collection report
+ * `kwallet6` / `gnome_libsecret` and encrypt nothing. Written down, that choice was re-asserted on every later launch where
+ * the bus probe found nothing — a broken store made permanent. Only a launch that could ENCRYPT may write the memo, and a
+ * launch on the remembered store that could not encrypt clears it.
+ */
+describe('password store memo — only a store that gave a key', () => {
+    it('a selected store that could not encrypt is NOT remembered', () => {
+        rememberPasswordStore(dir, 'kwallet6', false);
+        expect(readRememberedPasswordStore(dir)).toBeNull();
+        // Positive control: the same store, encrypting, is.
+        rememberPasswordStore(dir, 'kwallet6', true);
+        expect(readRememberedPasswordStore(dir)).toBe('kwallet6');
+    });
+
+    it('the remembered store failing to encrypt clears it; a different failing store leaves a good memo alone', () => {
+        rememberPasswordStore(dir, 'gnome_libsecret', true);
+        rememberPasswordStore(dir, 'kwallet6', false);
+        expect(readRememberedPasswordStore(dir)).toBe('gnome-libsecret');
+        rememberPasswordStore(dir, 'gnome_libsecret', false);
+        expect(readRememberedPasswordStore(dir)).toBeNull();
+    });
+
+    it('main.ts passes whether this launch could encrypt', () => {
+        const main = fs.readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+        expect(main).toMatch(/rememberPasswordStore\(genieHome\(\), safeStorage\.getSelectedStorageBackend\(\), safeStorage\.isEncryptionAvailable\(\)\)/);
+    });
+});

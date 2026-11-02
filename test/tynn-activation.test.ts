@@ -276,5 +276,6 @@ it('production main wires preparation for both providers and safeStorage without
     const main = await readFile('src/main/main.ts', 'utf8');
     expect(main.includes('tynnMcpServersOnDisk')).toBe(false);
     expect(/prepareMcpServers:\s*async[\s\S]*?prepareAgentMcp\(record,\s*signal\)/.test(main), 'main must prepare each session').toBe(true);
-    expect(/tynnCipher:\s*\{[\s\S]*?safeStorage\.encryptString\(text\)[\s\S]*?safeStorage\.decryptString\(bytes\)/.test(main), 'production encryption must use safeStorage').toBe(true);
+    // safeStorage through the one gate (os-cipher.ts): no keyring, no secret; basic_text is never a keyring (2026-11-01).
+    expect(/tynnCipher:\s*osCipher\(safeStorage, process\.platform\)/.test(main), 'production encryption must use safeStorage through osCipher').toBe(true);
 });

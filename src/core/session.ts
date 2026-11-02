@@ -237,6 +237,17 @@ export const LIMIT_RESUME_PROMPT = "The provider's rate limit has reset. Continu
 export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 240_000];
 export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
 
+/**
+ * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
+ * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
+ * sort By status and agents that are in between turns aren't making the whole list jump around."
+ *
+ * How long a turn that ended cleanly reads `Cooling` before `Idle`. Fixed, not a setting. DISPLAY ONLY: `turnState` is
+ * `idle` throughout, so nothing that decides whether to prompt (the inbox push, a flow, the person's message, a setting
+ * applied after a turn) waits for it.
+ */
+export const COOLING_MS = 15_000;
+
 export interface AgentSessionOptions {
     agentId: AgentId;
     cwd: string;
@@ -329,7 +340,7 @@ export interface AgentSessionOptions {
     onStraggler?: () => void;
     /** Genie's clock, for the stamps below (when an approval parked, when a failure was recorded). Injected so a host's clock reaches them. */
     clock?: () => number;
-    /** Run `fire` after `ms`; answers a cancel. Injected so a test can fire it; default `setTimeout`. */
+    /** Run `fire` after `ms`; answers a cancel (an overload's retry, the Cooling wait). Injected so a test can fire it; default `setTimeout`. */
     retryLater?: (ms: number, fire: () => void) => () => void;
 }
 
@@ -343,6 +354,8 @@ export class AgentSession {
     /** Overloaded turns in a row (OVERLOAD_RETRY_MS); a turn that goes through resets it. */
     #overloads = 0;
     #overloadCancel: (() => void) | null = null;
+    /** The Cooling wait (COOLING_MS) after a turn that ended cleanly, while it runs; `null` = not cooling. One per session. */
+    #coolingCancel: (() => void) | null = null;
     #turnState: TurnState = 'idle';
     #options: AgentSessionOptions;
     /** Rows that failed to persist. Kept so a storage fault is reportable, never silent. */
@@ -537,6 +550,37 @@ export class AgentSession {
 
     get turnState(): TurnState {
         return this.#turnState;
+    }
+
+    /**
+     * COOLING (COOLING_MS): the turn ended cleanly less than 15 s ago and nothing has happened since — no new turn, no
+     * stop. A status for the board to show and sort by, never a gate: `turnState` is `idle`, and `promptable` and
+     * `deliverable` read exactly as they would without it.
+     */
+    get cooling(): boolean {
+        return this.#coolingCancel !== null && this.#turnState === 'idle';
+    }
+
+    /** Begin the Cooling wait, replacing one already running; its end is announced, so the board redraws it Idle. */
+    #startCooling(): void {
+        this.#stopCooling();
+        this.#coolingCancel = this.#later(COOLING_MS, () => {
+            this.#coolingCancel = null;
+            this.#changed();
+        });
+    }
+
+    #stopCooling(): void {
+        this.#coolingCancel?.();
+        this.#coolingCancel = null;
+    }
+
+    /** The injected timer, or `setTimeout` — unref'd, so a wait that only redraws a status never holds the process open. */
+    #later(ms: number, fire: () => void): () => void {
+        if (this.#options.retryLater) return this.#options.retryLater(ms, fire);
+        const t = setTimeout(fire, ms);
+        t.unref?.();
+        return () => clearTimeout(t);
     }
 
     /**
@@ -865,6 +909,7 @@ export class AgentSession {
                         return;
                     }
                     this.#turnState = 'failed';
+                    this.#stopCooling();
                     this.#leaveQueuedAsDrafts();
                     this.#changed();
                     /*
@@ -971,8 +1016,7 @@ export class AgentSession {
                         this.#failedAt = null;
                         this.#held = true;
                         void this.#emitRow({ kind: 'notice', level: 'warning', message: `The provider is overloaded (${outcome.failure?.reason ?? 'overloaded'}). Genie retries in ${Math.round(ms / 1000)} s (attempt ${this.#overloads} of ${OVERLOAD_RETRY_MS.length}); anything you send meanwhile goes then.` });
-                        const later = this.#options.retryLater ?? ((wait: number, fire: () => void) => { const t = setTimeout(fire, wait); return () => clearTimeout(t); });
-                        this.#overloadCancel = later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
+                        this.#overloadCancel = this.#later(ms, () => { this.#overloadCancel = null; this.#resumeHeld(OVERLOAD_RESUME_PROMPT); });
                     } else if (paused !== null) {
                         // ACCOUNT PAUSED, not Broken and not Signed out: the provider refused the account itself. Said in
                         // words with what to do; main alerts once per login and `Try again` brings every agent on it back.
@@ -1014,6 +1058,10 @@ export class AgentSession {
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
                     // never the agent's last handoff, which a session answering in chat never files.
                     if (this.#lastTurnEnd === 'replied') void this.#emitRow({ kind: 'finished', n: Math.max(this.#marked, this.#turns) });
+                    // COOLING (COOLING_MS): only a turn that REPLIED — a failed, stopped, held or signed-out turn keeps its
+                    // own state. Started before the flush below: a prompt that waited opens a turn there, which ends it.
+                    if (this.#lastTurnEnd === 'replied') this.#startCooling();
+                    else this.#stopCooling();
                     // A QUEUED PROMPT IS NOT ASSUMED TO BECOME A TURN (the owner, 2026-10-20: idle agents not woken by
                     // mail). Claude Code FOLDS a prompt sent mid-turn into the running turn; opening its turn here left a
                     // phantom one that never ended — moic `working` for 36 minutes while idle, so no inbox notice and the
@@ -1041,6 +1089,7 @@ export class AgentSession {
                     // A retry waiting out an overload has nobody to send to now.
                     this.#overloadCancel?.();
                     this.#overloadCancel = null;
+                    this.#stopCooling();
                     // Persist whatever of the last reply arrived. A provider dying mid-sentence
                     // should cost the rest of the sentence, not the part it already said.
                     this.#closeMessage();
@@ -1207,6 +1256,8 @@ export class AgentSession {
         this.#echo = text;
         this.#echoSeen = '';
         this.#turnState = 'working';
+        // A new turn during Cooling goes straight to Working, and its timer goes with it.
+        this.#stopCooling();
     }
 
     /**
@@ -1230,6 +1281,7 @@ export class AgentSession {
         this.#ended = true;
         this.#overloadCancel?.();
         this.#overloadCancel = null;
+        this.#stopCooling();
         this.#leaveQueuedAsDrafts();
 
         // A promise nobody will ever resolve is a provider process waiting forever. `stop` means stop, and that has to
@@ -1736,6 +1788,8 @@ export class AgentSession {
         // Not announced here: this frame's own row (a reply, a thought, a tool call — every one of them a row, emitted
         // below in this same call) is pushed and already reads `working`. Announcing it as well was a second push per
         // first frame (genie#1418, batch B: session-host.test's push count).
+        // Activity during Cooling is a turn of the agent's own: Working, and the timer goes.
+        if (this.#turnState === 'idle' && activity) this.#stopCooling();
         if (this.#turnState === 'idle' && activity && this.#lastTurnEnd === null) {
             this.#turnState = 'working';
         } else if (this.#turnState === 'idle' && activity) {

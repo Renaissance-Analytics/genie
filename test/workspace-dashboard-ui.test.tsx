@@ -131,19 +131,19 @@ describe('the workspace route opens on its dashboard', () => {
     it('the header carries the agents strip and the view tabs (Dashboard … Settings) with the current one marked', () => {
         const html = render({ view: 'home' });
         expect(count(html, 'data-agent-pill')).toBe(3);
-        expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', fancy: true });
+        expect(control(html, 'data-workspace-tab="home"')).toMatchObject({ tag: 'button', tab: true });
         expect(control(html, 'data-workspace-tab="home"')!.text).toMatch(/^Dashboard(?![\w])/);
-        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('data-current="true"');
+        expect(control(html, 'data-workspace-tab="home"')!.open).toContain('aria-selected="true"');
         expect(html).not.toContain('data-workspace-tab="terminals"');
         expect(html).toContain('data-workspace-tab="add"');
-        expect(html).toMatch(/data-workspace-tab="settings"(?![^>]*data-current)/);
+        expect(control(html, 'data-workspace-tab="settings"')!.open).toContain('aria-selected="false"');
     });
 
     it('settings: the governs and settings sections, and nothing of the dashboard or the terminals', () => {
         const html = render({ view: 'settings' });
         expect(html).toContain('data-workspace-settings');
         expect(html).toContain('data-governs');
-        expect(html).toMatch(/data-workspace-tab="settings"[^>]*data-current="true"/);
+        expect(control(html, 'data-workspace-tab="settings"')!.open).toContain('aria-selected="true"');
         expect(html).not.toContain('data-workspace-dashboard');
         expect(html).not.toContain('data-terminal-add');
     });

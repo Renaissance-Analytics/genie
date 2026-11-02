@@ -15,7 +15,9 @@ export type SiteTone = 'running' | 'starting' | 'failed' | 'idle';
 type Of = { readonly workspaceId: string; readonly state: string };
 
 export function workingAgents(rows: readonly Of[], workspaceId: string): number {
-    return rows.filter((r) => r.workspaceId === workspaceId && r.state === 'working').length;
+    // Cooling (the 15 s after a turn that replied) counts as Working, as everywhere the board counts: a pulse that went out
+    // and came back between two turns would be the same jump the Cooling state removes from the board.
+    return rows.filter((r) => r.workspaceId === workspaceId && (r.state === 'working' || r.state === 'cooling')).length;
 }
 
 export function processTone(processes: readonly Of[], workspaceId: string): ProcessTone {
