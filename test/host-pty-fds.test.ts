@@ -169,6 +169,10 @@ async function rig(): Promise<Rig> {
     const transport = await within(10_000, 'the socket to the host', connectSocket(record.endpoint), tell);
     const client = new SessionEngineClient();
     expect(await within(15_000, 'the client connecting to the host', client.connect(transport, token), tell)).toMatchObject({ ok: true });
+    // The host's `terminals` spawn host must be up first: opened sooner, a terminal is refused ("the agent host is not
+    // connected, so this process was not started" — CI, 2026-11-02, opened ~400 ms before `profile=terminals` was ready).
+    await until('the host\'s terminals spawn host', () => /spawn host ready pid=\d+ profile=terminals/.test(readHostLog(home)), 20_000)
+        .catch((e: unknown) => { throw new Error(`${String(e)}\n${tell()}`); });
     // What the terminal says and how it ends, heard from before it opens: a terminal that ends at once says why here.
     const heard: string[] = [];
     client.terminals().onData((id, data) => { heard.push(`${id.slice(5, 13)} data ${JSON.stringify(data).slice(0, 300)}`); });
