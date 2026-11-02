@@ -34,4 +34,32 @@ describe('tray', () => {
         expect(png.readUInt32BE(20)).toBe(16); // height
         expect(png.subarray(png.length - 8).toString('latin1')).toContain('IEND');
     });
+
+    /**
+     * THE TRAY WITH GENIE-HOST (the host split, P1b; the owner's decision 5): Quit becomes the two answers the quit asks — "Just close the
+     * UI" (the host keeps what runs) and "Shut down everything" — and the tooltip says the host is running, with how many
+     * agents, so a person with no window open can see it.
+     */
+    it('with the host’s answers wired, Quit Genie gives way to “Just close the UI” and “Shut down everything”', async () => {
+        const { trayMenuTemplate } = await import('../src/main/tray.js');
+        const onQuit = vi.fn();
+        const onCloseUi = vi.fn();
+        const onShutDown = vi.fn();
+        const menu = trayMenuTemplate({ onOpen: vi.fn(), onSettings: vi.fn(), onCheckUpdates: vi.fn(), onQuit, onCloseUi, onShutDown });
+        expect(menu.map((m) => m.label ?? m.type)).toEqual(['Open Genie', 'Settings…', 'Check for updates', 'separator', 'Just close the UI', 'Shut down everything']);
+        menu[4]!.click!();
+        expect(onCloseUi).toHaveBeenCalledTimes(1);
+        menu[5]!.click!();
+        expect(onShutDown).toHaveBeenCalledTimes(1);
+        expect(onQuit).not.toHaveBeenCalled();
+    });
+
+    it('the tooltip says the host is running, and how many agents it runs; without a host it is unchanged', async () => {
+        const { trayTooltip } = await import('../src/main/tray.js');
+        expect(trayTooltip([], [], [], false, 0, 0)).toBe('Genie — host running');
+        expect(trayTooltip([], [], [], false, 0, 1)).toBe('Genie — host running 1 agent');
+        expect(trayTooltip([], [], [], false, 2, 3)).toBe('Genie — 2 waiting on you; host running 3 agents');
+        expect(trayTooltip([], [], [], false, 0, null)).toBe('Genie');
+        expect(trayTooltip([], [], [], false, 0)).toBe('Genie');
+    });
 });
