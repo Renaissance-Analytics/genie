@@ -91,7 +91,7 @@ export function reportFlush(flush: Promise<void>, what: string): void {
 }
 
 /**
- * A file that holds a secret in the clear (host-split plan §13: services.json, terminal-snapshots.json…): the owner's alone.
+ * A file that holds a secret in the clear (host-split plan §13: services.json…): the owner's alone.
  * POSIX modes; on Windows the profile's ACL is the guard, and a mode does nothing.
  */
 export const PRIVATE_FILE = { mode: 0o600 } as const;

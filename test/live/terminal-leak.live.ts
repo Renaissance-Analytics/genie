@@ -77,16 +77,7 @@ function pidAlive(pid: number): boolean {
 async function main(): Promise<void> {
     const userData = mkdtempSync(join(tmpdir(), 'genie2-leak-'));
     console.log(`\ngenie2 live TERMINAL LEAK check — ${CYCLES} open→exit cycles, ${LIVE_BATCH} live for the control\n`);
-    const MARK = Buffer.from('GT1');
-    const encryptor = {
-        isAvailable: () => true,
-        encrypt: (b: Buffer) => Buffer.concat([MARK, Buffer.from(b.map((x) => x ^ 0x5a))]),
-        decrypt: (b: Buffer) => {
-            if (!b.subarray(0, MARK.length).equals(MARK)) throw new Error('decrypt on foreign bytes');
-            return Buffer.from(b.subarray(MARK.length).map((x) => x ^ 0x5a));
-        },
-    };
-    const host = new TerminalHost(realFancyTermPort(userData, encryptor));
+    const host = new TerminalHost(realFancyTermPort());
     const exits = new Set<string>();
     host.onExit((id) => { exits.add(id); });
     const shortCommand = process.platform === 'win32' ? 'cmd.exe /c exit 0' : 'true';

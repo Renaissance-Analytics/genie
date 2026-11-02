@@ -401,8 +401,6 @@ export interface GenieBridge {
          * connection always names the workspace, because that is what its scope is checked against.
          */
         attach(workspaceId: string | null, id: string): Promise<{ id: string; pid: number; shell: string; scrollback: string } | null>;
-        /** The previous session's scrollback for this workspace, ONCE (§6.5); `null` when there is none. */
-        previousSession(workspaceId: string): Promise<string | null>;
         onData(listener: (id: string, data: string) => void): () => void;
         onExit(listener: (id: string, exitCode: number) => void): () => void;
     };
@@ -587,7 +585,6 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
     close: () => {},
     list: () => Promise.resolve([]),
     attach: () => Promise.resolve(null),
-    previousSession: () => Promise.resolve(null),
     onData: () => () => {},
     onExit: () => () => {},
 };

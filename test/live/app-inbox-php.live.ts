@@ -138,7 +138,6 @@ async function main(): Promise<void> {
     const roster = [clerk];
     const slugs = new Map([['fancy', 'fancy']]);
     const MARK = Buffer.from('GT1');
-    const encryptor = { isAvailable: () => true, encrypt: (b: Buffer) => Buffer.concat([MARK, Buffer.from(b.map((x) => x ^ 0x5a))]), decrypt: (b: Buffer) => Buffer.from(b.subarray(MARK.length).map((x) => x ^ 0x5a)) };
 
     const keys = await AppInboxKeys.open(userData);
     let services: Awaited<ReturnType<typeof composeServices>> | null = null;
@@ -153,7 +152,7 @@ async function main(): Promise<void> {
     console.log(`\ngenie2 live APP INBOX × PHP — door ${server.url}, root ${root}\n`);
 
     services = await composeServices({
-        userData, pty: realFancyTermPort(userData, encryptor), v1Settings: () => null, caddyBin, frontDoorPort: 0, phpWorkers: 2,
+        userData, pty: realFancyTermPort(), v1Settings: () => null, caddyBin, frontDoorPort: 0, phpWorkers: 2,
         docker: async () => ({ stdout: '', exitCode: 0 }), portFree: async () => true,
         roster: () => roster, workspaceSlugs: () => slugs,
         workspaces: () => [{ id: 'fancy', path: ws }],

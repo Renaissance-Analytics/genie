@@ -55,9 +55,6 @@ export interface WorkspaceState {
     closing?: string | null;
 }
 
-/** What separates a restored snapshot from live output (§6.5): old above, live below, never confused. */
-export const PREVIOUS_SESSION_DIVIDER = '\r\n\x1b[2m— previous session —\x1b[0m\r\n';
-
 /**
  * How much output to keep per terminal, in characters.
  *
@@ -77,15 +74,12 @@ export function terminalOpened(
     state: WorkspaceState,
     tab: TerminalTab,
     scrollback: string,
-    options: { restored?: boolean } = {},
 ): WorkspaceState {
-    // A snapshot restored from disk opens ABOVE the divider; a live reattach's scrollback is live.
-    const seeded = options.restored && scrollback.length > 0 ? scrollback + PREVIOUS_SESSION_DIVIDER : scrollback;
     return {
         ...state,
         terminals: [...state.terminals, tab],
         active: tab.id,
-        output: { ...state.output, [tab.id]: seeded },
+        output: { ...state.output, [tab.id]: scrollback },
     };
 }
 

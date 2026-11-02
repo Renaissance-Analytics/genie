@@ -181,7 +181,7 @@ import { FilesWatchHub, type FilesHubEvent, type FilesWant } from './files-watch
 import { repoStatus } from './repo-git.js';
 import { fileExporter } from './file-export.js';
 import { editorRead, editorWrite, type EditorBytesDeps } from './plugin-editor-bytes.js';
-import { TerminalSnapshots } from './terminal-snapshots.js';
+import { removeSavedScrollback } from './saved-scrollback.js';
 import { addRepoTo, commitsSinceIn, listReposOf, relocateRepoIn, removeRepoFrom, removeRepoLockOf, type RepoOpsPorts } from './repo-ops-host.js';
 import { HUMAN, agentCapFrom } from '../core/inbox.js';
 import { fileEventsOf } from '../core/files-panel.js';
@@ -687,7 +687,6 @@ const wantFrom = (raw: unknown): FilesWant => {
     const repos = Array.isArray(w.repos) ? w.repos.filter((r): r is string => typeof r === 'string') : [];
     return { ...(w.git === true ? { git: true } : {}), ...(repos.length > 0 ? { repos } : {}) };
 };
-let snapshots: TerminalSnapshots | null = null;
 let takeOvers: TakeOverHost | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
@@ -1589,17 +1588,11 @@ async function boot(): Promise<void> {
     /*
      * TERMINALS — for shells, builds, services and hosted sites. No agent has one.
      *
-     * The engine is fancy-term-host behind the PtyPort seam. Snapshots are encrypted with
-     * Electron's safeStorage; on a machine that genuinely cannot encrypt the engine takes its
-     * own documented plaintext fallback, which is its call and not decided here.
+     * The engine is fancy-term-host behind the PtyPort seam. It saves no scrollback (the owner, 2026-11-02).
      */
     // ONE pty engine, shared by the terminal host and the composition root's supervisor.
-    const ptyPort = realFancyTermPort(genieHome(), {
-        isAvailable: () => safeStorage.isEncryptionAvailable(),
-        encrypt: (bytes) => safeStorage.encryptString(bytes.toString('base64')),
-        decrypt: (bytes) => Buffer.from(safeStorage.decryptString(bytes), 'base64'),
     // The engine gates its cwd hook and detached terminals on GENIE'S settings, read live (§6.5).
-    }, () => services?.settings.snapshot() ?? {});
+    const ptyPort = realFancyTermPort(() => services?.settings.snapshot() ?? {});
     // THE WORKSPACE'S TERMINAL LIMIT (beta.33), read live from the workspace's settings on this workstation.
     // Interactive terminals run in genie-host's `terminals` child when there is a host (their output is never read here);
     // the open ones a previous window left running are taken back with what they printed.
@@ -1611,8 +1604,8 @@ async function boot(): Promise<void> {
         for (const pty of adoptablePtys) own.adopt(pty);
         terminals = own;
     }
-    // §6.5: what the terminals showed at the last quit, handed back once per workspace.
-    snapshots = await TerminalSnapshots.open(genieHome());
+    // SCROLLBACK IS NOT SAVED (the owner, 2026-11-02): what an older Genie left is deleted, and nothing writes it again.
+    await removeSavedScrollback(genieHome(), lifecycleLog);
     // THE FILE PANEL (§4.3): one host; attribution is the agents' own tool events, looked up live.
     filesHost = new FilesHost({
         // Each opened file carries its git state (the persona's `· committed`).
@@ -2112,7 +2105,6 @@ async function boot(): Promise<void> {
         if (!joined || (workspaceId !== null && joined.workspaceId !== workspaceId)) return null;
         return { id: joined.id, pid: joined.pid, shell: joined.shell, scrollback: joined.scrollback };
     });
-    ipcMain.handle('genie:terminal-previous', (_event, workspaceId: unknown) => (typeof workspaceId === 'string' ? snapshots?.take(workspaceId) ?? null : null));
 
     // THE FILE PANEL (§4.3). Confinement happens in the host; the renderer never sees a path it did not ask about.
     ipcMain.handle('genie:files-last-committed', (_event, workspaceId: unknown, path: unknown) => (typeof workspaceId === 'string' && typeof path === 'string' ? filesHost?.lastCommitted(workspaceId, path) ?? null : null));
@@ -4079,9 +4071,7 @@ app.on('before-quit', (event) => {
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();
-        // §6.5: the terminals' last screens, saved beside the running set, before the ptys go.
-        const shown = (terminals?.list() ?? []).map((t) => ({ workspaceId: t.workspaceId, scrollback: terminals?.scrollback(t.id) ?? '' }));
-        void Promise.all([recordShutdownNow(), snapshots?.save(shown) ?? Promise.resolve()]).catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
+        void recordShutdownNow().catch(() => { /* an unsaved list means no restore, never a blocked quit */ }).finally(() => app.quit());
         return;
     }
     // The shutdown already ran (a second quit request arrived while the running set was being written): nothing twice.

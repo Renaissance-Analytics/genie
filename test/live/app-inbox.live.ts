@@ -93,11 +93,6 @@ setInterval(() => {}, 1 << 30);
     const slugs = new Map([['fancy', 'fancy'], ['tynn', 'tynn']]);
 
     const MARK = Buffer.from('GT1');
-    const encryptor = {
-        isAvailable: () => true,
-        encrypt: (b: Buffer) => Buffer.concat([MARK, Buffer.from(b.map((x) => x ^ 0x5a))]),
-        decrypt: (b: Buffer) => Buffer.from(b.subarray(MARK.length).map((x) => x ^ 0x5a)),
-    };
 
     const keys = await AppInboxKeys.open(userData);
     let services: Awaited<ReturnType<typeof composeServices>> | null = null;
@@ -113,7 +108,7 @@ setInterval(() => {}, 1 << 30);
     check(server.address === '127.0.0.1', '0. the door listens on 127.0.0.1 only', server.address);
 
     services = await composeServices({
-        userData, pty: realFancyTermPort(userData, encryptor), v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
+        userData, pty: realFancyTermPort(), v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
         docker: async () => ({ stdout: '', exitCode: 0 }), portFree: async () => true,
         roster: () => roster, workspaceSlugs: () => slugs,
         workspaces: () => [{ id: 'fancy', path: fancy }, { id: 'tynn', path: tynn }],

@@ -53,10 +53,9 @@ async function main(): Promise<void> {
     const ws = join(base, 'acme');
     mkdirSync(ws, { recursive: true });
     writeFileSync(join(ws, 'project.json'), `${JSON.stringify({ name: 'acme', repos: [] }, null, 2)}\n`);
-    const encryptor = { isAvailable: () => true, encrypt: (b: Buffer) => b, decrypt: (b: Buffer) => b };
     const cgiPorts: Parameters<typeof resolvePhpCgi>[1] = { platform, root, fs: nodePhpVersionsFs() };
     const composed = await composeServices({
-        userData, pty: realFancyTermPort(userData, encryptor as never), v1Settings: () => null, caddyBin, frontDoorPort: 0,
+        userData, pty: realFancyTermPort(), v1Settings: () => null, caddyBin, frontDoorPort: 0,
         docker: async () => ({ stdout: '', exitCode: 0 }), portFree: async () => true,
         workspaces: () => [{ id: 'acme', path: ws }],
         siteProbe: (port, options) => siteAnswers(port, options),
