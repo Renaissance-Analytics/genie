@@ -141,7 +141,7 @@ function workingLabel(n: number): string {
 }
 
 const ROW =
-    'flex h-[30px] w-full items-center justify-start gap-2 rounded-md px-2 text-[13px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
+    'flex h-[30px] w-full items-center gap-2 rounded-md px-2 text-[13px] text-[var(--fg-2)] hover:bg-[var(--bg-2)]';
 const ROW_ACTIVE = 'bg-[var(--bg-3)] font-medium text-[var(--fg-1)]';
 
 function NavRow({

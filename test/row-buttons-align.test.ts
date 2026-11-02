@@ -110,7 +110,17 @@ describe('every row-like react-fancy Button in the renderer is left-aligned', ()
         expect(misalignedRows(inbox.replace(/w-full flex-col items-stretch justify-start/, 'w-full flex-col'), 'InboxFlyout.tsx').length).toBeGreaterThan(0);
     });
 
+    // The rail is a navigation MENU, not Buttons (the owner, 2026-11-01: "those should not be buttons, it's a menu"): it is
+    // being rebuilt on react-fancy's Sidebar in its own change. Until then its rows are not fixed here. Delete this entry
+    // when that lands — the test below fails once the rail has no row Buttons left, so it cannot outlive its reason.
+    const PENDING: Record<string, string> = { 'components/Sidebar.tsx': 'the rail becomes react-fancy Sidebar (a menu), not Buttons' };
+
     it('none is left centred', () => {
-        expect(found.map((f) => `${f.file}:${f.line} ${f.why}`), found.map((f) => `${f.file}:${f.line} ${f.why}`).join('\n')).toEqual([]);
+        const left = found.filter((f) => !(f.file in PENDING));
+        expect(left.map((f) => `${f.file}:${f.line} ${f.why}`), left.map((f) => `${f.file}:${f.line} ${f.why}`).join('\n')).toEqual([]);
+    });
+
+    it('each pending exception is still needed (it comes off when its file has no centred row Buttons left)', () => {
+        for (const file of Object.keys(PENDING)) expect(found.some((f) => f.file === file), `${file}: ${PENDING[file]}`).toBe(true);
     });
 });
