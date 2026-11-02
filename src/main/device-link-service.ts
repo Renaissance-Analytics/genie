@@ -46,6 +46,8 @@ function frameOf(text: string): Record<string, unknown> | null {
     }
 }
 
+/** The largest frame the host takes from another machine in one piece. */
+export const DEVICE_FRAME_LIMIT_BYTES = 100 * 1024 * 1024;
 const DEFAULT_DIAL_TIMEOUT_MS = 20_000;
 const PIN_NEEDED = 'type the PIN shown on that machine — this device has not paired with it yet';
 

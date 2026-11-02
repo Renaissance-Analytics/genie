@@ -9,7 +9,7 @@ import { rootsOfThisMachine } from './host-https-fetch.js';
  * VERIFICATION IS NEVER OFF: `rejectUnauthorized: true` is explicit, so an inherited NODE_TLS_REJECT_UNAUTHORIZED=0 changes nothing. No redirect is followed: a token goes to
  * the address it was minted by. Genie's CA counts only once it is in the OS store. No proxy: these machines are reached directly, as a window reached them over the tailnet.
  */
-export function deviceSocket(url: string, options: { readonly machineRoots?: () => readonly string[] } = {}): DeviceSocket {
+export function deviceSocket(url: string, options: { readonly machineRoots?: () => readonly string[]; readonly maxPayload?: number } = {}): DeviceSocket {
     const socket = new WebSocket(url, { ca: [...(options.machineRoots ?? rootsOfThisMachine)()], rejectUnauthorized: true, followRedirects: false });
     // ws emits `error` when a socket is closed mid-dial, and an emitter with no listener throws: giving up on a machine must not take the host with it.
     socket.on('error', () => {});

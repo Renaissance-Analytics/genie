@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocketServer } from 'ws';
 import { deviceSocket } from '../src/main/device-socket.js';
-import { DeviceLinkService } from '../src/main/device-link-service.js';
+import { DEVICE_FRAME_LIMIT_BYTES, DeviceLinkService, type DeviceLinkEvent } from '../src/main/device-link-service.js';
 import { issueCa, issueLeaf, type IssuedPem } from '../src/main/x509.js';
 
 /**
@@ -109,6 +109,50 @@ describe('an error nobody is listening for', () => {
         socket.onopen = socket.onmessage = socket.onclose = socket.onerror = null;
         expect((socket as unknown as EventEmitter).listenerCount('error')).toBeGreaterThan(0);
         socket.close();
+    });
+});
+
+describe('a frame over the limit', () => {
+    async function rigged(frameBytes: number) {
+        const server = createHttpServer();
+        new WebSocketServer({ server }).on('connection', (socket) => { socket.on('message', () => socket.send('x'.repeat(frameBytes))); });
+        open.push(server);
+        await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+        const url = `ws://127.0.0.1:${(server.address() as AddressInfo).port}/genie`;
+        const events: DeviceLinkEvent[] = [];
+        const lines: string[] = [];
+        const service = new DeviceLinkService({
+            tokens: { tokenFor: async () => ({ kind: 'missing' }), remember: async () => ({ ok: true }), forget: async () => ({ ok: true }), hosts: () => [] },
+            socket: (dial) => deviceSocket(dial, { machineRoots: roots, maxPayload: 1024 }),
+            send: (_owner, event) => events.push(event),
+            log: (line) => lines.push(line),
+        });
+        const opened = await service.open('w', url);
+        if (!opened.ok) throw new Error(opened.reason);
+        service.send('w', opened.channel, JSON.stringify({ kind: 'hello', auth: { kind: 'pin', code: '1' } }));
+        for (let i = 0; i < 100 && !events.some((e) => e.type === 'closed' || e.type === 'frame'); i += 1) await new Promise((r) => setTimeout(r, 20));
+        return { events, lines };
+    }
+
+    it('closes with words that name the limit, in the window and in the log: never a drop with no reason', async () => {
+        const { events, lines } = await rigged(2048);
+        const closed = events.filter((e) => e.type === 'closed');
+        expect(closed).toHaveLength(1);
+        const reason = (closed[0] as { reason: string | null }).reason ?? '';
+        expect(reason).toContain('100 MiB');
+        expect(reason).toMatch(/larger/);
+        expect(lines.join('\n')).toContain('100 MiB');
+    });
+
+    it('CONTROL: a frame under it arrives', async () => {
+        const { events } = await rigged(512);
+        expect(events.filter((e) => e.type === 'frame')).toHaveLength(1);
+        expect(events.filter((e) => e.type === 'closed')).toEqual([]);
+    });
+
+    it('the limit is the one the socket is given, and it is 100 MiB', () => {
+        expect(DEVICE_FRAME_LIMIT_BYTES).toBe(100 * 1024 * 1024);
+        expect(readFileSync('src/main/device-socket.ts', 'utf8')).toMatch(/maxPayload: options\.maxPayload \?\? DEVICE_FRAME_LIMIT_BYTES/);
     });
 });
 

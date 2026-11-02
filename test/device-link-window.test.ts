@@ -161,6 +161,10 @@ describe('source guards: the desktop path', () => {
         expect(desktop).not.toMatch(/kind: 'token'/);
     });
 
+    it('a connection that drops after it was up says the host\'s words, not nothing', () => {
+        expect(desktop).toMatch(/transport\.onClose\(\(\) => \{ const why = transport\.closedBecause\(\);/);
+    });
+
     it('a phone still keeps its origin storage', () => {
         const phone = app.slice(app.indexOf('function useMobileRemote('));
         expect(phone).toContain('rememberedTokens(window.localStorage)');

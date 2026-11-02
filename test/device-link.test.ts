@@ -54,8 +54,8 @@ class FakeSocket implements DeviceSocket {
     close(): void { this.closed += 1; }
     opens(): void { this.readyState = 1; this.onopen?.({}); }
     says(frame: unknown): void { this.onmessage?.({ data: typeof frame === 'string' ? frame : JSON.stringify(frame) }); }
-    ends(): void { this.readyState = 3; this.onclose?.({}); }
-    fails(): void { this.onerror?.({}); }
+    ends(ev: unknown = {}): void { this.readyState = 3; this.onclose?.(ev); }
+    fails(ev: unknown = {}): void { this.onerror?.(ev); }
 }
 
 function rig(k: Lockable = keychain(), options: { dialTimeoutMs?: number } = {}) {
@@ -335,6 +335,30 @@ describe('the channel: whose it is, and how it ends', () => {
         socket.ends();
         await settle();
         expect(r.closedTo(channel)).toHaveLength(1);
+    });
+
+    it('a connection that fails says what failed', async () => {
+        const r = rig();
+        const { channel, socket } = await r.opened();
+        socket.fails({ message: 'read ECONNRESET' });
+        await settle();
+        expect(r.closedTo(channel)[0]).toContain('read ECONNRESET');
+    });
+
+    it('a machine that closes because a frame was too large for IT says that, not nothing', async () => {
+        const r = rig();
+        const { channel, socket } = await r.opened();
+        socket.ends({ code: 1009 });
+        await settle();
+        expect(r.closedTo(channel)[0]).toMatch(/too large/);
+    });
+
+    it('an ordinary close has nothing to add', async () => {
+        const r = rig();
+        const { channel, socket } = await r.opened();
+        socket.ends({ code: 1000 });
+        await settle();
+        expect(r.closedTo(channel)).toEqual([null]);
     });
 
     it('a window gone from the link takes its sockets with it, and leaves the others', async () => {
