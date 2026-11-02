@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { genHost, laravelServeCommand, serveCaddyfile, type DevServer, type ServeSpec } from '../core/serve-config.js';
-import type { ProcessSupervisor } from './process-supervisor.js';
+import type { SupervisorApi } from './process-supervisor.js';
 import { SITE_READY_CEILING_MS } from './port-probe.js';
 
 /**
@@ -97,7 +97,7 @@ export interface UnservableSiteInput {
 }
 
 export interface SiteManagerDeps {
-    readonly supervisor: ProcessSupervisor;
+    readonly supervisor: SupervisorApi;
     readonly allocatePort: () => number;
     /** The bundled Caddy, or `null` when this install has none. */
     readonly caddyBin: string | null;

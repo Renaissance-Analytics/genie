@@ -305,10 +305,8 @@ let stallProfiler: { capture(ms: number): void } | null = null;
 let spawnHostNow: SpawnHostClient | null = null;
 /** The interactive terminals' spawn host (the host split, P2.1): genie-host's `terminals` child; null = this process's engine. */
 let spawnTerminalsNow: SpawnHostClient | null = null;
-/** Live ptys a previous window started, found under genie-host at boot: the supervisor's and the terminals' to adopt. */
+/** Live ptys a previous window started, found under genie-host at boot: the terminals' to adopt (supervised processes are the host's own since P3.3b). */
 let adoptablePtys: ListedPty[] = [];
-/** How long after the boot's restore an adopted process nobody claimed is ended. */
-const UNCLAIMED_GRACE_MS = 60_000;
 const stallWatchdog = new StallWatchdog({
     log: (line) => stallLog?.(line),
     onMainStall: (ms) => stallProfiler?.capture(ms),
@@ -1362,7 +1360,7 @@ async function boot(): Promise<void> {
         };
         engineLink.onLink(
             // The link back after a loss: whatever is running that this window does not know is taken back now.
-            () => { void reconcile().then((found) => { for (const pty of found) { services?.supervisor.adopt(pty); terminals?.adopt(pty); } }, (error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
+            () => { void reconcile().then((found) => { for (const pty of found) terminals?.adopt(pty); }, (error: unknown) => lifecycleLog(`spawn host reconcile failed reason=${error instanceof Error ? error.message : String(error)}`)); },
             (why) => { processes.linkDown(why); shells.linkDown(why); },
         );
         // The link is already up (it came up in connectAgentEngine): the first reconcile is now, before anything starts.
@@ -2595,6 +2593,9 @@ async function boot(): Promise<void> {
         processPty: spawnHostNow ? spawnHostNow.ptyPort(ptyPort) : ptyPort,
         // What a previous window left running under genie-host: adopted before any site or kept process starts.
         adoptPtys: adoptablePtys,
+        // THE PROCESS SUPERVISOR IS GENIE-HOST'S (P3.3b): sites, workers and the front door run — and restart — there, with
+        // or without this window; a window restart neither starts them twice nor stops them.
+        ...(agentEngineLink ? { supervisor: agentEngineLink.client.supervisor() } : {}),
         // The supervisor's liveness check asks the OS too (P2): a pty the engine still holds for a dead process is a crash.
         pidAlive: osPidAlive,
         v1Settings: () => readV1Settings(v1DatabaseFile()),
@@ -3045,13 +3046,6 @@ async function boot(): Promise<void> {
     // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
     registry.subscribe(() => processScheduler?.plan());
     const restoredProcesses = processBook.restore();
-    // WHAT NOBODY CLAIMED (the host split, P2.1): a process a previous window ran that this one no longer wants is ended,
-    // and named, once the boot's starts (sites above, the book here) have had their chance — never left running unseen.
-    if (adoptablePtys.length > 0) {
-        setTimeout(() => {
-            for (const r of composed.supervisor.reapUnclaimed()) lifecycleLog(`spawn host reaped unclaimed process=${r.processId} pid=${r.pid}`);
-        }, UNCLAIMED_GRACE_MS).unref?.();
-    }
     if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.

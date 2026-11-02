@@ -65,7 +65,7 @@ import { HostsSync, type HostsIo, type HostsSyncResult } from './hosts-file.js';
 import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { runtimeDir } from './paths.js';
-import { ProcessSupervisor } from './process-supervisor.js';
+import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import { DeviceStore } from './remote-devices.js';
 import { RemoteHost, type HostApi } from './remote-host.js';
@@ -125,6 +125,8 @@ export interface ComposeInput {
      * window opens them itself — only on the emergency path, when no host could start.
      */
     readonly agentStores?: WindowAgentStores;
+    /** genie-host's process supervisor, through this window's replica (P3.3b). Absent = this window runs its own. */
+    readonly supervisor?: SupervisorApi;
     /**
      * Genie 1's database, for TAKING OVER its service engines in place and stopping its sandbox/site containers
      * (main/v1-services.ts) — at boot until services.json records a take-over that saw Genie 1 and Docker. Before the
@@ -297,7 +299,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly flows: FlowStore;
     readonly flowScheduler: FlowScheduler;
     readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
-    readonly supervisor: ProcessSupervisor;
+    readonly supervisor: SupervisorApi;
     readonly sites: SiteManager;
     /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
     readonly envelopeSites: EnvelopeSites;
@@ -457,7 +459,7 @@ function startExternalFrontDoor(input: {
     onRoutesChange: (listener: () => void) => void;
     /** The names the hosts file carries — configured, not running (ComposedServices.configuredHosts). */
     configuredHosts: () => readonly string[];
-    supervisor: ProcessSupervisor;
+    supervisor: SupervisorApi;
     hostsIo: HostsIo;
     hostsPath: string;
     hostsDebounceMs: number;
@@ -747,8 +749,15 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
     if (input.v1Flows) await runV1FlowImport(flows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
 
-    const supervisor = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
-    for (const pty of input.adoptPtys ?? []) supervisor.adopt(pty);
+    // THE PROCESS SUPERVISOR (P3.3b): genie-host's when it runs — its restart policy keeps sites and workers alive with the
+    // UI closed, and this window drives it through a replica. This window's own only on the emergency path.
+    let supervisor: SupervisorApi;
+    if (input.supervisor) supervisor = input.supervisor;
+    else {
+        const own = new ProcessSupervisor(input.processPty ?? input.pty, { now, schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); } }, input.pidAlive ? { pidAlive: input.pidAlive } : {});
+        for (const pty of input.adoptPtys ?? []) own.adopt(pty);
+        supervisor = own;
+    }
     // ONE loopback allocator for sites and engines: two things never share a port — not a port an engine has
     // RECORDED (services.json, read through the registry every time), not one something else on this machine holds
     // (a bind probe), and the same ports for the same records after a restart (core/port-allocator.ts).

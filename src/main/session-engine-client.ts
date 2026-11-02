@@ -27,6 +27,7 @@ import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
+import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
@@ -120,6 +121,7 @@ export class SessionEngineClient {
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
+    #supervisor: SupervisorReplica | null = null;
     /** Agents updated since the last `welcome`: what a reconnect's dump did NOT mention has stopped meanwhile. */
     #seenSinceWelcome = new Set<string>();
 
@@ -275,6 +277,12 @@ export class SessionEngineClient {
                 if (listeners && p.frame) for (const l of [...listeners]) l(p.frame as SpawnFrame);
                 return;
             }
+            case 'supervisor.dump':
+                this.supervisor().rebase(payload as SupervisorDump);
+                return;
+            case 'supervisor.event':
+                this.supervisor().apply(payload as SupervisorEvent);
+                return;
             case 'stores.dump':
                 this.stores().rebase(payload as StoresDump);
                 return;
@@ -425,6 +433,19 @@ export class SessionEngineClient {
     /** The host MCP server's endpoint, verification and tools; null when it has not started. */
     mcpStatus(): Promise<ReturnType<HostMcp['status']> | null> {
         return this.#value<ReturnType<HostMcp['status']> | null>('engine.mcpStatus', [], null);
+    }
+
+    /**
+     * genie-host's process supervisor, as this window drives it (P3.3b): sites, the front door and the Processes view run
+     * their processes there, so they live — and restart — with the UI closed.
+     */
+    supervisor(): SupervisorReplica {
+        this.#supervisor ??= new SupervisorReplica(async (method, args) => {
+            const reply = await this.call('engine.supervisor', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#supervisor;
     }
 
     /** The batches and git results for this window's views. */

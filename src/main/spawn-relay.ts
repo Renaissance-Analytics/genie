@@ -17,7 +17,8 @@ import { parseSpawnFrame, type SpawnFrame } from './spawn-host-protocol.js';
  * Every port (the fork, the clock, the OS) is injectable: the relay is tested without a process.
  */
 
-export const SPAWN_PROFILES = ['processes', 'terminals'] as const;
+// `supervised` (P3.3b): the host's OWN process supervisor's ptys — its frames go to a client inside the host, never a window.
+export const SPAWN_PROFILES = ['processes', 'terminals', 'supervised'] as const;
 export type SpawnProfile = (typeof SPAWN_PROFILES)[number];
 
 /** A forked child as the relay uses it (a node ChildProcess with an IPC channel). */
@@ -41,6 +42,8 @@ export interface SpawnRelayOptions {
     readonly pidAlive?: (pid: number) => boolean;
     readonly schedule?: (fn: () => void, ms: number) => () => void;
     readonly log?: (line: string) => void;
+    /** A child exited (it is started again): whoever drives it stops sending into a child between lives (P3.3b). */
+    readonly onChildExit?: (profile: SpawnProfile) => void;
 }
 
 /** How long a lost child's killed helpers are waited for before their ptys are reported exited anyway (#1405's bound). */
@@ -110,6 +113,7 @@ export function startSpawnRelay(options: SpawnRelayOptions): SpawnRelay {
             log(`spawn relay: the ${profile} child (pid ${child.pid ?? '?'}) exited (code ${code ?? '?'}${signal ? `, ${signal}` : ''})`);
             const lost = [...slot.ptys];
             slot.ptys.clear();
+            options.onChildExit?.(profile);
             for (const [, pid] of lost) if (pid !== null && pid > 0) killPid(pid);
             void reportWhenGone(profile, lost);
             restartLater(profile);

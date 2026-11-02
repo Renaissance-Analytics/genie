@@ -119,8 +119,21 @@ probe "host-mail-wake-starts" src/main/host-mail-wake.ts \
     "        wake," "" \
     test/host-mail-wake.test.ts "a STOPPED agent is started for its mail"
 
+# P3.3b: the process supervisor is the host's
+probe "window-stop-reaches-host" src/main/supervisor-host.ts \
+    "        void this.#call('stop', [id]).catch(() => {});" "" \
+    test/supervisor-host-contract.test.ts "Stop from a window ends it FOR GOOD"
+
+probe "start-of-running-is-noop" src/main/process-supervisor.ts \
+    "        if (existing && existing.state === 'running') return this.#status(existing);" "" \
+    test/supervisor-host-contract.test.ts "starts nothing twice"
+
+probe "supervisor-dump-before-ready" src/main/session-engine-server.ts \
+    "        if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());" "" \
+    test/supervisor-host-contract.test.ts "the next window shows it"
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
