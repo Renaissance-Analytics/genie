@@ -149,8 +149,18 @@ describe('it answers as the window’s fetch did', () => {
         await expect(asked).rejects.toThrow();
     });
 
-    it('it speaks only https: a plain http URL is refused, so a token is never sent in the clear', async () => {
-        await expect(hostHttpsFetch({ machineRoots: trusted })('http://localhost:1/', GET)).rejects.toThrow(/https/i);
+    it('it speaks only https: a plain http URL is refused in its own words, BEFORE any route, and nothing is reached', async () => {
+        let reached = 0;
+        const plain = createHttpServer((_req, res) => { reached += 1; res.end('{}'); });
+        open.push(plain);
+        await new Promise<void>((r) => plain.listen(0, '127.0.0.1', r));
+        const url = `http://localhost:${(plain.address() as AddressInfo).port}/`;
+        const secret = { ...GET, headers: { Authorization: 'Bearer t' } };
+        // Node's own https would refuse this too (ERR_INVALID_PROTOCOL, naming "https:"), so a looser match cannot tell this check is here.
+        await expect(hostHttpsFetch({ machineRoots: trusted, env: {} })(url, secret)).rejects.toThrow('The host calls https only');
+        // Nor does a remembered route get to say something else first, naming a proxy it would never have used.
+        await expect(hostHttpsFetch({ machineRoots: trusted, env: {}, proxyRoutes: () => [{ kind: 'unsupported', scheme: 'socks5', host: 's.example', port: 1080 }] })(url, secret)).rejects.toThrow('The host calls https only');
+        expect(reached).toBe(0);
     });
 });
 
