@@ -218,13 +218,16 @@ describe('never through a running turn', () => {
         const f = fakeHost();
         const agent = record();
         f.state.inTurn = true;
-        const recovery = hostTynnRecovery({ names: async () => [agent.id], waiting: () => false, recheck: async () => {}, host: f.host as never, record: () => agent, threadOf: () => null, cwdFor: () => workspace });
+        const lines: string[] = [];
+        const recovery = hostTynnRecovery({ names: async () => [agent.id], waiting: () => false, recheck: async () => {}, host: f.host as never, record: () => agent, threadOf: () => null, cwdFor: () => workspace, log: (l) => lines.push(l) });
         await recovery.recover();
         await settle();
         expect(f.calls).toEqual([]);
         f.fire(agent.id);
         await settle();
         expect(f.calls, 'a change while still in its turn does nothing').toEqual([]);
+        // The wait is said, once: an agent parked on a question can wait a long time, and that must be readable in the log.
+        expect(lines.filter((l) => l.includes('waits for its turn to end'))).toHaveLength(1);
         f.state.inTurn = false;
         f.fire(agent.id);
         f.fire(agent.id);

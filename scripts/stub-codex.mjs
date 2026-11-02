@@ -61,7 +61,8 @@ const TICKER = (() => {
 /**
  * RECORD MODE (scripts/agent-key-no-window-cdp.mjs, genie#1457): while `<tmpdir>/genie-stub-codex-record-servers` exists, a
  * thread's start appends the MCP servers this provider was REALLY given, the bearer read from the variable Genie bound it to.
- * The file exists only in a test VM. Without it nothing below changes.
+ * The file exists only in a test VM. Without it nothing below changes. With it a turn also ENDS at once, with no approval to ask: a stub parked on a question nobody
+ * answers is mid-turn for ever, and recovery waits for an agent's idle (host-tynn-recovery.ts).
  */
 const RECORD_SERVERS = join(tmpdir(), 'genie-stub-codex-record-servers');
 function recordServers(params, method = 'thread/start') {
@@ -281,6 +282,11 @@ function handle(frame) {
 
         case 'turn/start': {
             respond(id, { turn: { id: TURN_ID } });
+
+            if (existsSync(RECORD_SERVERS)) {
+                send({ jsonrpc: '2.0', method: 'turn/completed', params: { threadId: THREAD_ID, turn: { id: TURN_ID, status: 'completed', items: [], error: null } } });
+                return;
+            }
 
             if (TICKER) {
                 let tick = 0;

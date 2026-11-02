@@ -46,11 +46,13 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
     /** Named, and waiting for their turn to end. */
     const owed = new Set<string>();
     const restarting = new Set<string>();
+    const toldWaiting = new Set<string>();
 
     const restart = async (id: string): Promise<void> => {
         const known = ports.record(id);
         if (!known) { log(`tynn recovery: no record for ${id}`); return; }
         const record: AgentRecord = { ...known, threadId: ports.threadOf(id) ?? known.threadId };
+        log(`tynn recovery: restarting ${record.name} on ${record.threadId ?? 'a new conversation'}`);
         const agent = id as AgentId;
         ports.host.stop(agent);
         const verdict = await ports.host.ended(agent);
@@ -70,7 +72,12 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
         if (!owed.has(id) || restarting.has(id)) return;
         const live = ports.host.probe(id as AgentId);
         if (!live || live.running === false) { owed.delete(id); return; }
-        if (live.inTurn === true) return;
+        if (live.inTurn === true) {
+            // Said once per wait: an agent parked on a question the person has not answered waits as long as that takes.
+            if (!toldWaiting.has(id)) { toldWaiting.add(id); log(`tynn recovery: ${id} holds its key and waits for its turn to end before restarting`); }
+            return;
+        }
+        toldWaiting.delete(id);
         owed.delete(id);
         restarting.add(id);
         void restart(id)

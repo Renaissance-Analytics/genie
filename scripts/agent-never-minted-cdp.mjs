@@ -84,6 +84,15 @@ async function finish() {
     for (const pid of [window?.pid, host?.pid]) { if (pid && alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } }
     for (const server of servers) { try { server.closeAllConnections(); server.close(); } catch { /* gone */ } }
     try { rmSync(RECORD, { force: true }); rmSync(work, { recursive: true, force: true }); } catch { /* gone */ }
+    if (failures.length > 0) {
+        // What the host itself said, so a failure names which part.
+        try {
+            const log = readFileSync(join(home, 'logs', 'genie-host.log'), 'utf8').split('\n');
+            console.log('--- the host: every recovery line, then the end of its log');
+            for (const line of log.filter((l) => l.includes('tynn recovery'))) console.log(line.slice(0, 220));
+            for (const line of log.slice(-30)) console.log(line.slice(0, 220));
+        } catch (error) { console.log(`--- no host log: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     console.log(`### never-minted=${failures.length === 0 ? 'PASS' : 'FAIL'}${failures.length ? `  failed: ${failures.join(', ')}` : ''}`);
     process.exit(failures.length === 0 ? 0 : 1);
 }
@@ -268,7 +277,9 @@ try {
 
         say('Tynn comes back');
         tynn.agentsDown = false;
+        const backAt = Date.now();
         const back = await until('C restarted with its key', 200_000, () => cRuns().find((r) => r.servers?.tynn?.enabled === true) ?? null);
+        console.log(`### never-minted recovery-took=${Math.round((Date.now() - backAt) / 1000)}s  from Tynn answering to C holding its key, on the host's own backoff${back ? '' : ' (it never came)'}`);
         const mintedC = tynn.minted.find((m) => m.agent === C_ID);
         if (expectNoRecovery) {
             check(back === null && c !== null && alive(c.pid), '19-NEGATIVE-with-recovery-broken-C-stays-without-its-key', `${cRuns().length} run(s) of C`);
