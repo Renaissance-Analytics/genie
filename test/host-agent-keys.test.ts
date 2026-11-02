@@ -61,6 +61,7 @@ beforeEach(async () => {
     writeFileSync(join(workspace, 'project.json'), JSON.stringify({ tynn: { projectId: PROJECT } }));
     writeFileSync(accountFile, JSON.stringify({ version: 1, state: 'signed-in', host: 'https://tynn.ai', userId: USER, scopes: [], tokenEnc: 'c2VhbGVk' }));
     lib = fakeLibrary();
+    savedUser = USER;
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
 
@@ -73,7 +74,10 @@ function minted(agent: AgentRecord, over: Record<string, unknown> = {}): void {
     writeFileSync(vaultFile, JSON.stringify({ version: 1, records: { [key]: { userId: USER, projectId: PROJECT, genieId: agent.id, remoteAgentId: 'remote-1', state: 'ready', publicId: PUBLIC_ID, ...over } } }));
     lib.held.set(ENTRY, KEY);
 }
-const keys = () => hostAgentKeys({ vaultFile, accountFile, tynnHost: 'https://tynn.ai', keychain: lib.keychain });
+/** Signed out, with the account saved: what the host's account says before Tynn has answered it. These cases are the off-grid path. */
+let savedUser: string | null = USER;
+const offGrid = { status: () => ({ signedIn: false }), savedUserId: () => savedUser, request: () => Promise.reject(new Error('no network here')) };
+const keys = () => hostAgentKeys({ vaultFile, keychain: lib.keychain, tynn: () => offGrid, workspaces: () => [{ id: 'ws', path: workspace }] });
 const bearer = (servers: readonly McpServer[]) => {
     const tynn = servers.find((s) => s.name === 'tynn') as { headers?: readonly { name: string; value: string }[] } | undefined;
     return tynn?.headers?.find((h) => h.name === 'Authorization')?.value ?? null;
@@ -131,7 +135,7 @@ describe('THE BUG: the window process is killed, the host starts an agent, the a
         await host.stopAll();
     });
 
-    it('never minted, no window: it starts without Tynn, and its chat says why (cut c takes this case away)', async () => {
+    it('never minted, signed out, no window: it starts without Tynn, and its chat says why', async () => {
         const agent = record();
         const { host, handed } = await world();
         expect(await host.start(agent, workspace)).toEqual({ ok: true });
@@ -142,19 +146,6 @@ describe('THE BUG: the window process is killed, the host starts an agent, the a
         await host.stopAll();
     });
 
-    it('with a window connected, the window still prepares it', async () => {
-        const agent = record();
-        const { server, host, handed } = await world();
-        const [hostSide, windowSide] = memoryPair();
-        server.accept(hostSide);
-        const asked: string[] = [];
-        await new SessionEngineClient({ prepareMcpServers: async (r) => { asked.push(r.id); return [{ type: 'http', name: 'tynn', url: 'https://tynn.ai/mcp/tynn', headers: [{ name: 'Authorization', value: 'Bearer from-the-window' }] }]; } }).connect(windowSide, TOKEN);
-        expect(await host.start(agent, workspace)).toEqual({ ok: true });
-        await until(() => handed.has(agent.id));
-        expect(asked).toEqual([agent.id]);
-        expect(bearer(handed.get(agent.id) ?? [])).toBe('Bearer from-the-window');
-        await host.stopAll();
-    });
 });
 
 describe('what the host may hand out with no window', () => {
@@ -173,32 +164,15 @@ describe('what the host may hand out with no window', () => {
     });
 
     it.each([
-        ['signed out', { version: 1, state: 'signed-out', host: 'https://tynn.ai' }],
-        ['another account', { version: 1, state: 'signed-in', host: 'https://tynn.ai', userId: 'user-8' }],
-        ['another Tynn host', { version: 1, state: 'signed-in', host: 'https://elsewhere.example', userId: USER }],
-    ])('%s: not handed out', async (_label, account) => {
+        ['nobody is saved', null],
+        ['another account is saved', 'user-8'],
+    ])('%s: not handed out', async (_label, saved) => {
         const agent = record();
         minted(agent);
-        writeFileSync(accountFile, JSON.stringify(account));
+        savedUser = saved;
         const result = await keys()(agent, workspace);
         expect(result.servers).toEqual([]);
         expect(result.note).toContain('Tynn unavailable');
-    });
-
-    it('a record that says signed out is not handed out, whatever else it still holds', async () => {
-        const agent = record();
-        minted(agent);
-        writeFileSync(accountFile, JSON.stringify({ version: 1, state: 'signed-out', host: 'https://tynn.ai', userId: USER }));
-        const result = await keys()(agent, workspace);
-        expect(result.servers).toEqual([]);
-        expect(result.note).toContain('Tynn unavailable');
-    });
-
-    it('no account file: not handed out', async () => {
-        const agent = record();
-        minted(agent);
-        await rm(accountFile);
-        expect((await keys()(agent, workspace)).servers).toEqual([]);
     });
 
     it('another project’s binding is not this one’s', async () => {
@@ -241,13 +215,9 @@ describe('what the host may hand out with no window', () => {
         expect(bearer((await read(agent, workspace)).servers)).toBe(`Bearer ${KEY}`);
     });
 
-    it('it never mints, registers or calls Tynn: it has no account to do it with (until cut c)', () => {
-        const code = readFileSync('src/main/host-agent-keys.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
-        expect(code).not.toMatch(/fetch\(|\.mint|\/agent-token|from 'electron'/);
-    });
 });
 
-describe('the window mints, and the host holds', () => {
+describe('the host holds, and what a window can ask of it', () => {
     /** A window on a real, attached host: with none attached every call answers "still starting", whatever the keychain would. */
     async function linkedWindow(keychain?: Keychain) {
         const server = new SessionEngineServer({ token: TOKEN, build: 'test', ...(keychain ? { keychain } : {}) });

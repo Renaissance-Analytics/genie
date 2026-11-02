@@ -39,7 +39,8 @@ import { writeAgentGitignore } from './agent-gitignore.js';
 import { writeAgentRouters } from './agent-routers.js';
 import { writeAgentSkills } from './agent-skills.js';
 import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js';
-import { tynnAgentTokens, tynnUnavailableNote, type TynnFailure, type TynnSessionPort } from './tynn-agent-token.js';
+import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
+import { agentTynnPrep } from './agent-tynn-prep.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { fileMigrationBook, migrateSecrets, type HostVault, type MigrationSource } from './keychain-migration.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
@@ -300,7 +301,7 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
      * Signed in to Tynn: the agents to restart so they get their Tynn server — those that started without it because of
      * the account (signed out, unreachable), and those whose unverified stored key Tynn now refuses (genie#1234).
      */
-    tynnRecovery(): Promise<string[]>;
+    tynnRecovery(asked?: { readonly secretsMoved?: boolean }): Promise<string[]>;
     readonly inbox: S['inbox'];
     readonly attention: S['attention'];
     readonly knowledge: S['knowledge'];
@@ -1009,14 +1010,13 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const reminders = new ReminderBook();
     // What the sync did to each workspace's agent files, for Settings (nothing about them is silent).
     const agentFiles = new AgentFilesHealth();
-    const tynnTokens = tynnAgentTokens({
-        file: join(input.userData, 'agent-credentials', 'agents.json'),
-        secrets: input.tynnSecrets ?? {
-            probe: async () => ({ ok: false, reason: 'no keychain' }),
-            get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
-            set: async () => ({ ok: false, reason: 'no keychain' }),
-        },
-    });
+    const tynnVaultFile = join(input.userData, 'agent-credentials', 'agents.json');
+    const tynnSecretsPort: AgentSecrets = input.tynnSecrets ?? {
+        probe: async () => ({ ok: false, reason: 'no keychain' }),
+        get: async () => ({ kind: 'unavailable', reason: 'no keychain' }),
+        set: async () => ({ ok: false, reason: 'no keychain' }),
+    };
+    const tynnTokens = tynnAgentTokens({ file: tynnVaultFile, secrets: tynnSecretsPort });
     /**
      * THE KEYS AN OLDER GENIE SEALED MOVE TO THE KEYCHAIN (P3.4 cut b's engine, switched on with this reader). At boot, so a host
      * that loses this window still has them; and awaited before a key is read. What could not move is tried again next time.
@@ -1044,90 +1044,18 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         const next = previous.then(run, run).finally(() => { if (configWork.get(path) === next) configWork.delete(path); });
         configWork.set(path, next); return next;
     };
-    const projectText = async (workspacePath: string): Promise<string | null> => {
-        try {
-            const file = join(workspacePath, 'project.json');
-            const stat = await lstat(file);
-            if (stat.isSymbolicLink() || !stat.isFile()) throw new Error();
-            const text = await readFileP(file, 'utf8');
-            const data: unknown = JSON.parse(text);
-            if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error();
-            return text;
-        } catch (error) {
-            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-            throw new McpPreparationError('workspace');
-        }
-    };
-    /*
-     * OFF GRID (genie#1234, the owner 2026-10-26: "Genie must work off grid"). Since #1216 a Tynn-linked agent did not start
-     * at all when its private Tynn credential could not be prepared, and when Genie signed itself out every such agent
-     * showed Broken. Now it starts without the `tynn` server and is told why; sign-in brings the server back.
-     */
-    const tynnWithout = new Map<string, TynnFailure>();
-    const tynnUnverified = new Map<string, { agent: AgentRecord; path: string; text: string | null }>();
-    const tynnRestart = new Set<string>();
-    const tynnNote = (agentId: string): string | null => {
-        const code = tynnWithout.get(agentId);
-        return code ? tynnUnavailableNote(code) : null;
-    };
-    /** Signed out or unreachable: the failures a sign-in can cure. The rest need the person, and are not restarted in a loop. */
-    const SIGN_IN_CURES: ReadonlySet<TynnFailure> = new Set<TynnFailure>(['refused', 'offline']);
-    const tynnRecovery = async (): Promise<string[]> => {
-        const tynn = input.tynn?.() ?? null;
-        if (!tynn?.status().signedIn) return [];
-        const named = new Set<string>(tynnRestart);
-        for (const [id, code] of tynnWithout) if (SIGN_IN_CURES.has(code)) named.add(id);
-        // The keys handed out unverified are checked now; one Tynn refuses is taken away by a restart without it.
-        for (const [id, held] of [...tynnUnverified]) {
-            const result = await tynnTokens.ensure({
-                workspacePath: held.path, agent: held.agent, tynn,
-                fs: { read: async () => held.text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },
-            });
-            if (result.status === 'failed') {
-                if (result.code === 'offline') continue;
-                tynnUnverified.delete(id); tynnRestart.add(id); named.add(id);
-            } else if (result.status === 'unlinked' || !result.unverified) tynnUnverified.delete(id);
-        }
-        return [...named];
-    };
-    const prepareAgentMcp = async (agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]> => {
-        const checkStop = () => { if (signal.aborted) throw new McpPreparationError('cancelled'); };
-        checkStop();
-        if (agent.workspaceId === OS_WORKSPACE) return [];
-        const workspace = input.workspaces?.().find((w) => w.id === agent.workspaceId);
-        if (!workspace || workspace.asleep) throw new McpPreparationError('workspace');
-        const text = await projectText(workspace.path);
-        await withConfig(workspace.path, () => reconcileLegacyTynnConfig({ workspacePath: workspace.path, fs: nodeTynnConfigFs(workspace.path) }));
-        checkStop();
-        const projectId = tynnProjectIdOf(text);
-        if (projectId === null) return [];
-        await moveAgentKeys();
-        const ensure = (tynn: TynnSessionPort | null) => tynnTokens.ensure({
-            workspacePath: workspace.path, agent, signal, tynn,
-            fs: { read: async () => text, write: async () => { throw new Error('Private agent credentials never enter a workspace'); } },
-        });
-        const asked = input.tynn?.() ?? null;
-        const signedInThen = asked?.status().signedIn === true;
-        let result = await ensure(asked);
-        checkStop();
-        // The account signed in WHILE this agent prepared (at launch it opens after the first agents start): its change
-        // event has already gone by, so nothing would recover this agent later. Asked once more, now.
-        const now = input.tynn?.() ?? null;
-        if (result.status === 'failed' && result.code === 'refused' && now?.status().signedIn && (now !== asked || !signedInThen)) {
-            result = await ensure(now);
-            checkStop();
-        }
-        tynnRestart.delete(agent.id); tynnUnverified.delete(agent.id);
-        // No credential: the agent starts WITHOUT the tynn server (genie#1234), never on a shared workspace credential.
-        if (result.status === 'failed') { tynnWithout.set(agent.id, result.code ?? 'refused'); return []; }
-        if (result.status === 'unlinked') throw new McpPreparationError('workspace');
-        const current = input.workspaces?.().find((w) => w.id === agent.workspaceId);
-        if (!current || current.asleep || current.path !== workspace.path || tynnProjectIdOf(await projectText(workspace.path)) !== projectId) throw new McpPreparationError('workspace');
-        checkStop();
-        tynnWithout.delete(agent.id);
-        if (result.unverified) tynnUnverified.set(agent.id, { agent, path: workspace.path, text });
-        return [{ type: 'http', name: 'tynn', url: result.mcp.url, headers: [{ name: 'Authorization', value: `Bearer ${result.mcp.token}` }] }];
-    };
+    // A window running its own engine prepares its agents here (agent-tynn-prep.ts). With a host, the host does, and this goes unused.
+    const tynnPrep = agentTynnPrep({
+        vaultFile: tynnVaultFile,
+        secrets: tynnSecretsPort,
+        tynn: () => input.tynn?.() ?? null,
+        workspaces: () => input.workspaces?.() ?? [],
+        withConfig,
+        ready: () => moveAgentKeys(),
+    });
+    const prepareAgentMcp = tynnPrep.prepare;
+    const tynnNote = tynnPrep.note;
+    const tynnRecovery = tynnPrep.recovery;
     // FLOWS RUN (P4): the scheduler fires an armed flow through the runner (flow-runner.ts) — a command as a supervised
     // process whose log is kept like any background process's, a prompt to a live agent (held back while it is mid-turn),
     // a knowledge write — and every run's outcome is recorded on the flow. Planned here, after every await that could

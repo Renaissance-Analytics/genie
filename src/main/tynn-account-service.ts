@@ -25,14 +25,16 @@ export class TynnAccountService {
     #account: TynnAccount | null = null;
     readonly #opening: Promise<TynnAccount>;
     readonly #host: string;
+    readonly #recovery: ((asked: { secretsMoved?: boolean }) => Promise<string[]>) | null;
     readonly #listeners = new Set<(dump: TynnAccountDump) => void>();
 
     /**
      * An account still opening is fine: opening asks Tynn who it is, with a 30 s deadline, and a host's boot does not wait for
      * that. Until it opens, a window reads signed out and its calls wait; then it hears the change.
      */
-    constructor(account: TynnAccount | Promise<TynnAccount>, options: { host?: string } = {}) {
+    constructor(account: TynnAccount | Promise<TynnAccount>, options: { host?: string; recovery?: (asked: { secretsMoved?: boolean }) => Promise<string[]> } = {}) {
         this.#host = options.host ?? '';
+        this.#recovery = options.recovery ?? null;
         const emit = (): void => { const dump = this.dump(); for (const listener of [...this.#listeners]) listener(dump); };
         const adopt = (opened: TynnAccount): TynnAccount => { this.#account = opened; opened.onChange(emit); emit(); return opened; };
         if (account instanceof Promise) this.#opening = account.then(adopt);
@@ -59,6 +61,8 @@ export class TynnAccountService {
             case 'signOut': return account.signOut();
             case 'recheck': return account.recheck();
             case 'reload': return account.reload();
+            // Which agents should restart to get their Tynn tools back: the window restarts them, as it does any other.
+            case 'recovery': return this.#recovery?.((args[0] ?? {}) as { secretsMoved?: boolean }) ?? [];
             case 'projects': return account.projects();
             case 'ownerOptions': return account.ownerOptions();
             case 'createProject': return account.createProject(args[0] as Parameters<TynnAccount['createProject']>[0]);

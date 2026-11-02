@@ -55,14 +55,18 @@ function remoteAgent(value: unknown): RemoteAgent | null {
 
 /** Main-process vault and identity provisioner. No project file supplies or receives an agent credential. */
 export function tynnAgentIdentities(ports: AgentCredentialPorts) {
-    let rows: Promise<Record<string, Stored>> | null = null;
+    /** The file's permissions are made right once. Its contents are read each time: another process may write it (the one-time move). */
+    let prepared = false;
     let writes: Promise<unknown> = Promise.resolve();
     const inFlight = new Map<string, Promise<TynnAgentToken>>();
     const projects = new Map<string, Promise<TynnAgentToken>>();
 
-    const load = (): Promise<Record<string, Stored>> => rows ??= (async () => {
+    const load = async (): Promise<Record<string, Stored>> => {
         let text: string;
-        try { await preparePrivateCredential(ports.file); text = await readFile(ports.file, 'utf8'); }
+        try {
+            if (!prepared) { await preparePrivateCredential(ports.file); prepared = true; }
+            text = await readFile(ports.file, 'utf8');
+        }
         catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}; throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be read.'); }
         try {
             const parsed = object(JSON.parse(text));
@@ -70,14 +74,13 @@ export function tynnAgentIdentities(ports: AgentCredentialPorts) {
             if (parsed?.version !== 1 || !records) throw new Error();
             return records as unknown as Record<string, Stored>;
         } catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault is invalid; no new key was requested.'); }
-    })();
+    };
 
     const save = (key: string, record: Stored): Promise<void> => {
         const run = async () => {
             const next = { ...await load(), [key]: record };
             try {
                 await writePrivateCredential(ports.file, JSON.stringify({ version: 1, records: next }));
-                rows = Promise.resolve(next);
             } catch { throw new ProvisionFailure('storage', 'The private Tynn agent vault could not be saved. Review any pending key before trying again.'); }
         };
         const work = writes.then(run, run); writes = work.catch(() => {}); return work;

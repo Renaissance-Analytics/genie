@@ -32,8 +32,8 @@ const TYNN_NOTES: Record<TynnFailure, string> = {
     storage: 'This agent’s private Tynn credential could not be read from the keychain, so it started without its Tynn tools. Unlock or start the keyring, then restart the agent.',
 };
 /** What an agent's chat says when it started without its Tynn tools, wherever it was started from. */
-export const tynnUnavailableNote = (code: TynnFailure): string =>
-    `Tynn unavailable — ${TYNN_NOTES[code] ?? TYNN_NOTES.refused} Nothing else is affected, and no shared workspace credential was used.`;
+export const tynnUnavailableNote = (code: TynnFailure, through: string | null = null): string =>
+    `Tynn unavailable — ${through ? `Tynn could not be reached through the proxy ${through}, so this agent started without its Tynn tools. Check that proxy, then restart this agent.` : TYNN_NOTES[code] ?? TYNN_NOTES.refused} Nothing else is affected, and no shared workspace credential was used.`;
 export const TYNN_SERVER_KEY = 'tynn';
 export const TYNN_TOML_BEGIN = '# >>> tynn — managed by Genie; edits between the markers are replaced on sync';
 export const TYNN_TOML_END = '# <<< tynn';
