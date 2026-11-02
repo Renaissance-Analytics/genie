@@ -299,6 +299,28 @@ const trayClick = (inspector, label, delayMs) => inspector.evaluate(`(() => {
     setTimeout(() => t.click(${JSON.stringify(label)}), ${delayMs});
     return 'ok';
 })()`, 10_000).catch((e) => String(e?.message ?? e));
+/**
+ * The person's answer to the NEXT native question (the tray's "always ask"), and nothing else: the dialog answers `index`
+ * and writes down what it asked, then puts itself back. No quit is started here — the tray item's own handler does that.
+ */
+async function answerNextDialog(inspector, index) {
+    rmSync(PROOF, { force: true });
+    return inspector.evaluate(`(() => {
+        const require = process.getBuiltinModule('node:module').createRequire(process.execPath);
+        const { dialog } = require('electron');
+        const fs = require('node:fs');
+        const real = dialog.showMessageBoxSync;
+        const click = (...args) => {
+            const options = args.find((a) => a && typeof a === 'object' && Array.isArray(a.buttons)) ?? {};
+            fs.writeFileSync(${JSON.stringify(PROOF)}, JSON.stringify({ title: options.title ?? null, buttons: options.buttons ?? null, message: options.message ?? null, answered: ${index} }));
+            dialog.showMessageBoxSync = real;
+            return ${index};
+        };
+        dialog.showMessageBoxSync = click;
+        return require('electron').dialog.showMessageBoxSync === click ? 'ok' : 'the dialog could not be answered (the substitution did not take)';
+    })()`, 10_000).catch((e) => String(e?.message ?? e));
+}
+
 /** Is there a page on the debugger port now? (Bounded.) */
 async function pageOn(port) {
     try {
@@ -553,7 +575,17 @@ try {
     b.cdp = null;
 
     // -------------------------------------------------------------------------------- Shut down everything, from the tray
-    step('26', 'Shut down everything from the tray (its own handler), then wait for the window process to exit (≤ 60 s)');
+    // ALWAYS ASK (the owner, 2026-11-02): the tray's Shut down everything confirms first. Cancel first — nothing may stop.
+    step('26c', 'the tray\'s Shut down everything ASKS; Cancel (button 0) does nothing');
+    check(await answerNextDialog(c.inspector, 0) === 'ok', '26c. the next dialog will be answered Cancel');
+    check(await trayClick(c.inspector, 'Shut down everything', 0) === 'ok', '26d. the tray\'s Shut down everything was clicked');
+    const cancelAsked = await until(() => asked(), 10_000);
+    check(JSON.stringify(cancelAsked?.buttons) === JSON.stringify(['Cancel', 'Shut down everything']) && agents.every((ag) => (cancelAsked?.message ?? '').includes(ag.name)),
+        '26e. it ASKED, naming what would stop (this run\'s agents among them), with Cancel and "Shut down everything"', JSON.stringify(cancelAsked));
+    await sleep(3_000);
+    check(!a.app.gone && alive(a.windowPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the window process, the host and the providers all alive');
+    step('26', 'Shut down everything from the tray, confirmed (button 1); then wait for the window process to exit (≤ 60 s)');
+    check(await answerNextDialog(c.inspector, 1) === 'ok', '26g. the next dialog will be answered Shut down everything');
     check(await trayClick(c.inspector, 'Shut down everything', 1_000) === 'ok', '26a. the tray\'s Shut down everything was clicked');
     // The inspector session lets go before the quit (batch M: an attached session holds a quitting Node process).
     await c.inspector.closed(5_000);

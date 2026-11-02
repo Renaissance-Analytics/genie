@@ -135,6 +135,7 @@ import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
 import { trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
+import { terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -400,6 +401,38 @@ function closeUi(reason: string): void {
     trayQuietSince = null;
     rendererErrorLog?.(`ui closed (${reason}): Genie stays in the tray`);
     refreshTray();
+}
+
+/**
+ * What a Restart or a Shut down everything would stop, named (core/tray-confirm.ts): the running agents, every open
+ * terminal (marked when a command runs in it — read from the process table), the kept processes, the active services and
+ * the sites.
+ */
+function stoppingNow(): Stopping {
+    const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : [];
+    const table = systemProcessTree.snapshot();
+    const workspaces = registry?.snapshot().workspaces ?? [];
+    const seen = new Map<string, number>();
+    const terminalsOpen = (terminals?.list() ?? []).map((t) => {
+        const n = (seen.get(t.workspaceId) ?? 0) + 1;
+        seen.set(t.workspaceId, n);
+        const ws = workspaces.find((w) => w.id === t.workspaceId);
+        return { name: `${ws ? basename(ws.path) : t.workspaceId} · terminal ${n}`, busy: terminalBusy(t.pid, table) };
+    });
+    const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
+    const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
+    const sites = (services?.routes() ?? []).map((r) => r.host);
+    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites };
+}
+
+/**
+ * ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time — what will stop,
+ * named; Cancel the default and the cancel; only the confirm button goes on. Not asked anywhere else: the quit dialog's own
+ * answer, the tray-only exit, the OS ending the session, the upgrade.
+ */
+function confirmTray(action: TrayAction): boolean {
+    const q = trayConfirm(action, stoppingNow());
+    return trayConfirmed(dialog.showMessageBoxSync({ type: 'question', title: q.title, message: q.message, buttons: [...q.buttons], defaultId: q.defaultId, cancelId: q.cancelId }));
 }
 
 /**
@@ -3893,7 +3926,8 @@ async function boot(): Promise<void> {
         onCheckUpdates: () => { void updates?.check(); },
         onQuit: () => { requestQuit(); },
         // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { restartGenie(); }, onShutDown: () => { requestQuit('shut-down'); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
+        // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { if (confirmTray('restart')) restartGenie(); }, onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
