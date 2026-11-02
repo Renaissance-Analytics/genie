@@ -194,6 +194,7 @@ import { parseRemoteChoice, type RemoteChoice } from '../core/agi-remote.js';
 import { withActionSignal } from './mcp-signal.js';
 import { genieMcpServer, type GenieMcpServer, type Verification } from './mcp-server.js';
 import { hostOnly, windowToolRunner, withHostTools } from './window-tools.js';
+import type { ProcessBookApi } from './processes-host.js';
 import { workspaceNameFor } from './workspace-names.js';
 import { HostRegistryStore } from './agent-stores-replica.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
@@ -1278,6 +1279,8 @@ async function boot(): Promise<void> {
         // bearer token, and this agent's caller key so the tools know which agent is calling.
         mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
         // GENIE'S TOOLS THAT STILL NEED THIS WINDOW, forwarded by genie-host's MCP server (P3.1): run here, answered there.
+        // Each kept process's app-inbox credential, for genie-host's process book (P3.3c): minted here, where the server is.
+        appEnvs: (list: ReadonlyArray<{ id: string; name: string; workspaceId: string }>) => Object.fromEntries(list.map((p) => [p.id, services ? services.appEnv({ kind: 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) : {}])),
         onToolCall: (call: ForwardedToolCall) => (windowToolRun ? windowToolRun(call) : Promise.resolve({ text: `${call.name}: Genie's window is still starting; call it again in a moment. Nothing was done.`, isError: true })),
         // openFileForUser made while no window was here: shown now (once the tools are built).
         onOpenFileLater: (call: ForwardedToolCall) => { if (windowToolRun) void windowToolRun(call); else openFilesLater.push(call); },
@@ -2479,8 +2482,9 @@ async function boot(): Promise<void> {
      */
     // THE BACKGROUND PROCESSES THE PERSON KEEPS (§6.6, process-book.ts): opened once the services are composed;
     // until then every snapshot is the supervisor's alone. Late-bound so no closure below can meet it uninitialised.
-    let processBook: ProcessBook | null = null;
-    let processScheduler: ProcessScheduler | null = null;
+    // genie-host's when it runs (P3.3c): the book and its scheduler there, this window's replica here.
+    let processBook: ProcessBookApi | null = null;
+    let processScheduler: Pick<ProcessScheduler, 'runNow'> | null = null;
     // The features' ports: the kept processes, and every workspace's GitHub panel (Tynn #806).
     // The Tynn this Genie uses: Help → Genie documentation opens its docs (Tynn #762).
     const tynnHost = (): string => TYNN_HOST;
@@ -3014,39 +3018,48 @@ async function boot(): Promise<void> {
     };
     // Bring back what the person keeps running (Genie 1 did, from terminal_specs); a hibernated workspace starts nothing.
     // Genie's own quit stops these through the supervisor and never touches the book, so a quit is not a stop.
-    processBook = await ProcessBook.open(genieHome(), {
-        supervisor: composed.supervisor,
-        envFor: (workspaceId) => composed.engines.envFor(workspaceId),
-        // Each kept process's own app credential (genie#1345), under its workspace's switch.
-        appEnv: (p) => composed.appEnv(p),
-        asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
-        // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
-        limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
-        // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
-        // Genie 1's SCHEDULED TASKS too (genie#1204): background processes with a schedule, imported PAUSED.
-        v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [], roster: () => (registry?.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) },
-    });
-    // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
-    await moveScheduledTasksOutOfFlows(composed.flows, processBook, (id) => registry?.workspace(id)?.path ?? null).catch((error: unknown) => console.error(`[genie] scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
-    // SCHEDULED TASKS' CLOCK (genie#1204): one timer for the enabled ones; a nudge reaches its agent when its turn ends.
-    processScheduler = new ProcessScheduler({
-        book: processBook,
-        supervisor: composed.supervisor,
-        envFor: (workspaceId) => composed.engines.envFor(workspaceId),
-        appEnv: (p) => composed.appEnv(p),
-        asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
-        nudge: (address, text, from) => {
-            const found = composed.resolveAddress(address);
-            return found.kind === 'one' && host !== null ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
-        },
-        now: Date.now,
-        schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
-    });
-    processScheduler.plan();
-    // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
-    registry.subscribe(() => processScheduler?.plan());
-    const restoredProcesses = processBook.restore();
-    if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
+    if (agentEngineLink) {
+        // THE PROCESS BOOK AND ITS SCHEDULER ARE GENIE-HOST'S (P3.3c): what the person keeps running is restored there, and a
+        // scheduled task fires on its clock, with or without this window. This window lists and manages them by replica.
+        processBook = agentEngineLink.client.processBook();
+        processScheduler = agentEngineLink.client.processBook();
+    } else {
+        const ownBook = await ProcessBook.open(genieHome(), {
+            supervisor: composed.supervisor,
+            envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+            // Each kept process's own app credential (genie#1345), under its workspace's switch.
+            appEnv: (p) => composed.appEnv(p),
+            asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+            // THE WORKSPACE'S BACKGROUND-PROCESS LIMIT (beta.33), read live from the workspace's settings.
+            limit: (workspaceId) => limitOf(composed.settings.snapshotFor(workspaceId), 'processes'),
+            // Genie 1's background processes, imported ONCE as the book opens (core/v1-processes.ts) — before the restore.
+            // Genie 1's SCHEDULED TASKS too (genie#1204): background processes with a schedule, imported PAUSED.
+            v1: { database: v1DatabaseFile(), workspaces: () => registry?.listWorkspaces() ?? [], roster: () => (registry?.snapshot().workspaces ?? []).flatMap((w) => registry!.agentsOf(w.id)) },
+        });
+        // The scheduled tasks earlier betas imported as FLOWS move to the processes they were in Genie 1 — once, by a marker.
+        await moveScheduledTasksOutOfFlows(composed.flows, ownBook, (id) => registry?.workspace(id)?.path ?? null).catch((error: unknown) => console.error(`[genie] scheduled tasks could not be moved out of Flows: ${error instanceof Error ? error.message : String(error)}`));
+        // SCHEDULED TASKS' CLOCK (genie#1204): one timer for the enabled ones; a nudge reaches its agent when its turn ends.
+        const ownScheduler = new ProcessScheduler({
+            book: ownBook,
+            supervisor: composed.supervisor,
+            envFor: (workspaceId) => composed.engines.envFor(workspaceId),
+            appEnv: (p) => composed.appEnv(p),
+            asleep: (workspaceId) => registry?.workspace(workspaceId)?.asleep === true,
+            nudge: (address, text, from) => {
+                const found = composed.resolveAddress(address);
+                return found.kind === 'one' && host !== null ? host.deliver(found.id as AgentId, text, `scheduled task "${from}"`) : false;
+            },
+            now: Date.now,
+            schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
+        });
+        ownScheduler.plan();
+        // A hibernate or a wake changes what may fire: plan again (Genie 1's disarm/armWorkspaceSchedules, genie#672).
+        registry.subscribe(() => ownScheduler.plan());
+        const restoredProcesses = ownBook.restore();
+        if (restoredProcesses.heldBack.length > 0) console.log(`[genie] ${restoredProcesses.heldBack.length} kept background process(es) held back: their workspace is hibernated, or at its background-process limit`);
+        processBook = ownBook;
+        processScheduler = ownScheduler;
+    }
     // UPDATE CHANNEL (the owner, 2026-10-12: "stable and dev update channels"): the setting decides what the
     // updater may see — read once here, then followed on every change. `channelFrom` reads a legacy `beta` as dev.
     updates?.setChannel(channelFrom(composed.settings.snapshot().update_channel));

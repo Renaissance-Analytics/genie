@@ -67,6 +67,9 @@ export const ENGINE_METHODS = [
     // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
     // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
     'engine.supervisor',
+    // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
+    // `engine.ready`, and again as `processes.event` on every change.
+    'engine.processes',
     // What Genie's MCP server in the host needs of the window until P3.2 (host-mcp.ts `WindowView`); the first one starts it.
     'engine.windowView',
     // Genie 1's database, where only the window knows it is: the host takes its memories and AgentInbox history once.
@@ -79,6 +82,8 @@ export const ENGINE_METHODS = [
     'client.prepareMcpServers',
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
     'client.toolCall',
+    // Each kept process's app-inbox credential, minted where the app-inbox server is (the window, until P5): `[processes]`.
+    'client.appEnvs',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];

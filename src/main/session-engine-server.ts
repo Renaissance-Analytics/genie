@@ -20,6 +20,7 @@ import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
+import type { ProcessesService } from './processes-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -80,6 +81,8 @@ export interface EngineServerOptions {
     readonly v1Import?: (databasePath: string) => Promise<void>;
     /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
     readonly supervisor?: SupervisorService;
+    /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
+    readonly processes?: ProcessesService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     readonly files?: {
@@ -134,6 +137,9 @@ export class SessionEngineServer {
         options.supervisor?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'supervisor.event', event);
         });
+        options.processes?.onEvent((dump) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
+        });
     }
 
     /** The session host's options that this server answers. Built BEFORE the host (it is handed to its constructor). */
@@ -164,6 +170,11 @@ export class SessionEngineServer {
         host.subscribe((agentId) => this.#markDirty(agentId));
     }
 
+    /** The workspace variables (DB_*, REDIS_URL…) the last window handed over with a start, for what the host starts itself. */
+    serviceEnvFor(workspaceId: string): Readonly<Record<string, string>> {
+        return this.#env.get(workspaceId) ?? {};
+    }
+
     /** Whether a window is connected now (the MCP server forwards window tools only then). */
     windowConnected(): boolean {
         return this.clients > 0;
@@ -172,6 +183,11 @@ export class SessionEngineServer {
     /** A window tool's call, to the newest window (P3.1). Rejects with no window, or when it closes before it answers. */
     forwardTool(call: unknown): Promise<unknown> {
         return this.#reverse('client.toolCall', [call]);
+    }
+
+    /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
+    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>): Promise<Record<string, Record<string, string>>> {
+        return this.#reverse('client.appEnvs', [processes]) as Promise<Record<string, Record<string, string>>>;
     }
 
     /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
@@ -254,6 +270,7 @@ export class SessionEngineServer {
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
+        if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         conn.transport.send(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: { running: host ? host.startedIds() : [] } }));
         const queued = this.#queue.splice(0, this.#queue.length);
         for (const callback of queued) this.#event(conn, 'engine.callback', callback);
@@ -401,6 +418,9 @@ export class SessionEngineServer {
                 return this.#options.mcp.runNative(args[0] as never);
             case 'engine.mcpStatus':
                 return this.#options.mcp?.status() ?? null;
+            case 'engine.processes':
+                if (!this.#options.processes) throw new Error('This host keeps no process book.');
+                return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.supervisor':
                 if (!this.#options.supervisor) throw new Error('This host runs no process supervisor.');
                 return this.#options.supervisor.call(str(0), Array.isArray(args[1]) ? args[1] : []);
@@ -411,6 +431,7 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
             case 'client.prepareMcpServers':
