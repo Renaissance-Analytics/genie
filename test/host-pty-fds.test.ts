@@ -137,13 +137,14 @@ async function rig(): Promise<Rig> {
     const fd = (server as unknown as { _handle: { fd: number } })._handle.fd;
     const inode = readlinkSync(`/proc/self/fd/${fd}`);
     const host = startHost(home, fd);
-    // From here only the host (and whatever it handed it to) holds the socket.
-    await new Promise<void>((r) => server.close(() => r()));
     const tell = () => `--- host log ---\n${host.log().slice(-3000)}`;
+    // The parent keeps ITS copy while the host starts, as the window holds :9222 while genie-host comes up.
     const record = await within(90_000, 'the host writing host.json', until('host.json', () => {
         const r = parseHostRecord(existsSync(join(home, 'runtime', 'host.json')) ? readFileSync(join(home, 'runtime', 'host.json'), 'utf8') : null);
         return r && r.pid === host.child.pid ? r : null;
     }, 85_000), tell);
+    // From here only the host (and whatever it handed it to) could hold the socket.
+    await new Promise<void>((r) => server.close(() => r()));
     await within(25_000, 'the host\'s terminals spawn host', until('terminals ready', () => /spawn host ready pid=\d+ profile=terminals/.test(host.log()), 20_000), tell);
     const token = readFileSync(join(home, 'runtime', 'host.token'), 'utf8').trim();
     const transport = await within(10_000, 'the socket to the host', connectSocket(record.endpoint), tell);

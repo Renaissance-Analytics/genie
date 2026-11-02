@@ -28,7 +28,16 @@ describe('inheritedFds', () => {
             8: { flags: 0o0, target: '/usr/share/icu/icudtl.dat' }, // a file: left alone
             9: { flags: 0o2, target: 'anon_inode:[eventfd]' }, // not a socket or a pipe: left alone
         });
-        expect(inheritedFds(fds, read, new Set([6]))).toEqual([3, 5]);
+        expect(inheritedFds(fds, read, new Set([6]), new Set())).toEqual([3, 5]);
+    });
+
+    it('a socket or pipe the PARENT also holds is inherited whatever its flag (CI: close-on-exec was set on the window’s socket in the host)', () => {
+        const read = info({
+            3: { flags: 0o2004002, target: 'socket:[29170]' }, // the parent's listener, flagged close-on-exec in this process — inherited
+            4: { flags: 0o2004002, target: 'pipe:[900]' }, // close-on-exec, the parent does NOT hold it: this process's own (tsx's esbuild pipe)
+            5: { flags: 0o2000002, target: '/tmp/a-file' }, // a file the parent holds too: files are never closed here
+        });
+        expect(inheritedFds([3, 4, 5], read, new Set(), new Set(['socket:[29170]', '/tmp/a-file']))).toEqual([3]);
     });
 });
 
