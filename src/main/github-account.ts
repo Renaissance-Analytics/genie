@@ -1,3 +1,4 @@
+import type { MigrationSource } from './keychain-migration.js';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import {
@@ -83,7 +84,8 @@ export interface CreateRepoOptions {
 export interface GithubAccountPorts {
     /** Genie 2's own file (`~/.genie/github.json`): the login in the clear, the token encrypted. */
     readonly file: string;
-    readonly cipher: GithubCipher;
+    readonly cipher?: GithubCipher;
+    readonly secrets?: unknown;
     readonly fetch: GithubFetch;
     /** Genie 1's settings table, read-only; `null` when there is none. */
     readonly v1Settings?: () => Readonly<Record<string, string>> | null;
@@ -95,6 +97,9 @@ export interface GithubAccountPorts {
 }
 
 export type GithubPage = { page: 'install' } | { page: 'device' } | { page: 'authorizations' } | { page: 'installation'; installationId: number };
+
+/** RED STUB. */
+export async function githubSealedSources(_options: { file: string; cipher: { decrypt(bytes: Buffer): string }; v1Settings?: () => Readonly<Record<string, string>> | null }): Promise<MigrationSource[]> { return []; }
 
 /** What the Settings surface and the IPC need — the account as a port, faked in tests. */
 export interface GithubAccountPort {
@@ -230,9 +235,9 @@ export class GithubAccount implements GithubAccountPort {
     }
 
     #decrypt(blob: string): { ok: true; token: string } | { ok: false; reason: 'unavailable' | 'failed' } {
-        if (!this.#ports.cipher.isAvailable()) return { ok: false, reason: 'unavailable' };
+        if (!this.#ports.cipher!.isAvailable()) return { ok: false, reason: 'unavailable' };
         try {
-            const token = this.#ports.cipher.decrypt(Buffer.from(blob, 'base64'));
+            const token = this.#ports.cipher!.decrypt(Buffer.from(blob, 'base64'));
             return token ? { ok: true, token } : { ok: false, reason: 'failed' };
         } catch {
             return { ok: false, reason: 'failed' };
@@ -292,7 +297,7 @@ export class GithubAccount implements GithubAccountPort {
     }
 
     #fileFor(t: HeldTokens, login: string, name: string | null, source: SignedInFile['source']): SignedInFile {
-        const encrypt = (text: string) => this.#ports.cipher.encrypt(text).toString('base64');
+        const encrypt = (text: string) => this.#ports.cipher!.encrypt(text).toString('base64');
         return {
             version: 1, state: 'signed-in', login, name, source, tokenEnc: encrypt(t.token),
             ...(t.refreshToken ? { refreshEnc: encrypt(t.refreshToken) } : {}),
@@ -515,7 +520,7 @@ export class GithubAccount implements GithubAccountPort {
         const previous = this.#flow;
         this.cancelSignIn();
         if (previous) await previous.done;
-        if (!this.#ports.cipher.isAvailable()) {
+        if (!this.#ports.cipher!.isAvailable()) {
             this.#message = NO_ENCRYPTION;
             this.#changed();
             return;
@@ -612,7 +617,7 @@ export class GithubAccount implements GithubAccountPort {
         } catch {
             // Read again by refresh below.
         }
-        if (!this.#ports.cipher.isAvailable()) {
+        if (!this.#ports.cipher!.isAvailable()) {
             this.#status = before;
             this.#message = NO_ENCRYPTION;
             this.#changed();
@@ -636,6 +641,8 @@ export class GithubAccount implements GithubAccountPort {
     }
 
     /** Forgets the token here (GitHub keeps the authorization until it is revoked on GitHub's page) and records it. */
+    async reload(): Promise<void> {}
+
     async signOut(): Promise<void> {
         this.cancelSignIn();
         await this.#flow?.done;

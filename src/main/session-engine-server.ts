@@ -1,3 +1,4 @@
+import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
@@ -65,6 +66,8 @@ export type { HostAgentKeys };
 export type EngineHostOptions = Required<Pick<HostOptions, 'currentRecord' | 'serviceEnvFor' | 'prepareMcpServers' | 'onThreadId' | 'onPlan' | 'onTurnNumbered' | 'onAction' | 'onHeadroom' | 'onMcpServers'>>;
 
 export interface EngineServerOptions {
+    /** The host's GitHub account (P3.4 cut c). */
+    readonly github?: GithubAccountService;
     /** What the OS said about proxies, as a window hands it over. */
     readonly proxy?: { remember(answers: Record<string, string>): Promise<void> };
     /** The host's Tynn account (P3.4 cut c). */
