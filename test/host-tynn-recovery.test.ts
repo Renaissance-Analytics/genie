@@ -52,7 +52,7 @@ const record = (over: Partial<Parameters<typeof agentRecord>[0]> = {}): AgentRec
 
 function tynnFake() {
     const remote: Array<{ id: string; name: string; external_id: string | null; status: string; tokens: Array<{ public_id: string; active: boolean }> }> = [];
-    const state = { signedIn: true, reachable: true, minted: 0 };
+    const state = { signedIn: true, reachable: true, minted: 0, conflict: false };
     const answer = (status: number, body: unknown) => ({ ok: status < 300, status, json: async () => body });
     const port: TynnSessionPort = {
         status: () => ({ signedIn: state.signedIn }),
@@ -60,7 +60,7 @@ function tynnFake() {
         savedUserId: () => 'user-7',
         request: async (path, init) => {
             if (!state.reachable) throw new Error('Tynn could not be reached.');
-            if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'GET') return answer(200, { project_id: PROJECT, agents: remote });
+            if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'GET') return answer(200, { project_id: PROJECT, agents: state.conflict ? [{ id: 'taken', name: 'atlas', external_id: 'someone-else', status: 'active', tokens: [] }] : remote });
             if (path === `/api/v1/projects/${PROJECT}/agents` && init.method === 'POST') {
                 const body = init.body as { name: string; external_id: string };
                 const row = { id: `remote-${remote.length + 1}`, name: body.name, external_id: body.external_id, status: 'active', tokens: [] };
@@ -125,6 +125,57 @@ describe('THE BUG: an agent started during an outage, with no window, gets its t
         expect(starts[1]!.thread).toBe('thread-of-this-conversation');
         expect(server.windowConnected()).toBe(false);
         expect(JSON.stringify(host.rowsFor(agent.id as AgentId))).toContain('Tynn is available again');
+        await host.stopAll();
+    });
+
+    it('/ME ANSWERS AND THE AGENT ENDPOINT FAILS: three steps, no restart, the running agent untouched; then it recovers', async () => {
+        const t = tynnFake();
+        t.state.reachable = false;
+        const { starts, keys, host } = world(t);
+        const agent = record();
+        const due: Array<() => void> = [];
+        const recovery = hostTynnRecovery({
+            names: (asked) => keys.recovery(asked), waiting: () => keys.waiting(), recheck: async () => {},
+            host: host as never, record: () => agent, threadOf: () => null, cwdFor: () => workspace,
+            schedule: (_ms, fn) => { due.push(fn); return () => {}; },
+        });
+        await host.start(agent, workspace);
+        await until(() => starts.length === 1);
+        await until(() => keys.waiting());
+        recovery.kick();
+        // The account reads signed in the whole time, so a sign-in alone is no reason to touch this agent.
+        expect(t.port.status().signedIn).toBe(true);
+        for (let step = 0; step < 3; step += 1) {
+            expect(due).toHaveLength(1);
+            due.shift()!();
+            await new Promise((r) => setTimeout(r, 20));
+        }
+        expect(starts, 'three steps, and the running agent was left alone').toHaveLength(1);
+        expect(host.probe(agent.id as AgentId)?.running).toBe(true);
+        expect(t.state.minted).toBe(0);
+        // Tynn's agent endpoint answers again: the key is in hand BEFORE the agent is touched.
+        t.state.reachable = true;
+        due.shift()!();
+        await until(() => starts.length === 2);
+        expect(starts).toHaveLength(2);
+        expect(t.state.minted).toBe(1);
+        expect(bearer(starts[1]!.servers)).toContain('rpk_');
+        await host.stopAll();
+    });
+
+    it('a key Tynn refuses to give stops the asking: it is not an outage, and the agent is left as it is', async () => {
+        const t = tynnFake();
+        t.state.reachable = false;
+        const { starts, keys, host } = world(t);
+        const agent = record();
+        await host.start(agent, workspace);
+        await until(() => starts.length === 1);
+        await until(() => keys.waiting());
+        t.state.reachable = true;
+        t.state.conflict = true;
+        expect(await keys.recovery()).toEqual([]);
+        expect(keys.waiting()).toBe(false);
+        expect(starts).toHaveLength(1);
         await host.stopAll();
     });
 
