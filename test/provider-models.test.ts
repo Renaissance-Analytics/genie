@@ -1,9 +1,9 @@
-import { listModels as prismListModels, ModelListError, type SessionModelState } from '@particle-academy/prism-acp';
+import { listModels as prismListModels, ModelListError, prepareProcessTree, type SessionModelState } from '@particle-academy/prism-acp';
 import { spawnSync } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyOutcome } from '../src/core/agent-ops.js';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
@@ -129,6 +129,9 @@ describe('which CLI is asked: the one an agent of that provider launches', () =>
 });
 
 describe('end to end against the stub CLIs (real prism-acp listModels, nothing faked above the process)', () => {
+    // On Windows the first launch on a fresh machine compiles prism-acp's supervisor, synchronously (measured: a row reading 52 s against its 20 s limit, event loop held). That build is not what these rows measure, so it happens here, with its own limit.
+    beforeAll(async () => { await prepareProcessTree(); }, 180_000);
+
     const runtime = { execPath: process.execPath, electron: false };
     const claudeStub = resolve('scripts/stub-claude.mjs');
     const codexStub = resolve('scripts/stub-codex.mjs');
