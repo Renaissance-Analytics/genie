@@ -485,15 +485,50 @@ const WIN_INSTALLER_URL = 'https://pkgs.tailscale.com/stable/tailscale-setup-lat
  * Tailscale's official signed installer and launch it (the user clicks through
  * Tailscale's own UI). On macOS/Linux the install path differs (App Store /
  * package manager), so hand back the download-page URL for the caller to open.
- * The signed installer is only ever fetched from Tailscale's own `pkgs.` host.
+ * The installer is only ever fetched from Tailscale's own `pkgs.` host, and runs only on Windows' verdict that it is validly signed by Tailscale (genie#1497).
  *
  * Returns `{ started: true }` when the Windows installer was launched, or a `url`
  * for the caller to open instead (other platforms, or a download failure).
  */
-// RED: the shape only.
+/** Windows' verdict on a file, in its own words, and who signed it. */
 export interface AuthenticodeAnswer { readonly status: string; readonly subject: string | null }
-export function refusalOf(_answer: AuthenticodeAnswer): string | null { return null; }
-export function readAuthenticode(_file: string): Promise<AuthenticodeAnswer> { return Promise.resolve({ status: 'Valid', subject: null }); }
+
+/** The publisher, read from the real installer's certificate table (2026-11-03): CN and O, both this, under DigiCert's code-signing CA. */
+const TAILSCALE_PUBLISHER = 'Tailscale Inc.';
+
+/** A certificate subject's parts by name. A value with a comma in it is quoted, so it is split outside quotes only, and a name further along cannot pass for the first. */
+function subjectParts(subject: string): Map<string, string> {
+    const parts = new Map<string, string>();
+    for (const piece of subject.match(/(?:[^,"]|"[^"]*")+/g) ?? []) {
+        const at = piece.indexOf('=');
+        if (at > 0) parts.set(piece.slice(0, at).trim(), piece.slice(at + 1).trim().replace(/^"(.*)"$/, '$1'));
+    }
+    return parts;
+}
+
+/** Why this file is not to be run, or null. Anything but Windows' own "Valid", from Tailscale, is a reason. */
+export function refusalOf(answer: AuthenticodeAnswer): string | null {
+    if (answer.status !== 'Valid') return `its signature is ${answer.status || 'unreadable'}`;
+    const parts = subjectParts(answer.subject ?? '');
+    if (parts.get('CN') === TAILSCALE_PUBLISHER && parts.get('O') === TAILSCALE_PUBLISHER) return null;
+    return `it is signed by ${parts.get('CN') ?? 'nobody it could read'}, not ${TAILSCALE_PUBLISHER}`;
+}
+
+/** Windows' own check. The file's name goes in the environment, never in the command's text, and PowerShell by its full path, so neither can be made into something else. */
+export function readAuthenticode(file: string): Promise<AuthenticodeAnswer> {
+    const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const script = '$s = Get-AuthenticodeSignature -LiteralPath $env:GENIE_AUTHENTICODE_FILE; [pscustomobject]@{ status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null } } | ConvertTo-Json -Compress';
+    return new Promise((resolve, reject) => {
+        execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, GENIE_AUTHENTICODE_FILE: file }, windowsHide: true, timeout: 60_000 }, (error, stdout) => {
+            if (error) { reject(error); return; }
+            try {
+                const parsed = JSON.parse(String(stdout)) as { status?: unknown; subject?: unknown };
+                resolve({ status: typeof parsed.status === 'string' ? parsed.status : '', subject: typeof parsed.subject === 'string' ? parsed.subject : null });
+            } catch (parseError) { reject(parseError as Error); }
+        });
+    });
+}
+
 export interface InstallPorts {
     readonly platform: NodeJS.Platform;
     readonly installed: () => string | null;
@@ -518,8 +553,20 @@ export async function installTailscale(over: Partial<InstallPorts> = {}): Promis
         const res = await (over.download ?? fetch)(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
-        const dest = path.join(os.tmpdir(), `tailscale-setup-${Date.now()}.exe`);
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'tailscale-setup-'));
+        const dest = path.join(folder, 'tailscale-setup.exe');
         fs.writeFileSync(dest, buf);
+        // Windows' verdict before anything runs. A check that cannot run is a refusal, never a pass.
+        let refusal: string | null;
+        try {
+            refusal = refusalOf(await (over.verify ?? readAuthenticode)(dest));
+        } catch {
+            refusal = 'its signature could not be checked';
+        }
+        if (refusal) {
+            fs.rmSync(folder, { recursive: true, force: true });
+            return { started: false, url: TAILSCALE_DOWNLOAD_PAGE, message: `The Tailscale installer was not run: ${refusal}.` };
+        }
         // Launch detached so Tailscale's installer outlives this call; the user
         // drives its UI. Not windowsHide — the user needs to see the installer.
         if (over.launch) { over.launch(dest); return { started: true }; }
