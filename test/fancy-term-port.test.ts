@@ -75,7 +75,7 @@ describe('opening', () => {
 
     it('parses a COMMAND into the shell and its args', () => {
         const f = fakeBackend();
-        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }) });
+        const port = fancyTermPort(f.backend, { defaultShell: () => ({ command: '/bin/sh', args: [] }), platform: 'linux' });
 
         port.open({ cwd: '/repo', command: 'npm test --filter=Challenge' });
 
