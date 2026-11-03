@@ -12,7 +12,7 @@
 #   ... -Phase wait-logon       waits for a logged-on session after that boot
 #   ... -Phase persist-write    then a reboot, then   ... -Phase persist-read    a value written in one boot and read in the next, each in the logged-on session
 #   ... -Phase autologon-clear  takes it away again
-#   ... -Phase script -Script scripts\x.mjs [-Minutes 25]    any script, in the logged-on person's session, its output printed when it ends and its exit code passed on
+#   ... -Phase script -Script scripts\x.mjs [-Minutes 25]    any script (.mjs by node, .ps1 by PowerShell), in the logged-on person's session, its output printed when it ends and its exit code passed on
 # The whole sequence, reboot included: scripts/vm-keychain-windows.sh in the envelope.
 param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'persist-write', 'persist-read', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon', 'script')][string]$Phase, [string]$Script = '', [int]$Minutes = 25)
 # Continue: quser and schtasks write to stderr in ordinary answers, and under Stop PowerShell 5.1 turns that into a throw (quser with nobody on: "No User exists", batch F0).
@@ -72,10 +72,12 @@ function Script-In-Session {
     $done = "$out.done"
     Remove-Item -Force -ErrorAction SilentlyContinue $out, $done
     $cmd = Join-Path $env:PUBLIC 'genie-session-script.cmd'
+    $runner = if ($Script -like '*.ps1') { 'powershell -NoProfile -ExecutionPolicy Bypass -File' } else { "`"$node`"" }
     Set-Content -Encoding ASCII -Path $cmd -Value @"
 @echo off
 cd /d "$repo"
-"$node" "$Script" > "$out" 2>&1
+set QUIT_CDP_ALLOW=1
+$runner "$Script" > "$out" 2>&1
 echo %ERRORLEVEL% > "$done"
 "@
     $name = 'GenieSessionScript'
