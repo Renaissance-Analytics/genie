@@ -1,7 +1,7 @@
 import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
+import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rename, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
@@ -842,6 +842,19 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 return Array.isArray(data.stopped) ? data.stopped.filter((s): s is string => typeof s === 'string') : [];
             },
             save: (stopped) => writeJsonAtomic(siteRunState, { stopped }),
+        },
+        trust: {
+            // A record that cannot be read is moved aside whole, for a person to look at; envelope-sites-host.ts writes a new one.
+            load: async () => {
+                const file = join(runtimeDir(input.userData), 'workspace-trust.json');
+                try {
+                    return await readJson<unknown>(file, null);
+                } catch (error) {
+                    await rename(file, `${file}.unreadable`).catch(() => undefined);
+                    throw error;
+                }
+            },
+            save: (book) => writeJsonAtomic(join(runtimeDir(input.userData), 'workspace-trust.json'), book),
         },
         envFor: (workspaceId) => engines.envFor(workspaceId),
         log: (line) => console.error(line),
