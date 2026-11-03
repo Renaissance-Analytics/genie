@@ -4,7 +4,8 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { transform } from 'esbuild';
+import { build } from 'esbuild';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { preparePrivateCredential } from '../src/main/private-credentials.js';
 
@@ -17,9 +18,8 @@ describe.skipIf(process.platform !== 'win32')('credential verifier parent lifeti
     it('exits when its parent dies during staging and refuses the unfinished write on the next start', async () => {
         const root = await mkdtemp(join(tmpdir(), 'genie-credential-death-'));
         const file = join(root, 'private-keys', 'credential.json');
-        const source = await readFile(new URL('../src/main/private-credentials.ts', import.meta.url), 'utf8');
-        const compiled = await transform(source, { loader: 'ts', format: 'cjs', target: 'node22' });
-        await writeFile(join(root, 'helper.cjs'), compiled.code);
+        // Bundled: the module now has a neighbour (windows-helper.ts), and this copy runs from a temp folder.
+        await build({ entryPoints: [fileURLToPath(new URL('../src/main/private-credentials.ts', import.meta.url))], bundle: true, platform: 'node', format: 'cjs', target: 'node22', outfile: join(root, 'helper.cjs'), logLevel: 'silent' });
         await writeFile(join(root, 'parent.cjs'), `
 const cp = require('node:child_process');
 const fs = require('node:fs/promises');

@@ -268,7 +268,7 @@ probe "a-dead-helper-loses-its-request" src/main/windows-helper.ts \
     test/windows-helper.test.ts "killed mid-request: the request is lost"
 
 probe "a-hung-helper-is-ended" src/main/windows-helper.ts \
-    "        pending.timer = setTimeout(() => this.#lose(\`no answer within \${this.#deadlineMs} ms\`), this.#deadlineMs);" "" \
+    "        pending.timer = realSetTimeout(() => this.#lose(\`no answer within \${this.#deadlineMs} ms\`), this.#deadlineMs);" "" \
     test/windows-helper.test.ts "hung past the deadline"
 
 probe "a-refused-script-is-a-refusal" src/main/windows-helper.ts \
