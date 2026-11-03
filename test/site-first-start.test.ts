@@ -40,7 +40,7 @@ function machine(files: Record<string, string>, over: { record?: unknown; record
             },
             runState: { load: async () => state.stops, save: async (s) => { state.stops = [...s]; } },
             trust: {
-                load: async () => { if (over.recordUnreadable && state.saves === 0) throw new Error('not valid JSON'); return state.record; },
+                load: async () => { if (over.recordUnreadable && state.saves === 0) throw new Error('not valid JSON'); return state.record === null ? null : JSON.parse(JSON.stringify(state.record)); },
                 save: async (book) => { if (state.saveFails) throw new Error('EROFS: read-only file system'); state.record = JSON.parse(JSON.stringify(book)); state.saves += 1; },
             },
             envFor: () => ({}),
