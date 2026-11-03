@@ -1,6 +1,7 @@
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { leftoverProviders, type ProcessRow } from '../core/leftover-providers.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE BOOT SWEEP (Tynn #796, part 2): before Genie resumes any agent, end every provider still running one of its
@@ -36,18 +37,18 @@ function parsePosixList(out: string): ProcessRow[] {
 }
 
 function win32List(): ProcessRow[] {
-    return parseWin32List(execFileSync('powershell', ['-NoProfile', '-Command', WIN32_LIST_SCRIPT], { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }));
+    return parseWin32List(execFileSync(resolveProgram('powershell'), ['-NoProfile', '-Command', WIN32_LIST_SCRIPT], { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true }));
 }
 
 function posixList(): ProcessRow[] {
-    return parsePosixList(execFileSync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 }));
+    return parsePosixList(execFileSync(resolveProgram('ps'), ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 }));
 }
 
 export const systemSweepIo: SweepIo = {
     list: () => (process.platform === 'win32' ? win32List() : posixList()),
     end: (pid) => {
         try {
-            if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
+            if (process.platform === 'win32') execFileSync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
             else process.kill(pid, 'SIGKILL');
         } catch {
             // already gone
@@ -90,15 +91,15 @@ const execFileAsync = promisify(execFile);
 export const systemSweepIoAsync: SweepIoAsync = {
     list: async () => {
         if (process.platform === 'win32') {
-            const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', WIN32_LIST_SCRIPT], { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+            const { stdout } = await execFileAsync(resolveProgram('powershell'), ['-NoProfile', '-Command', WIN32_LIST_SCRIPT], { encoding: 'utf8', timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
             return parseWin32List(stdout);
         }
-        const { stdout } = await execFileAsync('ps', ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 });
+        const { stdout } = await execFileAsync(resolveProgram('ps'), ['-eo', 'pid=,ppid=,args='], { encoding: 'utf8', timeout: 20_000, maxBuffer: 32 * 1024 * 1024 });
         return parsePosixList(stdout);
     },
     end: async (pid) => {
         try {
-            if (process.platform === 'win32') await execFileAsync('taskkill', ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
+            if (process.platform === 'win32') await execFileAsync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
             else process.kill(pid, 'SIGKILL');
         } catch {
             // already gone

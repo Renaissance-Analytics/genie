@@ -19,6 +19,7 @@ import {
     type SubmoduleEntry,
 } from '../core/envelope-plan.js';
 import type { EnvelopePorts } from './envelope-wizard-host.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE REAL DISK AND GIT THE ENVELOPE BUILD RUNS ON (Add workspace parity item 7). main.ts hands these to
@@ -35,14 +36,14 @@ const exists = async (p: string) => { try { await stat(p); return true; } catch 
 /** One read-only git command; `null` when it fails (not a repo, no such config, no git). */
 function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
     return new Promise((done) => {
-        execFile('git', [...args], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
+        execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
     });
 }
 
 /** git with input on stdin (Genie 1's runGitWithStdin): `check-ignore` exits 1 for "none matched", which is an answer. */
 function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
     return new Promise((done) => {
-        const child = spawn('git', [...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
+        const child = spawn(resolveProgram('git'), [...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
         let out = '';
         child.stdout.setEncoding('utf8');
         child.stdout.on('data', (d: string) => { out += d; });

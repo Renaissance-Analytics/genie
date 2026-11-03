@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { PROGRAM_LOOKUP_VARIABLE, resolveProgram } from '../core/program-lookup.js';
 import { shellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import { join } from 'node:path';
@@ -100,14 +101,15 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
             const created = backend.create({
                 id,
                 cwd: spawn.cwd,
-                shell: command,
+                // A whole path, always: the engine's own search must never see a bare name, whichever engine this is.
+                shell: resolveProgram(command, { platform: options.platform ?? process.platform, env: process.env }),
                 args,
                 ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
                 ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
                 // Only when given — a plain shell gets the user's environment untouched.
                 // GENIE_TERMINAL_ID in EVERY terminal (§6.9): the id is minted above, so the shell is born knowing which terminal it is.
                 // A caller's own GENIE_TERMINAL_ID wins (the Take Over host mints an attribution id of its own); the engine merges this over process.env.
-                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}) },
+                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
             });
             // An engine that could not start the process answers a non-positive pid rather than
             // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be

@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE PROCESS-CREATING CODE `execFileRunner` STANDS ON (genie#1397), run by the SPAWN HOST (main/spawn-host.ts) — a child
@@ -40,7 +41,7 @@ export interface RunResult {
 export function execInProcess(binary: string, args: readonly string[], options: RunOptions = {}): Promise<RunResult> {
     return new Promise((resolve, reject) => {
         const child = execFile(
-            binary,
+            options.shell === true ? binary : resolveProgram(binary),
             [...args],
             { timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS, windowsHide: true, maxBuffer: 4 * 1024 * 1024, ...(options.cwd ? { cwd: options.cwd } : {}), ...(options.env ? { env: { ...process.env, ...options.env } } : {}), shell: options.shell === true },
             (error, stdout, stderr) => {
@@ -67,7 +68,7 @@ export const streamInProcess: LineStream = (binary, args, onLine, onEnd) => {
     let ended = false;
     let stopped = false;
     const end = (reason: string) => { if (!ended) { ended = true; onEnd(reason); } };
-    const child = spawn(binary, [...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+    const child = spawn(resolveProgram(binary), [...args], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     let buffer = '';
     let stderr = '';
     child.stdout?.setEncoding('utf8');
