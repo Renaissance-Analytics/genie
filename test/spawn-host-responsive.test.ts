@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -91,17 +92,36 @@ vi.mock('node:child_process', async (original) => {
 async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     // The worker's gaps over 20 ms, as [end, gap] pairs in a shared ring (slot 0 is the count).
     const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
+    // The worker's gaps of 200 ms or more, each with what its own schedstat did across the gap: [end, gap, cpu ns, wait ns, timeslices]. Slot 0 is the count; slot 1 says whether it can read schedstat.
+    const why = new Float64Array(new SharedArrayBuffer(8 * (2 + 5 * 64)));
     const worker = new Worker(`
         const { workerData } = require('node:worker_threads');
-        const ring = new Float64Array(workerData);
+        const { readFileSync } = require('node:fs');
+        const ring = new Float64Array(workerData.ring);
+        const why = new Float64Array(workerData.why);
+        const sched = () => {
+            if (process.platform !== 'linux') return null;
+            try { return readFileSync('/proc/thread-self/schedstat', 'utf8').trim().split(/\s+/).map(Number); } catch { return null; }
+        };
+        let schedLast = sched();
+        why[1] = schedLast ? 1 : 0;
         let last = Date.now();
         setInterval(() => {
             const now = Date.now();
             const gap = now - last - 10;
             last = now;
             if (gap > 20) { const i = ring[0] % 4096; ring[1 + 2 * i] = now; ring[2 + 2 * i] = gap; ring[0] += 1; }
+            const schedNow = sched();
+            if (gap >= 200 && why[0] < 64) {
+                const at = 2 + 5 * why[0];
+                why[at] = now; why[at + 1] = gap;
+                if (schedNow && schedLast) { why[at + 2] = schedNow[0] - schedLast[0]; why[at + 3] = schedNow[1] - schedLast[1]; why[at + 4] = schedNow[2] - schedLast[2]; }
+                why[0] += 1;
+            }
+            schedLast = schedNow;
         }, 10);
-    `, { eval: true, workerData: shared.buffer });
+    `, { eval: true, workerData: { ring: shared.buffer, why: why.buffer } });
+    const stealBefore = procStatNow();
     await new Promise((r) => setTimeout(r, 100));
     // A hold on main, while this gauge runs, reads the worker's gaps as they land (shared memory: no event loop needed).
     const ringGaps = (): Array<[number, number]> => {
@@ -127,6 +147,14 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
         await worker.terminate();
     }
     const theirs = ringGaps();
+    const whyLines: string[] = [];
+    for (let i = 0; i < why[0]!; i += 1) {
+        const at = 2 + 5 * i;
+        whyLines.push(why[1] === 1
+            ? `gap ${why[at + 1]} ms: on a CPU ${Math.round(why[at + 2]! / 1e6)} ms, waiting for one ${Math.round(why[at + 3]! / 1e6)} ms, ${why[at + 4]} timeslices`
+            : `gap ${why[at + 1]} ms`);
+    }
+    console.log(`GAUGE-DIAG: the witness, gaps of 200 ms or more: ${whyLines.join('; ') || 'none'}; schedstat ${why[1] === 1 ? 'read' : process.platform === 'linux' ? 'unreadable' : `not available on ${process.platform}`}; ${stealSince(stealBefore)}`);
     let worst = 0;
     lastReading = { gap: 0, stalled: 0 };
     for (const [end, gap] of mine) {
@@ -140,6 +168,29 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
 
 /** The worst reading's parts: main's heartbeat gap, and how much of it the whole process was stopped (subtracted). */
 let lastReading = { gap: 0, stalled: 0 };
+
+/**
+ * WHY A WITNESS STALLED, for reading a repeat: `GAUGE-DIAG` lines. Linux only, and they say so anywhere else rather than read as zero.
+ * `/proc/thread-self/schedstat` is the calling thread's time on a CPU, time waiting for one (ns) and its timeslices. A stall whose wait grew by about its own length was
+ * waiting for a CPU; one whose wait did not was blocked on something else. `/proc/stat`'s eighth number on each cpu line is steal: time the host did not run that vCPU (in clock ticks).
+ */
+function stealByCpu(procStat: string): Record<string, number> {
+    const out: Record<string, number> = {};
+    for (const line of procStat.split('\n')) {
+        const fields = line.trim().split(/\s+/);
+        if (/^cpu\d*$/.test(fields[0] ?? '')) out[fields[0]!] = Number(fields[8] ?? 0);
+    }
+    return out;
+}
+const procStatNow = (): Record<string, number> | null => {
+    if (process.platform !== 'linux') return null;
+    try { return stealByCpu(readFileSync('/proc/stat', 'utf8')); } catch { return null; }
+};
+const stealSince = (before: Record<string, number> | null): string => {
+    const after = procStatNow();
+    if (!before || !after) return process.platform === 'linux' ? 'steal unreadable' : `steal not available on ${process.platform}`;
+    return `steal ticks ${Object.keys(after).map((cpu) => `${cpu}=${after[cpu]! - (before[cpu] ?? 0)}`).join(' ')}`;
+};
 
 type HostModule = typeof import('../src/main/spawn-host-client.js');
 let stopHost: (() => Promise<void>) | null = null;
@@ -155,6 +206,12 @@ afterEach(async () => {
  * and the gauge's worker alike. A hold the machine stalled through ended having held main for almost none of the time
  * the gauge can count. The hold now lasts until main has been held `ms` while the rest of the process ran.
  */
+describe('the diagnostic', () => {
+    it('reads each cpu line of /proc/stat for its steal, the eighth number', () => {
+        expect(stealByCpu('cpu  1 2 3 4 5 6 7 80 9 10\ncpu0 1 2 3 4 5 6 7 30 9 10\ncpu1 1 2 3 4 5 6 7 50 9 10\nintr 5\n')).toEqual({ cpu: 80, cpu0: 30, cpu1: 50 });
+    });
+});
+
 describe('the hold a spawn on main is made of', () => {
     it('holds main for the full time WHILE THE PROCESS RUNS: a stall of the whole process does not count toward it', () => {
         // A fake clock: 1 ms per read, and at 100 ms a 4,860 ms stall of the whole process (main and the worker both).
