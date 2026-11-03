@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import type { Keychain, KeychainResult, SecretName } from './keychain.js';
+import { MAX_SECRET_CHARS, type Keychain, type KeychainResult, type SecretName } from './keychain.js';
 import { writeJsonAtomic } from './store.js';
 
 /**
@@ -51,6 +51,7 @@ export type MigrationStatus =
     | 'already'
     | 'keychain-unavailable'
     | 'read-back-differs'
+    | 'too-large'
     | 'old-copy-unreadable'
     | 'confirmed-entry-missing'
     | 'old-copy-left'
@@ -87,6 +88,8 @@ async function moveOne(source: MigrationSource, vault: HostVault, book: Migratio
         return finish(source, book);
     }
 
+    // Before the store is asked, so this says what is wrong: a refusal there reads as a keychain that did not answer. Kept where it is, and said on every launch.
+    if (read.value.length > MAX_SECRET_CHARS) return 'too-large';
     const stored = await ask<KeychainResult>(() => vault.store(name, read.value), { ok: false, reason: '' });
     if (!stored.ok) return 'keychain-unavailable';
     const back = await ask<Comparison>(() => vault.compare(name, read.value), 'unavailable');

@@ -1,3 +1,4 @@
+import { MAX_SECRET_CHARS } from '../src/main/keychain.js';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -211,6 +212,25 @@ describe('it never runs twice', () => {
         expect(world.keychain.get(NAME)).toBe('the-renewed-key');
         expect(world.old).toBeNull();
         expect(world.writes).toBe(1);
+    });
+});
+
+describe('a secret over the size limit', () => {
+    it('stays where it was and says so by name: nothing written, nothing confirmed, nothing deleted, and the next launch says it again', async () => {
+        const world = new World();
+        world.old = 'x'.repeat(MAX_SECRET_CHARS + 1);
+        expect(await world.run()).toEqual([{ name: NAME, status: 'too-large' }]);
+        expect(world.old).toBe('x'.repeat(MAX_SECRET_CHARS + 1));
+        expect(world.writes).toBe(0);
+        expect(world.deletes).toBe(0);
+        expect(world.states[NAME]).toBeUndefined();
+        expect(await world.run()).toEqual([{ name: NAME, status: 'too-large' }]);
+    });
+
+    it('CONTROL: one at the limit moves', async () => {
+        const world = new World();
+        world.old = 'x'.repeat(MAX_SECRET_CHARS);
+        expect(await world.run()).toEqual([{ name: NAME, status: 'moved' }]);
     });
 });
 

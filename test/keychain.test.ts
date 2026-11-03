@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { ENTRY_OPTIONS, KEYCHAIN_SERVICE, Keychain, type KeyringModule } from '../src/main/keychain.js';
+import { generateHostKeypair } from '../src/main/workstation-identity.js';
+import { ENTRY_OPTIONS, KEYCHAIN_SERVICE, Keychain, MAX_SECRET_CHARS, type KeyringModule } from '../src/main/keychain.js';
 import { openHostKeychain } from '../src/main/host-keychain.js';
 
 /**
@@ -54,6 +55,53 @@ describe('with nothing on the bus, the library throws from its constructor', () 
     it('the same words from the read itself are the same answer', async () => {
         const k = new Keychain(async () => fakeModule(new Map(), new Error(NOT_ACTIVATABLE)).module);
         expect((await k.get('tynn/pairing')).kind).toBe('unavailable');
+    });
+});
+
+describe('the size limit: Windows refuses more than 1,280 UTF-16 units, so every OS does', () => {
+    // Measured on genie-test-windows: "Value of 'password encoded as UTF-16' is longer than the platform limit of 2560 chars", which counts bytes. A secret kept on Linux and then
+    // refused on Windows would be a profile that does not move between them, and a limit found by a person at the worst moment.
+    it('the limit is the platform\'s, in UTF-16 units', () => {
+        expect(MAX_SECRET_CHARS).toBe(1280);
+    });
+
+    it('over it: refused by name, in numbers, with the library never asked and no value in the words', async () => {
+        const f = fakeModule();
+        const k = new Keychain(async () => f.module);
+        const said: boolean[] = [];
+        k.onAnswerChange((answers) => said.push(answers));
+        const result = await k.set('tynn/pairing', 'x'.repeat(MAX_SECRET_CHARS + 1));
+        expect(result.ok).toBe(false);
+        const reason = result.ok ? '' : result.reason;
+        expect(reason).toContain('tynn/pairing');
+        expect(reason).toContain(String(MAX_SECRET_CHARS + 1));
+        expect(reason).toContain(String(MAX_SECRET_CHARS));
+        expect(reason).not.toContain('xxx');
+        expect(f.store.size).toBe(0);
+        expect(f.made, 'no entry was built for it').toEqual([]);
+        expect(said, 'it says nothing about whether the keychain answers').toEqual([]);
+    });
+
+    it('at it: kept', async () => {
+        const f = fakeModule();
+        const k = new Keychain(async () => f.module);
+        expect((await k.set('tynn/pairing', 'x'.repeat(MAX_SECRET_CHARS))).ok).toBe(true);
+    });
+
+    it('it counts what Windows counts: a character outside the basic plane is two', async () => {
+        const f = fakeModule();
+        const k = new Keychain(async () => f.module);
+        expect((await k.set('tynn/pairing', '\u{1F511}'.repeat(MAX_SECRET_CHARS / 2 + 1))).ok).toBe(false);
+    });
+
+    it('every secret Genie keeps today fits, with room: a workstation key, an agent key, a pairing, a GitHub token at its documented longest', () => {
+        const longestKept = {
+            'workstation PEM': generateHostKeypair().privateKeyPem.length,
+            'Tynn agent key (rpk_)': `rpk_${'0'.repeat(26)}.${'a'.repeat(64)}`.length,
+            'Tynn pairing (gpk_)': `gpk_${'0'.repeat(26)}.${'a'.repeat(64)}`.length,
+            'GitHub token, documented maximum': 255,
+        };
+        for (const [what, chars] of Object.entries(longestKept)) expect(chars, what).toBeLessThan(MAX_SECRET_CHARS / 4);
     });
 });
 
