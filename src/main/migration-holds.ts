@@ -35,7 +35,7 @@ export function holdMigration(ports: MigrationPorts, env: Readonly<Record<string
     };
     return {
         sources: ports.sources.map((source) => ({
-            name: source.name,
+            ...source,
             old: {
                 read: () => source.old.read(),
                 remove: async () => { await at('after-book', source.name); return source.old.remove(); },
@@ -46,6 +46,7 @@ export function holdMigration(ports: MigrationPorts, env: Readonly<Record<string
             compare: async (secret, value) => { await at('after-write', secret); return ports.vault.compare(secret, value); },
         },
         book: {
+            ...ports.book,
             read: () => ports.book.read(),
             write: async (secret, state) => {
                 await at(state === 'verified' ? 'after-read-back' : 'after-delete', secret);
