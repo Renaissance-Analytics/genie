@@ -1,6 +1,6 @@
-import { execFile } from 'node:child_process';
 import { resolveProgram } from '../core/program-lookup.js';
 import { parseGitConfigList, unsafeGitKeys, type GitConfigEntry } from '../core/workspace-trust.js';
+import { execFileRunner } from './toolchain-runner.js';
 
 /**
  * WHETHER GIT MAY RUN IN A FOLDER. A folder's own git config can name programs that an ordinary `git status` or `git diff` runs, so in a folder the person has not trusted, Genie reads that config first, and runs no git there if it holds a key
@@ -23,11 +23,8 @@ export function gitMayRun(cwd: string): Promise<boolean> {
 /** What a refused git action says. */
 export const GIT_NEEDS_TRUST = "This folder's git config can run commands, so Genie runs no git here until you trust this workspace.";
 
-const listing = (cwd: string, scope: '--local' | '--worktree'): Promise<GitConfigEntry[]> => new Promise((resolve) => {
-    execFile(resolveProgram('git'), ['config', scope, '--includes', '--list', '-z'], { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
-        resolve(error ? [] : parseGitConfigList(String(stdout)));
-    });
-});
+const listing = (cwd: string, scope: '--local' | '--worktree'): Promise<GitConfigEntry[]> =>
+    execFileRunner(resolveProgram('git'), ['config', scope, '--includes', '--list', '-z'], { cwd, timeoutMs: 10_000 }).then((r) => (r.exitCode === 0 ? parseGitConfigList(r.stdout) : []), () => []);
 
 /** A folder's own git config, as git itself resolves it: includes, the worktree's, a `.git` file's target, and a parent repository's when the folder is inside one. */
 export async function folderGitConfig(cwd: string): Promise<GitConfigEntry[]> {

@@ -15,9 +15,10 @@ let root: string;
 let repo: string;
 let mark: string;
 const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-const tool = () => {
+/** `filter`: it copies its input, as a filter must. Anything else reading its input would wait for ever on a hook that gets none. */
+const tool = (filter = false) => {
     const file = join(root, 'tool.sh');
-    writeFileSync(file, `#!/bin/sh\necho ran > '${mark.replace(/\\/g, '/')}'\ncat 2>/dev/null\nexit 0\n`);
+    writeFileSync(file, `#!/bin/sh\necho ran > '${mark.replace(/\\/g, '/')}'\n${filter ? 'cat\n' : 'exit 0\n'}`);
     chmodSync(file, 0o755);
     return file.replace(/\\/g, '/');
 };
@@ -37,7 +38,7 @@ beforeEach(() => {
 });
 afterEach(() => {
     setGitReadPolicy(null);
-    rmSync(root, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
 });
 
 describe('a plain repository, untrusted', () => {
@@ -81,7 +82,7 @@ describe('the other ways a config can say it', () => {
     it('diff.external, through repoDiff', async () => { git('config', 'diff.external', tool()); await repoDiff(repo, '.', 'a.txt', false); expect(ran()).toBe(false); });
     it('a filter, through gitTreeStatus', async () => {
         writeFileSync(join(repo, '.gitattributes'), '*.txt filter=x\n');
-        git('config', 'filter.x.clean', tool());
+        git('config', 'filter.x.clean', tool(true));
         await gitTreeStatus(repo);
         expect(ran()).toBe(false);
     });
