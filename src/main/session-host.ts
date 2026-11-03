@@ -357,12 +357,23 @@ export const LIMIT_REREAD_MS = 15 * 60_000;
 /** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
 export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string }
 
-export function claudeTrustOptions(_launch: { readonly binaryArgs?: readonly string[] }, _untrusted: GenieInstructionFiles | null): { settingSources?: readonly ('user' | 'project' | 'local')[]; strictMcpConfig?: boolean; binaryArgs?: readonly string[] } {
-    return {};
+/**
+ * A CLAUDE AGENT IN AN UNTRUSTED WORKSPACE: the person's own settings and no project's, Genie's own MCP servers and no folder's, and Genie's words from files of its own. Measured against a stand-in API (CLI 2.1.317), through a fresh launch and
+ * --resume, and by prism against real CLIs: hooks given by --settings and servers given by --mcp-config stay. Every construction carries these: nothing sticks between launches.
+ * The two file flags go through `binaryArgs` until prism-acp has options for them; a configured script stays first, as they are arguments to it.
+ */
+export function claudeTrustOptions(launch: { readonly binaryArgs?: readonly string[] }, untrusted: GenieInstructionFiles | null): { settingSources?: readonly ('user' | 'project' | 'local')[]; strictMcpConfig?: boolean; binaryArgs?: readonly string[] } {
+    if (untrusted === null) return {};
+    return {
+        settingSources: ['user'],
+        strictMcpConfig: true,
+        binaryArgs: [...(launch.binaryArgs ?? []), '--append-system-prompt-file', untrusted.promptFile, '--plugin-dir', untrusted.pluginDir],
+    };
 }
 
-export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(record: T, _untrusted: GenieInstructionFiles | null): T {
-    return record;
+/** A Codex agent set to run unasked does not, in an untrusted workspace: Codex keeps its own approvals and sandbox. */
+export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(record: T, untrusted: GenieInstructionFiles | null): T {
+    return untrusted === null ? record : { ...record, autoApprove: false };
 }
 
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
@@ -376,10 +387,10 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
     switch (record.provider) {
         case 'claude':
-            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...mcp, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(launch, extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(record, cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...inheritedPolicy }, driverEvents(options.events));
 
         default:
             return null;
@@ -431,6 +442,7 @@ export class SessionHost {
     readonly #store: () => SessionStore;
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
+    readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
@@ -569,6 +581,7 @@ export class SessionHost {
         this.#store = options.store ?? (() => (shared ??= openDurableStore(sessionsDir(this.#userData))));
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
+        this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#prepareMcpServers = options.prepareMcpServers;
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
@@ -786,10 +799,15 @@ export class SessionHost {
 
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
-        const driverFactory = this.#prepareMcpServers ? deferredDriverFactory(async (signal) => {
-            const prepared = await this.#prepareMcpServers!(record, cwd, signal);
+        // Read before each launch, not kept: a workspace trusted or changed since the last one counts now. A failure here starts nothing.
+        let untrustedNow = false;
+        const driverFactory = this.#prepareMcpServers || this.#untrustedFilesFor ? deferredDriverFactory(async (signal) => {
+            const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
+            untrustedNow = untrusted !== null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
-            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv });
+            const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
+            if (signal.aborted) throw new Error('Preparation was cancelled.');
+            const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
             if (current) current.mcp = prepared.map((server) => server.name);
@@ -883,7 +901,7 @@ export class SessionHost {
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
-            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions) } : {}),
+            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: untrustedNow }) } : {}),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.

@@ -73,6 +73,7 @@ import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunn
 import { ServiceRegistry } from './service-registry.js';
 import { DotEnvSync, envFileSites, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
 import { fileIsTracked, folderGitConfig, setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { writeGenieInstructions } from './genie-instructions.js';
 import { WorkspaceTrust } from './workspace-trust-host.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager, type PhpCgiResolution } from './site-manager.js';
@@ -965,6 +966,12 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         trustPass = trustPass.then(() => Promise.all(workspacesNow().map((w) => workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)))));
     };
     refreshTrust();
+    /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
+    const mayWriteInto = async (folder: string): Promise<boolean> => {
+        const workspace = workspacesNow().find((w) => w.path === folder);
+        if (!workspace) return true;
+        return (await workspaceTrust.refresh(workspace.id))?.trusted !== false;
+    };
     // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
     // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
     frontDoorCtl.beginHosts();
@@ -1172,7 +1179,14 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         sites,
         envelopeSites,
         workspaceTrust,
-        untrustedFilesFor: async () => null,
+        untrustedFilesFor: async (record) => {
+            const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
+            // Not in a workspace: the built-in Genie agent, in a folder of Genie's own.
+            if (!workspace) return null;
+            const view = await workspaceTrust.refresh(workspace.id);
+            if (view === null || view.trusted) return null;
+            return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
+        },
         engines,
         engineReconcile,
         envFiles,
@@ -1299,6 +1313,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
         syncConfig: async (workspacePath, source = 'start') => withConfig(workspacePath, async () => {
+            // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
+            if (!(await mayWriteInto(workspacePath))) return [];
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) {
                 const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
@@ -1328,6 +1344,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             return results;
         }),
         syncAgentDocs: async (workspacePath, source = 'start') => {
+            if (!(await mayWriteInto(workspacePath))) return;
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const on = settings.snapshot().mcp_sync_agents !== false;
             // One node fs for every step; each write and removal is reported to the health record Settings reads.

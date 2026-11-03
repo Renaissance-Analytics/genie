@@ -1070,6 +1070,9 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 let services: ComposedServices | null = null;
+/** Settles when the services are composed: an agent's launch asks them about its workspace first. */
+let servicesComposed: (value: ComposedServices) => void = () => {};
+const composedServices = new Promise<ComposedServices>((resolve) => { servicesComposed = resolve; });
 // Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
@@ -1239,6 +1242,7 @@ async function boot(): Promise<void> {
     }
     host = new SessionHost({
         userData: genieHome(),
+        untrustedFilesFor: async (record) => (await composedServices).untrustedFilesFor(record),
         // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
         currentRecord: (id) => registry?.find(id) ?? null,
         lifecycle: {
@@ -2584,6 +2588,7 @@ async function boot(): Promise<void> {
         }),
     });
     services = composed;
+    servicesComposed(composed);
     // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change
     // used to build its own snapshot concurrently, and they landed out of order.
     const featurePush = new LatestPush<FeatureData>({
