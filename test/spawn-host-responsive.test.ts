@@ -1,3 +1,7 @@
+import { spawn } from 'node:child_process';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -82,11 +86,10 @@ vi.mock('node:child_process', async (original) => {
 });
 
 /**
- * How long MAIN'S THREAD was held during `run`, beyond what this whole process was held at the same moment: a 10 ms
- * heartbeat on main, and one on a worker thread of the same process. Every gap of main's is reduced by the worker's gap
- * that overlaps it. A held main thread (a synchronous spawn) reads its full length; a process the machine did not
- * schedule (the full suite saturating every CPU: measured 76 and 304 ms on omarchy-test) reads about 0, because the
- * worker was not run either. The worst remainder is returned.
+ * How long MAIN'S THREAD was held during `run`, beyond what the machine was stopped at the same moment: a 10 ms heartbeat on main, and one in a PROCESS OF ITS OWN. Every gap of main's is reduced by the
+ * witness's gap that overlaps it. A held main thread reads its full length; a machine that stopped (the witness stopped too) reads about 0. It used to be a worker thread of this process, and that thread could stop for nearly a whole hold with
+ * the process running (measured: waiting for no CPU, and in about 1 run in 12), which subtracted a real 5 s hold down to 65 ms. Nothing inside this process can hold a witness outside it. What stopped that thread was not named.
+ * The worst remainder is returned.
  */
 interface GaugeForcing {
     /** Another thread of this process stops for the whole of `run`: nothing in this process may hide a hold. */
@@ -95,60 +98,99 @@ interface GaugeForcing {
     readonly stopTheWitness?: boolean;
 }
 
-async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
-    // The worker's gaps over 20 ms, as [end, gap] pairs in a shared ring (slot 0 is the count).
-    const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
-    const stall = new Int32Array(new SharedArrayBuffer(4));
-    const worker = new Worker(`
-        const { workerData } = require('node:worker_threads');
-        const ring = new Float64Array(workerData.ring);
-        const stall = new Int32Array(workerData.stall);
-        let last = Date.now();
-        setInterval(() => {
-            Atomics.wait(stall, 0, 1);
-            const now = Date.now();
-            const gap = now - last - 10;
-            last = now;
-            if (gap > 20) { const i = ring[0] % 4096; ring[1 + 2 * i] = now; ring[2 + 2 * i] = gap; ring[0] += 1; }
-        }, 10);
-    `, { eval: true, workerData: { ring: shared.buffer, stall: stall.buffer } });
-    await new Promise((r) => setTimeout(r, 100));
-    // A hold on main, while this gauge runs, reads the worker's gaps as they land (shared memory: no event loop needed).
-    const ringGaps = (): Array<[number, number]> => {
-        const out: Array<[number, number]> = [];
-        for (let i = 0; i < Math.min(shared[0]!, 4096); i += 1) out.push([shared[1 + 2 * i]!, shared[2 + 2 * i]!]);
-        return out;
-    };
-    let ringCount = -1;
-    let ringCache: Array<[number, number]> = [];
-    processStalled = (from, to) => {
-        if (shared[0] !== ringCount) { ringCount = shared[0]!; ringCache = ringGaps(); }
-        return overlapWith(ringCache, from, to);
-    };
-    const mine: Array<[number, number]> = [];
+/** The witness: a process of its own, beating every 10 ms. It writes `ready` after three beats, then each gap over 20 ms as `<end> <gap>`. It ends when its stdin does, so it cannot outlive a test. */
+const WITNESS = `
+    const { appendFileSync } = require('node:fs');
+    const file = process.argv[1];
     let last = Date.now();
-    const timer = setInterval(() => { const now = Date.now(); const gap = now - last - 10; last = now; if (gap > 20) mine.push([now, gap]); }, 10);
+    let beats = 0;
+    setInterval(() => {
+        const now = Date.now();
+        const gap = now - last - 10;
+        last = now;
+        beats += 1;
+        if (beats === 3) appendFileSync(file, 'ready ' + now + '\\n');
+        if (gap > 20) appendFileSync(file, now + ' ' + gap + '\\n');
+    }, 10);
+    process.stdin.on('end', () => process.exit(0));
+    process.stdin.resume();
+`;
+
+const witnessGaps = (file: string): Array<[number, number]> => {
+    let text = '';
+    try { text = readFileSync(file, 'utf8'); } catch { return []; }
+    const out: Array<[number, number]> = [];
+    for (const line of text.split('\n')) {
+        const [end, gap] = line.split(' ').map(Number);
+        if (Number.isFinite(end) && Number.isFinite(gap)) out.push([end!, gap!]);
+    }
+    return out;
+};
+
+async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
+    const dir = mkdtempSync(join(tmpdir(), 'gauge-witness-'));
+    const file = join(dir, 'gaps.txt');
+    const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+    const stopped = new Promise<void>((r) => { witness.once('exit', () => r()); witness.once('error', () => r()); });
+    // Another thread of this process, stopped on request: what the old in-process witness read as the whole process stopping.
+    const stall = new Int32Array(new SharedArrayBuffer(4));
+    const stalledThread = forcing.stallAThread ? new Worker(`
+        const { workerData } = require('node:worker_threads');
+        const stall = new Int32Array(workerData);
+        Atomics.store(stall, 0, 1);
+        Atomics.notify(stall, 0);
+        Atomics.wait(stall, 0, 1);
+    `, { eval: true, workerData: stall.buffer }) : null;
     try {
-        if (forcing.stallAThread) { Atomics.store(stall, 0, 1); await new Promise((r) => setTimeout(r, 40)); }
-        await run();
+        // A REAL HANDSHAKE: it has beaten, or the gauge does not begin.
+        const handshakeEnd = Date.now() + 20_000;
+        while (!existsSync(file)) {
+            if (Date.now() > handshakeEnd) throw new Error('the gauge\'s witness never beat, so nothing it says could be read');
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        if (stalledThread) while (Atomics.load(stall, 0) !== 1) await new Promise((r) => setTimeout(r, 5));
+        // What the file says at the moment the gauge begins, not what the wait above assumed.
+        const witnessBeatsAtStart = readFileSync(file, 'utf8').startsWith('ready') ? 3 : 0;
+        // A hold on main reads the witness's gaps from the file as they land: a spinning main has no event loop for a pipe.
+        let readAt = 0;
+        let cache: Array<[number, number]> = [];
+        processStalled = (from, to) => {
+            const now = Date.now();
+            if (now - readAt >= 50) { readAt = now; cache = witnessGaps(file); }
+            return overlapWith(cache, from, to);
+        };
+        const mine: Array<[number, number]> = [];
+        let last = Date.now();
+        const timer = setInterval(() => { const now = Date.now(); const gap = now - last - 10; last = now; if (gap > 20) mine.push([now, gap]); }, 10);
+        try {
+            if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGSTOP');
+            await run();
+            if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGCONT');
+            // Long enough for a witness that just woke to write the gap it woke to.
+            await new Promise((r) => setTimeout(r, forcing.stopTheWitness ? 300 : 60));
+        } finally {
+            processStalled = () => 0;
+            clearInterval(timer);
+        }
+        const theirs = witnessGaps(file);
+        let worst = 0;
+        lastReading = { gap: 0, stalled: 0, witnessBeatsAtStart };
+        for (const [end, gap] of mine) {
+            const start = end - gap;
+            // The same measure the hold uses (`overlapWith`): the longest witness gap overlapping this one of main's.
+            const process = overlapWith(theirs, start, end);
+            if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process, witnessBeatsAtStart }; }
+        }
+        return worst;
+    } finally {
         Atomics.store(stall, 0, 0);
         Atomics.notify(stall, 0);
-        await new Promise((r) => setTimeout(r, 60));
-    } finally {
-        processStalled = () => 0;
-        clearInterval(timer);
-        await worker.terminate();
+        await stalledThread?.terminate();
+        witness.stdin?.end();
+        witness.kill();
+        await stopped;
+        rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     }
-    const theirs = ringGaps();
-    let worst = 0;
-    lastReading = { gap: 0, stalled: 0 };
-    for (const [end, gap] of mine) {
-        const start = end - gap;
-        // The same measure the hold uses (`overlapWith`): the longest worker gap overlapping this one of main's.
-        const process = overlapWith(theirs, start, end);
-        if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process }; }
-    }
-    return worst;
 }
 
 /** The worst reading's parts: main's heartbeat gap, and how much of it the whole process was stopped (subtracted). */
