@@ -148,7 +148,8 @@ describe('THE BUG: an agent started during an outage, with no window, gets its t
         for (let step = 0; step < 3; step += 1) {
             expect(due).toHaveLength(1);
             due.shift()!();
-            await new Promise((r) => setTimeout(r, 20));
+            // The next step is scheduled when this one's check ends, after real file work: wait for that, not 20 ms (batch CC, under the suite).
+            await until(() => due.length === 1);
         }
         expect(starts, 'three steps, and the running agent was left alone').toHaveLength(1);
         expect(host.probe(agent.id as AgentId)?.running).toBe(true);

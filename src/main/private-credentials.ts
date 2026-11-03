@@ -246,6 +246,14 @@ async function preparePrivateStorage(file: string, staged?: { temp: string; writ
     }
 }
 
+/** The one file, as a store opening over it would have it. On Windows only for now: elsewhere the caller's chmod is the same thing. */
+export async function restrictPrivateFile(file: string): Promise<void> {
+    if (process.platform !== 'win32') return;
+    const target = { path: resolve(file), directory: false };
+    if (!await inspect(target)) throw new Error(REFUSED);
+    try { await restrict([target]); } catch (error) { throw error instanceof SharedCredentialDirectoryError ? error : new Error(REFUSED); }
+}
+
 /** Restrict existing storage before reading it or issuing a credential. Final links are refused. */
 export async function preparePrivateCredential(file: string): Promise<void> {
     await preparePrivateStorage(file);

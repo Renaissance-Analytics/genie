@@ -245,6 +245,19 @@ probe "over-the-limit-stays-where-it-was" src/main/keychain-migration.ts \
     "    if (read.value.length > MAX_SECRET_CHARS) return 'too-large';" "" \
     test/keychain-migration.test.ts "stays where it was and says so by name"
 
+# Two stores: the current sign-in wins, and nothing goes before its read-back
+probe "the-current-sign-in-is-not-held-up-by-an-older-file" src/main/tynn-account.ts \
+    "    if (await exists(file)) {" "    if (false) {" \
+    test/tynn-account-host.test.ts "the current sign-in moves, byte for byte"
+
+probe "the-older-seal-goes-with-the-move" src/main/tynn-account.ts \
+    "                if (options.legacyFile) await rm(options.legacyFile, { force: true });" "" \
+    test/tynn-account-host.test.ts "and then no seal is left anywhere"
+
+probe "a-stale-older-file-goes-only-once-moved" src/main/tynn-account.ts \
+    "|| typeof (current as { tokenEnc?: unknown }).tokenEnc === 'string') return;" ") return;" \
+    test/tynn-account-host.test.ts "the current one still sealed: not yet"
+
 # P3.4 cut a: the keychain. The pin is the core: unpinned, a secret is silently lost at the next reboot.
 probe "keychain-every-entry-is-pinned" src/main/keychain.ts \
     "        return new AsyncEntry(KEYCHAIN_SERVICE, name, ENTRY_OPTIONS);" "        return new AsyncEntry(KEYCHAIN_SERVICE, name);" \
@@ -324,7 +337,7 @@ probe "sign-out-removes-the-entry" src/main/tynn-account.ts \
     test/tynn-account-host.test.ts "a sign-out removes it"
 
 probe "only-a-real-pairing-token-moves" src/main/tynn-account.ts \
-    "                    return tokenValid(token) ? { kind: 'value', value: token } : { kind: 'unreadable' };" "                    return { kind: 'value', value: token };" \
+    "                    if (tokenValid(token)) return { kind: 'value', value: token };" "                    if (token) return { kind: 'value', value: token };" \
     test/tynn-account-host.test.ts "is not a pairing token"
 
 probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
