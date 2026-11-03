@@ -85,19 +85,26 @@ describe('the list', () => {
             expect((await local({ allow: ['Bash(npm test:*)'] }, true)).hooks).toEqual([{ file: '.claude/settings.local.json', event: 'permissions', command: JSON.stringify({ allow: ['Bash(npm test:*)'] }) }]);
         });
 
-        it('untracked: a narrow allow is a person approving a command, so it is shown and not hashed, and more of them never ask', async () => {
-            const before = await local({ allow: ['Bash(npm test:*)'] });
-            const after = await local({ allow: ['Bash(npm test:*)', 'Bash(git status:*)'] });
-            expect(before.approvals).toEqual(['Bash(npm test:*)']);
-            expect(after.approvals).toEqual(['Bash(npm test:*)', 'Bash(git status:*)']);
+        // MEASURED: what Claude Code 2.1.317 wrote when a person answered "don't ask again" to `npm run approval-probe`.
+        const WRITTEN_BY_THE_CLI = 'Bash(npm run *)';
+
+        it('untracked: what a person approving a command really writes is shown and not hashed, and more of them never ask', async () => {
+            const before = await local({ allow: [WRITTEN_BY_THE_CLI] });
+            const after = await local({ allow: [WRITTEN_BY_THE_CLI, 'Bash(git push:*)'] });
+            expect(before.approvals).toEqual([WRITTEN_BY_THE_CLI]);
+            expect(after.approvals).toEqual([WRITTEN_BY_THE_CLI, 'Bash(git push:*)']);
             expect(trustHash(before)).toBe(trustHash(after));
+        });
+
+        it.each(['Bash(npm run *)', 'Bash(npm test:*)', 'Bash(npm test)', 'Bash(git *)', 'Bash(git push *)', 'PowerShell(npm run *)'])('untracked: %s is the shape the CLI writes', async (rule) => {
+            expect((await local({ allow: [rule] })).approvals).toEqual([rule]);
         });
 
         it.each([['defaultMode', { defaultMode: 'bypassPermissions' }], ['additionalDirectories', { additionalDirectories: ['/'] }], ['deny', { deny: ['Bash'] }], ['ask', { ask: ['Bash'] }]])('untracked: %s still counts', async (_key, permissions) => {
             expect(trustHash(await local(permissions))).not.toBe(trustHash(await local({})));
         });
 
-        it.each(['Bash', 'Bash(*)', 'Bash(:*)', 'PowerShell(*)', '*', 'mcp__x', 'Write', 'Edit(**)', 'Bash(*:*)'])('untracked: an allow as wide as %s is no person approving one command: it counts', async (rule) => {
+        it.each(['Bash', 'Bash(*)', 'Bash(:*)', 'PowerShell(*)', '*', 'mcp__x', 'Write', 'Edit(**)', 'Bash(*:*)', 'Bash(sh *)', 'Bash(bash *)', 'Bash(zsh:*)', 'Bash(node *)', 'Bash(python *)', 'Bash(python3 *)', 'Bash(perl *)', 'Bash(ruby *)', 'Bash(php *)', 'Bash(curl *)', 'Bash(wget *)', 'Bash(env *)', 'Bash(sudo *)', 'Bash(cmd *)', 'Bash(powershell *)', 'Bash(pwsh *)', 'Bash(npx *)', 'Bash(./tool *)', 'Bash(/bin/sh *)', 'Bash(npm run * && other)', 'Bash(npm; other *)', 'Bash(a b c *)'])('untracked: an allow as wide as %s is no person approving one command: it counts', async (rule) => {
             expect(trustHash(await local({ allow: [rule] }))).not.toBe(trustHash(await local({})));
         });
 
