@@ -298,20 +298,21 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
     });
 
     it('the engine: a bare name runs the installed program, not the one in the working folder', async () => {
-        const out = await throughTheEngine(['git', '--version']);
+        // Not --version: node answers that before it loads the hook, so the planted copy could run and leave no mark.
+        const out = await throughTheEngine(['git', 'status']);
         expect(ran()).toBe(false);
-        // It did run something: the real one.
-        expect(out).toMatch(/git version/);
+        // It did run something: the real one, in a folder that is no repo.
+        expect(out).toMatch(/not a git repository/);
     }, 30_000);
 
     it('the engine: a bare name found only in the working folder does not run', async () => {
         copyFileSync(process.execPath, join(folder, 'onlyhere.exe'));
-        await throughTheEngine(['onlyhere', '--version']);
+        await throughTheEngine(['onlyhere', 'status']);
         expect(ran()).toBe(false);
     }, 30_000);
 
     it('CONTROL the engine: asked for the working folder by name, it runs it, so the two above can see', async () => {
-        await throughTheEngine(['.\\git.exe', '--version']);
+        await throughTheEngine(['.\\git.exe', 'status']);
         expect(ran()).toBe(true);
     }, 30_000);
 
