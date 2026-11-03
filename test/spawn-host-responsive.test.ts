@@ -31,13 +31,13 @@ const SLOW_MS = 5_000;
 /** Main held for longer than this was held FOR the spawn (a fifth of it); under it is the machine's scheduling. */
 const HELD_BAR_MS = SLOW_MS / 5;
 
-/** What a hold reads: the time, and how much of a span the whole process was stopped (the gauge's worker saw it too). */
+/** What a hold reads: the time, and how much of a span the machine was stopped (the gauge's witness saw it too). */
 interface HoldClocks {
     now(): number;
     stalled(from: number, to: number): number;
 }
 
-/** How much of [from, to] the whole process was stopped: the gauge's worker gaps, while a gauge runs; none otherwise. */
+/** How much of [from, to] the machine was stopped: the gauge's witness gaps, while a gauge runs; none otherwise. */
 let processStalled: (from: number, to: number) => number = () => 0;
 
 /** Hold this thread `ms`, the way a synchronous CreateProcess does. */
@@ -47,8 +47,8 @@ function hold(ms: number): void {
 
 /**
  * The hold itself, over the clocks it is given: until main has been held `ms` WHILE THE REST OF THE PROCESS RAN. Time the
- * whole process was stopped (the gauge's worker stopped too) is not main held by a spawn — the gauge does not count it,
- * so neither does the hold. Capped at twice `ms` of wall time (well inside the 30 s test timeout), should the worker never
+ * machine was stopped (the gauge's witness stopped too) is not main held by a spawn — the gauge does not count it,
+ * so neither does the hold. Capped at twice `ms` of wall time (well inside the 30 s test timeout), should the witness never
  * run again.
  */
 function holdFor(ms: number, clocks: HoldClocks): void {
@@ -61,9 +61,9 @@ function holdFor(ms: number, clocks: HoldClocks): void {
 }
 
 /**
- * How much of [from, to] the whole process was stopped, as the GAUGE counts it: the longest worker gap overlapping the
- * span (worker gaps as [end, gap] pairs). The hold and the gauge both use this, so they cannot disagree — a hold that
- * summed every short gap of a worker merely preempted by the spinning main stretched far past what the gauge subtracts.
+ * How much of [from, to] the machine was stopped, as the GAUGE counts it: the longest witness gap overlapping the
+ * span (witness gaps as [end, gap] pairs). The hold and the gauge both use this, so they cannot disagree — a hold that
+ * summed every short gap of a witness merely preempted by the spinning main stretched far past what the gauge subtracts.
  */
 function overlapWith(gaps: ReadonlyArray<readonly [number, number]>, from: number, to: number): number {
     let longest = 0;
