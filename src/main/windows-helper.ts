@@ -36,6 +36,8 @@ export interface WindowsHelperOptions {
     readonly spawn: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => HelperChild;
     readonly deadlineMs?: number;
     readonly log?: (line: string) => void;
+    readonly restMs?: number;
+    readonly now?: () => number;
 }
 
 // Real timers, taken at load: a test faking the clock (or advancing it 30 s) is not a helper past its deadline.

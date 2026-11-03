@@ -140,6 +140,9 @@ export function sharedWindowsHelper(): WindowsHelper | null {
     if (helper === undefined) helper = (process as { type?: string }).type === 'browser' ? null : windowsHelper();
     return helper;
 }
+// RED: the shape only.
+export function slowWriteLine(_ms: number, _way: string, _why: string | null): string | null { return null; }
+
 /** This attempt's: whether to skip the helper, and whether the helper was lost under it. */
 const attempt = new AsyncLocalStorage<{ oneShot: boolean; lost: boolean }>();
 
