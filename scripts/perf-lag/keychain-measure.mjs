@@ -11,6 +11,9 @@
  * read-back succeed, and it is GONE after the reboot. That is the failure the pin exists to stop, and it proves this gauge can
  * see it. `recheck` proves it was the reboot that took it, not merely a new session or process.
  *
+ *   node scripts/perf-lag/keychain-measure.mjs persist-write   # Windows, in a logged-on session; then reboot
+ *   node scripts/perf-lag/keychain-measure.mjs persist-read    # after it, in a logged-on session
+ *
  * "No Secret Service" is a child process with the session bus pointed nowhere. Windows runs `before` for the round trip and
  * the size limit (the pin means nothing there); there is no reboot phase on Windows.
  *
@@ -79,6 +82,18 @@ switch (phase) {
         const listed = spawnSync('secret-tool', ['search', '--all', 'service', SERVICE], { encoding: 'utf8', timeout: 15_000 });
         check('pinned-is-in-the-secret-service', `${listed.stdout}${listed.stderr}`.includes(SERVICE) || `${listed.stdout}${listed.stderr}`.includes('pinned'), (listed.stdout ?? '').split('\n').filter((l) => /label|service|username/.test(l)).join(' | ').slice(0, 200));
         withNoBus('nobus-before');
+        break;
+    }
+    // A value written in one boot and read in the next, on Windows (Credential Manager has no bus and no pin, so this is all a reboot can ask of it).
+    case 'persist-write': {
+        const w = await attempt(() => entry('persist', true).setPassword(PINNED_VALUE));
+        check('persist-write', !w.error, w.error ?? '');
+        break;
+    }
+    case 'persist-read': {
+        const r = await attempt(() => entry('persist', true).getPassword());
+        check('PERSISTED-THROUGH-THE-REBOOT', r.value === PINNED_VALUE, r.error ?? String(r.value));
+        await attempt(() => entry('persist', true).deletePassword());
         break;
     }
     case 'nobus-before': {
