@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { PROGRAM_LOOKUP_VARIABLE, resolveProgram } from '../core/program-lookup.js';
+import { PROGRAM_LOOKUP_VARIABLE, findProgram, notFoundWords } from '../core/program-lookup.js';
 import { shellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import { join } from 'node:path';
@@ -98,11 +98,15 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
                 ? spawn.shell ? shellLaunch(options.platform ?? process.platform, options.defaultShell, spawn.command) : parseCommandLine(spawn.command)
                 : options.defaultShell();
 
+            // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
+            const lookup = { platform: options.platform ?? process.platform, env: process.env };
+            const program = findProgram(command, lookup);
+            if (program === null) throw new Error(notFoundWords(command, lookup));
+
             const created = backend.create({
                 id,
                 cwd: spawn.cwd,
-                // A whole path, always: the engine's own search must never see a bare name, whichever engine this is.
-                shell: resolveProgram(command, { platform: options.platform ?? process.platform, env: process.env }),
+                shell: program,
                 args,
                 ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
                 ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),

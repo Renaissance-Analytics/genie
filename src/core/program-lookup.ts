@@ -53,23 +53,38 @@ const SYSTEM: Readonly<Record<string, readonly string[]>> = {
     whoami: ['System32', 'whoami.exe'],
 };
 
-export function resolveProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
-    if (ports.platform !== 'win32') return name;
-    if (/[\\/]/.test(name) || WHOLE.test(name)) return name;
-    const env = ports.env;
-    const stem = name.replace(/\.(exe|com)$/i, '');
-    const system = SYSTEM[stem.toLowerCase()];
-    const root = systemRoot(env);
-    if (system) return win32.join(root, ...system);
+/** The first of these file names in an absolute PATH entry, or `null`. A relative entry and the working folder are never looked in. */
+function onPath(files: readonly string[], ports: LookupPorts): string | null {
     const isFile = ports.isFile ?? realIsFile;
-    const candidates = /\.(exe|com)$/i.test(name) ? [name] : [`${name}.com`, `${name}.exe`];
-    for (const raw of (env['PATH'] ?? env['Path'] ?? '').split(';')) {
+    for (const raw of (ports.env['PATH'] ?? ports.env['Path'] ?? '').split(';')) {
         const entry = raw.trim().replace(/^"(.*)"$/, '$1');
         if (!WHOLE.test(entry)) continue;
-        for (const file of candidates) {
+        for (const file of files) {
             const whole = win32.join(entry, file);
             if (isFile(whole)) return whole;
         }
     }
-    return win32.join(root, 'System32', `${stem}.exe`);
+    return null;
+}
+
+/** The whole path of what this name would start with no shell, or `null` when nothing would. Windows only; elsewhere the name, as the OS's own search is already this. */
+export function findProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string | null {
+    if (ports.platform !== 'win32') return name;
+    if (/[\\/]/.test(name) || WHOLE.test(name)) return name;
+    const stem = name.replace(/\.(exe|com)$/i, '');
+    const system = SYSTEM[stem.toLowerCase()];
+    if (system) return win32.join(systemRoot(ports.env), ...system);
+    return onPath(/\.(exe|com)$/i.test(name) ? [name] : [`${name}.com`, `${name}.exe`], ports);
+}
+
+export function resolveProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
+    return findProgram(name, ports) ?? win32.join(systemRoot(ports.env), 'System32', `${name.replace(/\.(exe|com)$/i, '')}.exe`);
+}
+
+/** Why a name can't be started, in words: what was asked for, and the batch file of that name on PATH if there is one. Names no path that isn't there. */
+export function notFoundWords(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
+    const batch = /\.(cmd|bat)$/i.test(name) ? null : onPath([`${name}.cmd`, `${name}.bat`], ports);
+    return batch
+        ? `"${name}" is on this machine as ${batch}, a batch file, and Genie cannot start a batch file here directly yet. Nothing was started.`
+        : `"${name}" was not found on this machine's PATH, so nothing was started.`;
 }
