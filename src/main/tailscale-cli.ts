@@ -490,26 +490,39 @@ const WIN_INSTALLER_URL = 'https://pkgs.tailscale.com/stable/tailscale-setup-lat
  * Returns `{ started: true }` when the Windows installer was launched, or a `url`
  * for the caller to open instead (other platforms, or a download failure).
  */
-export async function installTailscale(): Promise<{
+// RED: the shape only.
+export interface AuthenticodeAnswer { readonly status: string; readonly subject: string | null }
+export function refusalOf(_answer: AuthenticodeAnswer): string | null { return null; }
+export function readAuthenticode(_file: string): Promise<AuthenticodeAnswer> { return Promise.resolve({ status: 'Valid', subject: null }); }
+export interface InstallPorts {
+    readonly platform: NodeJS.Platform;
+    readonly installed: () => string | null;
+    readonly download: (url: string) => Promise<Response>;
+    readonly verify: (file: string) => Promise<AuthenticodeAnswer>;
+    readonly launch: (file: string) => void;
+}
+
+export async function installTailscale(over: Partial<InstallPorts> = {}): Promise<{
     started: boolean;
     url?: string;
     message?: string;
 }> {
-    if (tailscaleCliPath()) {
+    if ((over.installed ?? tailscaleCliPath)()) {
         return { started: false, message: 'Tailscale is already installed.' };
     }
-    if (process.platform !== 'win32') {
+    if ((over.platform ?? process.platform) !== 'win32') {
         // macOS / Linux: open the official download page; install is OS-specific.
         return { started: false, url: TAILSCALE_DOWNLOAD_PAGE };
     }
     try {
-        const res = await fetch(WIN_INSTALLER_URL);
+        const res = await (over.download ?? fetch)(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
         const dest = path.join(os.tmpdir(), `tailscale-setup-${Date.now()}.exe`);
         fs.writeFileSync(dest, buf);
         // Launch detached so Tailscale's installer outlives this call; the user
         // drives its UI. Not windowsHide — the user needs to see the installer.
+        if (over.launch) { over.launch(dest); return { started: true }; }
         const child = spawn(dest, [], { detached: true, stdio: 'ignore' });
         child.unref();
         return { started: true };
