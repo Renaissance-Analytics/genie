@@ -18,6 +18,7 @@
     "verify:terminal": "tsx test/live/terminal.live.ts",
     "verify:leak": "tsx test/live/terminal-leak.live.ts",
     "verify:flows": "vitest run -c vitest.flows.config.mts",
+    "verify:zip64": "vitest run -c vitest.zip64.config.mts",
     "verify:app-inbox": "tsx test/live/app-inbox.live.ts"
   },
   "dependencies": {
