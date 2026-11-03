@@ -16,6 +16,10 @@ export const KEYCHAIN_SERVICE = 'Genie';
 export const ENTRY_OPTIONS = { linux: { store: 'secret-service' } } as const;
 
 /** The refusal, in words a person acts on. A reason from below is appended; it never carries a value. */
+/**
+ * THE LARGEST SECRET, ON EVERY OS. Windows' Credential Manager holds 2,560 bytes and the library stores UTF-16, so 1,280 units (measured on genie-test-windows: 2,048 refused in its own
+ * words). The same limit everywhere, so a secret never fits one machine and not another. A string's length is UTF-16 units already.
+ */
 export const MAX_SECRET_CHARS = 1280;
 const NO_KEYCHAIN = 'Genie needs a keyring to keep your sign-ins safe, and it did not answer, so nothing was saved';
 
@@ -88,6 +92,7 @@ export class Keychain {
 
     async set(name: SecretName, value: string): Promise<KeychainResult> {
         if (value.length === 0) return { ok: false, reason: 'An empty secret is not kept: reading it back could not tell it from nothing.' };
+        if (value.length > MAX_SECRET_CHARS) return { ok: false, reason: `${name} is ${value.length} characters, and the most the keychain can hold on every system is ${MAX_SECRET_CHARS}, so it was not saved.` };
         try {
             await (await this.#entry(name)).setPassword(value);
             this.#answered(true);

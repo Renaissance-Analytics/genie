@@ -236,6 +236,15 @@ probe "an-unconfirmed-record-is-kept" src/main/spawn-ledger.ts \
     "        this.#records = this.#records.filter((r) => r.bootId === this.#bootId || kept.has(r));" "        this.#records = this.#records.filter((r) => r.bootId === this.#bootId);" \
     test/spawn-ledger.test.ts "still running: never ended, said on every boot, and kept"
 
+# The largest secret: refused by name on every OS, and the old copy stays
+probe "over-the-limit-is-refused-by-name" src/main/keychain.ts \
+    "        if (value.length > MAX_SECRET_CHARS) return" "        if (false) return" \
+    test/keychain.test.ts "over it: refused by name"
+
+probe "over-the-limit-stays-where-it-was" src/main/keychain-migration.ts \
+    "    if (read.value.length > MAX_SECRET_CHARS) return 'too-large';" "" \
+    test/keychain-migration.test.ts "stays where it was and says so by name"
+
 # P3.4 cut a: the keychain. The pin is the core: unpinned, a secret is silently lost at the next reboot.
 probe "keychain-every-entry-is-pinned" src/main/keychain.ts \
     "        return new AsyncEntry(KEYCHAIN_SERVICE, name, ENTRY_OPTIONS);" "        return new AsyncEntry(KEYCHAIN_SERVICE, name);" \
