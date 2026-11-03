@@ -88,20 +88,30 @@ vi.mock('node:child_process', async (original) => {
  * schedule (the full suite saturating every CPU: measured 76 and 304 ms on omarchy-test) reads about 0, because the
  * worker was not run either. The worst remainder is returned.
  */
-async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
+interface GaugeForcing {
+    /** Another thread of this process stops for the whole of `run`: nothing in this process may hide a hold. */
+    readonly stallAThread?: boolean;
+    /** The witness itself is stopped for the whole of `run`, as a frozen machine would stop it: that much is not a hold. */
+    readonly stopTheWitness?: boolean;
+}
+
+async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
     // The worker's gaps over 20 ms, as [end, gap] pairs in a shared ring (slot 0 is the count).
     const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
+    const stall = new Int32Array(new SharedArrayBuffer(4));
     const worker = new Worker(`
         const { workerData } = require('node:worker_threads');
-        const ring = new Float64Array(workerData);
+        const ring = new Float64Array(workerData.ring);
+        const stall = new Int32Array(workerData.stall);
         let last = Date.now();
         setInterval(() => {
+            Atomics.wait(stall, 0, 1);
             const now = Date.now();
             const gap = now - last - 10;
             last = now;
             if (gap > 20) { const i = ring[0] % 4096; ring[1 + 2 * i] = now; ring[2 + 2 * i] = gap; ring[0] += 1; }
         }, 10);
-    `, { eval: true, workerData: shared.buffer });
+    `, { eval: true, workerData: { ring: shared.buffer, stall: stall.buffer } });
     await new Promise((r) => setTimeout(r, 100));
     // A hold on main, while this gauge runs, reads the worker's gaps as they land (shared memory: no event loop needed).
     const ringGaps = (): Array<[number, number]> => {
@@ -119,7 +129,10 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     let last = Date.now();
     const timer = setInterval(() => { const now = Date.now(); const gap = now - last - 10; last = now; if (gap > 20) mine.push([now, gap]); }, 10);
     try {
+        if (forcing.stallAThread) { Atomics.store(stall, 0, 1); await new Promise((r) => setTimeout(r, 40)); }
         await run();
+        Atomics.store(stall, 0, 0);
+        Atomics.notify(stall, 0);
         await new Promise((r) => setTimeout(r, 60));
     } finally {
         processStalled = () => 0;
@@ -139,7 +152,7 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
 }
 
 /** The worst reading's parts: main's heartbeat gap, and how much of it the whole process was stopped (subtracted). */
-let lastReading = { gap: 0, stalled: 0 };
+let lastReading: { gap: number; stalled: number; witnessBeatsAtStart?: number } = { gap: 0, stalled: 0 };
 
 type HostModule = typeof import('../src/main/spawn-host-client.js');
 let stopHost: (() => Promise<void>) | null = null;
@@ -231,6 +244,30 @@ describe('main never waits on a spawn (genie#1397)', () => {
         expect(answer).toEqual({ state: 'running', since: '2026-11-01T00:00:00Z' });
         console.log(`GAUGE: main held ${worst} ms by a ${SLOW_MS} ms spawn made on main (bar ${HELD_BAR_MS} ms); main's gap ${lastReading.gap} ms, of it the whole process stopped ${lastReading.stalled} ms`);
         expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms spawn on main`).toBeGreaterThan(SLOW_MS / 2);
+    }, 30_000);
+
+    const onMainDuring = async (forcing: GaugeForcing) => {
+        const host = (await import('../src/main/spawn-host-client.js').catch(() => null)) as HostModule | null;
+        host?.routeExecThroughSpawnHost(null);
+        const runnerModule = await import('../src/main/toolchain-runner.js');
+        const { ServiceDriver, dockerRunnerOver } = await import('../src/main/service-driver.js');
+        const driver = new ServiceDriver(dockerRunnerOver(runnerModule.execFileRunner));
+        return heartbeatDuring(async () => { await driver.status('genie-postgres-17'); }, forcing);
+    };
+
+    it('a thread of this process that stops for the whole hold hides none of it: only what is outside the process can say the process stopped', async () => {
+        const worst = await onMainDuring({ stallAThread: true });
+        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms spawn on main, with a thread stopped: main's gap ${lastReading.gap} ms, subtracted ${lastReading.stalled} ms`).toBeGreaterThan(SLOW_MS / 2);
+    }, 30_000);
+
+    it.skipIf(process.platform === 'win32')('CONTROL: the witness stopped too, as a frozen machine stops it: that much is subtracted, so a real stop is still not a hold', async () => {
+        const worst = await onMainDuring({ stopTheWitness: true });
+        expect(worst, `main's gap ${lastReading.gap} ms, subtracted ${lastReading.stalled} ms`).toBeLessThan(HELD_BAR_MS);
+    }, 30_000);
+
+    it('the gauge begins only once its witness has really beaten', async () => {
+        await onMainDuring({});
+        expect(lastReading.witnessBeatsAtStart ?? 0).toBeGreaterThanOrEqual(3);
     }, 30_000);
 
     it("a supervised process (a site's php-cgi) whose pty takes 5 s to open: main is never held for it (under a fifth of it); it runs, its pid and output arrive, a stop ends it", async () => {
