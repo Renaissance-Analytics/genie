@@ -30,8 +30,16 @@ const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [], app
 const OUR_SERVERS: ReadonlySet<string> = new Set(['genie', 'tynn', 'genie-agentinbox-channel']);
 /** Settings that change how Claude Code looks and nothing else, checked against its published schema. An allow-list, as with git config: anything else goes on the list, a key nobody has heard of included. */
 const SETTINGS_FOR_LOOKS_ONLY: ReadonlySet<string> = new Set(['$schema', 'theme', 'spinnerTipsEnabled', 'terminalProgressBarEnabled', 'showTurnDuration', 'prefersReducedMotion', 'viewMode', 'editorMode', 'syntaxHighlightingDisabled', 'verbose']);
-/** One command's approval, as a person gives one: a tool and a named command. Not a whole tool, and no bare wildcard. */
-const ONE_COMMAND = /^(?:Bash|PowerShell)\([A-Za-z0-9_.\/-][^*()]*(?::\*)?\)$/;
+/**
+ * A person's approval, in the shape the CLI writes: a named program, perhaps a subcommand, and ` *` or `:*`. Measured on Claude Code 2.1.317, which wrote `Bash(npm run *)` for "don't ask again" on `npm run approval-probe`; `:*` is the older form.
+ * A program that runs whatever it is handed is never narrow, whatever follows it, and neither is a path into a folder.
+ */
+const APPROVAL_SHAPE = /^(?:Bash|PowerShell)\(([A-Za-z0-9_.-]+)(?: [A-Za-z0-9_.-]+)?(?: \*|:\*)?\)$/;
+const RUNS_ANYTHING: ReadonlySet<string> = new Set(['sh', 'bash', 'zsh', 'fish', 'dash', 'ksh', 'csh', 'cmd', 'cmd.exe', 'powershell', 'powershell.exe', 'pwsh', 'node', 'nodejs', 'deno', 'bun', 'npx', 'pnpx', 'python', 'python2', 'python3', 'py', 'perl', 'ruby', 'php', 'lua', 'curl', 'wget', 'env', 'sudo', 'su', 'doas', 'eval', 'exec', 'xargs', 'nohup', 'time', 'timeout', 'watch']);
+const isApproval = (rule: string): boolean => {
+    const program = APPROVAL_SHAPE.exec(rule)?.[1];
+    return program !== undefined && !RUNS_ANYTHING.has(program.toLowerCase());
+};
 
 function settingsRows(file: string, text: string, approvalsOf: { readonly approvals: string[] } | null): TrustHook[] {
     let parsed: unknown;
@@ -43,7 +51,7 @@ function settingsRows(file: string, text: string, approvalsOf: { readonly approv
         if (key === 'permissions' && approvalsOf && isRecord(value)) {
             // A person's approvals, in a file no commit brought. Everything else in permissions still counts, and so does any allow wider than one command.
             const allow = Array.isArray(value.allow) ? value.allow : [];
-            const narrow = allow.filter((rule): rule is string => typeof rule === 'string' && ONE_COMMAND.test(rule));
+            const narrow = allow.filter((rule): rule is string => typeof rule === 'string' && isApproval(rule));
             approvalsOf.approvals.push(...narrow);
             const rest = { ...value, allow: allow.filter((rule) => !narrow.includes(rule as string)) };
             if (rest.allow.length === 0) delete (rest as { allow?: unknown }).allow;
