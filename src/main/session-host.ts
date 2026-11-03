@@ -63,6 +63,8 @@ export interface SessionLifecycle {
     spawned(agentId: AgentId, run: number, processes: readonly ProcessInfo[]): void;
     ended(agentId: AgentId, run: number, verdict: StopVerdict): void;
     straggler(agentId: AgentId, run: number): void;
+    /** The machine could not be read after this run's spawn: its pids are recorded with no start time. */
+    readingFailed?(agentId: AgentId, run: number, pids: readonly number[]): void;
 }
 
 /** The most recent recorded rows the Agent view loads; older ones are counted, not shown. */
@@ -860,6 +862,7 @@ export class SessionHost {
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
+            onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
             onStraggler: () => this.#lifecycle?.straggler(record.id, entry.run),
             // Its turns so far, known at start: the first turn after a relaunch numbers on at once (identity.ts lastTurn).
             ...(record.lastTurn !== undefined ? { turnsBefore: record.lastTurn } : {}),

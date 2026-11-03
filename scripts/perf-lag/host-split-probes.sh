@@ -219,6 +219,22 @@ probe "a-refused-write-leaves-nothing-staged" src/main/private-credentials.ts \
 probe "the-acl-guard-sees-the-line" test/helpers/acl-guard.ts \
     "    return warned.filter((args) => args[0] === ACL_FAILURE);" "    return [];" \
     test/acl-guard.test.ts "only the failure line is picked out"
+# A reading of the machine that fails: nothing started goes unrecorded, and nothing is reaped on a pid alone
+probe "a-failed-reading-is-tried-again" src/core/session.ts \
+    "                    if (after === null && this.#rootsReading === reading) after = await read().catch(() => null);" "" \
+    test/spawn-tracking-async.test.ts "one failure is tried again"
+
+probe "no-reading-still-leaves-a-record" src/core/session.ts \
+    "                        this.#options.onSpawned?.(pids.map((pid) => startTimeUnknown(pid, process.pid)));" "" \
+    test/spawn-tracking-async.test.ts "still no reading: the pid the spawn made is recorded"
+
+probe "a-pid-alone-is-never-swept" src/core/spawn-ledger.ts \
+    "        const alive = record.processes.filter((p) => findIn(table, p) !== undefined);" "        const alive = table.filter((row) => record.processes.some((p) => p.pid === row.pid));" \
+    test/spawn-ledger.test.ts "still running: never ended, said on every boot, and kept"
+
+probe "an-unconfirmed-record-is-kept" src/main/spawn-ledger.ts \
+    "        this.#records = this.#records.filter((r) => r.bootId === this.#bootId || kept.has(r));" "        this.#records = this.#records.filter((r) => r.bootId === this.#bootId);" \
+    test/spawn-ledger.test.ts "still running: never ended, said on every boot, and kept"
 
 # P3.4 cut a: the keychain. The pin is the core: unpinned, a secret is silently lost at the next reboot.
 probe "keychain-every-entry-is-pinned" src/main/keychain.ts \

@@ -104,6 +104,13 @@ export interface ProcessInfo {
     readonly name: string;
 }
 
+/**
+ * A PROCESS WHOSE START TIME WAS NEVER READ (the machine could not be read when it was spawned). No real process has this start time, so `sameProcess` matches nothing: a record
+ * with it says a provider was started and ends nothing, because a pid alone is not a process, and it may by now be someone else's.
+ */
+export const START_UNKNOWN = -1;
+export const startTimeUnknown = (pid: number, ppid: number): ProcessInfo => ({ pid, ppid, started: START_UNKNOWN, name: 'start time unknown' });
+
 export interface ReapResult {
     killed: number;
     /** True when the reap was declined as unsafe. `reason` says why, for a surface to report. */

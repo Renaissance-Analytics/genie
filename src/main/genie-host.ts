@@ -387,6 +387,7 @@ async function main(): Promise<void> {
                 engine.callback({ name: 'stopUnverified', agentId, reason: verdict.reason });
             },
             straggler: (agentId, run) => lifecycleLog(`straggler kind=agent owner=${agentId} run=${run} output after stop, not recorded`),
+            readingFailed: (agentId, run, pids) => { const line = `reading failed kind=agent owner=${agentId} run=${run} pids=${pids.join(',')}: the machine could not be read after the spawn, twice, so these are recorded with no start time`; say(line); lifecycleLog(line); },
         },
     });
     engine.attach(host);
