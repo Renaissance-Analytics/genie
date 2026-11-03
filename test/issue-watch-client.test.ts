@@ -108,14 +108,17 @@ describe('the client', () => {
         const h = harness();
         h.client.start();
         await h.settle();
-        expect(h.requests[0]).toEqual({ method: 'GET', path: '/api/v1/broadcasting-config', body: null });
+        // The list first: it does not wait for the socket (genie#1478).
+        expect(h.requests[0]).toEqual({ method: 'GET', path: '/api/v1/user/issue-watch', body: null });
+        expect(h.requests[1]).toEqual({ method: 'GET', path: '/api/v1/broadcasting-config', body: null });
         expect(h.sockets).toHaveLength(1);
         expect(h.sockets[0]!.url).toBe('wss://ws-us2.pusher.com/app/pk_test?protocol=7&client=genie&version=2.0');
         await h.connect(h.sockets[0]!);
         // The channel is the person's own, by the id the session answered /api/v1/me with.
-        expect(h.requests[1]).toEqual({ method: 'POST', path: '/api/v1/user/broadcasting-auth', body: { socket_id: '123.456', channel_name: 'private-App.Models.User.42' } });
+        expect(h.requests[2]).toEqual({ method: 'POST', path: '/api/v1/user/broadcasting-auth', body: { socket_id: '123.456', channel_name: 'private-App.Models.User.42' } });
         expect(h.sockets[0]!.sent.map((f) => JSON.parse(f))).toEqual([{ event: 'pusher:subscribe', data: { auth: 'pk_test:sig', channel: 'private-App.Models.User.42' } }]);
-        expect(h.requests[2]).toEqual({ method: 'GET', path: '/api/v1/user/issue-watch', body: null });
+        expect(h.requests[3]).toEqual({ method: 'GET', path: '/api/v1/user/issue-watch', body: null });
+        expect(h.requests).toHaveLength(4);
         expect(h.client.state()).toEqual({ kind: 'live' });
         // The reconcile after a boot is the baseline: nothing heard.
         expect(h.heard).toEqual([]);
