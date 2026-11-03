@@ -10,10 +10,10 @@ import type { ListedPty, SpawnFrame } from '../src/main/spawn-host-protocol.js';
  * what it did not know is handed back for the supervisor and the terminals to adopt.
  */
 
-function linked() {
+function linked(options: { linkWaitMs?: number } = {}) {
     const sent: SpawnFrame[] = [];
     const killed: number[] = [];
-    const client = new SpawnHostClient({ entry: 'never-forked.js', link: { send: (f) => sent.push(f) }, killPid: (pid) => killed.push(pid) });
+    const client = new SpawnHostClient({ entry: 'never-forked.js', link: { send: (f) => sent.push(f) }, killPid: (pid) => killed.push(pid), ...options });
     /** Answer the client's next call of `method` (it is in `sent`) with `value`, as the spawn host would. */
     const answer = (method: string, value: unknown) => {
         const call = [...sent].reverse().find((f) => f.kind === 'call' && f.method === method) as Extract<SpawnFrame, { kind: 'call' }> | undefined;
@@ -99,7 +99,11 @@ describe('a spawn host reached over a link', () => {
     });
 
     it('a pty opened while the link is DOWN does not start, and says why (a crash with words, never a silent hang)', async () => {
-        const { client } = linked();
+        const { client, answer } = linked();
+        const up = client.linkUp();
+        answer('pty.list', []);
+        await up;
+        client.linkDown('the host went');
         const pty = client.ptyPort();
         const data: string[] = [];
         const exits: number[] = [];
@@ -109,6 +113,133 @@ describe('a spawn host reached over a link', () => {
         await new Promise((r) => setTimeout(r, 0));
         expect(exits).toEqual([-1]);
         expect(data.join('')).toMatch(/agent host is not connected/);
+    });
+
+    describe('a link that has not come up YET is not a link that is down (genie#1453)', () => {
+        const opens = (sent: readonly SpawnFrame[]) => sent.filter((f) => f.kind === 'call' && f.method === 'pty.open') as Extract<SpawnFrame, { kind: 'call' }>[];
+        const tick = (ms = 0) => new Promise((r) => setTimeout(r, ms));
+        function watched(pty: ReturnType<SpawnHostClient['ptyPort']>) {
+            const data: string[] = [];
+            const exits: Array<[string, number]> = [];
+            pty.onData((_id, d) => data.push(d));
+            pty.onExit((id, c) => exits.push([id, c]));
+            return { data, exits };
+        }
+
+        it('an open waits, and starts when the link comes up, with its id and its tag', async () => {
+            const { client, sent, answer } = linked();
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            const opened = pty.open({ cwd: '/w', command: 'bash', tag: { kind: 'process', processId: 'p', workspaceId: 'ws' } });
+            await tick();
+            expect(w.exits, 'not refused').toEqual([]);
+            expect(w.data).toEqual([]);
+            expect(pty.isLive?.(opened.id)).toBe(true);
+            expect(opens(sent)).toEqual([]);
+            const up = client.linkUp();
+            answer('pty.list', []);
+            await up;
+            expect(opens(sent).map((f) => f.args[0])).toEqual([opened.id]);
+            expect(opens(sent)[0]!.args[2]).toEqual({ kind: 'process', processId: 'p', workspaceId: 'ws' });
+            expect(w.exits, 'and the reconcile does not call it gone').toEqual([]);
+        });
+
+        it('what was typed while it waited follows the open, in order', async () => {
+            const { client, sent, answer } = linked();
+            const pty = client.ptyPort();
+            const opened = pty.open({ cwd: '/w', command: 'bash' });
+            expect(pty.write(opened.id, 'ls\r')).toBe(true);
+            expect(pty.resize(opened.id, 80, 24)).toBe(true);
+            const up = client.linkUp();
+            answer('pty.list', []);
+            await up;
+            const after = sent.filter((f) => f.kind === 'call' && f.method.startsWith('pty.') && f.method !== 'pty.list') as Extract<SpawnFrame, { kind: 'call' }>[];
+            expect(after.map((f) => f.method)).toEqual(['pty.open', 'pty.write', 'pty.resize']);
+        });
+
+        it('a link that stays away past the bound refuses, in the same words, once', async () => {
+            const { client, sent } = linked({ linkWaitMs: 5 });
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            const opened = pty.open({ cwd: '/w', command: 'bash' });
+            await tick(30);
+            expect(w.exits).toEqual([[opened.id, -1]]);
+            expect(w.data.join('')).toBe('[genie] the agent host is not connected, so this process was not started\r\n');
+            expect(pty.isLive?.(opened.id)).toBe(false);
+            expect(opens(sent)).toEqual([]);
+        });
+
+        it('past the bound it does not wait again: the next open is refused at once', async () => {
+            const { client } = linked({ linkWaitMs: 5 });
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            pty.open({ cwd: '/w', command: 'bash' });
+            await tick(30);
+            w.exits.length = 0;
+            pty.open({ cwd: '/w', command: 'bash' });
+            await tick();
+            expect(w.exits).toHaveLength(1);
+        });
+
+        it('a refused open that the link then reaches is not started as well', async () => {
+            const { client, sent, answer } = linked({ linkWaitMs: 5 });
+            const pty = client.ptyPort();
+            pty.open({ cwd: '/w', command: 'bash' });
+            await tick(30);
+            const up = client.linkUp();
+            answer('pty.list', []);
+            await up;
+            expect(opens(sent)).toEqual([]);
+        });
+
+        it('the link going down while it waits refuses at once', async () => {
+            const { client } = linked();
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            const opened = pty.open({ cwd: '/w', command: 'bash' });
+            client.linkDown('the host went');
+            await tick();
+            expect(w.exits).toEqual([[opened.id, -1]]);
+        });
+
+        it('a kill while it waits: never started, and it ends', async () => {
+            const { client, sent, answer } = linked();
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            const opened = pty.open({ cwd: '/w', command: 'bash' });
+            expect(pty.kill(opened.id)).toBe(true);
+            await tick();
+            expect(w.exits.map(([id]) => id)).toEqual([opened.id]);
+            const up = client.linkUp();
+            answer('pty.list', []);
+            await up;
+            expect(opens(sent)).toEqual([]);
+        });
+
+        it('an open during the reconcile is not reported gone by it: it was not in the list because it was not open yet', async () => {
+            const { client, sent, answer } = linked();
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            const up = client.linkUp();
+            const opened = pty.open({ cwd: '/w', command: 'bash' });
+            answer('pty.list', []);
+            await up;
+            expect(w.exits).toEqual([]);
+            expect(opens(sent).map((f) => f.args[0])).toEqual([opened.id]);
+        });
+
+        it('a reconcile that fails refuses what waited, in words', async () => {
+            const { client, sent } = linked();
+            const pty = client.ptyPort();
+            const w = watched(pty);
+            const opened = pty.open({ cwd: '/w', command: 'bash' });
+            const up = client.linkUp();
+            const list = sent.find((f) => f.kind === 'call' && f.method === 'pty.list') as Extract<SpawnFrame, { kind: 'call' }>;
+            client.linkFrame({ kind: 'result', id: list.id, ok: false, reason: 'no', code: 'ESPAWNHOST' } as never);
+            await up.catch(() => {});
+            await tick();
+            expect(w.exits).toEqual([[opened.id, -1]]);
+        });
     });
 
     it('cwd reports travel too (an interactive terminal\'s OSC-7, for the cwd resume)', async () => {

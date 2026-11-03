@@ -49,7 +49,16 @@ export interface SpawnHostOptions {
      * `linkUp` reconciles with what is still running.
      */
     readonly link?: { send(frame: SpawnFrame): void };
+    /** How long an open waits for a link that has not come up yet. */
+    readonly linkWaitMs?: number;
 }
+
+/**
+ * How long an open waits for a link that has not come up yet (genie#1453). A new host's spawn hosts are ready within about 400 ms; past this it is not coming, and the open
+ * is refused in the same words as a link that is down.
+ */
+export const LINK_WAIT_MS = 10_000;
+const NOT_CONNECTED_LINE = '[genie] the agent host is not connected, so this process was not started\r\n';
 
 /** How long a lost child's killed helpers are waited for before their ptys are reported exited anyway. */
 export const HELPER_GONE_WAIT_MS = 10_000;
@@ -76,6 +85,14 @@ export class SpawnHostClient {
     readonly #cwd = new Set<(id: string, cwd: string) => void>();
     /** Over a link: whether it is up now (calls and ptys fail, said, while it is not). */
     #linkUp = false;
+    /**
+     * Where the link stands, for an open. `starting`: it has never been up, and may be about to. `reconciling`: it is up, and the list of what runs is on its way, so an open
+     * sent now would be reported gone by that list. Either way an open waits. `down` is a link that went, or never came within the bound: it is refused at once.
+     */
+    #linkState: 'starting' | 'reconciling' | 'up' | 'down' = 'starting';
+    /** Opens waiting for the link, each with what was asked of it meanwhile. */
+    readonly #held = new Map<string, { readonly frame: SpawnFrame; readonly after: SpawnFrame[] }>();
+    #heldTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(options: SpawnHostOptions) {
         this.#options = options;
@@ -101,20 +118,68 @@ export class SpawnHostClient {
      */
     async linkUp(): Promise<ListedPty[]> {
         this.#linkUp = true;
+        this.#linkState = 'reconciling';
         this.#sentEnv = null;
-        const listed = (await this.#call('pty.list', [])) as ListedPty[];
+        let listed: ListedPty[];
+        try {
+            listed = (await this.#call('pty.list', [])) as ListedPty[];
+        } catch (error) {
+            this.#linkState = 'down';
+            this.#refuseHeld();
+            throw error;
+        }
         const live = new Set(listed.map((p) => p.id));
         for (const id of [...this.#ptys.keys()]) {
             if (live.has(id)) continue;
             this.#ptys.delete(id);
             for (const l of this.#exit) l(id, -1);
         }
-        return listed.filter((p) => !this.#ptys.has(p.id));
+        const answer = listed.filter((p) => !this.#ptys.has(p.id));
+        this.#linkState = 'up';
+        this.#startHeld();
+        return answer;
+    }
+
+    /** Hold an open until the link can take it. The bound runs from the first one, and is not extended. */
+    #hold(id: string, frame: SpawnFrame): void {
+        this.#held.set(id, { frame, after: [] });
+        this.#heldTimer ??= setTimeout(() => {
+            this.#heldTimer = null;
+            if (this.#linkState === 'starting') this.#linkState = 'down';
+            this.#refuseHeld();
+        }, this.#options.linkWaitMs ?? LINK_WAIT_MS);
+        this.#heldTimer.unref?.();
+    }
+
+    #stopHeldTimer(): void {
+        if (this.#heldTimer) clearTimeout(this.#heldTimer);
+        this.#heldTimer = null;
+    }
+
+    #startHeld(): void {
+        this.#stopHeldTimer();
+        for (const [id, held] of [...this.#held]) {
+            this.#held.delete(id);
+            this.#ptys.set(id, { pid: null });
+            this.#send(held.frame);
+            for (const frame of held.after) this.#send(frame);
+        }
+    }
+
+    #refuseHeld(): void {
+        this.#stopHeldTimer();
+        for (const id of [...this.#held.keys()]) {
+            this.#held.delete(id);
+            for (const l of this.#data) l(id, NOT_CONNECTED_LINE);
+            for (const l of this.#exit) l(id, -1);
+        }
     }
 
     /** The link is down: calls in flight fail (ESPAWNHOST) and streams end; NOTHING is killed — the ptys run on. */
     linkDown(reason: string): void {
         this.#linkUp = false;
+        this.#linkState = 'down';
+        this.#refuseHeld();
         for (const [, p] of this.#pending) p.reject(Object.assign(new Error(`the spawn host is unreachable: ${reason}`), { code: 'ESPAWNHOST' }));
         this.#pending.clear();
         for (const [, s] of [...this.#streams]) s.onEnd(`the spawn host is unreachable: ${reason}`);
@@ -165,10 +230,18 @@ export class SpawnHostClient {
                 }
                 // The caller's id when it gave one (a window's replica, P3.3e), never one already in use.
                 const id = spawn.id && !this.#ptys.has(spawn.id) ? spawn.id : `term_${randomUUID()}`;
+                const { tag, id: _asked, ...engineSpawn } = spawn;
+                void _asked;
+                // The tag is the spawn host's to keep, not the engine's: it travels beside the spawn options.
+                const openFrame: SpawnFrame = { kind: 'call', id: 0, method: 'pty.open', args: [id, engineSpawn, tag ?? null] };
+                if (this.#options.link && (this.#linkState === 'starting' || this.#linkState === 'reconciling')) {
+                    this.#hold(id, openFrame);
+                    return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
+                }
                 if (this.#options.link && !this.#linkUp) {
                     // Over a link that is down: not started, and said (a crash with words, never a silent hang).
                     queueMicrotask(() => {
-                        for (const l of this.#data) l(id, '[genie] the agent host is not connected, so this process was not started\r\n');
+                        for (const l of this.#data) l(id, NOT_CONNECTED_LINE);
                         for (const l of this.#exit) l(id, -1);
                     });
                     return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
@@ -182,33 +255,36 @@ export class SpawnHostClient {
                     return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
                 }
                 this.#ptys.set(id, { pid: null });
-                // The tag is the spawn host's to keep, not the engine's: it travels beside the spawn options.
-                const { tag, id: _asked, ...engineSpawn } = spawn;
-                void _asked;
-                this.#send({ kind: 'call', id: 0, method: 'pty.open', args: [id, engineSpawn, tag ?? null] });
+                this.#send(openFrame);
                 return { id, pid: 0, shell: spawn.command ?? '', scrollback: '' };
             },
             write: (id, data) => {
                 if (fallbackOwned.has(id)) return fallback!.write(id, data);
+                const waitingW = this.#held.get(id);
+                if (waitingW) { waitingW.after.push({ kind: 'call', id: 0, method: 'pty.write', args: [id, data] }); return true; }
                 if (!this.#ptys.has(id)) return false;
                 this.#send({ kind: 'call', id: 0, method: 'pty.write', args: [id, data] });
                 return true;
             },
             resize: (id, cols, rows) => {
                 if (fallbackOwned.has(id)) return fallback!.resize(id, cols, rows);
+                const waitingR = this.#held.get(id);
+                if (waitingR) { waitingR.after.push({ kind: 'call', id: 0, method: 'pty.resize', args: [id, cols, rows] }); return true; }
                 if (!this.#ptys.has(id)) return false;
                 this.#send({ kind: 'call', id: 0, method: 'pty.resize', args: [id, cols, rows] });
                 return true;
             },
             kill: (id) => {
                 if (fallbackOwned.delete(id)) return fallback!.kill(id);
+                // Never started: nothing to kill, and it ends the way a killed one does.
+                if (this.#held.delete(id)) { queueMicrotask(() => { for (const l of this.#exit) l(id, -1); }); return true; }
                 if (!this.#ptys.delete(id)) return false;
                 this.#send({ kind: 'call', id: 0, method: 'pty.kill', args: [id] });
                 return true;
             },
             // The supervisor keeps its own log of what a process printed (OutputTail); nothing is held twice here.
             scrollback: (id) => (fallbackOwned.has(id) ? fallback!.scrollback(id) : undefined),
-            isLive: (id) => (fallbackOwned.has(id) ? fallback!.isLive?.(id) ?? true : this.#ptys.has(id)),
+            isLive: (id) => (fallbackOwned.has(id) ? fallback!.isLive?.(id) ?? true : this.#ptys.has(id) || this.#held.has(id)),
             onData: (l) => { this.#data.add(l); return () => this.#data.delete(l); },
             onExit: (l) => { this.#exit.add(l); return () => this.#exit.delete(l); },
             onPid: (l) => { this.#pid.add(l); return () => this.#pid.delete(l); },

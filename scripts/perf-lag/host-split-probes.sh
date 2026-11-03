@@ -503,6 +503,26 @@ probe "the-cleanup-comes-before-the-write" src/main/workspace-config-sync.ts \
     "        await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });" "" \
     test/workspace-config-writer.test.ts "removes the legacy credential"
 
+# genie#1453: a link that has not come up yet is not a link that is down
+probe "an-open-waits-for-a-starting-link" src/main/spawn-host-client.ts \
+    "                if (this.#options.link && (this.#linkState === 'starting' || this.#linkState === 'reconciling')) {" "                if (false) {" \
+    test/spawn-host-link.test.ts "an open waits, and starts when the link comes up"
+
+probe "the-wait-has-a-bound" src/main/spawn-host-client.ts \
+    "            this.#refuseHeld();
+        }, this.#options.linkWaitMs ?? LINK_WAIT_MS);" "        }, this.#options.linkWaitMs ?? LINK_WAIT_MS);" \
+    test/spawn-host-link.test.ts "a link that stays away past the bound refuses"
+
+probe "a-down-link-still-refuses-at-once" src/main/spawn-host-client.ts \
+    "        this.#linkState = 'down';
+        this.#refuseHeld();
+" "" \
+    test/spawn-host-link.test.ts "a pty opened while the link is DOWN does not start"
+
+probe "the-reconcile-does-not-call-a-waiting-open-gone" src/main/spawn-host-client.ts \
+    "this.#linkState === 'starting' || this.#linkState === 'reconciling'" "this.#linkState === 'starting'" \
+    test/spawn-host-link.test.ts "an open during the reconcile is not reported gone"
+
 # P3.4 cut e: the host dials other machines, and their tokens never reach a window
 probe "the-welcome-loses-its-token" src/main/device-link-service.ts \
     "        const heard = JSON.stringify(rest);" "        const heard = JSON.stringify(message);" \
