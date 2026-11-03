@@ -207,6 +207,19 @@ probe "upgrade-deletes-saved-scrollback" src/main/saved-scrollback.ts \
     "            await rm(path, { recursive: true, force: true });" "" \
     test/no-saved-scrollback.test.ts "are GONE"
 
+# A failed ACL refuses the write, and an unexplained one fails the run
+probe "a-failed-chmod-refuses-the-write" src/main/private-credentials.ts \
+    "            await restrict([{ path: temp, directory: false }]);" "            await restrict([{ path: temp, directory: false }]).catch(() => {});" \
+    test/private-credentials-refuses.test.ts "on the staged file: refused, the secret nowhere"
+
+probe "a-refused-write-leaves-nothing-staged" src/main/private-credentials.ts \
+    "        if (created) await rm(temp, { force: true }).then(() => { created = false; }, () => {});" "" \
+    test/private-credentials-refuses.test.ts "on the staged file: refused, the secret nowhere"
+
+probe "the-acl-guard-sees-the-line" test/helpers/acl-guard.ts \
+    "    return warned.filter((args) => args[0] === ACL_FAILURE);" "    return [];" \
+    test/acl-guard.test.ts "only the failure line is picked out"
+
 # P3.4 cut a: the keychain. The pin is the core: unpinned, a secret is silently lost at the next reboot.
 probe "keychain-every-entry-is-pinned" src/main/keychain.ts \
     "        return new AsyncEntry(KEYCHAIN_SERVICE, name, ENTRY_OPTIONS);" "        return new AsyncEntry(KEYCHAIN_SERVICE, name);" \
