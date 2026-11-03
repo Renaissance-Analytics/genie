@@ -96,13 +96,9 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     const why = new Float64Array(new SharedArrayBuffer(8 * (2 + 5 * 64)));
     const worker = new Worker(`
         const { workerData } = require('node:worker_threads');
-        const { readFileSync } = require('node:fs');
         const ring = new Float64Array(workerData.ring);
         const why = new Float64Array(workerData.why);
-        const sched = () => {
-            if (process.platform !== 'linux') return null;
-            try { return readFileSync('/proc/thread-self/schedstat', 'utf8').trim().split(/\s+/).map(Number); } catch { return null; }
-        };
+        ${SCHED_SOURCE}
         let schedLast = sched();
         why[1] = schedLast ? 1 : 0;
         let last = Date.now();
@@ -192,6 +188,15 @@ const stealSince = (before: Record<string, number> | null): string => {
     return `steal ticks ${Object.keys(after).map((cpu) => `${cpu}=${after[cpu]! - (before[cpu] ?? 0)}`).join(' ')}`;
 };
 
+/** The witness's reader, as source: it runs inside the worker. A space, not a pattern: a backslash in here is eaten by the template it lands in, which is how every reading came out NaN. */
+const SCHED_SOURCE = `
+    const parseSched = (text) => { const fields = text.trim().split(' ').map(Number); return fields.length === 3 && fields.every(Number.isFinite) ? fields : null; };
+    const sched = () => {
+        if (process.platform !== 'linux') return null;
+        try { return parseSched(require('node:fs').readFileSync('/proc/thread-self/schedstat', 'utf8')); } catch { return null; }
+    };
+`;
+
 type HostModule = typeof import('../src/main/spawn-host-client.js');
 let stopHost: (() => Promise<void>) | null = null;
 afterEach(async () => {
@@ -207,6 +212,34 @@ afterEach(async () => {
  * the gauge can count. The hold now lasts until main has been held `ms` while the rest of the process ran.
  */
 describe('the diagnostic', () => {
+    it('reads a schedstat sample as its three numbers, and anything else as nothing', () => {
+        const parse = new Function(`${SCHED_SOURCE}; return parseSched;`.replace('require', 'undefined'))() as (text: string) => number[] | null;
+        expect(parse('2293514106 481220 92\n')).toEqual([2293514106, 481220, 92]);
+        expect(parse('')).toBeNull();
+        expect(parse('not numbers here\n')).toBeNull();
+    });
+
+    it.skipIf(process.platform !== 'linux')("a real worker reads its own thread's schedstat, as numbers, at its first beat and after work", async () => {
+        const worker = new Worker(`
+            const { parentPort } = require('node:worker_threads');
+            ${SCHED_SOURCE}
+            const first = sched();
+            const until = Date.now() + 50;
+            while (Date.now() < until) { /* on a CPU */ }
+            parentPort.postMessage({ first, second: sched() });
+        `, { eval: true });
+        const { first, second } = await new Promise<{ first: number[] | null; second: number[] | null }>((resolve, reject) => { worker.once('message', resolve); worker.once('error', reject); });
+        await worker.terminate();
+        expect(first?.every(Number.isFinite)).toBe(true);
+        expect(second?.every(Number.isFinite)).toBe(true);
+        expect(second![0]!).toBeGreaterThan(first![0]!);
+    });
+
+    it.skipIf(process.platform === 'linux')('elsewhere there is no schedstat, and the reader says none rather than zero', () => {
+        const sched = new Function('require', `${SCHED_SOURCE}; return sched;`)(() => ({})) as () => number[] | null;
+        expect(sched()).toBeNull();
+    });
+
     it('reads each cpu line of /proc/stat for its steal, the eighth number', () => {
         expect(stealByCpu('cpu  1 2 3 4 5 6 7 80 9 10\ncpu0 1 2 3 4 5 6 7 30 9 10\ncpu1 1 2 3 4 5 6 7 50 9 10\nintr 5\n')).toEqual({ cpu: 80, cpu0: 30, cpu1: 50 });
     });
