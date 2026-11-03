@@ -39,7 +39,7 @@ class World {
 describe('in a test build', () => {
     let dir: string;
     let marker: string;
-    const spec = (step: string, name = SECOND) => ({ GENIE_TEST_MIGRATION_HOLD: `${step}:${name}`, GENIE_TEST_MIGRATION_HOLD_FILE: marker });
+    const spec = (step: string, name: string = SECOND) => ({ GENIE_TEST_MIGRATION_HOLD: `${step}:${name}`, GENIE_TEST_MIGRATION_HOLD_FILE: marker });
     beforeEach(() => {
         dir = mkdtempSync(join(tmpdir(), 'migration-holds-'));
         marker = join(dir, 'held');
