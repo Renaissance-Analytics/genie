@@ -229,6 +229,8 @@ export interface ComposeInput {
     readonly tynnVault?: HostVault;
     /** What else an older Genie sealed, moved the same way: each joins this with its reader (the Tynn pairing, cut c). */
     readonly legacySecrets?: () => Promise<readonly MigrationSource[]>;
+    /** Where a secret that did not move is said, as well as the console: the lifecycle log, which someone can read afterwards. Names and states, never a value. */
+    readonly secretsLog?: (line: string) => void;
     /** Something moved: whoever reads it reads again. */
     readonly onSecretsMoved?: () => void;
     /** Whether a real server/discover through the server's own door answered at boot (§6.4 "native transport verified at boot"). */
@@ -1033,11 +1035,14 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         const outcomes = await migrateSecrets(sources, tynnVault, migrationBook);
         if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
         const stuck = outcomes.filter((o) => !['moved', 'nothing', 'already'].includes(o.status));
-        for (const o of stuck) console.error(`[keychain] ${o.name} stays where it was: ${o.status}`);
+        const say = (line: string): void => { console.error(line); input.secretsLog?.(line); };
+        for (const o of stuck) say(`[keychain] ${o.name} stays where it was: ${o.status}`);
         if (stuck.length > 0) keysMoved = null;
     })().catch((error: unknown) => {
         keysMoved = null;
-        console.error(`[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`);
+        const line = `[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`;
+        console.error(line);
+        input.secretsLog?.(line);
     });
     const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'));
     void moveAgentKeys();

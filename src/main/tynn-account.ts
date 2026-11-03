@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile, rm } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
 import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
 import type { MigrationSource, OldRead } from './keychain-migration.js';
@@ -101,12 +101,33 @@ const parseMe = (body: unknown): Me | null => {
  * THE PAIRING AN OLDER GENIE SEALED, for the one-time move (keychain-migration.ts). Only a window can open it. The delete takes the
  * token field out and leaves the rest of the record: who is signed in is still true.
  */
-export async function settleStaleLegacyPairing(_options: { file: string; legacyFile: string; log?: (line: string) => void }): Promise<void> {}
+export async function settleStaleLegacyPairing(options: { file: string; legacyFile: string; log?: (line: string) => void }): Promise<void> {
+    if (!await exists(options.legacyFile)) return;
+    const text = await readFile(options.file, 'utf8').catch(() => null);
+    if (text === null) return;
+    let current: unknown;
+    try { current = JSON.parse(text); } catch { return; }
+    if (typeof current !== 'object' || current === null || typeof (current as { tokenEnc?: unknown }).tokenEnc === 'string') return;
+    await rm(options.legacyFile, { force: true });
+    options.log?.('tynn/pairing: an older tynn.json beside a sign-in that has already moved was stale, and is gone');
+}
+
+const exists = (path: string): Promise<boolean> => lstat(path).then(() => true, () => false);
+
+/**
+ * TWO STORES: an older tynn.json beside credentials/tynn.json. A rename leaves only one, so this takes an older Genie run after a newer one. The store refuses to choose, and that is right for what it
+ * knows, but here the answer is known: credentials/tynn.json is the sign-in that is current. So the older file is not brought across while the current one is there. It goes once the current one has
+ * moved, or at once if that already happened.
+ */
+async function bringLegacyAcross(store: PrivateCredentialStore, legacyFile: string, file: string): Promise<void> {
+    if (await exists(file)) return;
+    await store.migrate(legacyFile, file);
+}
 
 export function tynnPairingSource(options: { file: string; legacyFile?: string; cipher: { decrypt(bytes: Buffer): string }; store?: PrivateCredentialStore; log?: (line: string) => void }): MigrationSource {
     const store = options.store ?? PRIVATE_CREDENTIAL_STORE;
     const record = async (): Promise<Record<string, unknown> | null> => {
-        if (options.legacyFile) await store.migrate(options.legacyFile, options.file);
+        if (options.legacyFile) await bringLegacyAcross(store, options.legacyFile, options.file);
         const text = await readFile(options.file, 'utf8').catch(() => null);
         return text === null ? null : JSON.parse(text) as Record<string, unknown>;
     };
@@ -115,17 +136,25 @@ export function tynnPairingSource(options: { file: string; legacyFile?: string; 
         old: {
             read: async (): Promise<OldRead> => {
                 try {
+                    if (options.legacyFile && await exists(options.legacyFile) && await exists(options.file)) options.log?.('tynn/pairing: an older tynn.json sits beside the current sign-in; the current one moves, and the older one goes after its read-back');
                     const data = await record();
                     if (typeof data?.tokenEnc !== 'string') return { kind: 'none' };
                     const token = options.cipher.decrypt(Buffer.from(data.tokenEnc, 'base64'));
-                    return tokenValid(token) ? { kind: 'value', value: token } : { kind: 'unreadable' };
-                } catch { return { kind: 'unreadable' }; }
+                    if (tokenValid(token)) return { kind: 'value', value: token };
+                    options.log?.('tynn/pairing: its seal opened to something that is not a pairing key');
+                    return { kind: 'unreadable' };
+                } catch (error) {
+                    // Words from Node or the OS, about a file or a seal: the value is what could not be read.
+                    options.log?.(`tynn/pairing: could not be read: ${error instanceof Error ? error.message : String(error)}`);
+                    return { kind: 'unreadable' };
+                }
             },
             remove: async () => {
                 const data = await record();
                 if (!data) return;
                 const { tokenEnc: _gone, ...kept } = data;
                 await store.write(options.file, JSON.stringify(kept));
+                if (options.legacyFile) await rm(options.legacyFile, { force: true });
             },
         },
     };
@@ -162,7 +191,7 @@ export class TynnAccount implements TynnAccountPort {
     }
 
     async #prepareStorage(): Promise<void> {
-        if (this.#ports.legacyFile) await this.#store.migrate(this.#ports.legacyFile, this.#ports.file);
+        if (this.#ports.legacyFile) await bringLegacyAcross(this.#store, this.#ports.legacyFile, this.#ports.file);
         await this.#store.prepare(this.#ports.file);
     }
 
@@ -184,7 +213,7 @@ export class TynnAccount implements TynnAccountPort {
 
     #persist(credential: Credential | null): Promise<void> {
         const run = async () => {
-            if (this.#ports.legacyFile) await this.#store.migrate(this.#ports.legacyFile, this.#ports.file);
+            if (this.#ports.legacyFile) await bringLegacyAcross(this.#store, this.#ports.legacyFile, this.#ports.file);
             const data = credential ? {
                 version: 1, state: 'signed-in', host: credential.host, userId: credential.userId, scopes: credential.scopes, usedCodes: this.#usedCodes,
             } : { version: 1, state: 'signed-out', host: this.host(), usedCodes: this.#usedCodes };

@@ -60,7 +60,7 @@ import { QUIT_DATA, answerSecondInstance, asksToQuit, launchDecision, type Launc
 import { ActivationLedger, bringUp, onceShowable, showWhenReady, windowLabelOf, type Activation } from '../core/window-activation.js';
 import { viewDelivery, viewReaches, type ViewRequest } from '../core/view-requests.js';
 import { genieUrlIn, signInCodeFrom, workstationOpenFrom } from '../core/tynn-sign-in.js';
-import { tynnPairingSource, TynnAccount } from './tynn-account.js';
+import { settleStaleLegacyPairing, tynnPairingSource, TynnAccount } from './tynn-account.js';
 import { parseTynnProjectInput, TYNN_HOST } from '../core/tynn.js';
 import { githubSealedSources, GithubAccount } from './github-account.js';
 import type { GithubAccountReplica } from './github-account-replica.js';
@@ -1100,6 +1100,8 @@ let relayAfterSwitch: (() => void) | null = null;
 let relayHostNow: RelayHostHandle | null = null;
 let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
+/** A secret's move, said where it can be read afterwards: names and states, never a value. */
+const keychainLog = (line: string): void => { console.error(`[keychain] ${line}`); try { openLifecycleLog(runtimeDir(genieHome()))(`keychain ${line}`); } catch { /* the console has it */ } };
 const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
 /** The sockets to other machines the host holds for each window (genie:device-open). */
 const deviceChannels = new Map<string, Electron.WebContents>();
@@ -2810,8 +2812,9 @@ async function boot(): Promise<void> {
         tynn: () => tynnAccount,
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
+        secretsLog: (line) => keychainLog(line),
         legacySecrets: async () => [
-            tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform) }),
+            await settleStaleLegacyPairing({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), log: (line) => keychainLog(line) }).then(() => tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })),
             ...await githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }),
             ...await workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }),
         ],
