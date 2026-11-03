@@ -43,6 +43,7 @@ import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
 import { agentTynnPrep } from './agent-tynn-prep.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationSource } from './keychain-migration.js';
+import { holdMigration, portsOf } from './migration-holds.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginHost } from './plugin-host.js';
@@ -1036,7 +1037,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnTokens.legacyKeys(tynnCipher) },
             { file: 'legacy secrets', covers: '', sources: async () => (await input.legacySecrets?.()) ?? [] },
         ]);
-        const outcomes = await migrateSecrets(sources, tynnVault, migrationBook);
+        const outcomes = await migrateSecrets(...portsOf(holdMigration({ sources, vault: tynnVault, book: migrationBook })));
         if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
         const stuck = outcomes.some((o) => !['moved', 'nothing', 'already'].includes(o.status));
         for (const line of stuckLines(outcomes, stuckSaid)) { console.error(line); input.secretsLog?.(line); }

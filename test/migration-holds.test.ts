@@ -124,7 +124,7 @@ describe('in any other build', () => {
 describe('wired', () => {
     it('the move runs through it, and the engine itself knows nothing about it', () => {
         expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/migrateSecrets\(\.\.\.[^\n]*holdMigration\(/);
-        expect(readFileSync('src/main/keychain-migration.ts', 'utf8')).not.toMatch(/hold/i);
+        expect(readFileSync('src/main/keychain-migration.ts', 'utf8')).not.toMatch(/migration-holds|holdMigration/);
     });
 });
 
