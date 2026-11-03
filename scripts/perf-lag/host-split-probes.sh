@@ -662,8 +662,22 @@ probe "the-desktop-hook-holds-no-token" src/renderer/App.tsx \
     test/device-link-window.test.ts "the desktop hook keeps no token"
 
 
+# The ACL guard: nothing about time fails a file; an ACL line still does
+probe "the-guard-holds-the-real-timer" test/helpers/acl-guard.ts \
+    "    await new Promise((r) => realSetTimeout(r, ms));" "    await new Promise((r) => setTimeout(r, ms));" \
+    test/acl-guard.test.ts "fake timers on: it still finishes, on the real clock"
+
+probe "the-guard-outlasts-a-stall" test/setup-acl-guard.ts \
+    "{ report: realWarn }), END_OF_FILE_HOOK_MS);" "{ report: realWarn }));" \
+    test/acl-guard-stalled-worker.test.ts "Hook timed out"
+
+probe "the-guard-still-checks" test/helpers/acl-guard.ts \
+    "    checkAclLines(warned, testPath, 'at the end of this file');" "" \
+    test/acl-guard.test.ts "fake timers on: a real unexplained line still fails"
+
+
 echo "=== restored: every probed test file (green expected)"
-if npx vitest run test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
+if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
     grep -E "Test Files|Tests " "/tmp/probe-$$.log"
 else
     echo "RESTORE FAILED"; grep -E "×|FAIL|Tests " "/tmp/probe-$$.log" | head -10; fail=1
