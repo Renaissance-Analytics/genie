@@ -17,12 +17,15 @@
  * Getting a sign-in code changes nothing in repos/tynn: `/dev/quick-login` then `/genie/callback`. That route exists only where APP_ENV is local or development, so against
  * production this fails closed, and the alias is checked first as well. No token is printed.
  *
- * NOT HERE: S4 (scripts/upgrade-crash-acceptance.mjs), S5-S7 (scripts/upgrade-acceptance-mint-cdp.mjs), S10, S12, the relay half of S11, and A1-A5.
+ * THE RELAY HALF OF S11 runs only with UPGRADE_RELAY=<the local relay's ws:// endpoint>, and needs that relay up with tynn.gen's WORKSTATION_SHARED_RELAY_ENDPOINT set to it (without that line tynn.gen hands out
+ * the PRODUCTION relay; .ai/knowledge/test-vm.md). The moved key signs the relay hello and the ticket's request; its control puts another key under the same id, which must not get through.
+ *
+ * NOT HERE: S4 (scripts/upgrade-crash-acceptance.mjs), S5-S7 (scripts/upgrade-acceptance-mint-cdp.mjs), S10 (scripts/upgrade-v1-github-acceptance-cdp.mjs), S12 and A1-A5 (scripts/github-live-cdp.mjs).
  *
  * Prints `### upgrade <check>=PASS|FAIL  detail`, then `### upgrade=PASS|FAIL`. Capped at 12 min. Every exit puts back what it hid.
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
@@ -371,7 +374,37 @@ try {
     check(nameAgain === who, 'S3.1-still-signed-in', String(nameAgain));
     check(sha(bookFile) === bookBefore, 'S3.2-the-book-did-not-change');
     check((await held(`tynn/agent/${ids.first}`)) === renewed, 'S3.3-the-renewed-key-was-not-overwritten');
-    again.close();
+
+    if (process.env.UPGRADE_RELAY) {
+        say('S11: the moved key signs its way onto the relay');
+        const workstation = (c) => c.evaluate('window.genie.features.snapshot().then((d) => d?.remote?.tynnWorkstation ?? null)');
+        await again.evaluate(`window.genie.features.act({ kind: 'settings.set', key: 'remote_access', value: true }).then(() => true)`);
+        const reached = await until('the relay', 90_000, async () => { const t = await workstation(again); return t?.relay?.state === 'reachable' ? t : null; });
+        const seen = await workstation(again);
+        check(Boolean(reached), 'S11.2-the-moved-key-gets-onto-the-relay', reached ? String(reached.relay.relay) : JSON.stringify(seen?.relay ?? null));
+        check(String(reached?.relay?.relay ?? '').startsWith(process.env.UPGRADE_RELAY), 'S11.3-and-it-is-the-test-relay', String(reached?.relay?.relay ?? 'none'));
+        again.close();
+        await stopApp();
+
+        const [host] = Object.keys(before11);
+        const name = `workstation/${host}`;
+        const moved = await held(name);
+        await keep(name, generateKeyPairSync('ed25519').privateKey.export({ type: 'pkcs8', format: 'pem' }).toString());
+        const wrong = await launchNew();
+        let through = false;
+        for (let i = 0; i < 45 && !through; i += 1) { through = (await workstation(wrong))?.relay?.state === 'reachable'; await sleep(1000); }
+        const after = await workstation(wrong);
+        // Refused BECAUSE of the key. "Could not be reached" is the network, and batch FF's control passed on exactly that, proving nothing.
+        const reason = String(after?.relay?.reason ?? '');
+        const refused = after?.registered === false || (after?.relay?.state === 'unavailable' && reason !== '' && !/could not be reached/i.test(reason));
+        check(!through && refused, 'S11.4-CONTROL-another-key-under-that-id-is-refused', JSON.stringify({ registered: after?.registered ?? null, id: after?.workstationId === seen?.workstationId ? 'the same' : 'another', relay: after?.relay ?? null }));
+        wrong.close();
+        await stopApp();
+        await keep(name, moved);
+    } else {
+        say('S11: the relay half did not run: UPGRADE_RELAY is not set');
+        again.close();
+    }
 } catch (error) {
     check(false, 'the-check-threw', error instanceof Error ? error.message : String(error));
 }
