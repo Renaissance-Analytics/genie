@@ -30,6 +30,8 @@ export interface TynnBoardLivePorts {
     readonly schedule: (fn: () => void, ms: number) => () => void;
     readonly onRing: (projectId: string, ring: BoardLiveRing) => void;
     readonly onState: (projectId: string, state: LiveState) => void;
+    /** Why the socket failed. The board is a live-update path over data it can still fetch, so this is only logged. */
+    readonly onFailure?: (reason: string) => void;
 }
 
 const EVENTS: ReadonlySet<string> = new Set(BOARD_LIVE.events);

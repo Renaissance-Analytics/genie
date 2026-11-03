@@ -7,6 +7,9 @@
  *  - no Origin, or any other: `pusher:error` 4009 `Origin not allowed`, and then NOTHING. The socket stays open and silent;
  *    it does not even answer a close (production closes it about 300 s later, which no test wants to wait for).
  *
+ * `subscribe` says what a signed subscribe is answered with: `answer` (the default), `subscription-error` (the Pusher
+ * protocol's refusal), `pusher-error` (a connection-level refusal, 4009 `Connection is unauthorized`), or `silent`.
+ *
  * The WebSocket is written by hand on purpose, so this runs with no dependency under plain Node and under Electron's own
  * binary, and what it records (`connections[n].origin`) is the header as it arrived on the wire.
  */
@@ -51,7 +54,16 @@ function readFrames(buffer) {
 
 export const ORIGIN_NOT_ALLOWED = JSON.stringify({ event: 'pusher:error', data: JSON.stringify({ code: 4009, message: 'Origin not allowed' }) });
 
-export async function startFakeReverb({ allowedOrigins }) {
+function subscribeAnswer(mode, channel, auth) {
+    if (mode === 'silent') return null;
+    if (mode === 'pusher-error') return JSON.stringify({ event: 'pusher:error', data: JSON.stringify({ code: 4009, message: 'Connection is unauthorized' }) });
+    if (mode === 'subscription-error' || typeof auth !== 'string' || auth === '') {
+        return JSON.stringify({ event: 'pusher:subscription_error', channel, data: JSON.stringify({ type: 'AuthError', error: 'The signature is not valid', status: 401 }) });
+    }
+    return JSON.stringify({ event: 'pusher_internal:subscription_succeeded', channel, data: '{}' });
+}
+
+export async function startFakeReverb({ allowedOrigins, subscribe = 'answer' }) {
     const connections = [];
     const open = new Set();
     let nextId = 1;
@@ -85,9 +97,8 @@ export async function startFakeReverb({ allowedOrigins }) {
                 if (!allowed) continue;
                 const message = JSON.parse(frame.text);
                 if (message.event !== 'pusher:subscribe') continue;
-                socket.write(textFrame(typeof message.data?.auth === 'string' && message.data.auth !== ''
-                    ? JSON.stringify({ event: 'pusher_internal:subscription_succeeded', channel: message.data.channel, data: '{}' })
-                    : JSON.stringify({ event: 'pusher:subscription_error', channel: message.data?.channel, data: '{}' })));
+                const answer = subscribeAnswer(subscribe, message.data?.channel, message.data?.auth);
+                if (answer !== null) socket.write(textFrame(answer));
             }
         });
     });

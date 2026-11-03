@@ -8,7 +8,7 @@ import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { issueWatchPanelView, issueWatchWhyNot, parseIssueWatchEntry, type IssueWatchSummary, type IwEvent } from '../src/core/issue-watch.js';
 import { AttentionStore } from '../src/main/attention-store.js';
 import { InboxStore } from '../src/main/inbox-store.js';
-import { CONNECT_DEADLINE_MS, IssueWatchClient, RECONNECT_MAX_MS, RECONNECT_MS, type IssueWatchClientPorts, type IssueWatchState, type SocketLike } from '../src/main/issue-watch-client.js';
+import { CONNECT_DEADLINE_MS, IssueWatchClient, RECONNECT_MAX_MS, RECONNECT_MS, SUBSCRIBE_DEADLINE_MS, type IssueWatchClientPorts, type IssueWatchState, type SocketLike } from '../src/main/issue-watch-client.js';
 import { genieTools, type Caller } from '../src/main/mcp-tools.js';
 import { TynnBoardLive } from '../src/main/tynn-board-live.js';
 import { dialTynnSocket } from '../src/main/tynn-socket.js';
@@ -43,14 +43,14 @@ afterEach(async () => {
     for (const s of servers) await s.close();
     servers = [];
 });
-async function reverb(allowedOrigins: readonly string[] = [PRODUCTION]): Promise<FakeReverb> {
-    const s = await startFakeReverb({ allowedOrigins });
+async function reverb(allowedOrigins: readonly string[] = [PRODUCTION], subscribe?: 'answer' | 'subscription-error' | 'pusher-error' | 'silent'): Promise<FakeReverb> {
+    const s = await startFakeReverb({ allowedOrigins, ...(subscribe === undefined ? {} : { subscribe }) });
     servers.push(s);
     return s;
 }
 
 /** A signed-in Tynn over nothing, and a client on it. */
-function harness(opts: { config: unknown; socket: IssueWatchClientPorts['socket']; signedIn?: boolean; pull?: (n: number) => Promise<unknown> | unknown }) {
+function harness(opts: { config: unknown; socket: IssueWatchClientPorts['socket']; signedIn?: boolean; pull?: (n: number) => Promise<unknown> | unknown; authStatus?: number; authHangs?: boolean }) {
     const requests: string[] = [];
     const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
     const states: IssueWatchState[] = [];
@@ -65,8 +65,11 @@ function harness(opts: { config: unknown; socket: IssueWatchClientPorts['socket'
                 requests.push(path);
                 let json: unknown = reconcile;
                 if (path === '/api/v1/broadcasting-config') json = opts.config;
-                else if (path === '/api/v1/user/broadcasting-auth') json = { auth: 'rk:sig' };
-                else if (opts.pull) json = await opts.pull(pulls++);
+                else if (path === '/api/v1/user/broadcasting-auth') {
+                    if (opts.authHangs === true) await new Promise(() => {});
+                    json = { auth: 'rk:sig' };
+                    if (opts.authStatus !== undefined) return { ok: opts.authStatus < 300, status: opts.authStatus, json: async () => json };
+                } else if (opts.pull) json = await opts.pull(pulls++);
                 return { ok: true, status: 200, json: async () => json };
             },
         }),
@@ -443,10 +446,298 @@ describe('the reconcile does not wait for the socket', () => {
         await settle();
         expect(f.sockets).toHaveLength(1);
         expect(liveTimers(h).map((t) => t.ms)).toEqual([CONNECT_DEADLINE_MS]);
-        // Live, the one deadline it has is gone: nothing can come along later and close a healthy socket.
+        // Connected, the one connect deadline it has is gone: nothing can come along later and close a healthy socket.
         f.sockets[0]!.emit({ event: 'pusher:connection_established', data: JSON.stringify({ socket_id: '1.2' }) });
         await settle();
+        expect(liveTimers(h).filter((t) => t.ms === CONNECT_DEADLINE_MS)).toEqual([]);
+    });
+});
+
+describe('IssueWatch: a subscribe refused or unanswered is a failure with its reason', () => {
+    const ESTABLISHED = { event: 'pusher:connection_established', data: JSON.stringify({ socket_id: '1.2' }) };
+    const SUBSCRIBED = { event: 'pusher_internal:subscription_succeeded', channel: CHANNEL, data: '{}' };
+
+    it('real wire: pusher:subscription_error closes it, says why, backs off, and the reason reaches issueWatchWhyNot', async () => {
+        const server = await reverb([PRODUCTION], 'subscription-error');
+        const h = harness({ config: server.config(), socket: (url) => dialTynnSocket(url, PRODUCTION) });
+        h.client.start();
+        await until(() => h.client.state().kind === 'reconnecting');
+        expect(h.client.state()).toEqual({ kind: 'reconnecting', reason: expect.stringMatching(/refused the channel.*The signature is not valid.*401/) });
+        expect(await until(() => server.connections[0]?.closeAsked === true)).toBe(true);
+        expect(liveTimers(h).map((t) => t.ms)).toEqual([RECONNECT_MS]);
+        const state = h.client.state() as { kind: 'reconnecting'; reason: string };
+        expect(issueWatchWhyNot({ state: state.kind, linked: true, reason: state.reason })).toContain('The signature is not valid');
+    });
+
+    it('real wire: a connection-level refusal after the subscribe is the same failure', async () => {
+        const server = await reverb([PRODUCTION], 'pusher-error');
+        const h = harness({ config: server.config(), socket: (url) => dialTynnSocket(url, PRODUCTION) });
+        h.client.start();
+        await until(() => h.client.state().kind === 'reconnecting');
+        expect(h.client.state()).toEqual({ kind: 'reconnecting', reason: expect.stringMatching(/Connection is unauthorized.*4009/) });
+    });
+
+    it('real wire: a subscribe nobody answers fails at its deadline, not never', async () => {
+        const server = await reverb([PRODUCTION], 'silent');
+        const h = harness({ config: server.config(), socket: (url) => dialTynnSocket(url, PRODUCTION) });
+        h.client.start();
+        await until(() => server.connections[0]?.received.length === 1);
+        expect(h.client.state().kind).toBe('connecting');
+        const deadline = liveTimers(h).find((t) => t.ms === SUBSCRIBE_DEADLINE_MS);
+        expect(deadline).toBeDefined();
+        deadline!.fn();
+        expect(h.client.state()).toEqual({ kind: 'reconnecting', reason: expect.stringContaining('30 s') });
+        expect(liveTimers(h).map((t) => t.ms)).toEqual([RECONNECT_MS]);
+    });
+
+    it('a signature that never comes back is covered by the same deadline', async () => {
+        const f = fakeSockets();
+        const h = harness({ config: CONFIG, socket: f.socket, authHangs: true });
+        h.client.start();
+        await settle();
+        f.sockets[0]!.emit(ESTABLISHED);
+        await settle();
+        liveTimers(h).find((t) => t.ms === SUBSCRIBE_DEADLINE_MS)!.fn();
+        expect(f.sockets[0]!.closed).toBe(true);
+        expect(h.client.state()).toMatchObject({ kind: 'reconnecting' });
+    });
+
+    it('the signature’s 404 is Tynn’s word for signed out: it says so, keeps the credential, closes and tries again', async () => {
+        const f = fakeSockets();
+        const h = harness({ config: CONFIG, socket: f.socket, authStatus: 404 });
+        h.client.start();
+        await settle();
+        f.sockets[0]!.emit(ESTABLISHED);
+        await settle();
+        expect(f.sockets[0]!.closed).toBe(true);
+        const state = h.client.state() as { kind: string; reason: string };
+        // Still trying: a passing 404 heals itself (main/tynn-account.ts decides the sign-in, on /me).
+        expect(state.kind).toBe('reconnecting');
+        expect(state.reason).toMatch(/not signed in to Tynn/);
+        expect(state.reason).toMatch(/404/);
+        expect(state.reason).toMatch(/sign-in is kept/);
+        expect(liveTimers(h).map((t) => t.ms)).toEqual([RECONNECT_MS]);
+    });
+
+    it('CONTROL: subscribed ends the deadline; a refusal on another channel is not this one’s', async () => {
+        const f = fakeSockets();
+        const h = harness({ config: CONFIG, socket: f.socket });
+        h.client.start();
+        await settle();
+        f.sockets[0]!.emit(ESTABLISHED);
+        await settle();
+        expect(liveTimers(h).map((t) => t.ms)).toEqual([SUBSCRIBE_DEADLINE_MS]);
+        f.sockets[0]!.emit({ event: 'pusher:subscription_error', channel: 'private-someone-else', data: '{}' });
+        await settle();
+        expect(f.sockets[0]!.closed).toBe(false);
+        f.sockets[0]!.emit(SUBSCRIBED);
+        await settle();
+        expect(h.client.state()).toEqual({ kind: 'live' });
         expect(liveTimers(h)).toEqual([]);
+    });
+
+    it('a refused subscribe backs off like a refused connect, and live starts it over', async () => {
+        const f = fakeSockets();
+        const h = harness({ config: CONFIG, socket: f.socket });
+        h.client.start();
+        await settle();
+        const pauses: number[] = [];
+        for (let i = 0; i < 3; i += 1) {
+            f.sockets[i]!.emit(ESTABLISHED);
+            await settle();
+            f.sockets[i]!.emit({ event: 'pusher:subscription_error', channel: CHANNEL, data: JSON.stringify({ error: 'nope', status: 403 }) });
+            await settle();
+            const retry = liveTimers(h).at(-1)!;
+            pauses.push(retry.ms);
+            retry.cancelled = true;
+            retry.fn();
+            await settle();
+        }
+        expect(pauses).toEqual([RECONNECT_MS, 10_000, 20_000]);
+        f.sockets[3]!.emit(ESTABLISHED);
+        await settle();
+        f.sockets[3]!.emit(SUBSCRIBED);
+        await settle();
+        f.sockets[3]!.drop();
+        expect(liveTimers(h).at(-1)!.ms).toBe(RECONNECT_MS);
+    });
+});
+
+describe('the live board does not hang either', () => {
+    const P1 = '01JPROJECTONE';
+    const P2 = '01JPROJECTTWO';
+    const channel = (p: string) => `private-project-board.${p}`;
+    const ESTABLISHED = { event: 'pusher:connection_established', data: JSON.stringify({ socket_id: '1.2' }) };
+    const SUBSCRIBED = (p: string) => ({ event: 'pusher_internal:subscription_succeeded', channel: channel(p), data: '{}' });
+
+    function board(opts: { socket: IssueWatchClientPorts['socket']; config?: unknown; authHangs?: boolean }) {
+        const timers: Array<{ fn: () => void; ms: number; cancelled: boolean }> = [];
+        const states = new Map<string, string>();
+        const failures: string[] = [];
+        const live = new TynnBoardLive({
+            tynn: () => ({
+                request: async (path) => {
+                    if (path !== '/api/v1/broadcasting-config' && opts.authHangs === true) await new Promise(() => {});
+                    return { ok: true, status: 200, json: async () => (path === '/api/v1/broadcasting-config' ? opts.config ?? CONFIG : { auth: 'rk:sig' }) };
+                },
+            }),
+            socket: opts.socket,
+            schedule: (fn, ms) => { const t = { fn, ms, cancelled: false }; timers.push(t); return () => { t.cancelled = true; }; },
+            onRing: () => {},
+            onState: (projectId, state) => { states.set(projectId, state); },
+            onFailure: (reason) => { failures.push(reason); },
+        });
+        return { live, timers, states, failures };
+    }
+
+    it('pusher:error closes it, is logged with its reason, and retries with a growing pause, without waiting for a close', async () => {
+        const f = fakeSockets();
+        const b = board({ socket: f.socket });
+        const stop = b.live.watch(P1);
+        await settle();
+        f.sockets[0]!.emit(REFUSAL);
+        await settle();
+        expect(f.sockets[0]!.closed).toBe(true);
+        expect(b.states.get(P1)).toBe('reconnecting');
+        expect(b.failures).toEqual([expect.stringMatching(/Origin not allowed.*4009/)]);
+        const first = liveTimers(b);
+        expect(first.map((t) => t.ms)).toEqual([1_000]);
+        // A close that does arrive, late, is the same failure.
+        f.sockets[0]!.drop();
+        expect(liveTimers(b)).toHaveLength(1);
+        first[0]!.cancelled = true;
+        first[0]!.fn();
+        await settle();
+        f.sockets[1]!.emit(REFUSAL);
+        await settle();
+        expect(liveTimers(b).at(-1)!.ms).toBe(2_000);
+        stop();
+    });
+
+    it('a socket that says nothing fails at the connect deadline and retries', async () => {
+        const f = fakeSockets();
+        const b = board({ socket: f.socket });
+        const stop = b.live.watch(P1);
+        await settle();
+        liveTimers(b).find((t) => t.ms === CONNECT_DEADLINE_MS)!.fn();
+        expect(f.sockets[0]!.closed).toBe(true);
+        expect(b.states.get(P1)).toBe('reconnecting');
+        expect(b.failures).toEqual([expect.stringContaining('15 s')]);
+        expect(liveTimers(b).map((t) => t.ms)).toEqual([1_000]);
+        stop();
+    });
+
+    it('a subscribe nobody answers, or a signature that never comes back, fails at the subscribe deadline and retries', async () => {
+        for (const authHangs of [false, true]) {
+            const f = fakeSockets();
+            const b = board({ socket: f.socket, authHangs });
+            const stop = b.live.watch(P1);
+            await settle();
+            f.sockets[0]!.emit(ESTABLISHED);
+            await settle();
+            liveTimers(b).find((t) => t.ms === SUBSCRIBE_DEADLINE_MS)!.fn();
+            expect(f.sockets[0]!.closed).toBe(true);
+            expect(b.states.get(P1)).toBe('reconnecting');
+            expect(liveTimers(b).map((t) => t.ms)).toEqual([1_000]);
+            stop();
+        }
+    });
+
+    it('a board refused its channel is off and not retried; its deadline is gone, and the other board’s socket stays up', async () => {
+        const f = fakeSockets();
+        const b = board({ socket: f.socket });
+        b.live.watch(P1);
+        const stop = b.live.watch(P2);
+        await settle();
+        f.sockets[0]!.emit(ESTABLISHED);
+        await settle();
+        f.sockets[0]!.emit(SUBSCRIBED(P2));
+        f.sockets[0]!.emit({ event: 'pusher:subscription_error', channel: channel(P1), data: JSON.stringify({ error: 'nope', status: 403 }) });
+        await settle();
+        expect(b.states.get(P1)).toBe('off');
+        expect(b.states.get(P2)).toBe('live');
+        expect(b.failures).toEqual([expect.stringContaining('nope')]);
+        expect(f.sockets[0]!.closed).toBe(false);
+        expect(liveTimers(b)).toEqual([]);
+        stop();
+    });
+
+    it('closing a board whose subscribe is out takes its deadline with it: it cannot close the socket under the other board', async () => {
+        const f = fakeSockets();
+        const b = board({ socket: f.socket });
+        const stop1 = b.live.watch(P1);
+        const stop2 = b.live.watch(P2);
+        await settle();
+        f.sockets[0]!.emit(ESTABLISHED);
+        await settle();
+        f.sockets[0]!.emit(SUBSCRIBED(P2));
+        await settle();
+        expect(liveTimers(b).map((t) => t.ms)).toEqual([SUBSCRIBE_DEADLINE_MS]);
+        stop1();
+        expect(liveTimers(b)).toEqual([]);
+        expect(f.sockets[0]!.closed).toBe(false);
+        stop2();
+    });
+
+    it('one board that never answers keeps growing the pause: another going live does not reset it (COUNTED)', async () => {
+        const f = fakeSockets();
+        const b = board({ socket: f.socket });
+        b.live.watch(P1);
+        const stop = b.live.watch(P2);
+        await settle();
+        const pauses: number[] = [];
+        for (let i = 0; i < 3; i += 1) {
+            f.sockets[i]!.emit(ESTABLISHED);
+            await settle();
+            f.sockets[i]!.emit(SUBSCRIBED(P2));
+            await settle();
+            liveTimers(b).find((t) => t.ms === SUBSCRIBE_DEADLINE_MS)!.fn();
+            const retry = liveTimers(b).at(-1)!;
+            pauses.push(retry.ms);
+            retry.cancelled = true;
+            retry.fn();
+            await settle();
+        }
+        expect(pauses).toEqual([1_000, 2_000, 4_000]);
+        // Every board answered: the pause starts over.
+        f.sockets[3]!.emit(ESTABLISHED);
+        await settle();
+        f.sockets[3]!.emit(SUBSCRIBED(P1));
+        f.sockets[3]!.emit(SUBSCRIBED(P2));
+        await settle();
+        f.sockets[3]!.drop();
+        expect(liveTimers(b).at(-1)!.ms).toBe(1_000);
+        stop();
+    });
+
+    it('a socket that cannot be built retries with its reason, not an unhandled rejection', async () => {
+        const b = board({ socket: () => { throw new Error('Invalid URL'); } });
+        const stop = b.live.watch(P1);
+        await settle();
+        expect(b.states.get(P1)).toBe('reconnecting');
+        expect(b.failures).toEqual([expect.stringContaining('Invalid URL')]);
+        expect(liveTimers(b).map((t) => t.ms)).toEqual([1_000]);
+        stop();
+    });
+
+    it('real wire: a Reverb that refuses the socket does not leave the board connecting', async () => {
+        const server = await reverb();
+        const b = board({ socket: (url) => new WebSocket(url) as unknown as SocketLike, config: server.config() });
+        const stop = b.live.watch(P1);
+        await until(() => b.states.get(P1) === 'reconnecting');
+        expect(b.states.get(P1)).toBe('reconnecting');
+        expect(await until(() => server.connections[0]?.closeAsked === true)).toBe(true);
+        stop();
+    });
+
+    it('real wire: a subscribe nobody answers does not leave the board connecting', async () => {
+        const server = await reverb([PRODUCTION], 'silent');
+        const b = board({ socket: (url) => dialTynnSocket(url, PRODUCTION), config: server.config() });
+        const stop = b.live.watch(P1);
+        await until(() => server.connections[0]?.received.length === 1);
+        liveTimers(b).find((t) => t.ms === SUBSCRIBE_DEADLINE_MS)!.fn();
+        expect(b.states.get(P1)).toBe('reconnecting');
+        stop();
     });
 });
 
@@ -499,6 +790,11 @@ describe('the reason reaches whoever asks', () => {
             expect(checked.ok).toBe(true);
             expect(checked.counts).toEqual({ issues: 1, prs: 0, security: 0, feedback: 0 });
             expect(checked.notLive).toBe(REASON);
+        });
+
+        it('notLive is there whenever it is not live, reason or none, so its absence means live', async () => {
+            expect((await call({ state: 'connecting', linked: true, entry: ENTRY }, 'checkIssues')).notLive).toBe('IssueWatch is connecting');
+            expect((await call({ state: 'reconnecting', linked: true, entry: ENTRY }, 'checkIssues')).notLive).toBe('IssueWatch is reconnecting');
         });
 
         it('CONTROL: live, checkIssues has no notLive', async () => {

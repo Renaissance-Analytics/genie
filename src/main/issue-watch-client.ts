@@ -71,6 +71,8 @@ export const RECONNECT_MS = 5_000;
 export const RECONNECT_MAX_MS = 300_000;
 /** How long a dialled socket may say nothing before it counts as failed. */
 export const CONNECT_DEADLINE_MS = 15_000;
+/** How long, from `connection_established`, signing and subscribing may take before it counts as failed. */
+export const SUBSCRIBE_DEADLINE_MS = 30_000;
 
 export class IssueWatchClient {
     readonly #ports: IssueWatchClientPorts;

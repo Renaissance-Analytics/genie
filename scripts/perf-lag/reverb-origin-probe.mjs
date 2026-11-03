@@ -14,7 +14,8 @@
  *  - LOCAL, against scripts/perf-lag/fake-reverb.mjs: what arrives on the wire with no Origin (the control), with Genie's
  *    and with a wrong one, and what each is answered.
  *  - PRODUCTION, on the same three dials unauthenticated: the Reverb host and public key come from Tynn's
- *    `/api/v1/broadcasting-config` or, as that answers 404 with no account, its public JS bundle. It never subscribes.
+ *    `/api/v1/broadcasting-config` or, as that answers 404 with no account, its public JS bundle. One more dial sends a
+ *    subscribe to a made-up private channel with a nonsense signature, to read how a refusal really looks. Nothing is joined.
  *  - TLS: the default verification is still on. A server with a self-signed certificate must not open.
  *
  * `--local` skips production and TLS (what `npm test` runs on CI, so CI does not depend on production's being up).
@@ -55,6 +56,26 @@ function dial(url, init) {
         socket.addEventListener('message', (e) => { done({ frame: String(e.data) }); });
         socket.addEventListener('error', (e) => { done({ error: String(e.message ?? e.error?.message ?? 'error') }); });
         socket.addEventListener('close', (e) => { done({ closed: e.code }); });
+    });
+}
+
+/** Connects, sends one badly signed subscribe, and answers with the first thing said after it. */
+function refusedSubscribe(url, init, key) {
+    return new Promise((resolve) => {
+        const socket = new WebSocket(url, init);
+        let subscribed = false;
+        const done = (result) => {
+            clearTimeout(timer);
+            try { socket.close(); } catch { /* already closing */ }
+            resolve(result);
+        };
+        const timer = setTimeout(() => { done({ subscribed, silent: true }); }, DIAL_MS);
+        socket.addEventListener('message', (e) => {
+            if (subscribed) { done({ subscribed, frame: String(e.data) }); return; }
+            subscribed = true;
+            socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'private-genie-origin-probe', auth: `${key}:not-a-signature` } }));
+        });
+        socket.addEventListener('error', () => { done({ subscribed, error: true }); });
     });
 }
 
@@ -106,6 +127,8 @@ async function production() {
     check(`production: Origin ${ORIGIN} gets connection_established, with no account`, eventOf(genie) === 'pusher:connection_established', said(genie));
     const wrong = await dial(url, { headers: { Origin: 'https://example.com' } });
     check('production CONTROL: a wrong Origin is refused with 4009', refused(wrong), said(wrong));
+    const bad = await refusedSubscribe(url, { headers: { Origin: ORIGIN } }, where.key);
+    check('production: a badly signed subscribe is refused out loud, and not joined', ['pusher:subscription_error', 'pusher:error'].includes(eventOf(bad)), said(bad));
 }
 
 async function tls() {

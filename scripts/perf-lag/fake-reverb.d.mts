@@ -17,4 +17,4 @@ export interface FakeReverb {
     close(): Promise<void>;
 }
 
-export function startFakeReverb(options: { allowedOrigins: readonly string[] }): Promise<FakeReverb>;
+export function startFakeReverb(options: { allowedOrigins: readonly string[]; subscribe?: 'answer' | 'subscription-error' | 'pusher-error' | 'silent' }): Promise<FakeReverb>;
