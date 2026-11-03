@@ -490,6 +490,9 @@ export function nodePhpVersionsFs(): PhpVersionsFs {
     };
 }
 
+// RED: the shape only.
+export function httpFetchOver(_get: (url: string, init: { redirect: 'follow' }) => Promise<Response>) { return httpFetch; }
+
 /** The real network: `fetch`, redirects followed (windows.php.net answers from downloads.php.net). */
 export const httpFetch = {
     bytes: async (url: string): Promise<Fetched<Uint8Array>> => {
