@@ -127,6 +127,8 @@ export function useAclHelper(chosen: WindowsHelper | null | undefined): void { h
 export function windowsHelper(options: Partial<Pick<WindowsHelperOptions, 'deadlineMs' | 'log'>> = {}): WindowsHelper {
     return new WindowsHelper({
         ...options,
+        // Its reasons are a host's log line: paths and secrets never reach these words.
+        log: options.log ?? ((line) => sayDiagnostic(line)),
         spawn: (file, args, env) => {
             const child = spawn(file, [...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
             // Idle, it must not hold its owner open. While a request runs, the helper refs it again.
@@ -140,23 +142,36 @@ export function sharedWindowsHelper(): WindowsHelper | null {
     if (helper === undefined) helper = (process as { type?: string }).type === 'browser' ? null : windowsHelper();
     return helper;
 }
-// RED: the shape only.
-export function slowWriteLine(_ms: number, _way: string, _why: string | null): string | null { return null; }
+const SLOW_WRITE_MS = 5_000;
+const HELD_THREAD_MS = 1_000;
+/** A write a person would feel, said with which way it went. No path and no value. A window's or a host's stderr is its log. */
+export function slowWriteLine(ms: number, way: string, why: string | null): string | null {
+    return ms < SLOW_WRITE_MS ? null : `PRIVATE_FILE_SLOW_WRITE ${Math.round(ms)} ms through the ${way}${why ? `: ${why}` : ''}`;
+}
+const sayDiagnostic = (line: string | null): void => { if (line === null) return; try { console.warn(line); failureLog?.(line); } catch { /* A diagnostic cannot change a write. */ } };
 
 /** This attempt's: whether to skip the helper, and whether the helper was lost under it. */
-const attempt = new AsyncLocalStorage<{ oneShot: boolean; lost: boolean }>();
+const attempt = new AsyncLocalStorage<{ oneShot: boolean; lost: boolean; why?: string | null }>();
 
 /**
  * THE VERIFICATION IS NEVER SKIPPED. A helper dead, hung or unstartable loses its request, and the whole attempt runs again by a launch, with the same script and the same read-back. A script that
  * refused is a refusal, and is not tried again: that is the answer, not a failure to get one. If the launch fails too, so does the write.
  */
 async function withHelperOrALaunch<T>(work: () => Promise<T>): Promise<T> {
-    const state = { oneShot: false, lost: false };
+    const state: { oneShot: boolean; lost: boolean; why?: string | null } = { oneShot: false, lost: false };
+    const began = performance.now();
+    const way = () => (process.platform === 'win32' && sharedWindowsHelper() ? 'helper' : 'launch');
     try {
-        return await attempt.run(state, work);
+        const done = await attempt.run(state, work);
+        sayDiagnostic(slowWriteLine(performance.now() - began, way(), null));
+        return done;
     } catch (error) {
-        if (!state.lost) throw error;
-        return attempt.run({ oneShot: true, lost: false }, work);
+        if (!state.lost) { sayDiagnostic(slowWriteLine(performance.now() - began, way(), 'refused')); throw error; }
+        try {
+            return await attempt.run({ oneShot: true, lost: false }, work);
+        } finally {
+            sayDiagnostic(slowWriteLine(performance.now() - began, 'helper, then a launch', state.why ?? null));
+        }
     }
 }
 
@@ -169,7 +184,7 @@ function startWindowsAcl(body: string): NativeAcl {
         return {
             child: { stdin: request.stdin, stdout: request.stdout, kill: () => request.kill() } as unknown as ChildProcess,
             completed: request.completed.catch((error: unknown) => {
-                if (error instanceof HelperLost) { if (state) state.lost = true; }
+                if (error instanceof HelperLost) { if (state) { state.lost = true; state.why = error.message; } }
                 else recordNativeFailure(error, began);
                 throw new Error(REFUSED);
             }),
@@ -180,9 +195,12 @@ function startWindowsAcl(body: string): NativeAcl {
     for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
     const began = performance.now();
     try {
+        const held = performance.now();
         const work = run(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), [
             '-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64'),
         ], { env, windowsHide: true, timeout: NATIVE_ACL_TIMEOUT_MS, maxBuffer: 65_536 });
+        // CreateProcess runs on this thread, and no timer can fire while it does.
+        if (performance.now() - held >= HELD_THREAD_MS) sayDiagnostic(`PRIVATE_FILE_LAUNCH starting it held this thread ${Math.round(performance.now() - held)} ms`);
         return { child: work.child, completed: work.catch((error: unknown) => {
             recordNativeFailure(error, began);
             throw new Error(REFUSED);

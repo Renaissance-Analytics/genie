@@ -17,7 +17,7 @@ probe() {
     fi
     cp "$file" "/tmp/probe-$$.orig"
     node -e "const fs=require('fs');const p=process.argv[1];let s=fs.readFileSync(p,'utf8').split('\r\n').join('\n');if(!s.includes(process.argv[2])){console.error('anchor missing');process.exit(2)}fs.writeFileSync(p,s.replace(process.argv[2],process.argv[3]))" "$file" "$anchor" "$replacement" || { echo "PROBE $name: anchor missing in $file"; fail=1; cp "/tmp/probe-$$.orig" "$file"; return; }
-    if npx vitest run test/migration-holds.test.ts test/keychain-migration-finishes.test.ts $tests > "/tmp/probe-$$.log" 2>&1; then
+    if npx vitest run test/windows-helper-backoff.test.ts test/migration-holds.test.ts test/keychain-migration-finishes.test.ts $tests > "/tmp/probe-$$.log" 2>&1; then
         echo "PROBE $name: STAYED GREEN with the fix removed (the test is vacuous)"; fail=1
     elif grep -q "$expect" "/tmp/probe-$$.log"; then
         echo "PROBE $name: red as expected ($expect)"
@@ -708,6 +708,16 @@ probe "the-holds-need-the-flag" src/main/migration-holds.ts \
     "    if (typeof __GENIE_TEST_HOLDS__ === 'undefined' || !__GENIE_TEST_HOLDS__) return ports;" "" \
     test/migration-holds.test.ts "the ports as they were, whatever the environment says"
 
+
+# A helper that does not answer
+probe "a-stuck-helper-rests" src/main/windows-helper.ts \
+    "        if (this.#losses < LOSSES_BEFORE_REST) return;" "        return;" \
+    test/windows-helper-backoff.test.ts "two helpers at most"
+
+probe "an-answer-ends-the-count" src/main/windows-helper.ts \
+    "            this.#losses = 0;
+" "" \
+    test/windows-helper-backoff.test.ts "one loss is forgiven by the next answer"
 
 echo "=== restored: every probed test file (green expected)"
 if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then
