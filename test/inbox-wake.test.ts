@@ -173,6 +173,11 @@ describe('paused-agent replies beside the normal inbox push', () => {
         expect(woken).toEqual([]);
         expect(notices(peer.id)).toEqual([reminderText(1)]);
         expect((await services.inbox.receive({ participant: agent.id, acknowledge: false })).messages[0]!.readAt).toBeNull();
+        // Explicit user restart after resolving the account pause delivers the retained original.
+        host.stop(agent.id);
+        expect(host.start(agent, dir)).toEqual({ ok: true });
+        time.advance(COALESCE_MS);
+        expect(notices(agent.id)).toEqual([reminderText(1)]);
     });
 });
 

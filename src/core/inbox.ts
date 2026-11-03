@@ -28,8 +28,14 @@ export const HUMAN = 'human' as const;
 export type InboxSessionProbe = (agentId: AgentId) => Pick<LiveSession, 'limit' | 'accountPaused'> | null;
 
 /** A reported provider pause, never inferred from being idle, busy, stopped or signed out. */
+export function inboxAgentPaused(session: ReturnType<InboxSessionProbe>): boolean {
+    const state = session?.limit?.state;
+    return session?.accountPaused != null || state === 'paused' || state === 'retrying' || state === 'needs-person';
+}
+
+/** Only public availability is reported; provider and account diagnostics stay out of the reply. */
 export function pausedAgentReply(session: ReturnType<InboxSessionProbe>): string | null {
-    if (!session?.accountPaused && (!session?.limit || session.limit.state === 'open')) return null;
+    if (!inboxAgentPaused(session)) return null;
     return 'Automatic reply from Genie: this agent is paused and cannot respond right now. '
         + 'Your message has been saved for them. If you are blocked, ask your user for guidance.';
 }
