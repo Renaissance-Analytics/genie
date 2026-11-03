@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hardenProcess, resolveProgram } from '../src/core/program-lookup.js';
+import { open as openEngine } from '@particle-academy/fancy-pty';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from '../src/main/fancy-term-port.js';
 import { providerLaunchOptions } from '../src/main/session-host.js';
@@ -34,6 +35,14 @@ describe('hardenProcess', () => {
         const env: NodeJS.ProcessEnv = {};
         expect(() => hardenProcess({ platform: 'win32', env, home: () => 'C:\\gone', chdir: () => { throw new Error('ENOENT'); } })).not.toThrow();
         expect(env[VARIABLE]).toBe('1');
+    });
+});
+
+describe('the engine in the lock', () => {
+    it('is at least the one whose bare names stay out of the working folder', () => {
+        const lock = JSON.parse(readFileSync('package-lock.json', 'utf8')) as { packages: Record<string, { version?: string }> };
+        const [major, minor] = (lock.packages['node_modules/@particle-academy/fancy-pty']?.version ?? '0.0.0').split('.').map(Number);
+        expect(major! > 0 || minor! >= 4).toBe(true);
     });
 });
 
@@ -99,6 +108,12 @@ describe("a person's terminal and everyone else's", () => {
         return { made, port: fancyTermPort({ create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 1, shell: 'cmd', existing: false, scrollback: '' }; }, on: () => {}, kill: () => {}, write: () => {}, resize: () => {}, getScrollback: () => '' } as never, { defaultShell: () => ({ command: 'cmd', args: [] }) }) };
     };
     const envOf = (made: Array<Record<string, unknown>>) => made[0]!['env'] as Record<string, string | undefined>;
+
+    it('the engine is never handed an empty environment, which it cannot start on Windows: an empty one still carries the terminal id', () => {
+        const b = backend();
+        b.port.open({ cwd: '/w', env: {} });
+        expect(Object.keys(envOf(b.made)).length).toBeGreaterThan(0);
+    });
 
     it("a person's: the variable is taken off, so it behaves as Windows does", () => {
         const b = backend();
@@ -271,6 +286,33 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
             expect(lines(await say(true))).toMatch(/HAS-NOT/);
             expect(lines(await say(false))).toMatch(/HAS-IT/);
         } finally { if (was === undefined) delete process.env[VARIABLE]; else process.env[VARIABLE] = was; }
+    }, 30_000);
+
+    /** The engine itself, with none of Genie's resolving in front of it: what it printed, once it has ended. */
+    const throughTheEngine = (argv: string[]) => new Promise<string>((resolve) => {
+        let out = '';
+        const pty = openEngine({ argv, cwd: folder, env: { ...process.env } as Record<string, string>, cols: 80, rows: 24 });
+        pty.onData((chunk) => { out += chunk.toString('utf8'); });
+        pty.onError((error) => { resolve(`${out}${error.message}`); });
+        pty.onExit(() => { resolve(out); });
+    });
+
+    it('the engine: a bare name runs the installed program, not the one in the working folder', async () => {
+        const out = await throughTheEngine(['git', '--version']);
+        expect(ran()).toBe(false);
+        // It did run something: the real one.
+        expect(out).toMatch(/git version/);
+    }, 30_000);
+
+    it('the engine: a bare name found only in the working folder does not run', async () => {
+        copyFileSync(process.execPath, join(folder, 'onlyhere.exe'));
+        await throughTheEngine(['onlyhere', '--version']);
+        expect(ran()).toBe(false);
+    }, 30_000);
+
+    it('CONTROL the engine: asked for the working folder by name, it runs it, so the two above can see', async () => {
+        await throughTheEngine(['.\\git.exe', '--version']);
+        expect(ran()).toBe(true);
     }, 30_000);
 
     it('resolving finds the real one with a PATH of its own', () => {
