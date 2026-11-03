@@ -31,7 +31,7 @@ describe('a site declared in a workspace', () => {
         writeFileSync(join(workspace, 'project.json'), JSON.stringify({
             name: 'Acme',
             repos: [{ name: 'shop', slug: 'shop', path: 'repos/shop' }],
-            sites: { k1: { repo: 'shop', runMode: 'host', kind: 'http', enabled: true, name: 'shop', genName: 'shop.gen', hostPort: 4999, command: ['node', 'serve.cjs'] } },
+            sites: { k1: { repo: 'shop', runMode: 'host', kind: 'http', enabled: true, name: 'shop', genName: 'shop.gen', command: ['node', 'serve.cjs'] } },
         }));
         let port = 41000;
         const supervisor = new ProcessSupervisor(pty, { now: () => Date.now(), schedule: () => () => {} });
@@ -49,9 +49,9 @@ describe('a site declared in a workspace', () => {
 describe("a folder's own git config", () => {
     let repo: string;
     const git = (...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-    const script = () => {
+    const script = (filter = false) => {
         const file = join(root, 'tool.sh');
-        writeFileSync(file, `#!/bin/sh\necho ran > '${mark.replace(/\\/g, '/')}'\ncat\n`);
+        writeFileSync(file, `#!/bin/sh\necho ran > '${mark.replace(/\\/g, '/')}'\n${filter ? 'cat\n' : 'exit 0\n'}`);
         chmodSync(file, 0o755);
         return file.replace(/\\/g, '/');
     };
@@ -84,13 +84,13 @@ describe("a folder's own git config", () => {
     it('diff.external: repoDiff', async () => { git('config', 'diff.external', script()); writeFileSync(join(repo, 'a.txt'), 'two\n'); await row('diff-external-repoDiff', () => repoDiff(repo, '.', 'a.txt', false)); });
     it('a filter: repoStatus on a changed file', async () => {
         writeFileSync(join(repo, '.gitattributes'), '*.txt filter=x\n');
-        git('config', 'filter.x.clean', script());
+        git('config', 'filter.x.clean', script(true));
         writeFileSync(join(repo, 'a.txt'), 'two\n');
         await row('filter-repoStatus', () => repoStatus(repo, '.'));
     });
     it('a filter: gitTreeStatus on a changed file', async () => {
         writeFileSync(join(repo, '.gitattributes'), '*.txt filter=x\n');
-        git('config', 'filter.x.clean', script());
+        git('config', 'filter.x.clean', script(true));
         writeFileSync(join(repo, 'a.txt'), 'two\n');
         await row('filter-gitTreeStatus', () => gitTreeStatus(repo));
     });
