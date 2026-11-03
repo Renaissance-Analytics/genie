@@ -51,6 +51,7 @@ export type MigrationStatus =
     | 'already'
     | 'keychain-unavailable'
     | 'read-back-differs'
+    | 'too-large'
     | 'old-copy-unreadable'
     | 'confirmed-entry-missing'
     | 'old-copy-left'

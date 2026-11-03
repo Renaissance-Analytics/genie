@@ -16,6 +16,7 @@ export const KEYCHAIN_SERVICE = 'Genie';
 export const ENTRY_OPTIONS = { linux: { store: 'secret-service' } } as const;
 
 /** The refusal, in words a person acts on. A reason from below is appended; it never carries a value. */
+export const MAX_SECRET_CHARS = 1280;
 const NO_KEYCHAIN = 'Genie needs a keyring to keep your sign-ins safe, and it did not answer, so nothing was saved';
 
 /** What is kept, by name. The agents' and the workstations' are one entry each. */
