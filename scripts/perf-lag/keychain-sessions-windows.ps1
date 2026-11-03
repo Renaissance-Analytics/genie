@@ -12,8 +12,9 @@
 #   ... -Phase wait-logon       waits for a logged-on session after that boot
 #   ... -Phase persist-write    then a reboot, then   ... -Phase persist-read    a value written in one boot and read in the next, each in the logged-on session
 #   ... -Phase autologon-clear  takes it away again
+#   ... -Phase script -Script scripts\x.mjs [-Minutes 25]    any script, in the logged-on person's session, its output printed when it ends and its exit code passed on
 # The whole sequence, reboot included: scripts/vm-keychain-windows.sh in the envelope.
-param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'persist-write', 'persist-read', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon')][string]$Phase)
+param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'persist-write', 'persist-read', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon', 'script')][string]$Phase, [string]$Script = '', [int]$Minutes = 25)
 # Continue: quser and schtasks write to stderr in ordinary answers, and under Stop PowerShell 5.1 turns that into a throw (quser with nobody on: "No User exists", batch F0).
 $ErrorActionPreference = 'Continue'
 $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
@@ -63,6 +64,32 @@ echo %ERRORLEVEL% > "$done"
     } finally { schtasks /Delete /TN $name /F 2>$null | Out-Null }
 }
 
+# A whole script in the logged-on session. What the host it starts inherits is that session, which is what Credential Manager needs.
+function Script-In-Session {
+    if (-not $Script) { Write-Output '### keychain-sessions script=FAIL  name a -Script'; exit 2 }
+    if ((Active-Sessions).Count -eq 0) { Write-Output '### keychain-sessions script=NEEDS-A-LOGGED-ON-SESSION'; exit 4 }
+    $out = Join-Path $env:PUBLIC 'genie-session-script.txt'
+    $done = "$out.done"
+    Remove-Item -Force -ErrorAction SilentlyContinue $out, $done
+    $cmd = Join-Path $env:PUBLIC 'genie-session-script.cmd'
+    Set-Content -Encoding ASCII -Path $cmd -Value @"
+@echo off
+cd /d "$repo"
+"$node" "$Script" > "$out" 2>&1
+echo %ERRORLEVEL% > "$done"
+"@
+    $name = 'GenieSessionScript'
+    schtasks /Create /TN $name /TR "`"$cmd`"" /SC ONCE /ST 23:59 /IT /F /RL LIMITED | Out-Null
+    try {
+        schtasks /Run /TN $name | Out-Null
+        $deadline = (Get-Date).AddMinutes($Minutes)
+        while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 5 }
+        if (Test-Path $out) { Get-Content $out }
+        if (-not (Test-Path $done)) { Write-Output "### keychain-sessions script=FAIL  it did not finish within $Minutes minutes"; exit 1 }
+        exit [int](Get-Content $done).Trim()
+    } finally { schtasks /Delete /TN $name /F 2>$null | Out-Null }
+}
+
 function Run-In-Session([string]$measurePhase) {
     $code = 1
     In-Session $measurePhase | ForEach-Object { if ($_ -is [int]) { $code = $_ } else { Write-Output $_ } }
@@ -76,6 +103,7 @@ switch ($Phase) {
         exit $LASTEXITCODE
     }
     'interactive' { Run-In-Session 'before' }
+    'script' { Script-In-Session }
     'persist-write' { Run-In-Session 'persist-write' }
     'persist-read' { Run-In-Session 'persist-read' }
     'autologon' {

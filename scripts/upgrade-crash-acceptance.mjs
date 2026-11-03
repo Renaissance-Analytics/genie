@@ -11,7 +11,10 @@
  * it could not open would read `old-copy-unreadable` and never reach a hold, so reaching one is the control. Beta.56's own seals are upgrade-acceptance-cdp.mjs's job; what is measured here is the order
  * of the steps. The hold is on the SECOND secret, so each case also shows a secret that already finished is not disturbed.
  *
- * Only the window is killed: the host stays up, as it does when a window crashes. Windows repeats this at the end, with a Credential Manager reader.
+ * Only the window is killed: the host stays up, as it does when a window crashes.
+ *
+ * ON WINDOWS (scripts/vm-acceptance-windows.sh in the envelope; plan §13): the same, in the logged-on session, because over SSH Credential Manager answers ERROR_NO_SUCH_LOGON_SESSION. @napi-rs/keyring is the reader
+ * there too. safeStorage's key is in userData's Local State on Windows, so the sealer runs in the real userData rather than its own.
  *
  * Prints `### crash <check>=PASS|FAIL  detail`, then `### crash=PASS|FAIL`. Capped at 12 min. No value is printed.
  */
@@ -19,6 +22,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
+import { lookup } from 'node:dns/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 
@@ -31,6 +35,8 @@ const runtime = join(home, 'runtime');
 const require = createRequire(`${process.cwd()}/`);
 const work = mkdtempSync(join(tmpdir(), 'crash-'));
 const say = (line) => console.log(`--- ${line}`);
+const WINDOWS = process.platform === 'win32';
+const WINDOW_ARGS = WINDOWS ? [] : ['--no-sandbox', '--ozone-platform=x11'];
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 const check = (ok, name, detail = '') => { console.log(`### crash ${name}=${ok ? 'PASS' : 'FAIL'}${detail ? `  ${detail}` : ''}`); if (!ok) failures.push(name); };
@@ -84,7 +90,7 @@ async function finish() {
 setTimeout(() => { check(false, 'the-12-min-cap'); void finish(); }, 720_000).unref();
 
 const electronEnv = (extra = {}) => { const env = { ...process.env, XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0', ...extra }; delete env.ELECTRON_RUN_AS_NODE; return env; };
-const launch = (extra) => { window = spawn(require('electron'), ['.', '--no-sandbox', '--ozone-platform=x11'], { env: electronEnv(extra), stdio: 'ignore' }); };
+const launch = (extra) => { window = spawn(require('electron'), ['.', ...WINDOW_ARGS], { env: electronEnv(extra), stdio: 'ignore' }); };
 
 /** Seals with this tree's Electron under this tree's name. Takes texts, returns base64, in order. */
 function seal(texts) {
@@ -108,7 +114,7 @@ app.whenReady().then(() => {
     const input = join(work, 'sealer-in.json');
     const output = join(work, 'sealer-out.json');
     writeFileSync(input, JSON.stringify(texts), { mode: 0o600 });
-    execFileSync(require('electron'), [app, '--no-sandbox', '--ozone-platform=x11', '--password-store=gnome-libsecret', `--user-data-dir=${join(work, 'sealer-data')}`], { env: electronEnv({ SEALER_IN: input, SEALER_OUT: output }), stdio: 'ignore', timeout: 60_000 });
+    execFileSync(require('electron'), [app, ...WINDOW_ARGS, ...(WINDOWS ? [] : ['--password-store=gnome-libsecret', `--user-data-dir=${join(work, 'sealer-data')}`])], { env: electronEnv({ SEALER_IN: input, SEALER_OUT: output }), stdio: 'ignore', timeout: 60_000 });
     const result = json(output);
     rmSync(input, { force: true });
     rmSync(output, { force: true });
@@ -127,7 +133,7 @@ const CASES = [
 
 try {
     say('the alias: tynn.ai must be tynn.gen on this machine');
-    const resolved = execFileSync('getent', ['hosts', 'tynn.ai'], { encoding: 'utf8' }).trim().split(/\s+/)[0];
+    const { address: resolved } = await lookup('tynn.ai');
     if (resolved !== '127.0.0.1' && resolved !== '::1') throw new Error(`tynn.ai resolves to ${resolved}: the alias is not up, and this would reach production`);
     check(true, '0-tynn-ai-is-the-alias', resolved);
 

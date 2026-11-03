@@ -22,6 +22,10 @@
  *
  * NOT HERE: S4 (scripts/upgrade-crash-acceptance.mjs), S5-S7 (scripts/upgrade-acceptance-mint-cdp.mjs), S10 (scripts/upgrade-v1-github-acceptance-cdp.mjs), S12 and A1-A5 (scripts/github-live-cdp.mjs).
  *
+ * ON WINDOWS (scripts/vm-acceptance-windows.sh in the envelope; plan §13): S1, S2, S3 and S9, the real beta.56 installer run silently, in the logged-on session (over SSH Credential Manager answers
+ * ERROR_NO_SUCH_LOGON_SESSION). S8 does not run: nothing here can make Credential Manager go away while a person is logged on, and with nobody logged on there is no Genie to look at. S9's modes are read as
+ * ACLs: owner-only, against the inherited SYSTEM and Administrators those files started with. safeStorage's key is in userData's Local State there, so the sealer runs in the real userData.
+ *
  * Prints `### upgrade <check>=PASS|FAIL  detail`, then `### upgrade=PASS|FAIL`. Capped at 12 min. Every exit puts back what it hid.
  */
 import { execFileSync, spawn } from 'node:child_process';
@@ -29,6 +33,7 @@ import { createHash, generateKeyPairSync, randomBytes } from 'node:crypto';
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
+import { lookup } from 'node:dns/promises';
 import { join } from 'node:path';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this replaces a profile and hides system files; test machines only'); process.exit(2); }
@@ -36,7 +41,10 @@ process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
 process.env.DBUS_SESSION_BUS_ADDRESS ??= `unix:path=${process.env.XDG_RUNTIME_DIR}/bus`;
 
 const PORT = Number(process.env.CDP_PORT ?? 9222);
-const APPIMAGE_URL = process.env.BETA56_APPIMAGE ?? 'https://github.com/Renaissance-Analytics/genie/releases/download/v2.0.0-beta.56/Genie-2.0.0-beta.56.AppImage';
+const WINDOWS = process.platform === 'win32';
+const WINDOW_ARGS = WINDOWS ? [] : ['--no-sandbox', '--ozone-platform=x11'];
+const RELEASE = 'https://github.com/Renaissance-Analytics/genie/releases/download/v2.0.0-beta.56';
+const APPIMAGE_URL = process.env.BETA56_APPIMAGE ?? (WINDOWS ? `${RELEASE}/Genie-2.0.0-beta.56-setup.exe` : `${RELEASE}/Genie-2.0.0-beta.56.AppImage`);
 const TYNN = 'https://tynn.ai';
 const ACCOUNT = process.env.TYNN_TEST_ACCOUNT ?? 'member@example.com';
 const home = join(homedir(), '.genie');
@@ -61,6 +69,8 @@ const sudo = (...args) => quiet('sudo', '-n', ...args);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const hostPid = () => { try { return JSON.parse(readFileSync(join(runtime, 'host.json'), 'utf8')).pid; } catch { return null; } };
 const json = (file) => JSON.parse(readFileSync(file, 'utf8'));
+/** On Windows a mode means nothing: who the ACL names does. SYSTEM and Administrators are what such a file inherited (src/main/private-credentials.ts). */
+const openToOthers = (file) => /\b(SYSTEM|Administrators|Everyone|Users|Authenticated Users)\b/.test(execFileSync('icacls', [file], { encoding: 'utf8' }).split(/\r?\n/).filter((line) => !/^Successfully/.test(line)).join('\n').replaceAll(file, ''));
 const sha = (file) => createHash('sha256').update(readFileSync(file)).digest('hex');
 
 // The keychain, read the way the host reads it. With nothing on the bus the library throws from its constructor.
@@ -137,7 +147,7 @@ class Cdp {
 async function launch(command, args) {
     const env = { ...process.env, XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0' };
     delete env.ELECTRON_RUN_AS_NODE;
-    window = spawn(command, [...args, '--no-sandbox', '--ozone-platform=x11', `--remote-debugging-port=${PORT}`], { env, stdio: 'ignore' });
+    window = spawn(command, [...args, ...WINDOW_ARGS, `--remote-debugging-port=${PORT}`], { env, stdio: 'ignore' });
     const page = await until('a window on the debugger port', 90_000, async () => {
         try { return (await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json()).find((t) => t.type === 'page' && t.webSocketDebuggerUrl) ?? null; } catch { return null; }
     });
@@ -206,7 +216,7 @@ app.whenReady().then(() => {
         rmSync(output, { force: true });
         const env = { ...process.env, SEALER_IN: input, SEALER_OUT: output, XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0' };
         delete env.ELECTRON_RUN_AS_NODE;
-        execFileSync(binary, ['--no-sandbox', '--ozone-platform=x11', '--password-store=gnome-libsecret', `--user-data-dir=${join(work, 'sealer-data')}`], { env, stdio: 'ignore', timeout: 60_000 });
+        execFileSync(binary, [...WINDOW_ARGS, ...(WINDOWS ? [] : ['--password-store=gnome-libsecret', `--user-data-dir=${join(work, 'sealer-data')}`])], { env, stdio: 'ignore', timeout: 60_000 });
         const result = json(output);
         rmSync(input, { force: true });
         rmSync(output, { force: true });
@@ -225,7 +235,7 @@ app.whenReady().then(() => {
     throw new Error(`no name opened beta.56's seal: ${tried.join('; ')}`);
 }
 function binaryIn(root) {
-    const found = ['genie', 'Genie', 'ai.tynn.genie'].map((name) => join(root, name)).find((file) => existsSync(file));
+    const found = ['genie', 'Genie', 'ai.tynn.genie', 'Genie.exe', 'genie.exe'].map((name) => join(root, name)).find((file) => existsSync(file));
     if (!found) throw new Error(`no Genie binary in ${root}: ${readdirSync(root).slice(0, 30).join(', ')}`);
     return found;
 }
@@ -248,17 +258,25 @@ const TOKENS = /gpk_[0-9A-Za-z]{26}|rpk_[0-9A-Za-z]{26}|ghu_[0-9A-Za-z]{8}|ghr_[
 
 try {
     say('the alias: tynn.ai must be tynn.gen on this machine');
-    const resolved = execFileSync('getent', ['hosts', 'tynn.ai'], { encoding: 'utf8' }).trim().split(/\s+/)[0];
+    const { address: resolved } = await lookup('tynn.ai');
     if (resolved !== '127.0.0.1' && resolved !== '::1') throw new Error(`tynn.ai resolves to ${resolved}: the alias is not up, and this would reach production`);
     check(true, '0-tynn-ai-is-the-alias', resolved);
 
     say('the real beta.56');
-    const image = join(work, 'beta56.AppImage');
+    const image = join(work, WINDOWS ? 'beta56-setup.exe' : 'beta56.AppImage');
     if (process.env.BETA56_APPIMAGE && existsSync(process.env.BETA56_APPIMAGE)) cpSync(process.env.BETA56_APPIMAGE, image);
     else execFileSync('curl', ['-fsSL', '-o', image, APPIMAGE_URL], { timeout: 300_000 });
     chmodSync(image, 0o755);
-    execFileSync(image, ['--appimage-extract'], { cwd: work, stdio: 'ignore', timeout: 180_000 });
-    const root = join(work, 'squashfs-root');
+    let root;
+    if (WINDOWS) {
+        // One-click and per-user: `/S` installs under %LOCALAPPDATA%\\Programs, as a person's would, and runs nothing.
+        execFileSync(image, ['/S'], { stdio: 'ignore', timeout: 300_000 });
+        root = await until('the installed app', 60_000, () => ['genie', 'Genie'].map((name) => join(process.env.LOCALAPPDATA, 'Programs', name)).find((dir) => existsSync(dir)) ?? null);
+        if (!root) throw new Error('the installer left nothing under Programs');
+    } else {
+        execFileSync(image, ['--appimage-extract'], { cwd: work, stdio: 'ignore', timeout: 180_000 });
+        root = join(work, 'squashfs-root');
+    }
     check(existsSync(binaryIn(root)), '1-beta56-unpacked', statSync(image).size + ' bytes');
     const before = await launch(binaryIn(root), []);
     const version = await before.evaluate('window.genie.updates?.state?.().then((s) => s?.currentVersion ?? s?.version ?? null).catch(() => null)');
@@ -315,30 +333,34 @@ try {
     mkdirSync(join(home, 'terminal-snapshots'), { recursive: true });
     writeFileSync(join(home, 'terminal-snapshots', 'one.txt'), 'pasted-in-a-terminal');
     const loose = ['services.json', 'remote-devices.json', 'app-inbox.json'].map((name) => join(runtime, name)).filter((file) => existsSync(file));
-    for (const file of loose) chmodSync(file, 0o644);
-    say(`0644 on: ${loose.map((f) => f.slice(home.length + 1)).join(', ') || 'none of the three existed'}`);
+    if (WINDOWS) check(loose.length > 0 && loose.every(openToOthers), '6-CONTROL-the-loose-files-are-open-to-others', loose.map((f) => f.slice(home.length + 1)).join(', ') || 'none of the three existed');
+    else for (const file of loose) chmodSync(file, 0o644);
+    say(`${WINDOWS ? 'inherited ACL' : '0644'} on: ${loose.map((f) => f.slice(home.length + 1)).join(', ') || 'none of the three existed'}`);
     const sealsBefore = scan(SEALS);
     check(sealsBefore.includes(join('credentials', 'tynn.json')) && sealsBefore.includes('github.json'), '6-CONTROL-the-scan-finds-the-seals', sealsBefore.join(', '));
 
-    say('S8: no keychain. The new build, with the Secret Service unable to start');
-    stopKeyring();
-    await until('the daemon to go', 15_000, () => !bus().owned);
-    hideActivation();
-    const gone = await until('the bus to forget it', 15_000, () => { const b = bus(); return !b.owned && !b.activatable; });
-    check(Boolean(gone), 'S8.0-CONTROL-the-bus-cannot-start-it', bus().line || 'not listed');
-    {
-        const cdp = await launchNew();
-        const carded = await until('the card', 60_000, async () => (await features(cdp)).keyring);
-        check(carded?.state === 'not-running', 'S8.1-settings-offers-the-keyring', JSON.stringify(carded));
-        await sleep(5_000);
-        cdp.close();
-        await stopApp();
+    if (WINDOWS) say('S8 does not run on Windows: see the header');
+    else {
+        say('S8: no keychain. The new build, with the Secret Service unable to start');
+        stopKeyring();
+        await until('the daemon to go', 15_000, () => !bus().owned);
+        hideActivation();
+        const gone = await until('the bus to forget it', 15_000, () => { const b = bus(); return !b.owned && !b.activatable; });
+        check(Boolean(gone), 'S8.0-CONTROL-the-bus-cannot-start-it', bus().line || 'not listed');
+        {
+            const cdp = await launchNew();
+            const carded = await until('the card', 60_000, async () => (await features(cdp)).keyring);
+            check(carded?.state === 'not-running', 'S8.1-settings-offers-the-keyring', JSON.stringify(carded));
+            await sleep(5_000);
+            cdp.close();
+            await stopApp();
+        }
+        const sealsDuring = scan(SEALS);
+        check(sealsBefore.every((file) => sealsDuring.includes(file)), 'S8.2-the-seals-stayed', sealsDuring.join(', '));
+        putBack();
+        quiet('systemctl', '--user', 'start', 'gnome-keyring-daemon.socket');
+        check((await held('tynn/pairing')) === null, 'S8.3-and-nothing-moved', 'tynn/pairing is not in the keychain');
     }
-    const sealsDuring = scan(SEALS);
-    check(sealsBefore.every((file) => sealsDuring.includes(file)), 'S8.2-the-seals-stayed', sealsDuring.join(', '));
-    putBack();
-    quiet('systemctl', '--user', 'start', 'gnome-keyring-daemon.socket');
-    check((await held('tynn/pairing')) === null, 'S8.3-and-nothing-moved', 'tynn/pairing is not in the keychain');
 
     say('the upgrade: the new build, with the keychain answering');
     const cdp = await launchNew();
@@ -354,8 +376,8 @@ try {
     check(name === who, 'S1-the-sign-in-survived-with-no-pairing', `${name}; beta.56 said ${who}`);
     const scrollback = ['terminal-snapshots.json', 'terminal-snapshots'].filter((file) => existsSync(join(home, file)));
     check(scrollback.length === 0, 'S9.1-the-scrollback-is-gone', scrollback.join(', ') || 'none');
-    const modes = loose.map((file) => [file.slice(home.length + 1), (statSync(file).mode & 0o777).toString(8)]);
-    check(loose.length > 0 && modes.every(([, mode]) => mode === '600'), 'S9.2-the-modes-are-right', modes.map((m) => m.join(' ')).join(', ') || 'none of the three existed, so this proved nothing');
+    const modes = loose.map((file) => [file.slice(home.length + 1), WINDOWS ? (openToOthers(file) ? 'open' : 'owner-only') : (statSync(file).mode & 0o777).toString(8)]);
+    check(loose.length > 0 && modes.every(([, mode]) => mode === (WINDOWS ? 'owner-only' : '600')), 'S9.2-the-modes-are-right', modes.map((m) => m.join(' ')).join(', ') || 'none of the three existed, so this proved nothing');
     for (const [host, id] of Object.entries(before11)) check(json(workstationFile)[host]?.workstationId === id, 'S11.1-the-workstation-keeps-its-id', `${host}: ${id}`);
     const bookFile = join(home, 'keychain-migration.json');
     const book = existsSync(bookFile) ? json(bookFile).secrets ?? {} : {};
