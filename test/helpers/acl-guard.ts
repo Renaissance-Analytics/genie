@@ -17,15 +17,33 @@ export function checkAclLines(warned: unknown[][], testPath: string | undefined,
 }
 
 export interface Moment { readonly monotonicMs: number; readonly wallMs: number }
-export const END_OF_FILE_HOOK_MS = 10_000;
 
-// RED: what the guard does today, moved here whole so the tests below can reach it.
+/**
+ * THE GUARD'S OWN CLOCK, HELD FROM LOAD. This module loads in the setup file, before any test can mock a timer, and these references are what it uses from then on. It asks one question, about
+ * ACL lines, so nothing about time may fail a file: not fake timers left on (the global setTimeout never fires), and not a stalled worker (vitest fails a hook that ran past its time however it
+ * ended, which six workers did on omarchy-test on 2026-11-03, after 10.7 s). 5 minutes is the outer limit for a wait of 25 ms.
+ */
+const realSetTimeout = globalThis.setTimeout;
+const realMonotonic = performance.now.bind(performance);
+const realWall = Date.now;
+export const END_OF_FILE_HOOK_MS = 300_000;
+const MOMENT_MS = 25;
+/** Longer than this for a wait of 25 ms is worth a line in the log. */
+const STALL_REPORT_MS = 1_000;
+
 async function aMoment(ms: number): Promise<Moment> {
-    await new Promise((r) => setTimeout(r, ms));
-    return { monotonicMs: ms, wallMs: ms };
+    const monotonic = realMonotonic();
+    const wall = realWall();
+    await new Promise((r) => realSetTimeout(r, ms));
+    return { monotonicMs: Math.round(realMonotonic() - monotonic), wallMs: realWall() - wall };
 }
 
+/**
+ * The moment, then the check. A stall is not a failure, but it is evidence (genie#1479), so it is said, by both clocks: the two agreeing is a pause, the wall alone is a clock that stepped. A line
+ * is still a failure, stalled or not.
+ */
 export async function endOfFileCheck(warned: unknown[][], testPath: string | undefined, options: { moment?: (ms: number) => Promise<Moment>; report?: (line: string) => void } = {}): Promise<void> {
-    await (options.moment ?? aMoment)(25);
+    const { monotonicMs, wallMs } = await (options.moment ?? aMoment)(MOMENT_MS);
+    if (monotonicMs >= STALL_REPORT_MS || wallMs >= STALL_REPORT_MS) options.report?.(`TEST_CLOCK_STALL the guard's ${MOMENT_MS} ms wait took ${monotonicMs} ms monotonic, ${wallMs} ms wall, ending ${new Date(realWall()).toISOString()}, ${testPath ?? 'no test file'}`);
     checkAclLines(warned, testPath, 'at the end of this file');
 }
