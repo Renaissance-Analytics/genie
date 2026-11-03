@@ -394,7 +394,10 @@ try {
         let through = false;
         for (let i = 0; i < 45 && !through; i += 1) { through = (await workstation(wrong))?.relay?.state === 'reachable'; await sleep(1000); }
         const after = await workstation(wrong);
-        check(!through, 'S11.4-CONTROL-another-key-under-that-id-does-not-get-on', JSON.stringify(after?.relay ?? null));
+        // Refused BECAUSE of the key. "Could not be reached" is the network, and batch FF's control passed on exactly that, proving nothing.
+        const reason = String(after?.relay?.reason ?? '');
+        const refused = after?.registered === false || (after?.relay?.state === 'unavailable' && reason !== '' && !/could not be reached/i.test(reason));
+        check(!through && refused, 'S11.4-CONTROL-another-key-under-that-id-is-refused', JSON.stringify({ registered: after?.registered ?? null, id: after?.workstationId === seen?.workstationId ? 'the same' : 'another', relay: after?.relay ?? null }));
         wrong.close();
         await stopApp();
         await keep(name, moved);
