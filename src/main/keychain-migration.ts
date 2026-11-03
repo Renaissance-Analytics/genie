@@ -124,6 +124,9 @@ export function migrateSecrets(sources: readonly MigrationSource[], vault: HostV
     return work;
 }
 
+// RED: the shape only.
+export function stuckLines(_outcomes: readonly MigrationOutcome[], _said: Set<string>): string[] { return []; }
+
 /** The host's half, over its keychain. It reads and compares here, and answers in one word. */
 export function hostVault(keychain: Pick<Keychain, 'get' | 'set'>): HostVault {
     return {
