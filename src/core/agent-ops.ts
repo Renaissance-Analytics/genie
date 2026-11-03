@@ -189,7 +189,7 @@ export function applyOutcome(agentName: string, what: string, apply: ApplyWhen):
  * A Claude agent's TOOL SETTING as the answer to one shell call (genie#1188), read at the moment the permission hook
  * asks: all tools (and no setting) → allow, nobody asked; ask → park it for the person; edits only → refuse.
  */
-export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined): 'allow' | 'deny' | 'ask' {
+export function permissionDecisionFor(permissions: 'all' | 'ask' | 'edits' | undefined, _where: { readonly untrusted?: boolean } = {}): 'allow' | 'deny' | 'ask' {
     if (permissions === 'ask') return 'ask';
     if (permissions === 'edits') return 'deny';
     return 'allow';

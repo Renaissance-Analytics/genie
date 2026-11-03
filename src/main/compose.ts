@@ -284,6 +284,8 @@ export interface ComposedServices {
     readonly envelopeSites: EnvelopeSites;
     /** What each workspace's own files say would run, and whether the person has said yes to it. */
     readonly workspaceTrust: WorkspaceTrust;
+    /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
+    untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
     readonly engines: ServiceRegistry;
     /**
@@ -1170,6 +1172,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         sites,
         envelopeSites,
         workspaceTrust,
+        untrustedFilesFor: async () => null,
         engines,
         engineReconcile,
         envFiles,

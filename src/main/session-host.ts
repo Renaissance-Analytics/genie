@@ -123,7 +123,7 @@ import { sessionsDir } from './paths.js';
 
 /** Injected so a test can run this host without spawning a provider CLI. */
 /** `extras.mcpServers`: the MCP servers this session starts with (Genie's own, with the agent's caller key). */
-export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
+export type DriverFor = (record: AgentRecord, cwd: string, resumeSessionId: string | null, extras?: { mcpServers?: readonly McpServer[]; untrusted?: GenieInstructionFiles; serviceEnv?: Readonly<Record<string, string>> }) => SessionDriverFactory | null;
 
 /**
  * THE AGENT'S SERVICE VARIABLES, AS PRISM-ACP TAKES THEM (the owner, 2026-10-16: "ONLY let through Genie-managed
@@ -354,6 +354,17 @@ export const realListModels: ListProviderModels = (provider) =>
 /** How often a held login is read again while it waits (genie#1195). */
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
+/** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
+export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string }
+
+export function claudeTrustOptions(_launch: { readonly binaryArgs?: readonly string[] }, _untrusted: GenieInstructionFiles | null): { settingSources?: readonly ('user' | 'project' | 'local')[]; strictMcpConfig?: boolean; binaryArgs?: readonly string[] } {
+    return {};
+}
+
+export function codexRecordFor<T extends { readonly autoApprove?: boolean }>(record: T, _untrusted: GenieInstructionFiles | null): T {
+    return record;
+}
+
 export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) => {
     const resume = resumeSessionId ? { resumeSessionId } : {};
     const mcp = extras?.mcpServers && extras.mcpServers.length > 0 ? { mcpServers: extras.mcpServers } : {};
@@ -501,6 +512,8 @@ export class SessionHost {
          * the MCP server starts after the host. Absent = none.
          */
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
+        /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
+        untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
