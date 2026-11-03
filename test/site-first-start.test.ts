@@ -22,7 +22,7 @@ const manifestOf = (sites: Record<string, unknown>) => JSON.stringify({ name: 'A
 /** What survives a launch: the files, and the record on this machine. Each `launch()` is a new Genie over them. */
 function machine(files: Record<string, string>, over: { record?: unknown; recordUnreadable?: boolean; missing?: string[] } = {}) {
     const fs = new Map(Object.entries(files));
-    const state = { record: over.record ?? null, saves: 0, stops: [] as string[], missing: new Set(over.missing ?? []) };
+    const state = { record: over.record ?? null, saves: 0, stops: [] as string[], missing: new Set(over.missing ?? []), saveFails: false };
     const launch = () => {
         const opened: string[] = [];
         const logs: string[] = [];
@@ -41,7 +41,7 @@ function machine(files: Record<string, string>, over: { record?: unknown; record
             runState: { load: async () => state.stops, save: async (s) => { state.stops = [...s]; } },
             trust: {
                 load: async () => { if (over.recordUnreadable && state.saves === 0) throw new Error('not valid JSON'); return state.record; },
-                save: async (book) => { state.record = JSON.parse(JSON.stringify(book)); state.saves += 1; },
+                save: async (book) => { if (state.saveFails) throw new Error('EROFS: read-only file system'); state.record = JSON.parse(JSON.stringify(book)); state.saves += 1; },
             },
             envFor: () => ({}),
             log: (l) => logs.push(l),
@@ -389,10 +389,15 @@ describe('a record that cannot be believed asks rather than assumes', () => {
         const m = await settled(webFiles());
         const g = m.launch();
         await g.envelope.sync([acme]);
-        const original = m.state.saves;
-        expect(original).toBeGreaterThan(0);
+        m.state.saveFails = true;
         await g.envelope.start(g.sites.list()[0]!.id, { person: true });
         expect(g.ran('serve-it')).toBe(true);
+        expect(g.logs.join('\n')).toMatch(/could not be saved/);
+        // It was not recorded, so the next launch asks again rather than assuming.
+        m.state.saveFails = false;
+        const next = m.launch();
+        await next.envelope.sync([acme]);
+        expect(next.ran('serve-it')).toBe(false);
     });
 });
 
