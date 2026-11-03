@@ -24,7 +24,8 @@ import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PHP_RECIPES, phpIniContents, type PhpPlatform } from '../../src/core/php-versions.js';
 import * as phpVersions from '../../src/main/php-versions.js';
-import { httpFetch, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+import { httpFetchOver, installPhpVersion, nodePhpVersionsFs, phpVersionsRoot } from '../../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import * as toolchainOps from '../../src/main/toolchain-ops.js';
 import { nodeToolchainFs } from '../../src/main/toolchain-ops.js';
 import { execFileRunner } from '../../src/main/toolchain-runner.js';
@@ -96,7 +97,7 @@ async function main(): Promise<void> {
     console.log(`genie#1334 live — ${platform}, PHP ${version} through Genie's installer, into ${root}; CA port ${ca ? 'present' : 'ABSENT (a tree without the fix)'}`);
 
     const outcome = await installPhpVersion(version, true, {
-        platform, root, fs: nodePhpVersionsFs(), run, fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, cpus: availableParallelism(),
+        platform, root, fs: nodePhpVersionsFs(), run, fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, cpus: availableParallelism(),
         progress: (s) => { if (s) console.log(`    … ${s}`); },
         ...(ca ? { ca } : {}),
     } as Parameters<typeof installPhpVersion>[2]);
