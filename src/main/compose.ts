@@ -859,12 +859,13 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         envFor: (workspaceId) => engines.envFor(workspaceId),
         log: (line) => console.error(line),
     });
+    // A site waiting for its first start here is not configured yet: the person's Start is what asks for its name.
     // CONFIGURED, not running (genie#624): a site that exists resolves whether or not it is up, so a start or a stop never
     // moves the hosts file. Unioned with what is up only so a name Caddy serves always resolves (a site started by
     // hand that its envelope declares disabled).
     const configuredHosts = (): string[] => [
         ...new Set([
-            ...sites.list().filter((s) => s.state !== 'unservable' && !envelopeSites.disabled(s.id)).map((s) => s.host),
+            ...sites.list().filter((s) => s.state !== 'unservable' && s.firstStart === undefined && !envelopeSites.disabled(s.id)).map((s) => s.host),
             ...routes().map((r) => r.host),
         ]),
     ];
