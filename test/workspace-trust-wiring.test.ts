@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -111,5 +111,7 @@ describe('the env files', () => {
         const waiting = site({ id: 'waiting', firstStart: { runs: 'x', folder: '.', changed: false } });
         const running = site({ id: 'running' });
         expect(envFileSites([waiting, running]).map((s) => s.id)).toEqual(['running']);
+        // And it is what the composition gives the env files, which the row above cannot see.
+        expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/sites: \(\) => envFileSites\(sites\.list\(\)\)/);
     });
 });

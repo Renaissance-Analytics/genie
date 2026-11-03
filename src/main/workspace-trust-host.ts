@@ -26,6 +26,8 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [] };
 const OUR_SERVERS: ReadonlySet<string> = new Set(['genie', 'tynn', 'genie-agentinbox-channel']);
+/** Settings that run nothing, and that Claude Code itself rewrites as a person works: on the list, each approval would ask again. */
+const SETTINGS_THAT_RUN_NOTHING: ReadonlySet<string> = new Set(['permissions', 'model', 'outputStyle', 'includeCoAuthoredBy', 'cleanupPeriodDays']);
 
 function settingsRows(file: string, text: string): TrustHook[] {
     let parsed: unknown;
@@ -33,6 +35,7 @@ function settingsRows(file: string, text: string): TrustHook[] {
     if (!isRecord(parsed)) return [{ file, event: 'unreadable', command: text.slice(0, 4000) }];
     const rows: TrustHook[] = [];
     for (const [key, value] of Object.entries(parsed)) {
+        if (SETTINGS_THAT_RUN_NOTHING.has(key)) continue;
         if (key !== 'hooks' || !isRecord(value)) { rows.push({ file, event: key, command: JSON.stringify(value) }); continue; }
         for (const [event, entries] of Object.entries(value)) {
             for (const entry of Array.isArray(entries) ? entries : [entries]) {

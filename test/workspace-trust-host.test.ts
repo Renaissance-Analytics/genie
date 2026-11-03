@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseTrustBook } from '../src/core/envelope-sites.js';
 import type { GitConfigEntry } from '../src/core/workspace-trust.js';
+import { configSyncTargets } from '../src/main/config-sync-targets.js';
 import { WorkspaceTrust, readTrustList, type TrustListPorts } from '../src/main/workspace-trust-host.js';
 
 /** What a workspace's own files say would run, and the one verdict everything reads. Invented names; the files are a map. */
@@ -51,6 +52,22 @@ describe('the list', () => {
         }));
         expect(list.hooks).toHaveLength(2);
         expect(list.servers).toEqual([{ file: '.mcp.json', name: 'genie', command: 'node theirs.js' }, { file: '.codex/config.toml', name: 'tynn', command: 'node theirs.js' }]);
+    });
+
+    it("everything Genie's real writer puts in a workspace is left off, with a token and without: Genie's own files never make it ask", async () => {
+        for (const GENIE_MCP_TOKEN of ['aB3-_.~+/=', '']) {
+            const files = new Map<string, string>();
+            const targets = configSyncTargets({ workspacePath: W, fs: { read: async (p) => files.get(p) ?? null, write: async (p, text) => { files.set(p, text); } }, flags: { mcp_sync_claude: true, mcp_sync_cursor: true, mcp_sync_codex: true, mcp_sync_hooks: true } });
+            for (const target of targets) await target.write({ GENIE_MCP_URL: 'http://127.0.0.1:43127/mcp', GENIE_MCP_TOKEN });
+            expect(files.has(at('.claude', 'settings.local.json'))).toBe(true);
+            expect(files.has(at('.mcp.json'))).toBe(true);
+            expect(await readTrustList(W, { readText: async (p) => files.get(p) ?? null, gitConfig: async () => [] })).toEqual({ sites: [], hooks: [], servers: [], gitKeys: [] });
+        }
+    });
+
+    it('what Claude Code itself records as a person works runs nothing, and changing it does not ask again', async () => {
+        const list = await readTrustList(W, ports({ [at('.claude', 'settings.local.json')]: JSON.stringify({ permissions: { allow: ['Bash(npm test)'] }, model: 'x' }) }));
+        expect(list.hooks).toEqual([]);
     });
 
     it('reads a server from Codex config too', async () => {
