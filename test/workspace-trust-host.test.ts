@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseTrustBook } from '../src/core/envelope-sites.js';
 import { trustHash, type GitConfigEntry } from '../src/core/workspace-trust.js';
@@ -57,7 +57,7 @@ describe('the list', () => {
     it("everything Genie's real writer puts in a workspace is left off, with a token and without: Genie's own files never make it ask", async () => {
         for (const GENIE_MCP_TOKEN of ['aB3-_.~+/=', '']) {
             const files = new Map<string, string>();
-            const targets = configSyncTargets({ workspacePath: W, fs: { read: async (p) => files.get(p) ?? null, write: async (p, text) => { files.set(p, text); } }, flags: { mcp_sync_claude: true, mcp_sync_cursor: true, mcp_sync_codex: true, mcp_sync_hooks: true } });
+            const targets = configSyncTargets({ workspacePath: W, fs: { read: async (p) => files.get(normalize(p)) ?? null, write: async (p, text) => { files.set(normalize(p), text); } }, flags: { mcp_sync_claude: true, mcp_sync_cursor: true, mcp_sync_codex: true, mcp_sync_hooks: true } });
             for (const target of targets) await target.write({ GENIE_MCP_URL: 'http://127.0.0.1:43127/mcp', GENIE_MCP_TOKEN });
             expect(files.has(at('.claude', 'settings.local.json'))).toBe(true);
             expect(files.has(at('.mcp.json'))).toBe(true);
