@@ -4,7 +4,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
-import { migrateSecrets, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import { fileMigrationBook, gatherSources, migrateSecrets, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
+import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
 import { hostTynnPorts } from '../src/main/host-tynn-account.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
@@ -378,6 +379,33 @@ describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.jso
         const read = await tynnPairingSource({ file, cipher: { decrypt: () => { throw new Error('Error while decrypting'); } }, store: strictStore, log: (l) => lines.push(l) }).old.read();
         expect(read.kind).toBe('unreadable');
         expect(lines.join('\n')).toMatch(/tynn\/pairing.*Error while decrypting/);
+    });
+
+    it('a corrupt agents.json does not stop the sign-in: the pairing moves and the account opens signed in; the agents file stays, and answers by its own name', async () => {
+        writeFileSync(file, record(TOKEN));
+        const agents = join(dirname(file), 'agents.json');
+        writeFileSync(agents, '{ not json');
+        const k = keychainFake();
+        const sources = await gatherSources([
+            { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnAgentIdentities({ file: agents, secrets: k as never }).legacyKeys(cipher) },
+            { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => [tynnPairingSource({ file, cipher, store: strictStore })] },
+        ]);
+        expect(await migrateSecrets(sources, vaultOver(k) as never, memoryBook())).toEqual([{ name: 'agents.json', status: 'old-copy-unreadable' }, { name: 'tynn/pairing', status: 'moved' }]);
+        expect(k.held.get('tynn/pairing')).toBe(TOKEN);
+        expect(readFileSync(agents, 'utf8')).toBe('{ not json');
+        // It survives: the real account, opened over what is left.
+        const account = await open(k, tynnFake());
+        expect(account.status()).toMatchObject({ signedIn: true });
+    });
+
+    it('a corrupt book does not stop the sign-in: the pairing moves and the account opens signed in', async () => {
+        writeFileSync(file, record(TOKEN));
+        const bookFile = join(dirname(file), 'keychain-migration.json');
+        writeFileSync(bookFile, '{ not json');
+        const k = keychainFake();
+        expect(await migrateSecrets([tynnPairingSource({ file, cipher, store: strictStore })], vaultOver(k) as never, fileMigrationBook(bookFile))).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
+        expect(k.held.get('tynn/pairing')).toBe(TOKEN);
+        expect((await open(k, tynnFake())).status()).toMatchObject({ signedIn: true });
     });
 
     it('CONTROL: only the older file: it still comes across, as it always did', async () => {

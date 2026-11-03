@@ -1,5 +1,5 @@
 import { MAX_SECRET_CHARS } from '../src/main/keychain.js';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -442,21 +442,19 @@ describe('the book on disk', () => {
         expect((await book.read())[NAME]).toBe('done');
     });
 
-    it('a file that cannot be understood REJECTS: it is not an empty book', async () => {
+    it('a book from a newer Genie REJECTS: it is not an empty one, and it is not ours', async () => {
         const file = join(dir, 'keychain-migration.json');
-        writeFileSync(file, '{ not json');
-        await expect(fileMigrationBook(file).read()).rejects.toThrow();
         writeFileSync(file, JSON.stringify({ version: 99, secrets: {} }));
-        await expect(fileMigrationBook(file).read()).rejects.toThrow();
-        writeFileSync(file, JSON.stringify({ version: 1, secrets: { [NAME]: 'perhaps' } }));
         await expect(fileMigrationBook(file).read()).rejects.toThrow();
     });
 
-    it('writes on an unreadable book are refused too, so they cannot wipe what it said', async () => {
+    it('a write on a book that does not parse keeps the bad file beside it, and rebuilds', async () => {
         const file = join(dir, 'keychain-migration.json');
         writeFileSync(file, '{ not json');
-        await expect(fileMigrationBook(file).write(NAME, 'done')).rejects.toThrow();
-        expect(readFileSync(file, 'utf8')).toBe('{ not json');
+        await fileMigrationBook(file).write(NAME, 'done');
+        expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ version: 1, rebuilt: true, secrets: { [NAME]: 'done' } });
+        const kept = readdirSync(dir).find((name) => name.startsWith('keychain-migration.json.corrupt-'));
+        expect(readFileSync(join(dir, kept!), 'utf8')).toBe('{ not json');
     });
 
     it('holds names and states only', async () => {
@@ -477,9 +475,9 @@ describe('each secret switches on with its reader', () => {
         }
         const compose = strip(readFileSync('src/main/compose.ts', 'utf8'));
         expect(compose.match(/migrateSecrets\(/g)).toHaveLength(1);
-        expect(compose).toMatch(/const sources = \[\.\.\.await tynnTokens\.legacyKeys\(tynnCipher\), \.\.\.\(await input\.legacySecrets\?\.\(\) \?\? \[\]\)\];/);
+        expect(compose).toMatch(/const sources = await gatherSources\(\[[\s\S]*?tynnTokens\.legacyKeys\(tynnCipher\)[\s\S]*?input\.legacySecrets\?\.\(\)/);
         // The accounts' tokens join in main.ts, with their readers in the host.
-        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/legacySecrets: async \(\) => \{\s*await settleStaleLegacyPairing\([\s\S]*?return \[\s*tynnPairingSource\([\s\S]*?githubSealedSources\(/);
+        expect(strip(readFileSync('src/main/main.ts', 'utf8'))).toMatch(/legacySecrets: \(\) => gatherSources\(\[[\s\S]*?settleStaleLegacyPairing\([\s\S]*?tynnPairingSource\([\s\S]*?githubSealedSources\([\s\S]*?workstationSealedSources\(/);
     });
 
     it('it has no fallback to write to: the engine touches no file but its book', () => {

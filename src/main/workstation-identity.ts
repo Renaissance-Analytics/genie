@@ -1,7 +1,7 @@
 import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, sign } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
-import type { MigrationSource, OldRead } from './keychain-migration.js';
+import { basename, dirname } from 'node:path';
+import { unreadableFile, type MigrationSource, type OldRead } from './keychain-migration.js';
 import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
 
 /**
@@ -145,6 +145,14 @@ export async function workstationSealedSources(options: { file: string; cipher: 
             return parsed && typeof parsed === 'object' ? (parsed as IdentityFile) : {};
         } catch { return {}; }
     };
+    // Read for itself: "no file" is known absent, anything else that stops the read is not. `load` stays forgiving for the steps after this one.
+    try {
+        const parsed = JSON.parse(await readFile(options.file, 'utf8')) as unknown;
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [unreadableFile(basename(options.file), 'workstation/')];
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        return [unreadableFile(basename(options.file), 'workstation/')];
+    }
     const all = await load();
     return Object.entries(all).filter(([, row]) => typeof row?.keyEnc === 'string' && row.keyEnc !== '').map(([host]) => ({
         name: entryFor(host),

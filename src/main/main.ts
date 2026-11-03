@@ -78,7 +78,7 @@ import { reportProxyAnswers } from './proxy-report.js';
 import type { SessionEngineClient } from './session-engine-client.js';
 import type { TynnAccountReplica } from './tynn-account-replica.js';
 import { Keychain } from './keychain.js';
-import { hostVault } from './keychain-migration.js';
+import { gatherSources, hostVault } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
 import { deviceLinkGate } from './device-link-gate.js';
@@ -2813,14 +2813,14 @@ async function boot(): Promise<void> {
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
         secretsLog: (line) => keychainLog(line),
-        legacySecrets: async () => {
-            await settleStaleLegacyPairing({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), log: (line) => keychainLog(line) });
-            return [
-                tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) }),
-                ...await githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }),
-                ...await workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }),
-            ];
-        },
+        legacySecrets: () => gatherSources([
+            { file: 'tynn.json', covers: 'tynn/pairing', sources: async () => {
+                await settleStaleLegacyPairing({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), log: (line) => keychainLog(line) }).catch(() => {});
+                return [tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })];
+            } },
+            { file: 'github.json', covers: 'github/', sources: () => githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }) },
+            { file: 'workstation.json', covers: 'workstation/', sources: () => workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }) },
+        ]),
         onSecretsMoved: () => {
             void githubAccount?.reload().catch(() => {});
             void registerWorkstationNow?.();

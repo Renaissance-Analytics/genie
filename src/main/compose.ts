@@ -42,7 +42,7 @@ import { configSyncTargets, writeAgentProtocol } from './config-sync-targets.js'
 import { tynnAgentTokens, type TynnSessionPort } from './tynn-agent-token.js';
 import { agentTynnPrep } from './agent-tynn-prep.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
-import { fileMigrationBook, migrateSecrets, type HostVault, type MigrationSource } from './keychain-migration.js';
+import { fileMigrationBook, gatherSources, migrateSecrets, stuckLines, type HostVault, type MigrationSource } from './keychain-migration.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
 import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginHost } from './plugin-host.js';
@@ -1028,23 +1028,26 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
      * that loses this window still has them; and awaited before a key is read. What could not move is tried again next time.
      */
     let keysMoved: Promise<void> | null = null;
+    const stuckSaid = new Set<string>();
     const moveAgentKeys = (): Promise<void> => keysMoved ??= (async () => {
         const { tynnCipher, tynnVault } = input;
         if (!tynnCipher || !tynnVault) return;
-        const sources = [...await tynnTokens.legacyKeys(tynnCipher), ...(await input.legacySecrets?.() ?? [])];
+        const sources = await gatherSources([
+            { file: 'agents.json', covers: 'tynn/agent/', sources: () => tynnTokens.legacyKeys(tynnCipher) },
+            { file: 'legacy secrets', covers: '', sources: async () => (await input.legacySecrets?.()) ?? [] },
+        ]);
         const outcomes = await migrateSecrets(sources, tynnVault, migrationBook);
         if (outcomes.some((o) => o.status === 'moved')) input.onSecretsMoved?.();
-        const stuck = outcomes.filter((o) => !['moved', 'nothing', 'already'].includes(o.status));
-        const say = (line: string): void => { console.error(line); input.secretsLog?.(line); };
-        for (const o of stuck) say(`[keychain] ${o.name} stays where it was: ${o.status}`);
-        if (stuck.length > 0) keysMoved = null;
+        const stuck = outcomes.some((o) => !['moved', 'nothing', 'already'].includes(o.status));
+        for (const line of stuckLines(outcomes, stuckSaid)) { console.error(line); input.secretsLog?.(line); }
+        if (stuck) keysMoved = null;
     })().catch((error: unknown) => {
         keysMoved = null;
         const line = `[keychain] secrets could not be moved: ${error instanceof Error ? error.message : String(error)}`;
         console.error(line);
         input.secretsLog?.(line);
     });
-    const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'));
+    const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'), { log: (line) => { console.error(line); input.secretsLog?.(line); } });
     void moveAgentKeys();
     // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
     const withConfig = configWriter();

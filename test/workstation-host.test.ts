@@ -280,7 +280,7 @@ describe('where it is wired', () => {
     it('with a host, main asks it; only its own engine holds a key here', () => {
         const main = strip(readFileSync('src/main/main.ts', 'utf8'));
         expect(main).toMatch(/agentEngineLink\s*\?\s*agentEngineLink\.client\.workstation\(\)/);
-        expect(main).toMatch(/\.\.\.await workstationSealedSources\(/);
+        expect(main).toMatch(/sources: \(\) => workstationSealedSources\(/);
         expect(strip(readFileSync('src/main/genie-host.ts', 'utf8'))).toMatch(/new WorkstationService\(/);
         expect(strip(readFileSync('src/main/workstation-replica.ts', 'utf8'))).not.toMatch(/privateKeyPem/);
     });
