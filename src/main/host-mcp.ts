@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from 'node:fs';
+import { writeTextPrivate } from './store.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { livenessOf } from '../core/liveness.js';
 import type { AgentId, AgentRecord } from '../core/identity.js';
@@ -162,7 +163,7 @@ export function startHostMcp(ports: HostMcpPorts): HostMcp {
                         return typeof v.port === 'number' && typeof v.token === 'string' && v.token.length >= 32 ? { port: v.port, token: v.token } : null;
                     } catch { return null; }
                 },
-                write: (value) => { try { writeFileSync(ports.endpointFile, JSON.stringify(value), { mode: 0o600 }); } catch (error) { ports.log(`mcp: could not remember the endpoint: ${(error as Error).message}`); } },
+                write: (value) => { void writeTextPrivate(ports.endpointFile, JSON.stringify(value)).catch((error: unknown) => ports.log(`mcp: could not remember its endpoint: ${error instanceof Error ? error.message : String(error)}`)); },
             },
         });
         try {

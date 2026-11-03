@@ -312,8 +312,19 @@ function win32Snapshot(): ProcessInfo[] {
     return parseWin32Snapshot(execFileSync('powershell', WIN32_ARGS, WIN32_OPTIONS), process.pid);
 }
 
+/**
+ * WHO READS IT, WHERE A LONG-LIVED HELPER RUNS (genie-host): 1.8 to 2.2 s a launch, about 65 ms through the helper. Its failure is not the reading's: a launch still answers. The helper is left out of
+ * the reading the same way a scan's own PowerShell is, by the pid the script reports.
+ */
+let win32Reader: ((script: string) => Promise<string>) | null = null;
+export function setWin32ProcessReader(reader: ((script: string) => Promise<string>) | null): void { win32Reader = reader; }
+
 /** The same reading, off the event loop (genie#1201). */
 async function win32SnapshotAsync(): Promise<ProcessInfo[]> {
+    if (win32Reader) {
+        const text = await win32Reader(WIN32_SCRIPT).catch(() => null);
+        if (text !== null) return parseWin32Snapshot(text, process.pid);
+    }
     const { stdout } = await execFileAsync('powershell', WIN32_ARGS, WIN32_OPTIONS);
     return parseWin32Snapshot(stdout, process.pid);
 }

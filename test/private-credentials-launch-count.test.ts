@@ -91,7 +91,10 @@ vi.mock('node:fs/promises', async (original) => {
     } };
 });
 
-import { preparePrivateCredential, setPrivateCredentialFailureLog, writePrivateCredential } from '../src/main/private-credentials.js';
+import { preparePrivateCredential, setPrivateCredentialFailureLog, useAclHelper, writePrivateCredential } from '../src/main/private-credentials.js';
+
+// These drive a launch per write, the path a helper falls back to. Its own count is in test/windows-helper-real.test.ts.
+useAclHelper(null);
 
 const roots: string[] = [];
 function alive(pid: number): boolean {

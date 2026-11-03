@@ -49,6 +49,9 @@ import { machineKeyOf, readMachineId } from './machine-key.js';
 import { execFileText } from './toolchain-runner.js';
 import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
+import { setWin32ProcessReader } from '../core/process-tree.js';
+import { sharedWindowsHelper } from './private-credentials.js';
+import { writeTextPrivate } from './store.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { deviceSocket } from './device-socket.js';
 import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
@@ -140,6 +143,8 @@ async function main(): Promise<void> {
      * kill, an installer — is ended BEFORE any agent starts, from the record only (pid, start time and name must match).
      * A window that adopts a live host never sweeps: that would end the host's own providers.
      */
+    // On Windows, one long-lived PowerShell for this host's process readings and its private files (windows-helper.ts). It ends when this process does, however it does.
+    if (process.platform === 'win32') setWin32ProcessReader((script) => { const helper = sharedWindowsHelper(); return helper ? helper.run(script).completed.then((r) => r.stdout) : Promise.reject(new Error('no helper')); });
     const spawnLedger = SpawnLedger.open(join(runtime, 'children.json'), randomUUID());
     spawnLedger.sweep(systemProcessTree, lifecycleLog);
     // prism-acp's supervisor (a Job Object on Windows) before any agent starts: a provider is never run uncontained.
@@ -565,10 +570,10 @@ async function main(): Promise<void> {
     server.on('connection', (socket) => engine.accept(lineTransport(socket)));
 
     // The token first, then the record that points at it: a window that reads the record can always read the token.
-    writeFileSync(tokenFile, token, { mode: 0o600 });
+    await writeTextPrivate(tokenFile, token);
     if (process.platform !== 'win32') chmodSync(tokenFile, 0o600);
     const record: HostRecord = { pid: process.pid, endpoint, protocol: ENGINE_PROTOCOL, build, startedAt: Date.now() };
-    writeFileSync(recordFile, JSON.stringify(record), { mode: 0o600 });
+    await writeTextPrivate(recordFile, JSON.stringify(record));
     say(`serving ${endpoint} (protocol ${ENGINE_PROTOCOL}, build ${build})`);
 
     async function shutdown(why: string): Promise<void> {

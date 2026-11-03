@@ -45,12 +45,13 @@ describe('launches', () => {
         expect(r.children[0]!.written).toHaveLength(5);
     });
 
-    it('started as today: the same flags, and no PSModulePath, so a planted module cannot load', () => {
+    it('started as today: the same flags, and no PSModulePath, so a planted module cannot load', async () => {
         const before = process.env.PSModulePath;
         process.env.PSModulePath = 'C:/planted';
         try {
             const r = rig();
             void r.helper.run('x').completed.catch(() => {});
+            await settle();
             const { file, args, env } = r.launches[0]!;
             expect(file).toMatch(/WindowsPowerShell.v1\.0.powershell\.exe$/);
             expect(args.slice(0, 5)).toEqual(['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden']);
@@ -148,7 +149,7 @@ describe('when it fails, nothing passes for done', () => {
         r.helper.stop();
     });
 
-    it('those waiting behind it are lost too, never run by a helper they were not sent to', async () => {
+    it('those waiting behind it go to the next helper, and only then', async () => {
         const r = rig();
         const a = r.helper.run('a');
         const b = r.helper.run('b');
@@ -182,9 +183,10 @@ describe('when it fails, nothing passes for done', () => {
         expect(r.children[0]!.killed).toBe(true);
     });
 
-    it('stop closes its stdin, which is how it ends, and how it ends with a dead owner', () => {
+    it('stop closes its stdin, which is how it ends, and how it ends with a dead owner', async () => {
         const r = rig();
         void r.helper.run('x').completed.catch(() => {});
+        await settle();
         r.helper.stop();
         expect(r.children[0]!.ended).toBe(true);
     });
