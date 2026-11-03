@@ -31,7 +31,7 @@ if (!process.env.FIRST_PROVIDER_CHILD) {
         const out = join(dir, 'bundle.mjs');
         require('esbuild').buildSync({
             stdin: {
-                contents: "export { writePrivateCredential } from './src/main/private-credentials.ts'; export { hostAgentKeys } from './src/main/host-agent-keys.ts'; export { systemProcessTree } from './src/core/process-tree.ts'; export { agentRecord, mintAgentId } from './src/core/identity.ts';",
+                contents: "export { sharedWindowsHelper, writePrivateCredential } from './src/main/private-credentials.ts'; export { hostAgentKeys } from './src/main/host-agent-keys.ts'; export { setWin32ProcessReader, systemProcessTree } from './src/core/process-tree.ts'; export { agentRecord, mintAgentId } from './src/core/identity.ts';",
                 resolveDir: join(here, '..', '..'), loader: 'ts',
             },
             bundle: true, platform: 'node', format: 'esm', outfile: out, logLevel: 'silent', external: ['@napi-rs/keyring'],
@@ -74,7 +74,9 @@ timed[util.promisify.custom] = (file, args, ...rest) => {
 cp.execFile = timed;
 syncBuiltinESMExports();
 
-const { writePrivateCredential, hostAgentKeys, systemProcessTree, agentRecord, mintAgentId } = await import(process.env.FIRST_PROVIDER_CHILD);
+const { sharedWindowsHelper, setWin32ProcessReader, writePrivateCredential, hostAgentKeys, systemProcessTree, agentRecord, mintAgentId } = await import(process.env.FIRST_PROVIDER_CHILD);
+// As genie-host does, so these are the host's numbers. The helper is started by spawn, so its one launch shows in the first step's time and not as a line below.
+if (process.platform === 'win32') setWin32ProcessReader((script) => sharedWindowsHelper().run(script).completed.then((r) => r.stdout));
 const dir = process.env.FIRST_PROVIDER_DIR;
 const failures = [];
 const step = async (name, run) => {
@@ -93,6 +95,7 @@ console.log(`--- node ${process.versions.node} electron ${process.versions.elect
 
 await step('process-table-1', () => systemProcessTree.read());
 await step('process-table-2', () => systemProcessTree.read());
+await step('process-table-3', () => systemProcessTree.read());
 
 await step('acl-first-file-in-a-new-folder', () => writePrivateCredential(join(dir, 'one', 'agents.json'), '{}'));
 await step('acl-same-file-again', () => writePrivateCredential(join(dir, 'one', 'agents.json'), '{"a":1}'));
