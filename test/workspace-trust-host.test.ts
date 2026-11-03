@@ -8,7 +8,9 @@ import { WorkspaceTrust, readTrustList, type TrustListPorts } from '../src/main/
 
 const W = join('/ws', 'acme');
 const at = (...parts: string[]) => join(W, ...parts);
-const stopHook = { hooks: [{ type: 'command', command: 'curl -s http://127.0.0.1:1/x -H "Authorization: Bearer ${GENIE_MCP_TOKEN}" # genie imDone stop hook' }] };
+const IMDONE = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"imDone","arguments":{"terminalId":"$GENIE_TERMINAL_ID"}}}';
+const genieStop = `curl -s -X POST -H "Authorization: Bearer abc.def" -H "Content-Type: application/json" -H "Mcp-Param-TerminalId: $GENIE_TERMINAL_ID" --data '${IMDONE}' http://127.0.0.1:4123/mcp > /dev/null`;
+const stopHook = { hooks: [{ type: 'command', command: genieStop }] };
 
 function ports(files: Record<string, string>, git: Record<string, GitConfigEntry[]> = {}): TrustListPorts & { files: Map<string, string> } {
     const map = new Map(Object.entries(files));
@@ -39,6 +41,16 @@ describe('the list', () => {
         }));
         expect(list.hooks).toEqual([]);
         expect(list.servers).toEqual([{ file: '.mcp.json', name: 'theirs', command: 'node server.js' }]);
+    });
+
+    it("what merely looks like Genie's stays on the list: a hook that adds to its command, one pointed elsewhere, and a server named genie that starts a program", async () => {
+        const list = await readTrustList(W, ports({
+            [at('.claude', 'settings.json')]: JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: `${genieStop}; other-thing imDone GENIE_MCP_URL` }] }, { hooks: [{ type: 'command', command: genieStop.replace('127.0.0.1', 'x.invalid') }] }] } }),
+            [at('.mcp.json')]: JSON.stringify({ mcpServers: { genie: { command: 'node', args: ['theirs.js'] } } }),
+            [at('.codex', 'config.toml')]: '[mcp_servers.tynn]\ncommand = "node"\nargs = ["theirs.js"]\n',
+        }));
+        expect(list.hooks).toHaveLength(2);
+        expect(list.servers).toEqual([{ file: '.mcp.json', name: 'genie', command: 'node theirs.js' }, { file: '.codex/config.toml', name: 'tynn', command: 'node theirs.js' }]);
     });
 
     it('reads a server from Codex config too', async () => {

@@ -172,7 +172,7 @@ export class EnvelopeSites {
      */
     async #openTrust(workspaces: readonly WorkspaceRef[]): Promise<void> {
         if (this.#trust !== null) return;
-        const empty = (carried: readonly string[]): TrustBook => ({ version: 1, carried: [...carried], pendingCarry: [...carried], sites: {} });
+        const empty = (carried: readonly string[]): TrustBook => ({ version: 1, carried: [...carried], pendingCarry: [...carried], sites: {}, workspaces: {} });
         let loaded: unknown;
         try {
             loaded = await this.#ports.trust.load();
@@ -220,9 +220,10 @@ export class EnvelopeSites {
         const book = this.#trust!;
         const prefix = `${workspaceId}/`;
         const kept = Object.entries(book.sites).filter(([id]) => !id.startsWith(prefix));
-        if (kept.length === Object.keys(book.sites).length && !book.pendingCarry.includes(workspaceId)) return;
+        if (kept.length === Object.keys(book.sites).length && !book.pendingCarry.includes(workspaceId) && book.workspaces[workspaceId] === undefined) return;
         book.sites = Object.fromEntries(kept);
         book.pendingCarry = book.pendingCarry.filter((id) => id !== workspaceId);
+        delete book.workspaces[workspaceId];
         await this.#saveTrust();
     }
 
@@ -347,6 +348,28 @@ export class EnvelopeSites {
     disabled(siteId: string): boolean {
         const t = this.#tracked.get(siteId);
         return t !== undefined && !t.enabled;
+    }
+
+    /** The record's part the workspace verdict reads (workspace-trust-host.ts). Nothing yet read is nothing trusted. */
+    trustRecord(): { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> } {
+        return this.#trust ?? { carried: [], workspaces: {} };
+    }
+
+    /** The list a workspace's verdict is against. Throws when it can't be kept: the person is told, and it stays as it was. */
+    async recordWorkspace(workspaceId: string, hash: string): Promise<void> {
+        if (this.#trust === null) throw new Error('the record of what runs here has not been read yet');
+        this.#trust.workspaces[workspaceId] = hash;
+        await this.#ports.trust.save(this.#trust);
+    }
+
+    /** The person trusted the workspace: nothing of it waits for a first start now, and what the usual rule starts, starts. */
+    async approveSites(workspaceId: string): Promise<void> {
+        const stopped = await this.#stops();
+        for (const [siteId, t] of [...this.#tracked]) {
+            if (t.workspaceId !== workspaceId || this.#sites.get(siteId)?.firstStart === undefined) continue;
+            await this.#lift(siteId, { person: true });
+            if (t.servable && t.enabled && !stopped.has(`${workspaceId}/${t.key}`) && !this.#workspaces.get(workspaceId)?.asleep) this.#tryStart(siteId);
+        }
     }
 
     /** The person's Stop: the processes end and the stop is remembered on this machine through the next launch. */
