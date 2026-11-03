@@ -107,6 +107,19 @@ describe("a person's terminal and everyone else's", () => {
         expect(envOf(b.made)[VARIABLE]).toBeUndefined();
     });
 
+    it('the engine is handed a whole path on Windows, for a line, a split command and a plain shell; elsewhere the name', () => {
+        const opens = (platform: NodeJS.Platform, spawn: Record<string, unknown>) => {
+            const made: Array<Record<string, unknown>> = [];
+            const port = fancyTermPort({ create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 1, shell: 'x', existing: false, scrollback: '' }; }, on: () => {}, kill: () => {}, write: () => {}, resize: () => {}, getScrollback: () => '' } as never, { platform, defaultShell: () => ({ command: 'cmd', args: [] }) });
+            port.open({ cwd: '/w', ...spawn } as never);
+            return String(made[0]!['shell']);
+        };
+        expect(opens('win32', { command: 'echo hi', shell: true })).toMatch(/^[A-Za-z]:.*\\System32\\cmd\.exe$/);
+        expect(opens('win32', {})).toMatch(/^[A-Za-z]:.*\\System32\\cmd\.exe$/);
+        expect(opens('win32', { command: 'nothing-by-this-name arg' })).toMatch(/^[A-Za-z]:.*\\nothing-by-this-name\.exe$/);
+        expect(opens('linux', { command: 'tool arg' })).toBe('tool');
+    });
+
     it("an agent's or Genie's: it stays as inherited", () => {
         const b = backend();
         b.port.open({ cwd: '/w', command: 'x', shell: true });
@@ -168,6 +181,8 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
         writeFileSync(hook, `require('node:fs').writeFileSync(${JSON.stringify(mark)}, process.execPath);\nprocess.exit(0);\n`);
         for (const name of ['git.exe', 'reg.exe', 'taskkill.exe']) copyFileSync(process.execPath, join(folder, name));
         process.env.NODE_OPTIONS = `--require ${JSON.stringify(hook)}`;
+        // Set on a machine, it would hide what these look for: resolving must hold with it gone.
+        delete process.env[VARIABLE];
     });
     afterEach(() => {
         if (before === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before;
@@ -199,6 +214,8 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
     it('MEASURE not set: a bare name with a working folder finds the folder', () => {
         inChild(bare('git', folder), without(), tmpdir());
         console.log(`### lookup not-set-with-cwd ran=${ran()}`);
+        // CONTROL for every 'false' below: with no variable and a bare name, Windows does look there. This is what the rest is protecting against.
+        expect(ran()).toBe(true);
     });
     it('MEASURE set only in the spawn\'s env option', () => {
         inChild(bare('git', folder, `, ${VARIABLE}: '1'`), without(), tmpdir());

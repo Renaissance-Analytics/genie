@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
+import { PROGRAM_LOOKUP_VARIABLE, resolveProgram } from '../core/program-lookup.js';
 import { shellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import { join } from 'node:path';
@@ -101,7 +101,8 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
             const created = backend.create({
                 id,
                 cwd: spawn.cwd,
-                shell: command,
+                // A whole path, always: the engine's own search must never see a bare name, whichever engine this is.
+                shell: resolveProgram(command, { platform: options.platform ?? process.platform, env: process.env }),
                 args,
                 ...(spawn.cols === undefined ? {} : { cols: spawn.cols }),
                 ...(spawn.rows === undefined ? {} : { rows: spawn.rows }),
