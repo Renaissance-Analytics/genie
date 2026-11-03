@@ -201,7 +201,7 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
     });
     afterEach(() => {
         if (before === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before;
-        rmSync(folder, { recursive: true, force: true });
+        rmSync(folder, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     });
 
     it('CONTROL: run by its path it does say so, so the mark can be seen', async () => {
