@@ -93,7 +93,10 @@ describe.skipIf(process.platform !== 'win32')('Windows itself', () => {
     it('an unsigned file: refused', async () => {
         const file = join(dir, 'unsigned.exe');
         writeFileSync(file, 'not a program');
-        expect(refusalOf(await readAuthenticode(file))).toMatch(/signature/);
+        const answer = await readAuthenticode(file);
+        // An answer that is really Windows': an empty one was refused too, for the wrong reason, on CI's first run.
+        expect(answer.status).toMatch(/NotSigned|UnknownError/);
+        expect(refusalOf(answer)).toContain(answer.status);
     });
 
     it("CONTROL: Windows' own signed PowerShell reads as validly signed, by someone who is not Tailscale", async () => {

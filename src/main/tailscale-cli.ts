@@ -517,9 +517,11 @@ export function refusalOf(answer: AuthenticodeAnswer): string | null {
 /** Windows' own check. The file's name goes in the environment, never in the command's text, and PowerShell by its full path, so neither can be made into something else. */
 export function readAuthenticode(file: string): Promise<AuthenticodeAnswer> {
     const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const script = '$s = Get-AuthenticodeSignature -LiteralPath $env:GENIE_AUTHENTICODE_FILE; [pscustomobject]@{ status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null } } | ConvertTo-Json -Compress';
+    const script = '$ErrorActionPreference = "Stop"; $s = Get-AuthenticodeSignature -LiteralPath $env:GENIE_AUTHENTICODE_FILE; [pscustomobject]@{ status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null } } | ConvertTo-Json -Compress';
     return new Promise((resolve, reject) => {
-        execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, GENIE_AUTHENTICODE_FILE: file }, windowsHide: true, timeout: 60_000 }, (error, stdout) => {
+        // PSModulePath goes: inherited from a pwsh parent, it makes this PowerShell 5.1 load pwsh's Security module, which fails, so the cmdlet is not there (measured on CI's runner).
+        const { PSModulePath: _inherited, ...env } = process.env;
+        execFile(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...env, GENIE_AUTHENTICODE_FILE: file }, windowsHide: true, timeout: 60_000 }, (error, stdout) => {
             if (error) { reject(error); return; }
             try {
                 const parsed = JSON.parse(String(stdout)) as { status?: unknown; subject?: unknown };
