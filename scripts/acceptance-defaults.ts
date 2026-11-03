@@ -18,7 +18,8 @@ import { join } from 'node:path';
 import { GO_RECIPES, goBinaryName } from '../src/core/go-versions.js';
 import { currentLinkDir, defaultPathEntry } from '../src/core/toolchain-defaults.js';
 import { installGoVersion, managedGo, type GoVersionsPorts } from '../src/main/go-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { listDefaults, nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
@@ -31,7 +32,7 @@ async function main(): Promise<void> {
     const tc = join(mkdtempSync(join(tmpdir(), 'genie-defaults-')), 'genie2-toolchain');
     const root = join(tc, 'go-versions');
     nodePhpVersionsFs().mkdirp(root);
-    const goPorts: GoVersionsPorts = { platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run, fetchBytes: httpFetch.bytes, fetchText: httpFetch.text };
+    const goPorts: GoVersionsPorts = { platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run, fetchBytes: liveFetch.bytes, fetchText: liveFetch.text };
     const [A, B] = [GO_RECIPES[0]!.version, GO_RECIPES[1]!.version];
     for (const v of [A, B]) {
         const r = await installGoVersion(v, true, goPorts);

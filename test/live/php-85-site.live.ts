@@ -15,7 +15,8 @@ import { request } from 'node:http';
 import { availableParallelism, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PhpPlatform } from '../../src/core/php-versions.js';
-import { httpFetch, installPhpVersion, managedPhp, nodePhpVersionsFs, phpVersionsRoot, resolvePhpCgi } from '../../src/main/php-versions.js';
+import { httpFetchOver, installPhpVersion, managedPhp, nodePhpVersionsFs, phpVersionsRoot, resolvePhpCgi } from '../../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { execFileRunner } from '../../src/main/toolchain-runner.js';
 import type { CommandRunner } from '../../src/main/toolchain-prober.js';
 import { composeServices } from '../../src/main/compose.js';
@@ -47,7 +48,7 @@ async function main(): Promise<void> {
     const base = mkdtempSync(join(tmpdir(), 'genie-1394-'));
     const root = phpVersionsRoot(join(base, 'toolchain'));
     const run: CommandRunner = (binary, args, options) => execFileRunner(binary, args, { timeoutMs: 45 * 60_000, ...(options?.env ? { env: options.env } : {}) });
-    const ports = { platform, root, fs: nodePhpVersionsFs(), run, fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, cpus: availableParallelism(), progress: () => {} } as Parameters<typeof installPhpVersion>[2];
+    const ports = { platform, root, fs: nodePhpVersionsFs(), run, fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, cpus: availableParallelism(), progress: () => {} } as Parameters<typeof installPhpVersion>[2];
 
     const userData = join(base, 'home');
     const ws = join(base, 'acme');

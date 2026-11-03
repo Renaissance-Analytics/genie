@@ -163,7 +163,7 @@ import { installRustVersion, listRustVersions, managedRust, removeRustVersion, r
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
-import { httpFetch, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
+import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -1257,7 +1257,10 @@ let genieBrowserWindow: GenieBrowserWindows | null = null;
  * Where "latest" comes from, per tool (toolchain-prober.ts `latestIndex`): every command it runs goes through the same
  * platform routing as the probe and the update, so on Windows `npm outdated -g` reaches npm.cmd through cmd.exe.
  */
-const latestFor = latestIndex({ run: execFileRunner, fetchJson: async (url) => (await fetch(url)).json(), platform: process.platform as Platform });
+/** Every toolchain and PHP download. */
+const httpFetch = httpFetchOver((url, init) => net.fetch(url, init));
+
+const latestFor = latestIndex({ run: execFileRunner, fetchJson: async (url) => (await net.fetch(url)).json(), platform: process.platform as Platform });
 
 /** The package manager that actually ANSWERS on this machine (apt or dnf on Linux), asked once per run. */
 let detectedPackageManager: Promise<PackageManager | null> | null = null;
@@ -1739,7 +1742,7 @@ async function boot(): Promise<void> {
         // is public, so no token; 10 s at most, and a failure says "unavailable" in the window, never blocks the update.
         runningVersion: app.getVersion(),
         releases: async () => {
-            const res = await fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
+            const res = await net.fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
                 headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' },
                 signal: AbortSignal.timeout(10_000),
             });
@@ -2663,7 +2666,7 @@ async function boot(): Promise<void> {
             return r;
         },
         install: async () => {
-            const r = await installTailscale();
+            const r = await installTailscale((url) => net.fetch(url));
             openHttps(r.url);
             await refreshTailscale();
             return r;
