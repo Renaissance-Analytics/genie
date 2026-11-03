@@ -148,7 +148,7 @@ const HELD_THREAD_MS = 1_000;
 export function slowWriteLine(ms: number, way: string, why: string | null): string | null {
     return ms < SLOW_WRITE_MS ? null : `PRIVATE_FILE_SLOW_WRITE ${Math.round(ms)} ms through the ${way}${why ? `: ${why}` : ''}`;
 }
-const sayDiagnostic = (line: string | null): void => { if (line === null) return; try { console.warn(line); failureLog?.(line); } catch { /* A diagnostic cannot change a write. */ } };
+const sayDiagnostic = (line: string | null): void => { if (line === null) return; try { console.error(line); failureLog?.(line); } catch { /* A diagnostic cannot change a write. */ } };
 
 /** This attempt's: whether to skip the helper, and whether the helper was lost under it. */
 const attempt = new AsyncLocalStorage<{ oneShot: boolean; lost: boolean; why?: string | null }>();
