@@ -94,7 +94,8 @@ beforeEach(async () => {
     time = fakeTime();
     woken = [];
     appTurns = new Map();
-    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, docker: async () => ({ stdout: '', exitCode: 1 }), portFree: async () => true });
+    // @ts-expect-error -- Test-first: the following implementation wires the inbox session probe.
+    services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, docker: async () => ({ stdout: '', exitCode: 1 }), portFree: async () => true, inboxSession: (id: AgentId) => host?.probe(id) ?? null });
     host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree });
     const appBudget: NonNullable<InboxPushPorts['appBudget']> = {
         waitMs: (id) => {
@@ -144,6 +145,37 @@ const appMail = async (to: AgentId, text = 'petition #42 queued'): Promise<void>
 const agentMail = async (from: AgentId, to: AgentId, text = 'hello'): Promise<void> => { await services.inbox.send({ from, to, text }); };
 const notices = (id: AgentId): string[] => (fakes.get(id)?.prompts ?? []).filter((p) => p.includes('unread AgentInbox'));
 const uncollected = (): number => services.signals({ osAgentWorking: false, githubBlocked: false }).uncollectedMail;
+
+describe('paused-agent replies beside the normal inbox push', () => {
+    it.each(['idle', 'busy'] as const)('still tells a normal %s agent about mail without a paused reply', async (state) => {
+        const agent = register('manual', 'recipient');
+        const peer = register('manual', 'sender');
+        startIdle(agent);
+        if (state === 'busy') host.prompt(agent.id, 'Continue working.', 'you');
+        await agentMail(peer.id, agent.id);
+        time.advance(COALESCE_MS);
+        expect(notices(agent.id)).toEqual([reminderText(1)]);
+        expect(services.inbox.all()).toHaveLength(1);
+    });
+
+    it('tells the sender about a real account pause while the recipient receives no prompt or restart', async () => {
+        const agent = register('manual', 'paused');
+        const peer = register('manual', 'sender');
+        startIdle(agent);
+        startIdle(peer);
+        host.prompt(agent.id, 'Work before the provider pauses.', 'you');
+        fakes.get(agent.id)!.events.onTurnEnd?.({ stopReason: null, isError: true, raw: 'error_during_execution', failure: { kind: 'billing', reason: 'account_on_hold' } } as never);
+        expect(host.probe(agent.id)?.accountPaused).toMatchObject({ reason: 'account_on_hold' });
+        const promptsBefore = fakes.get(agent.id)!.prompts.length;
+        await agentMail(peer.id, agent.id);
+        time.advance(COALESCE_MS);
+        expect(services.inbox.all()).toHaveLength(2);
+        expect(fakes.get(agent.id)!.prompts).toHaveLength(promptsBefore);
+        expect(woken).toEqual([]);
+        expect(notices(peer.id)).toEqual([reminderText(1)]);
+        expect((await services.inbox.receive({ participant: agent.id, acknowledge: false })).messages[0]!.readAt).toBeNull();
+    });
+});
 
 describe.each(['manual', 'automated'] as const)('an IDLE %s agent', (mode) => {
     it('gets a turn for an APP’s message — with no person message (the owner’s fancy, beta.53)', async () => {
