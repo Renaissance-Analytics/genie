@@ -22,6 +22,8 @@ function rng(seed: number) {
 
 function ledger(n: number, seed: number): TimedEvent[] {
     const r = rng(seed);
+    // Its own stream, so marking a call leaves every seed's ledger otherwise as it was.
+    const marks = rng(seed ^ 0x5a5a5a5a);
     const rows: TimedEvent[] = [];
     let turn = 0;
     const openTools: string[] = [];
@@ -37,7 +39,8 @@ function ledger(n: number, seed: number): TimedEvent[] {
         else if (p < 0.25) {
             const id = `tc${i}`;
             openTools.push(id);
-            event = { kind: 'tool', toolCallId: id, name: 'Bash', title: `step ${i}`, status: 'in_progress' };
+            // A subagent's call now and then: it never holds a message, in the whole chat or the tail (genie#1473).
+            event = { kind: 'tool', toolCallId: id, name: 'Bash', title: `step ${i}`, status: 'in_progress', ...(marks() < 0.3 ? { parentToolCallId: 'tc_spawner' } : {}) };
         } else if (p < 0.35 && openTools.length > 0) {
             const id = openTools.splice(Math.floor(r() * openTools.length), 1)[0]!;
             event = { kind: 'tool', toolCallId: id, name: 'Bash', title: null, status: r() < 0.8 ? 'completed' : 'failed' };
@@ -67,11 +70,20 @@ const detailOf = (rows: readonly TimedEvent[], comms: ChatDetail['comms'] = null
 
 describe('the tail is exactly the end of the full chat', () => {
     it('over 60 generated ledgers of every row kind, at several window sizes, with and without mail', () => {
+        let waitingSeen = 0;
         for (let seed = 1; seed <= 60; seed += 1) {
-            const rows = ledger(400 + seed * 13, seed);
+            // Only a message at the END of a ledger can still be waiting (the next reply, thought or turn ends it), and these
+            // are full of replies: on some, end with one, behind a step of the agent's own.
+            const generated = ledger(400 + seed * 13, seed);
+            const rows = seed % 3 !== 1 ? generated : [
+                ...generated,
+                { id: 'last-step', event: { kind: 'tool', toolCallId: 'tc_last', name: 'Bash', title: 'last step', status: 'in_progress', toolKind: null, rawInput: null }, at: 1_800_000_000_000 },
+                { id: 'last-message', event: { kind: 'message', speaker: 'you', peerName: null, text: 'still there?' }, at: 1_800_000_000_001 },
+            ] satisfies TimedEvent[];
             const comms = seed % 2 === 0 ? Array.from({ length: 12 }, (_, k) => ({ id: `c${k}`, from: k % 2 ? 'human' : 'agent_a', to: k % 2 ? 'agent_a' : 'agent_w', text: `mail ${k}`, sentAt: new Date(1_700_000_000_000 + (k * 37 + seed) * 1000 * 7).toISOString(), readAt: null })) : null;
             const detail = detailOf(rows, comms, seed % 3 !== 0);
             const full = chatThreadFrom(detail, 'agent_a', [], Date.now).messages;
+            waitingSeen += full.filter((m) => m.waiting).length;
             for (const lines of [1, 20, 100, 500]) {
                 const tail = chatThreadFrom(detail, 'agent_a', [], Date.now, lines);
                 expect(tail.messages, `seed ${seed}, ${lines} lines`).toEqual(full.slice(full.length - tail.messages.length));
@@ -81,6 +93,8 @@ describe('the tail is exactly the end of the full chat', () => {
                 else expect(tail.messages, `seed ${seed}, ${lines} lines: nothing behind = the whole chat`).toEqual(full);
             }
         }
+        // CONTROL: these ledgers do hold waiting messages, so agreeing on them means something.
+        expect(waitingSeen).toBeGreaterThanOrEqual(20);
     });
 
     it('CONTROL: without a window the chat is the whole history, and nothing is behind it', () => {
