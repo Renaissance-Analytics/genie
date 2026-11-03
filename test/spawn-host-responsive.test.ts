@@ -216,11 +216,13 @@ describe('the gauge can trust its own control', () => {
      */
     it('PROBE: the worker kept off the CPU for most of a real hold: the hold is still read', async () => {
         const worst = await heartbeatDuring(async () => {
-            starveWorker(4_500);
+            // The worker's gap lands just AFTER the hold has ended, as batch Z's must have: a gap that lands during the hold made the old hold stretch by as much, which hid this.
+            starveWorker(SLOW_MS + 100);
             await new Promise((r) => setTimeout(r, 30));
             hold(SLOW_MS);
+            await new Promise((r) => setTimeout(r, 300));
         });
-        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms hold, with the worker stopped for 4,500 of them`).toBeGreaterThan(SLOW_MS / 2);
+        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms hold, with the worker stopped through it`).toBeGreaterThan(SLOW_MS / 2);
     }, 30_000);
 
     it('main spun through its gap: held, whatever the worker did', () => {
