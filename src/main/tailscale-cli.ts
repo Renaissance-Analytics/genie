@@ -514,18 +514,65 @@ export function refusalOf(answer: AuthenticodeAnswer): string | null {
     return `it is signed by ${parts.get('CN') ?? 'nobody it could read'}, not ${TAILSCALE_PUBLISHER}`;
 }
 
-/** Windows' own check. The file's name goes in the environment, never in the command's text, and PowerShell by its full path, so neither can be made into something else. */
+/**
+ * WINDOWS' OWN CHECK: WinVerifyTrust, the documented API, reached from PowerShell 5.1 through Add-Type. Not Get-AuthenticodeSignature: on CI's Windows runner its module would not load ("the module could not be loaded"),
+ * with PSModulePath removed and with the policy bypassed, so it cannot be relied on being there. An embedded signature is what is asked about, which is what Tailscale's installer carries; a catalogue is not consulted.
+ * Revocation is not checked online: the check must not hang on a person's network. The script goes as -EncodedCommand and the file's name in the environment, so neither is quoted, and PowerShell by its full path.
+ */
+const AUTHENTICODE_SCRIPT = [
+    "$ErrorActionPreference = 'Stop'",
+    "Add-Type -TypeDefinition @'",
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'public static class GenieTrust {',
+    '    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]',
+    '    struct FileInfo { public uint cbStruct; [MarshalAs(UnmanagedType.LPWStr)] public string path; public IntPtr file; public IntPtr subject; }',
+    '    [StructLayout(LayoutKind.Sequential)]',
+    '    struct Data { public uint cbStruct; public IntPtr policy; public IntPtr sip; public uint ui; public uint revocation; public uint union; public IntPtr file; public uint state; public IntPtr stateData; public IntPtr url; public uint flags; public uint context; public IntPtr settings; }',
+    '    [DllImport("wintrust.dll", CharSet = CharSet.Unicode)]',
+    '    static extern int WinVerifyTrust(IntPtr window, ref Guid action, ref Data data);',
+    '    public static int Check(string path) {',
+    '        var action = new Guid("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");',
+    '        var info = new FileInfo { cbStruct = (uint)Marshal.SizeOf(typeof(FileInfo)), path = path };',
+    '        var memory = Marshal.AllocHGlobal(Marshal.SizeOf(typeof(FileInfo)));',
+    '        try {',
+    '            Marshal.StructureToPtr(info, memory, false);',
+    '            var data = new Data { cbStruct = (uint)Marshal.SizeOf(typeof(Data)), ui = 2, revocation = 0, union = 1, file = memory, state = 1 };',
+    '            var result = WinVerifyTrust(new IntPtr(-1), ref action, ref data);',
+    '            data.state = 2;',
+    '            WinVerifyTrust(new IntPtr(-1), ref action, ref data);',
+    '            return result;',
+    '        } finally { Marshal.FreeHGlobal(memory); }',
+    '    }',
+    '}',
+    "'@",
+    '$code = [GenieTrust]::Check($env:GENIE_AUTHENTICODE_FILE)',
+    '$subject = $null',
+    'try { $subject = [System.Security.Cryptography.X509Certificates.X509Certificate]::CreateFromSignedFile($env:GENIE_AUTHENTICODE_FILE).Subject } catch { $subject = $null }',
+    "[pscustomobject]@{ code = $code; subject = $subject } | ConvertTo-Json -Compress",
+].join('\n');
+
+/** WinVerifyTrust's answers, in the words people search for. */
+export function trustWords(code: number): string {
+    const unsigned = code >>> 0;
+    if (unsigned === 0) return 'Valid';
+    if (unsigned === 0x800b0100) return 'NotSigned';
+    if (unsigned === 0x80096010) return 'HashMismatch';
+    if (unsigned === 0x800b0109 || unsigned === 0x800b0004 || unsigned === 0x800b0111) return 'NotTrusted';
+    if (unsigned === 0x800b0101) return 'Expired';
+    return `UnknownError 0x${unsigned.toString(16)}`;
+}
+
 export function readAuthenticode(file: string): Promise<AuthenticodeAnswer> {
     const powershell = path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    const script = '$ErrorActionPreference = "Stop"; $s = Get-AuthenticodeSignature -LiteralPath $env:GENIE_AUTHENTICODE_FILE; [pscustomobject]@{ status = [string]$s.Status; subject = if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null } } | ConvertTo-Json -Compress';
+    const encoded = Buffer.from(AUTHENTICODE_SCRIPT, 'utf16le').toString('base64');
     return new Promise((resolve, reject) => {
-        // So that the cmdlet's own module loads. PSModulePath inherited from a pwsh parent points this PowerShell 5.1 at pwsh's modules, and a Restricted policy stops a module's files loading. The policy applies to this one process, whose script is the line above.
-        const { PSModulePath: _inherited, ...env } = process.env;
-        execFile(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', script], { env: { ...env, GENIE_AUTHENTICODE_FILE: file }, windowsHide: true, timeout: 60_000 }, (error, stdout) => {
+        execFile(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded], { env: { ...process.env, GENIE_AUTHENTICODE_FILE: file }, windowsHide: true, timeout: 60_000 }, (error, stdout) => {
             if (error) { reject(error); return; }
             try {
-                const parsed = JSON.parse(String(stdout)) as { status?: unknown; subject?: unknown };
-                resolve({ status: typeof parsed.status === 'string' ? parsed.status : '', subject: typeof parsed.subject === 'string' ? parsed.subject : null });
+                const parsed = JSON.parse(String(stdout)) as { code?: unknown; subject?: unknown };
+                if (typeof parsed.code !== 'number') { reject(new Error('no answer from WinVerifyTrust')); return; }
+                resolve({ status: trustWords(parsed.code), subject: typeof parsed.subject === 'string' ? parsed.subject : null });
             } catch (parseError) { reject(parseError as Error); }
         });
     });

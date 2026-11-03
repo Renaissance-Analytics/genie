@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { installTailscale, readAuthenticode, refusalOf, type InstallPorts } from '../src/main/tailscale-cli.js';
+import { installTailscale, readAuthenticode, refusalOf, trustWords, type InstallPorts } from '../src/main/tailscale-cli.js';
 
 /**
  * WHAT WINDOWS IS ASKED TO RUN (genie#1497). The installer came over the network and was started with nothing checked. Now Windows' own Authenticode verdict comes first: valid, and signed by Tailscale Inc.
@@ -32,6 +32,17 @@ describe('the verdict', () => {
 
     it('valid with no signer read: refused', () => {
         expect(refusalOf({ status: 'Valid', subject: null })).toMatch(/signed by/);
+    });
+});
+
+describe("WinVerifyTrust's answers", () => {
+    it.each([[0, 'Valid'], [-2146762496, 'NotSigned'], [-2146869232, 'HashMismatch'], [-2146762487, 'NotTrusted'], [-2146762495, 'Expired']])('%i is %s', (code, words) => {
+        expect(trustWords(code)).toBe(words);
+    });
+
+    it('one it does not know is unknown, by number, and that is a refusal', () => {
+        expect(trustWords(-2146762749)).toBe('UnknownError 0x800b0003');
+        expect(refusalOf({ status: trustWords(-2146762749), subject: GOOD })).toContain('0x800b0003');
     });
 });
 
@@ -99,11 +110,22 @@ describe.skipIf(process.platform !== 'win32')('Windows itself', () => {
         expect(refusalOf(answer)).toContain(answer.status);
     });
 
-    it("CONTROL: Windows' own signed PowerShell reads as validly signed, by someone who is not Tailscale", async () => {
-        const answer = await readAuthenticode(join(process.env.SystemRoot!, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
+    // node.exe carries its signature in the file, as Tailscale's installer does. Windows' own programs mostly use a catalogue, which this does not ask about.
+    it('CONTROL: node.exe reads as validly signed, by someone who is not Tailscale', async () => {
+        const answer = await readAuthenticode(process.execPath);
         expect(answer.status).toBe('Valid');
-        expect(answer.subject).toMatch(/Microsoft/);
+        expect(answer.subject).toMatch(/OpenJS|Node/);
         expect(refusalOf(answer)).toMatch(/signed by/);
+    });
+
+    it('the same file with one byte changed: refused for that', async () => {
+        const changed = readFileSync(process.execPath);
+        changed[Math.floor(changed.length / 3)]! ^= 0xff;
+        const file = join(dir, 'changed.exe');
+        writeFileSync(file, changed);
+        const answer = await readAuthenticode(file);
+        expect(answer.status).toBe('HashMismatch');
+        expect(refusalOf(answer)).toContain('HashMismatch');
     });
 
     it('a name with a space and a quote in it reaches the check whole', async () => {
