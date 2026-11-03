@@ -163,10 +163,43 @@ const features = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d
 const CURL_OS = process.platform === 'win32' ? ['--ssl-no-revoke'] : [];
 const NOWHERE = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
+const curlSafely = (args, options) => {
+    try { return execFileSync('curl', args, { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'], ...options }); } catch (error) {
+        const url = args.findLast((a) => a.startsWith('http')) ?? 'an address';
+        throw new Error(`curl ${url.split('?')[0]}: ${String(error.stderr ?? 'no answer').trim().split(/\r?\n/)[0].slice(0, 200)}`);
+    }
+};
+
+/**
+ * A sign-in code from tynn.gen, on Windows through Node's HTTPS client (scripts/tynn-alias-request.mjs): Windows' curl refuses the alias's answer to the login. Only the alias's CA is trusted there, and the name is checked. Never printed.
+ */
+function signInCodeWindows() {
+    const jar = join(work, 'jar.json');
+    const ca = join(homedir(), 'tynn-alias', 'tynn-ca.crt');
+    const ask = (path, extra = {}) => {
+        let out;
+        try {
+            out = execFileSync(process.execPath, [join('scripts', 'tynn-alias-request.mjs')], { input: JSON.stringify({ url: `${TYNN}${path}`, jar, ca, ...extra }), encoding: 'utf8', timeout: 30_000, stdio: ['pipe', 'pipe', 'pipe'] });
+        } catch (error) { throw new Error(`the alias: ${String(error.stderr ?? 'no answer').trim().split(/\r?\n/)[0].slice(0, 200)}`); }
+        return JSON.parse(out);
+    };
+    const first = ask('/login');
+    say(`/login answered ${first.status}, ${first.framing}`);
+    const xsrf = JSON.parse(readFileSync(jar, 'utf8'))['XSRF-TOKEN'];
+    if (!xsrf) throw new Error('no XSRF cookie from /login');
+    const login = ask('/dev/quick-login', { method: 'POST', headers: { 'X-XSRF-TOKEN': decodeURIComponent(xsrf), Accept: 'text/html' }, form: { email: ACCOUNT } });
+    say(`/dev/quick-login answered ${login.status}, ${login.framing}`);
+    if (login.status !== 302) throw new Error(`quick login answered ${login.status}: not a local Tynn, or no such seeded account`);
+    const code = /token=([A-Za-z0-9]{64})/.exec(ask('/genie/callback?return=genie%3A%2F%2Foauth%2Fcallback').body)?.[1];
+    if (!code) throw new Error('no 64-character code on the callback page');
+    return code;
+}
+
 /** A sign-in code from tynn.gen, by curl, which reads the OS store this VM's alias CA is in. Never printed. */
 function signInCode() {
+    if (WINDOWS) return signInCodeWindows();
     const jar = join(work, 'jar');
-    const curl = (...args) => execFileSync('curl', ['-sS', ...CURL_OS, '-A', 'Genie-upgrade-acceptance', '-c', jar, '-b', jar, ...args], { encoding: 'utf8', timeout: 30_000 });
+    const curl = (...args) => curlSafely(['-sS', ...CURL_OS, '-A', 'Genie-upgrade-acceptance', '-c', jar, '-b', jar, ...args]);
     curl('-o', NOWHERE, `${TYNN}/login`);
     const xsrf = readFileSync(jar, 'utf8').split('\n').map((l) => l.split('\t')).find((f) => f[5] === 'XSRF-TOKEN')?.[6];
     if (!xsrf) throw new Error('no XSRF cookie from /login');
