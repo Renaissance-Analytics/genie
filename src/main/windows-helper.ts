@@ -9,6 +9,9 @@ import { join } from 'node:path';
  * through it. stdin is a pipe of its owner's alone, and its end is the helper's end: when the owner dies, however it dies, the pipe closes. Measured with the owner killed outright, idle 63 ms and
  * busy 70 ms (the pipe going takes a running script with it).
  *
+ * A HELPER THAT DOES NOT ANSWER IS TRIED ONCE MORE, THEN LEFT ALONE. Each loss costs a write its deadline, and a launch after it, which is right once and wrong for a burst. Two losses in a row and it rests (5 minutes): a request is told at once and the
+ * caller launches. An answer ends the count. Starting one runs CreateProcess on this thread, which has held a thread for minutes on a real machine (genie#1397), so a slow start is said.
+ *
  * ONE REQUEST AT A TIME, so a script's handshake has stdin to itself. A dead helper or one past the deadline loses the request (`HelperLost`), and it is the caller's to do the work another way:
  * nothing here ever reports a request done that the script did not say was done.
  */
@@ -36,6 +39,8 @@ export interface WindowsHelperOptions {
     readonly spawn: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => HelperChild;
     readonly deadlineMs?: number;
     readonly log?: (line: string) => void;
+    readonly restMs?: number;
+    readonly now?: () => number;
 }
 
 // Real timers, taken at load: a test faking the clock (or advancing it 30 s) is not a helper past its deadline.
@@ -44,6 +49,10 @@ const realClearTimeout = globalThis.clearTimeout;
 
 /** A script past this is hung: a write takes milliseconds here, and a cold start under two seconds. Long enough for a stalled machine, and the caller still has a launch to try. */
 const DEFAULT_DEADLINE_MS = 20_000;
+const DEFAULT_REST_MS = 5 * 60_000;
+/** Two in a row, so a single stall costs one restart and no more. */
+const LOSSES_BEFORE_REST = 2;
+const SLOW_START_MS = 1_000;
 
 const LOOP = `
 $utf=[Text.UTF8Encoding]::new($false)
@@ -94,11 +103,28 @@ export class WindowsHelper {
     readonly #queue: Pending[] = [];
     #next = 0;
     #lastPid: number | null = null;
+    readonly #restMs: number;
+    readonly #now: () => number;
+    #losses = 0;
+    #restingUntil = 0;
 
     constructor(options: WindowsHelperOptions) {
         this.#spawn = options.spawn;
         this.#deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
         this.#log = options.log ?? (() => {});
+        this.#restMs = options.restMs ?? DEFAULT_REST_MS;
+        this.#now = options.now ?? Date.now;
+    }
+
+    /** One more lost. At the limit it rests, and whoever is waiting is told now: the caller has a launch, and none of them should wait out a deadline first. */
+    #lost(why: string): void {
+        this.#losses += 1;
+        if (this.#losses < LOSSES_BEFORE_REST) return;
+        this.#restingUntil = this.#now() + this.#restMs;
+        // After the rest, one try: its failure rests again at once.
+        this.#losses = LOSSES_BEFORE_REST - 1;
+        this.#log(`windows helper: resting for ${Math.round(this.#restMs / 1000)} s, writes launch meanwhile: ${why}`);
+        for (const waiting of this.#queue.splice(0)) waiting.reject(new HelperLost(`the helper is resting: ${why}`));
     }
 
     /** The running helper's pid, or the last one's. */
@@ -115,6 +141,10 @@ export class WindowsHelper {
             end: (text?: string): void => { if (text !== undefined && this.#active === pending) this.#child?.stdin?.write(text); },
             destroy: (): void => {},
         });
+        if (this.#now() < this.#restingUntil) {
+            reject(new HelperLost('the helper is resting'));
+            return { stdin, stdout, completed, kill: () => {} };
+        }
         this.#queue.push(pending);
         // After this turn, so a caller can attach to stdout before anything can arrive.
         queueMicrotask(() => this.#pump());
@@ -133,19 +163,31 @@ export class WindowsHelper {
         if (this.#child) return this.#child;
         const { file, args, env } = helperSpawnArgs();
         let child: HelperChild;
+        const began = this.#now();
         try {
             child = this.#spawn(file, args, env);
         } catch (error) {
-            this.#log(`windows helper: could not start: ${error instanceof Error ? error.message : String(error)}`);
+            const why = `could not start: ${error instanceof Error ? error.message : String(error)}`;
+            this.#log(`windows helper: ${why}`);
+            this.#lost(why);
             return null;
         }
+        const held = this.#now() - began;
+        if (held >= SLOW_START_MS) this.#log(`windows helper: starting it held this thread ${held} ms`);
         this.#child = child;
         this.#lastPid = child.pid ?? null;
         this.#buffer = '';
         // Writing to a helper that has just died is its exit's to report, not an uncaught EPIPE's.
         (child.stdin as unknown as Partial<EventEmitter> | null)?.on?.('error', () => {});
         child.stdout?.on('data', (data: Buffer | string) => { if (this.#child === child) this.#heard(data.toString()); });
-        const gone = (why: string): void => { if (this.#child === child) { this.#child = null; this.#failActive(why); this.#pump(); } };
+        const gone = (why: string): void => {
+            if (this.#child !== child) return;
+            this.#child = null;
+            // Idle, it is no loss: nothing was waiting on it.
+            if (this.#active) { this.#log(`windows helper: ${why}`); this.#lost(why); }
+            this.#failActive(why);
+            this.#pump();
+        };
         child.once('exit', () => gone('the helper exited'));
         child.once('error', (error: unknown) => gone(`the helper failed: ${error instanceof Error ? error.message : String(error)}`));
         return child;
@@ -195,6 +237,7 @@ export class WindowsHelper {
         const done = /^DONE (\d+) ([01])$/.exec(line);
         if (done && Number(done[1]) === active.id) {
             this.#settle(active);
+            this.#losses = 0;
             if (done[2] === '0') active.resolve({ stdout: active.text, stderr: '' });
             else active.reject(Object.assign(new Error('the script refused'), { code: 1 }));
             if (this.#child) this.#refChild(this.#child, false);
@@ -222,6 +265,7 @@ export class WindowsHelper {
         this.#log(`windows helper: ${why}`);
         const child = this.#child;
         this.#child = null;
+        this.#lost(why);
         this.#failActive(why);
         try { child?.kill(); } catch { /* already gone */ }
         queueMicrotask(() => this.#pump());
