@@ -81,6 +81,7 @@ import { Keychain } from './keychain.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnWorkstationState } from '../renderer/features.js';
 import { droneRefusal, effectiveRoleOf, outboundDialRefusal, type WorkstationRole } from '../core/workstation-role.js';
+import { deviceLinkGate } from './device-link-gate.js';
 import { dispatchConnectLink } from '../core/connect-link.js';
 import { accountKeyOf, remoteWindowAction, windowsLeftByAccountChange } from '../core/remote-window-policy.js';
 import { wordTynnRefusal } from './drone-refusal.js';
@@ -1100,6 +1101,8 @@ let relayHostNow: RelayHostHandle | null = null;
 let relayStatusNow: RelayHostStatus = { state: 'off' };
 /** A window's connection to a Tynn workstation (Tynn #837), by the channel it was given; main alone holds it. */
 const relayChannels = new Map<string, { transport: RelayMemberTransport; sender: Electron.WebContents; workstationId: string }>();
+/** The sockets to other machines the host holds for each window (genie:device-open). */
+const deviceChannels = new Map<string, Electron.WebContents>();
 /** The Genie browser for each Tynn workstation a window here drives: a door per connection (remote-browsers.ts). */
 const remoteBrowsers = new RemoteBrowsers(siteDoor);
 let nextRelayChannel = 0;
@@ -2262,8 +2265,8 @@ async function boot(): Promise<void> {
     /*
      * The tailnet socket is dialled by the remote window's renderer, which main otherwise never sees: every WebSocket an
      * app window opens (they share the default session; the Genie browser has its own) is cancelled while this machine
-     * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. Until P3 moves the dial
-     * into main itself (host split, audit M-e), this is where main decides.
+     * is a drone. Main's own sockets (the relay, Pusher) are Node's and do not pass through here. A desktop window no longer
+     * dials (genie:device-open, below, refuses first): this stays as defence in depth for anything else a window opens.
      */
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => callback({ cancel: outboundDialRefusal(workstationRoleNow, details.url) !== null }));
     // THE TYNN NETWORK, AS A MEMBER (Tynn #837; Genie 1's workstation:connectable / workstation:open): the workstations
@@ -2347,12 +2350,41 @@ async function boot(): Promise<void> {
     });
     // Revoking a claimed link ends its guest's live session NOW: this host re-checks its relay sessions at once (audit M-c).
     ipcMain.handle('genie:tynn-share-revoke', (_event, linkId: unknown) => (typeof linkId === 'string' ? revokeShareLink(shareRequest, ownWorkstation(), linkId, async () => { await relayHostNow?.revalidate(); }) : { ok: false, reason: 'not a link' }));
+    // ANOTHER MACHINE, BY ITS ADDRESS (P3.4 cut e, audit M-e): refused here on a drone, then the host dials, and holds the token. The window's frames use the relay's channels.
+    const deviceLinkNow = () => agentEngineLink?.client.deviceLink() ?? null;
+    let deviceLinkHeard: unknown = null;
+    const hearDeviceLink = (link: NonNullable<ReturnType<typeof deviceLinkNow>>) => {
+        if (deviceLinkHeard === link) return;
+        deviceLinkHeard = link;
+        link.onFrame((channel, text) => { const sender = deviceChannels.get(channel); if (sender && !sender.isDestroyed()) sender.send('genie:relay-message', channel, text); });
+        link.onClosed((channel, reason) => {
+            const sender = deviceChannels.get(channel);
+            deviceChannels.delete(channel);
+            if (sender && !sender.isDestroyed()) sender.send('genie:relay-closed', channel, reason);
+        });
+    };
+    ipcMain.handle('genie:device-open', async (event, url: unknown) => {
+        const link = deviceLinkNow();
+        if (link) hearDeviceLink(link);
+        const opened = await deviceLinkGate(url, { role: () => workstationRoleNow, link: () => link });
+        if (!opened.ok) return opened;
+        const sender = event.sender;
+        deviceChannels.set(opened.channel, sender);
+        // The window went: its connection goes with it.
+        sender.once('destroyed', () => { if (deviceChannels.delete(opened.channel)) link?.close(opened.channel); });
+        return opened;
+    });
+    ipcMain.handle('genie:device-hosts', async () => (await deviceLinkNow()?.hosts()) ?? []);
+    ipcMain.handle('genie:device-forget', async (_event, url: unknown) => (typeof url === 'string' ? (await deviceLinkNow()?.forget(url)) ?? false : false));
+    ipcMain.handle('genie:device-adopt', async (_event, url: unknown, token: unknown) => (typeof url === 'string' && typeof token === 'string' ? (await deviceLinkNow()?.adopt(url, token)) ?? false : false));
     // Only the window that opened a channel may use it.
     ipcMain.on('genie:relay-send', (event, channel: unknown, text: unknown) => {
+        if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender && typeof text === 'string') { deviceLinkNow()?.send(channel, text); return; }
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
         if (c && c.sender === event.sender && typeof text === 'string') c.transport.send(text);
     });
     ipcMain.on('genie:relay-close', (event, channel: unknown) => {
+        if (typeof channel === 'string' && deviceChannels.get(channel) === event.sender) { deviceLinkNow()?.close(channel); return; }
         const c = typeof channel === 'string' ? relayChannels.get(channel) : undefined;
         if (c && c.sender === event.sender) c.transport.close();
     });

@@ -236,7 +236,9 @@ export type AuthRequest =
     | { kind: 'token'; token: string; label?: string }
     /** Already authenticated by the TRANSPORT (the Tynn relay checked a grant and its key, Tynn #838): refused on any
      *  connection that carries no {@link PreAuth}, so a tailnet socket cannot claim it. */
-    | { kind: 'relay'; label?: string };
+    | { kind: 'relay'; label?: string }
+    /** Only between a desktop window and its own host, which writes the token in (main/device-link-service.ts). Never reaches another machine. */
+    | { kind: 'saved'; label?: string };
 
 /** Who a transport already proved a connection to be (the Tynn relay's grant, main/relay-grant.ts). */
 export interface PreAuth {

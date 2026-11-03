@@ -374,7 +374,7 @@ probe "the-heard-thread-is-resumed" src/main/host-tynn-recovery.ts \
     test/host-tynn-recovery.test.ts "A THREAD THE HOST HEARD WITH NO WINDOW"
 
 probe "it-keeps-asking-while-someone-waits" src/main/host-tynn-recovery.ts \
-    "                await ports.recheck().catch(() => {});" "" \
+    "            await ports.recheck().catch(() => {});" "" \
     test/host-tynn-recovery.test.ts "with an agent waiting on Tynn"
 
 probe "a-start-waits-for-the-write" src/main/agent-tynn-prep.ts \
@@ -455,6 +455,89 @@ probe "no-method-hands-out-the-key" src/main/workstation-service.ts \
     "            case 'identity': return this.identity(host);" "            case 'identity': return this.identity(host);
             case 'read': return this.#options.store.read(host);" \
     test/workstation-host.test.ts "no method hands out the key"
+
+# Recovery: when it asks, and that it waits. never-through-a-running-turn, above, is the probe that a restart does not happen mid-turn.
+probe "a-wait-ends-at-idle" src/main/host-tynn-recovery.ts \
+    "    ports.host.subscribe((id) => settle(id));" "" \
+    test/host-tynn-recovery.test.ts "mid-turn it waits"
+
+probe "a-nudge-replaces-its-timer" src/main/host-tynn-recovery.ts \
+    "        cancelTimer?.();" "" \
+    test/host-tynn-recovery.test.ts "the timer it replaced does not also fire"
+
+probe "a-nudge-only-while-someone-waits" src/main/host-tynn-recovery.ts \
+    "        if (checking || !ports.waiting()) return;" "        if (checking) return;" \
+    test/host-tynn-recovery.test.ts "a nudge with nobody waiting does nothing"
+
+# The socket to another machine: the host's trust set, and no way to turn it off
+probe "device-socket-verifies" src/main/device-socket.ts \
+    "rejectUnauthorized: true, followRedirects: false" "rejectUnauthorized: false, followRedirects: false" \
+    test/device-socket.test.ts "a machine nobody vouches for is refused"
+
+probe "device-socket-uses-the-host-roots" src/main/device-socket.ts \
+    "{ ca: [...(options.machineRoots ?? rootsOfThisMachine)()], rejectUnauthorized" "{ rejectUnauthorized" \
+    test/device-socket.test.ts "a machine whose certificate chains to a trusted root connects"
+
+probe "device-socket-follows-no-redirect" src/main/device-socket.ts \
+    "rejectUnauthorized: true, followRedirects: false" "rejectUnauthorized: true, followRedirects: true" \
+    test/device-socket.test.ts "a redirect is not followed"
+
+probe "device-socket-survives-its-own-close" src/main/device-socket.ts \
+    "    socket.on('error', () => {});" "" \
+    test/device-socket.test.ts "cannot take the host down"
+
+# P3.4 cut e: the host dials other machines, and their tokens never reach a window
+probe "the-welcome-loses-its-token" src/main/device-link-service.ts \
+    "        const heard = JSON.stringify(rest);" "        const heard = JSON.stringify(message);" \
+    test/device-link.test.ts "the welcome reaches the window WITHOUT the minted token"
+
+probe "a-frame-over-the-limit-says-so" src/main/device-link-service.ts \
+    "        socket.onerror = (ev) => this.#end(channel, errorWords(ev));" "        socket.onerror = () => this.#end(channel, null);" \
+    test/device-socket.test.ts "closes with words that name the limit"
+
+probe "a-window-cannot-say-a-token" src/main/device-link-service.ts \
+    "        if (!message || !auth || (auth.kind !== 'pin' && auth.kind !== 'saved')) {" "        if (!message || !auth) {" \
+    test/device-link.test.ts "closes the channel and nothing reaches the machine"
+
+probe "a-locked-keychain-is-not-a-pin" src/main/device-link-service.ts \
+    "read.kind === 'missing' ? PIN_NEEDED :" "true ? PIN_NEEDED :" \
+    test/device-link.test.ts "a saved hello on a locked keychain says the keychain"
+
+probe "nothing-overtakes-the-welcome" src/main/device-link-service.ts \
+    "        if (channel.inbound) { channel.inbound.push(text); return; }" "" \
+    test/device-link.test.ts "what follows the welcome keeps its order"
+
+probe "only-the-window-that-opened-it" src/main/device-link-service.ts \
+    "        if (!channel || channel.owner !== owner || channel.closed) return;" "        if (!channel || channel.closed) return;" \
+    test/device-link.test.ts "another window cannot speak on"
+
+probe "only-ws-is-dialled" src/main/device-link-service.ts \
+    "        if (!isDeviceUrl(url)) return Promise.resolve({ ok: false, reason: 'another machine is reached over ws:// or wss://' });" "" \
+    test/device-link.test.ts "only ws:// and wss:// are dialled"
+
+probe "no-method-returns-a-device-token" src/main/device-link-service.ts \
+    "            default: throw new Error(\`The device link has no \${method}.\`);" "            default: return this.#options.tokens.tokenFor(String(args[0] ?? ''));" \
+    test/device-link.test.ts "no method returns a token"
+
+probe "a-dropped-window-lets-its-sockets-go" src/main/session-engine-server.ts \
+    "            if (was) this.#options.deviceLink?.dropOwner(conn.id);" "" \
+    test/device-link.test.ts "a window dropping off the link closes its sockets"
+
+probe "a-device-token-must-read-back" src/main/device-tokens.ts \
+    "            if (back.kind !== 'value' || back.value !== token) return { ok: false, reason: back.kind === 'unavailable' ? back.reason : 'the keychain did not read back what was written' };" "" \
+    test/device-link.test.ts "a read-back that differs by a byte"
+
+probe "localStorage-only-after-the-read-back" src/renderer/remote-session.ts \
+    "        if (moved) tokens.forget(url);" "        if (moved || !moved) tokens.forget(url);" \
+    test/device-link-window.test.ts "a token the host did not read back stays"
+
+probe "a-drone-stops-before-the-host" src/main/device-link-gate.ts \
+    "    if (refused) return Promise.resolve({ ok: false, reason: refused });" "" \
+    test/device-link-window.test.ts "a drone is refused and the host is asked nothing"
+
+probe "the-desktop-hook-holds-no-token" src/renderer/App.tsx \
+    "                const auth = deviceAuth(pin, label, pairedNow.current, url.url);" "                const auth = deviceAuth(pin, label, pairedNow.current, url.url); rememberedTokens(window.localStorage).tokenFor(url.url);" \
+    test/device-link-window.test.ts "the desktop hook keeps no token"
 
 
 echo "=== restored: every probed test file (green expected)"

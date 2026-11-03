@@ -8,13 +8,14 @@ import type { StopVerdict } from '../core/session.js';
  * stopped agent is left stopped, since its next start prepares it anyway.
  *
  * THE ASKING. An account change is one way to hear it. An agent waiting on Tynn is the other reason to look: the account's own retries end, and
- * Tynn's agent endpoints can be down while /me is fine. So while someone waits, this asks again on a backoff; with nobody waiting, nothing is
- * scheduled. A restart comes only once the host holds the key (`names`, agent-tynn-prep.ts): until then the running agent is not touched.
+ * Tynn's agent endpoints can be down while /me is fine. So while someone waits, this asks again: after 30 s, after 2 min, then every 5 min, and at once when a window links
+ * or the machine wakes. With nobody waiting, nothing is scheduled. A restart comes only once the host holds the key (`names`, agent-tynn-prep.ts): until then the running
+ * agent is not touched, so asking often costs a question and no one's session. An agent should not sit without its tools for long after Tynn is back.
  *
  * THE THREAD. With no window, the host only queues an agent's thread id for the next window, so the registry may not know it yet. `threadOf` is what
  * the host heard: resuming from the registry alone would quietly start a new conversation.
  */
-export const RECOVERY_STEPS_MS: readonly number[] = [30_000, 120_000, 600_000, 1_800_000];
+export const RECOVERY_STEPS_MS: readonly number[] = [30_000, 120_000, 300_000];
 const BACK_NOTICE = 'Tynn is available again. Genie restarted this session on the same conversation to bring its Tynn tools up to date.';
 
 export interface HostTynnRecoveryPorts {
@@ -38,11 +39,37 @@ export interface HostTynnRecoveryPorts {
     cwdFor(record: AgentRecord): string;
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     readonly log?: (line: string) => void;
+    /** Starts while someone waits, and stops when nobody does: says when the machine has been asleep. */
+    readonly watchWake?: (onWake: () => void) => () => void;
+}
+
+const unrefSchedule = (ms: number, fn: () => void): (() => void) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); };
+
+/**
+ * THE MACHINE SLEPT. The host has no Electron and so no powerMonitor. A timer runs on a clock that stops during sleep and the wall clock does not, so a timer that comes back
+ * far later than it asked by the wall clock means the machine was away. A wrong clock change costs one extra question to Tynn.
+ */
+export function wallClockJumps(onWake: () => void, options: { readonly everyMs?: number; readonly toleranceMs?: number; readonly now?: () => number; readonly schedule?: (ms: number, fn: () => void) => () => void } = {}): () => void {
+    const every = options.everyMs ?? 30_000;
+    const tolerance = options.toleranceMs ?? 60_000;
+    const now = options.now ?? Date.now;
+    const schedule = options.schedule ?? unrefSchedule;
+    let cancel: (() => void) | null = null;
+    let stopped = false;
+    const arm = (): void => {
+        const askedAt = now();
+        cancel = schedule(every, () => {
+            if (now() - askedAt > every + tolerance) onWake();
+            if (!stopped) arm();
+        });
+    };
+    arm();
+    return () => { stopped = true; cancel?.(); };
 }
 
 export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
     const log = ports.log ?? (() => {});
-    const schedule = ports.schedule ?? ((ms: number, fn: () => void) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); });
+    const schedule = ports.schedule ?? unrefSchedule;
     /** Named, and waiting for their turn to end. */
     const owed = new Set<string>();
     const restarting = new Set<string>();
@@ -100,22 +127,42 @@ export function hostTynnRecovery(ports: HostTynnRecoveryPorts) {
 
     let step = 0;
     let looping = false;
+    let checking = false;
+    let cancelTimer: (() => void) | null = null;
+    let stopWake: (() => void) | null = null;
+    const check = (): void => {
+        checking = true;
+        void (async () => {
+            await ports.recheck().catch(() => {});
+            await recover();
+        })().finally(() => { checking = false; tick(); });
+    };
     const tick = (): void => {
-        if (!ports.waiting()) { looping = false; step = 0; return; }
-        schedule(RECOVERY_STEPS_MS[Math.min(step, RECOVERY_STEPS_MS.length - 1)]!, () => {
+        if (!ports.waiting()) { looping = false; step = 0; stopWake?.(); stopWake = null; return; }
+        cancelTimer = schedule(RECOVERY_STEPS_MS[Math.min(step, RECOVERY_STEPS_MS.length - 1)]!, () => {
+            cancelTimer = null;
             step += 1;
-            void (async () => {
-                await ports.recheck().catch(() => {});
-                await recover();
-            })().finally(tick);
+            check();
         });
+    };
+    const begin = (): void => {
+        looping = true;
+        stopWake ??= ports.watchWake?.(() => nudge()) ?? null;
     };
     /** An agent was prepared: if it is waiting on Tynn, start asking. One loop however many agents. */
     const kick = (): void => {
         if (looping || !ports.waiting()) return;
-        looping = true;
+        begin();
         tick();
     };
+    /** Something changed (a window linked, the machine woke): ask now instead of at the next step. */
+    const nudge = (): void => {
+        if (checking || !ports.waiting()) return;
+        cancelTimer?.();
+        cancelTimer = null;
+        if (!looping) begin();
+        check();
+    };
 
-    return { recover, kick };
+    return { recover, kick, nudge };
 }
