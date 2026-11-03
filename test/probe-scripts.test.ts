@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
@@ -108,4 +109,22 @@ it('CONTROL: the check catches a name found nowhere', () => {
     const [two] = calls('probe "y" test/probe-scripts.test.ts \\\n    "say \\"it\\" \\$ a\nb" "" \\\n    test/x.test.ts "z"\n');
     expect(two).toMatchObject({ name: 'y', anchor: 'say "it" $ a\nb', replacement: '', tests: ['test/x.test.ts'], expected: 'z' });
     expect(read('test/probe-scripts.test.ts').includes(`not ${'in this file at all'}`)).toBe(false);
+});
+
+/**
+ * A MERGE OF TWO PROBE LISTS CAN LEAVE TWO RESTORE BLOCKS, THE FIRST WITH NO `fi` (the rebase on 592e1d64): every anchor and test name still checks out, and bash refuses the whole script on the VM.
+ */
+describe.each(SCRIPTS)('%s, as a script bash can read', (file) => {
+    it('has one restore block, at the end', () => {
+        const text = read(file);
+        expect(text.split('=== restored: every probed test file').length - 1).toBeLessThanOrEqual(1);
+        const restore = text.indexOf('=== restored: every probed test file');
+        if (restore >= 0) expect(text.indexOf('\nprobe "', restore)).toBe(-1);
+    });
+
+    it.skipIf(process.platform === 'win32')('parses', () => {
+        const parsed = spawnSync('bash', ['-n', file], { encoding: 'utf8' });
+        expect(parsed.stderr).toBe('');
+        expect(parsed.status).toBe(0);
+    });
 });

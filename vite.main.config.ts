@@ -5,6 +5,8 @@ import { defineConfig } from 'vite';
  * has supported ESM main since 28.
  */
 export default defineConfig({
+    // The test build that stops at each step of the keychain move (src/main/migration-holds.ts). Nothing that ships sets it.
+    define: { __GENIE_TEST_HOLDS__: process.env.GENIE_TEST_HOLDS === '1' ? 'true' : 'false' },
     build: {
         outDir: 'dist/main',
         emptyOutDir: false,
