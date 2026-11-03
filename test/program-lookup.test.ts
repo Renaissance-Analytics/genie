@@ -131,8 +131,17 @@ describe("a person's terminal and everyone else's", () => {
         };
         expect(opens('win32', { command: 'echo hi', shell: true })).toMatch(/^[A-Za-z]:.*\\System32\\cmd\.exe$/);
         expect(opens('win32', {})).toMatch(/^[A-Za-z]:.*\\System32\\cmd\.exe$/);
-        expect(opens('win32', { command: 'nothing-by-this-name arg' })).toMatch(/^[A-Za-z]:.*\\nothing-by-this-name\.exe$/);
         expect(opens('linux', { command: 'tool arg' })).toBe('tool');
+    });
+
+    it('a name that is not on this machine: it says so in words, naming what was asked for and no path it invented, and the engine is never called', () => {
+        const made: Array<Record<string, unknown>> = [];
+        const port = fancyTermPort({ create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 1, shell: 'x', existing: false, scrollback: '' }; }, on: () => {}, kill: () => {}, write: () => {}, resize: () => {}, scrollback: () => '', attach: () => null } as never, { defaultShell: () => ({ command: 'cmd.exe', args: [] }), platform: 'win32' });
+        let words = '';
+        try { port.open({ cwd: '/w', command: 'nothing-by-this-name arg' }); } catch (error) { words = (error as Error).message; }
+        expect(words).toMatch(/"nothing-by-this-name" was not found/);
+        expect(words).not.toMatch(/System32|\.exe/);
+        expect(made).toEqual([]);
     });
 
     it("an agent's or Genie's: it stays as inherited", () => {
@@ -339,6 +348,41 @@ pty.onExit(end);`;
         engineStartedInTheFolder('.\\git.exe');
         expect(ran()).toBe(true);
     }, 40_000);
+
+    /** Through the real port and the real engine: what a person would read, and whether anything ran. */
+    const openedThroughThePort = (command: string, cwd: string) => {
+        const settings = { get: (key: string) => (key === 'track_cwd' ? 'off' : key === 'detached_terminals' ? 'off' : undefined) };
+        configureInProcessBackend({ settings, snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false } } as never);
+        const port = fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
+        try { const opened = port.open({ cwd, command }); port.kill(opened.id); return ''; } catch (error) { return (error as Error).message; }
+    };
+
+    it('the real message: npm is on this machine as a batch file, and it says that, and no path that is not there', () => {
+        const words = openedThroughThePort('npm run dev', folder);
+        expect(words).toMatch(/"npm" is on this machine as .*npm\.cmd, a batch file/i);
+        expect(words).not.toMatch(/System32/i);
+    });
+
+    it('a batch file and a program of that name in the working folder: not run, and not mentioned as if they were found', async () => {
+        writeFileSync(join(folder, 'plantedtool.cmd'), `@echo ran> "${mark}"\r\n`);
+        copyFileSync(process.execPath, join(folder, 'plantedtool.exe'));
+        const words = openedThroughThePort('plantedtool status', folder);
+        await new Promise((r) => setTimeout(r, 1_500));
+        expect(words).toMatch(/"plantedtool" was not found/);
+        expect(ran()).toBe(false);
+    });
+
+    it('a name in the folder when Genie itself started there: the same', async () => {
+        writeFileSync(join(folder, 'plantedtool.cmd'), `@echo ran> "${mark}"\r\n`);
+        const was = process.cwd();
+        process.chdir(folder);
+        try {
+            const words = openedThroughThePort('plantedtool status', folder);
+            await new Promise((r) => setTimeout(r, 1_500));
+            expect(words).toMatch(/"plantedtool" was not found/);
+            expect(ran()).toBe(false);
+        } finally { process.chdir(was); }
+    });
 
     it('resolving finds the real one with a PATH of its own', () => {
         const dir = join(folder, 'on path');
