@@ -1,5 +1,6 @@
 import { IssueWatchFeed, parseIssueWatchActivity, parseIssueWatchEntry, type IwEntry, type IwEvent, isRepoName, parseWatchedRepos, type WatchedRepos } from '../core/issue-watch.js';
-import { encodePong, encodeSubscribe, parsePusherFrame, pusherErrorOf, socketIdOf, socketUrlFor } from '../core/pusher.js';
+import { socketUrlFor, type PusherFrame } from '../core/pusher.js';
+import { PusherLink } from './pusher-link.js';
 
 /**
  * ISSUEWATCH, LISTENING TO TYNN (Tynn #806). Genie never polls GitHub: Tynn does, with its GitHub App, and pushes each
@@ -16,9 +17,8 @@ import { encodePong, encodeSubscribe, parsePusherFrame, pusherErrorOf, socketIdO
  *      that what changed comes out as events.
  *
  * THE SOCKET CAN FAIL WITHOUT SAYING SO (genie#1478): production's Reverb refused Genie with `pusher:error` and then left the
- * socket open and silent for 300 s. So a `pusher:error` is a failure with its reason, a dial has a deadline for
- * `connection_established`, and a failed socket is let go at once rather than waited on to close. The same reconcile also
- * runs at start and on each failure, independent of the socket, so a push outage does not blank the list. It is bounded by
+ * socket open and silent for 300 s. main/pusher-link.ts holds that: a refusal, or a connect or subscribe that goes unanswered,
+ * ends the socket with a reason, and here that is a retry with a growing pause. The same reconcile also runs at start and on each failure, independent of the socket, so a push outage does not blank the list. It is bounded by
  * the backoff, and it is not a poll: once live, nothing asks again until a delta or a drop says to.
  *
  * Everything outside is a port, so the whole life is tested with a fake socket and a fake Tynn.
@@ -69,24 +69,14 @@ export type IssueWatchRefreshAnswer =
 export const RECONNECT_MS = 5_000;
 /** The longest a connection that keeps failing waits between tries. */
 export const RECONNECT_MAX_MS = 300_000;
-/** How long a dialled socket may say nothing before it counts as failed. */
-export const CONNECT_DEADLINE_MS = 15_000;
-/** How long, from `connection_established`, signing and subscribing may take before it counts as failed. */
-export const SUBSCRIBE_DEADLINE_MS = 30_000;
 
 export class IssueWatchClient {
     readonly #ports: IssueWatchClientPorts;
     readonly #feed = new IssueWatchFeed();
     #state: IssueWatchState = { kind: 'stopped' };
     #stopped = false;
-    #socket: SocketLike | null = null;
-    #channel: string | null = null;
+    #link: PusherLink | null = null;
     #cancelRetry: (() => void) | null = null;
-    #cancelDeadline: (() => void) | null = null;
-    /** `connection_established` has come on the current socket. */
-    #established = false;
-    /** What the runtime last said went wrong on the current socket, for the close that follows. */
-    #socketError: string | null = null;
     /** How many tries in a row have failed: the next pause. Live starts it over. */
     #failures = 0;
     /** The last failure, said until it is live again, also while it dials the next try. */
@@ -120,11 +110,10 @@ export class IssueWatchClient {
         this.#pullAgain = null;
         this.#cancelRetry?.();
         this.#cancelRetry = null;
-        this.#endDeadline();
-        const socket = this.#socket;
-        this.#socket = null;
+        const link = this.#link;
+        this.#link = null;
         this.#set({ kind: 'stopped' });
-        try { socket?.close(); } catch { /* already closing */ }
+        link?.close();
     }
 
     /**
@@ -208,74 +197,54 @@ export class IssueWatchClient {
         const url = socketUrlFor(config);
         if (url === null) return this.#retry('Tynn has no push configured');
         // The person's own channel (Tynn's routes/channels.php `App.Models.User.{id}`).
-        this.#channel = `private-App.Models.User.${tynn.userId}`;
+        const channel = `private-App.Models.User.${tynn.userId}`;
         let socket: SocketLike;
         try {
             socket = this.#ports.socket(url);
         } catch (error) {
             return this.#retry(`Tynn's socket could not be dialled: ${(error as Error).message}`);
         }
-        this.#socket = socket;
-        this.#established = false;
-        this.#socketError = null;
-        this.#cancelDeadline = this.#ports.schedule(() => {
-            this.#fail(socket, `Tynn's socket server said nothing for ${CONNECT_DEADLINE_MS / 1000} s`);
-        }, CONNECT_DEADLINE_MS);
-        socket.addEventListener('message', (e) => { if (this.#socket === socket) void this.#onFrame(socket, String(e.data), tynn); });
-        socket.addEventListener('close', () => { if (this.#socket === socket) this.#onDrop(); });
-        // A 'close' follows, and the reconnect is scheduled there; what went wrong is only said here.
-        socket.addEventListener('error', (e) => { if (this.#socket === socket && typeof e.message === 'string' && e.message !== '') this.#socketError = e.message; });
+        const link: PusherLink = new PusherLink(socket, this.#ports.schedule, {
+            onEstablished: (socketId) => { void this.#sign(link, channel, socketId, tynn); },
+            onSubscribed: (subscribed) => {
+                if (subscribed !== channel) return;
+                this.#failures = 0;
+                this.#why = null;
+                this.#set({ kind: 'live' });
+                void this.#reconcile(tynn);
+            },
+            onSubscriptionRefused: (refused, reason) => { if (refused === channel) link.fail(reason); },
+            onEvent: (frame) => { if (frame.channel === channel) void this.#onEvent(frame, tynn); },
+            onEnded: (reason) => {
+                this.#link = null;
+                this.#retry(reason);
+            },
+        });
+        this.#link = link;
     }
 
-    #endDeadline(): void {
-        this.#cancelDeadline?.();
-        this.#cancelDeadline = null;
-    }
-
-    /** This socket has failed: let it go now and try again. Its close may never come, and is ignored if it does. */
-    #fail(socket: SocketLike, reason: string): void {
-        if (this.#socket !== socket) return;
-        this.#socket = null;
-        this.#endDeadline();
-        try { socket.close(); } catch { /* already closing */ }
-        this.#retry(reason);
-    }
-
-    async #onFrame(socket: SocketLike, raw: string, tynn: SignedInTynn): Promise<void> {
-        const frame = parsePusherFrame(raw);
-        if (!frame) return;
-        const refused = pusherErrorOf(frame);
-        if (refused !== null) {
-            this.#fail(socket, `Tynn's socket server refused the connection: ${refused.message.slice(0, 200)}${refused.code === null ? '' : ` (${refused.code})`}`);
-            return;
-        }
-        const socketId = socketIdOf(frame);
-        if (socketId !== null) {
-            this.#established = true;
-            this.#endDeadline();
-            try {
-                const res = await tynn.request('/api/v1/user/broadcasting-auth', { method: 'POST', body: { socket_id: socketId, channel_name: this.#channel } });
-                const body = res.ok ? ((await res.json()) as { auth?: unknown }) : null;
-                if (this.#socket !== socket) return;
-                if (!body || typeof body.auth !== 'string' || body.auth === '') {
-                    this.#fail(socket, `Tynn refused to sign the channel: HTTP ${res.status}`);
-                    return;
-                }
-                socket.send(encodeSubscribe(this.#channel!, body.auth));
-            } catch (error) {
-                this.#fail(socket, `Tynn could not sign the channel: ${(error as Error).message}`);
+    /** Has Tynn sign the channel for this socket, and subscribes. */
+    async #sign(link: PusherLink, channel: string, socketId: string, tynn: SignedInTynn): Promise<void> {
+        link.expectSubscribe(channel);
+        try {
+            const res = await tynn.request('/api/v1/user/broadcasting-auth', { method: 'POST', body: { socket_id: socketId, channel_name: channel } });
+            const body = res.ok ? ((await res.json()) as { auth?: unknown }) : null;
+            if (!link.active) return;
+            if (!body || typeof body.auth !== 'string' || body.auth === '') {
+                // Tynn answers every unauthorized request with 404. main/tynn-account.ts holds the rule: the credential stays,
+                // and /me decides. So this is said as what it is and tried again, and nothing here signs anyone out.
+                link.fail(res.status === 404
+                    ? 'not signed in to Tynn: it answered 404 when asked to sign the channel, as it does to anything unauthorized. The sign-in is kept, and this tries again'
+                    : `Tynn refused to sign the channel: HTTP ${res.status}`);
+                return;
             }
-            return;
+            link.subscribe(channel, body.auth);
+        } catch (error) {
+            link.fail(`Tynn could not sign the channel: ${(error as Error).message}`);
         }
-        if (frame.event === 'pusher:ping') { socket.send(encodePong()); return; }
-        if (frame.channel !== this.#channel) return;
-        if (frame.event === 'pusher_internal:subscription_succeeded') {
-            this.#failures = 0;
-            this.#why = null;
-            this.#set({ kind: 'live' });
-            await this.#reconcile(tynn);
-            return;
-        }
+    }
+
+    async #onEvent(frame: PusherFrame, tynn: SignedInTynn): Promise<void> {
         if (frame.event === 'issuewatch.delta') {
             // A list too big for one event comes as a notice (tynn.ai#308: counts, `truncated`, no items): pull it whole.
             if ((frame.data as { truncated?: unknown } | null)?.truncated === true) await this.#reconcile(tynn);
@@ -320,13 +289,6 @@ export class IssueWatchClient {
         this.#ports.onEntry?.(entry);
         const events = this.#feed.apply(entry);
         if (events.length > 0) this.#ports.onEvents(entry.projectId, events);
-    }
-
-    #onDrop(): void {
-        this.#socket = null;
-        this.#endDeadline();
-        if (this.#stopped) return;
-        this.#retry(this.#established ? null : `Tynn's socket closed before it connected${this.#socketError === null ? '' : `: ${this.#socketError}`}`);
     }
 
     #retry(reason: string | null): void {

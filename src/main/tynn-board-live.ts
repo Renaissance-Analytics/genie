@@ -1,6 +1,7 @@
-import { encodePong, encodeSubscribe, parsePusherFrame, socketIdOf, socketUrlFor } from '../core/pusher.js';
+import { socketUrlFor, type PusherFrame } from '../core/pusher.js';
 import { BOARD_LIVE, liveChannel, liveReconnectDelay, ringIds, type LiveState } from '../core/tynn-board.js';
 import type { SocketLike } from './issue-watch-client.js';
+import { PusherLink } from './pusher-link.js';
 
 /**
  * THE LIVE BOARD, LISTENING TO TYNN (genie#1295 row B4, workspace-ux 0.5.0 `data.live`).
@@ -19,6 +20,11 @@ import type { SocketLike } from './issue-watch-client.js';
  * most 30 s), back to 1 s once live. A board Tynn will not sign (a 404: no board scope, no access, an older Tynn) is
  * "off" and not retried until the next connection; a Tynn with no socket, or no sign-in, is "off". When the last open
  * board closes, the socket closes. Everything outside is a port, so the whole life is tested with a fake socket.
+ *
+ * The socket can fail without saying so (genie#1478; main/pusher-link.ts holds it): a refusal, or a connect or subscribe that
+ * goes unanswered, ends it and it reconnects as a drop does. The reason is only logged: this is a live-update path over data
+ * the tab can still fetch. A channel refused alone is that board "off". Production refuses a bad signature for the whole
+ * socket instead, so that one reconnects with the rest; the signature is Tynn's own, so it is not expected to be bad.
  */
 export interface BoardLiveRing { readonly ids: readonly string[]; readonly catchUp: boolean }
 
@@ -41,7 +47,7 @@ export class TynnBoardLive {
     /** Open boards: project → how many tabs follow it. */
     readonly #watchers = new Map<string, number>();
     readonly #states = new Map<string, LiveState>();
-    #socket: SocketLike | null = null;
+    #link: PusherLink | null = null;
     #socketId: string | null = null;
     #attempt = 0;
     #cancelRetry: (() => void) | null = null;
@@ -56,9 +62,9 @@ export class TynnBoardLive {
         this.#watchers.set(projectId, (this.#watchers.get(projectId) ?? 0) + 1);
         const known = this.#states.get(projectId);
         if (known !== undefined) this.#ports.onState(projectId, known);
-        if (this.#socket !== null && this.#socketId !== null) {
+        if (this.#link !== null && this.#socketId !== null) {
             if ((this.#watchers.get(projectId) ?? 0) === 1) void this.#subscribe(projectId);
-        } else if (this.#socket === null && this.#cancelRetry === null && !this.#dialling) {
+        } else if (this.#link === null && this.#cancelRetry === null && !this.#dialling) {
             void this.#connect();
         }
         let done = false;
@@ -69,6 +75,8 @@ export class TynnBoardLive {
             if (left > 0) { this.#watchers.set(projectId, left); return; }
             this.#watchers.delete(projectId);
             this.#states.delete(projectId);
+            // Its subscribe may be out: the answer no longer matters, so its silence must not close the socket under another.
+            this.#link?.forget(liveChannel(projectId));
             if (this.#watchers.size === 0) this.#close();
         };
     }
@@ -86,10 +94,10 @@ export class TynnBoardLive {
     #close(): void {
         this.#cancelRetry?.();
         this.#cancelRetry = null;
-        const socket = this.#socket;
-        this.#socket = null;
+        const link = this.#link;
+        this.#link = null;
         this.#socketId = null;
-        try { socket?.close(); } catch { /* already closing */ }
+        link?.close();
     }
 
     async #connect(): Promise<void> {
@@ -101,42 +109,54 @@ export class TynnBoardLive {
         let url: string | null;
         try {
             const res = await tynn.request(BOARD_LIVE.push.path, { method: 'GET' });
-            if (!res.ok) { this.#dialling = false; return this.#retry(); }
+            if (!res.ok) { this.#dialling = false; return this.#retry(`Tynn answered the push config with HTTP ${res.status}`); }
             url = socketUrlFor((await res.json()) as Parameters<typeof socketUrlFor>[0]);
-        } catch {
+        } catch (error) {
             this.#dialling = false;
-            return this.#retry();
+            return this.#retry(`Tynn could not be reached: ${(error as Error).message}`);
         }
         this.#dialling = false;
         if (this.#watchers.size === 0) return;
         // Tynn has no socket to listen on: the board is simply not live.
         if (url === null) { this.#setAll('off'); return; }
-        const socket = this.#ports.socket(url);
-        this.#socket = socket;
-        socket.addEventListener('message', (e) => { if (this.#socket === socket) void this.#onFrame(socket, String(e.data)); });
-        socket.addEventListener('close', () => { if (this.#socket === socket) this.#onDrop(); });
-        socket.addEventListener('error', () => { /* a 'close' follows; the reconnect is scheduled there */ });
+        let socket: SocketLike;
+        try {
+            socket = this.#ports.socket(url);
+        } catch (error) {
+            return this.#retry(`Tynn's socket could not be dialled: ${(error as Error).message}`);
+        }
+        const link: PusherLink = new PusherLink(socket, this.#ports.schedule, {
+            onEstablished: (socketId) => {
+                this.#socketId = socketId;
+                for (const id of this.#watchers.keys()) void this.#subscribe(id);
+            },
+            onSubscribed: (channel) => {
+                const projectId = this.#projectOf(channel);
+                if (projectId === null) return;
+                // Only when every board has answered: one that never does must keep growing the pause, whoever else is live.
+                if (link.pendingSubscribes === 0) this.#attempt = 0;
+                this.#set(projectId, 'live');
+                this.#ports.onRing(projectId, { ids: [], catchUp: true });
+            },
+            onSubscriptionRefused: (channel, reason) => {
+                const projectId = this.#projectOf(channel);
+                if (projectId === null) return;
+                this.#ports.onFailure?.(reason);
+                this.#set(projectId, 'off');
+            },
+            onEvent: (frame) => { this.#onEvent(frame); },
+            onEnded: (reason) => {
+                this.#link = null;
+                this.#socketId = null;
+                this.#retry(reason);
+            },
+        });
+        this.#link = link;
     }
 
-    async #onFrame(socket: SocketLike, raw: string): Promise<void> {
-        const frame = parsePusherFrame(raw);
-        if (!frame) return;
-        const socketId = socketIdOf(frame);
-        if (socketId !== null) {
-            this.#socketId = socketId;
-            await Promise.all([...this.#watchers.keys()].map((id) => this.#subscribe(id)));
-            return;
-        }
-        if (frame.event === 'pusher:ping') { socket.send(encodePong()); return; }
+    #onEvent(frame: PusherFrame): void {
         const projectId = this.#projectOf(frame.channel);
         if (projectId === null) return;
-        if (frame.event === 'pusher_internal:subscription_succeeded') {
-            this.#attempt = 0;
-            this.#set(projectId, 'live');
-            this.#ports.onRing(projectId, { ids: [], catchUp: true });
-            return;
-        }
-        if (frame.event === 'pusher:subscription_error') { this.#set(projectId, 'off'); return; }
         if (EVENTS.has(frame.event)) this.#ports.onRing(projectId, { ids: ringIds(frame.event, frame.data), catchUp: false });
     }
 
@@ -147,35 +167,36 @@ export class TynnBoardLive {
     }
 
     async #subscribe(projectId: string): Promise<void> {
-        const socket = this.#socket;
+        const link = this.#link;
         const socketId = this.#socketId;
         const tynn = this.#ports.tynn();
-        if (socket === null || socketId === null) return;
+        if (link === null || socketId === null) return;
         if (tynn === null) { this.#set(projectId, 'off'); return; }
         const channel = liveChannel(projectId);
+        link.expectSubscribe(channel);
         try {
             const res = await tynn.request(`/api/v1/projects/${encodeURIComponent(projectId)}${BOARD_LIVE.auth.path}`, { method: 'POST', body: { socket_id: socketId, channel_name: channel } });
             const body = res.ok ? ((await res.json()) as { auth?: unknown }) : null;
-            if (this.#socket !== socket) return;
+            if (!link.active) return;
+            if (!this.#watchers.has(projectId)) { link.forget(channel); return; }
             // Tynn will not sign it (404 for every refusal): this board is not live. Not retried in a loop.
-            if (!body || typeof body.auth !== 'string' || body.auth === '') { this.#set(projectId, 'off'); return; }
-            socket.send(encodeSubscribe(channel, body.auth));
-        } catch {
+            if (!body || typeof body.auth !== 'string' || body.auth === '') {
+                link.forget(channel);
+                this.#set(projectId, 'off');
+                return;
+            }
+            link.subscribe(channel, body.auth);
+        } catch (error) {
             // Tynn could not be reached to sign it: drop and dial again, so it is retried with the rest.
-            if (this.#socket === socket) socket.close();
+            link.fail(`Tynn could not sign the board's channel: ${(error as Error).message}`);
         }
     }
 
-    #onDrop(): void {
-        this.#socket = null;
-        this.#socketId = null;
+    #retry(reason: string | null): void {
         if (this.#watchers.size === 0) return;
-        this.#retry();
-    }
-
-    #retry(): void {
-        if (this.#watchers.size === 0) return;
+        if (reason !== null) this.#ports.onFailure?.(reason);
         this.#setAll('reconnecting');
+        this.#cancelRetry?.();
         const ms = liveReconnectDelay(this.#attempt);
         this.#attempt += 1;
         this.#cancelRetry = this.#ports.schedule(() => { this.#cancelRetry = null; void this.#connect(); }, ms);

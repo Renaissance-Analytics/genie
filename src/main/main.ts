@@ -468,6 +468,7 @@ function tynnBoardLive(): TynnBoardLive {
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onRing: (projectId, ring) => tynnBoardLiveSignal(projectId, { ring }),
         onState: (projectId, state) => tynnBoardLiveSignal(projectId, { state }),
+        onFailure: (reason) => { console.log(`[genie] tynn board live: ${reason}`); },
     });
     return tynnBoardLiveClient;
 }

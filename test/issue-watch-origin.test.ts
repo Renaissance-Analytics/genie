@@ -8,8 +8,9 @@ import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import { issueWatchPanelView, issueWatchWhyNot, parseIssueWatchEntry, type IssueWatchSummary, type IwEvent } from '../src/core/issue-watch.js';
 import { AttentionStore } from '../src/main/attention-store.js';
 import { InboxStore } from '../src/main/inbox-store.js';
-import { CONNECT_DEADLINE_MS, IssueWatchClient, RECONNECT_MAX_MS, RECONNECT_MS, SUBSCRIBE_DEADLINE_MS, type IssueWatchClientPorts, type IssueWatchState, type SocketLike } from '../src/main/issue-watch-client.js';
+import { IssueWatchClient, RECONNECT_MAX_MS, RECONNECT_MS, type IssueWatchClientPorts, type IssueWatchState, type SocketLike } from '../src/main/issue-watch-client.js';
 import { genieTools, type Caller } from '../src/main/mcp-tools.js';
+import { CONNECT_DEADLINE_MS, SUBSCRIBE_DEADLINE_MS } from '../src/main/pusher-link.js';
 import { TynnBoardLive } from '../src/main/tynn-board-live.js';
 import { dialTynnSocket } from '../src/main/tynn-socket.js';
 
