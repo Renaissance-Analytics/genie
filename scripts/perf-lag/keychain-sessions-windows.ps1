@@ -8,8 +8,15 @@
 #       A task at logon that keeps trying until Credential Manager answers: how long a host started at logon could be refused, and in what words.
 #
 # Prints `### keychain ...` lines from scripts/perf-lag/keychain-measure.mjs and `### keychain-sessions ...` here. The tasks are removed afterwards. No secret is involved.
-param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'logon-install', 'logon-read')][string]$Phase)
-$ErrorActionPreference = 'Stop'
+#   ... -Phase autologon        (the password on stdin, never an argument) sets Windows to log genie on at the next boot, in this VM only
+#   ... -Phase wait-logon       waits for a logged-on session after that boot
+#   ... -Phase autologon-clear  takes it away again
+# The whole sequence, reboot included: scripts/vm-keychain-windows.sh in the envelope.
+param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon')][string]$Phase)
+# Continue: quser and schtasks write to stderr in ordinary answers, and under Stop PowerShell 5.1 turns that into a throw (quser with nobody on: "No User exists", batch F0).
+$ErrorActionPreference = 'Continue'
+$winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
+function Active-Sessions { @(cmd /c 'quser 2>nul' | Where-Object { $_ -match '\bActive\b' }) }
 $repo = (Get-Location).Path
 $node = (Get-Command node).Source
 $env:KEYCHAIN_MEASURE_ALLOW = '1'
@@ -30,7 +37,7 @@ switch ($Phase) {
         exit $LASTEXITCODE
     }
     'interactive' {
-        $someone = @(quser 2>$null | Where-Object { $_ -match '\bActive\b' })
+        $someone = Active-Sessions
         if ($someone.Count -eq 0) { Write-Output '### keychain-sessions interactive=NEEDS-A-LOGGED-ON-SESSION  quser shows nobody active: log someone on, or set autologon'; exit 4 }
         Write-Output "--- active: $($someone -join '; ')"
         $out = Join-Path $env:PUBLIC 'genie-keychain-interactive.txt'
@@ -58,6 +65,28 @@ echo %ERRORLEVEL% > "$done"
             $text | Where-Object { $_ -notmatch '^(GROUP INFORMATION|Group Name|=|$)' -and $_ -notmatch 'S-1-' }
             exit [int](Get-Content $done).Trim()
         } finally { schtasks /Delete /TN $name /F 2>$null | Out-Null }
+    }
+    'autologon' {
+        $password = [Console]::In.ReadLine()
+        if (-not $password) { Write-Output '### keychain-sessions autologon=FAIL  no password on stdin'; exit 1 }
+        Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '1'
+        Set-ItemProperty -Path $winlogon -Name DefaultUserName -Value $env:USERNAME
+        Set-ItemProperty -Path $winlogon -Name DefaultDomainName -Value $env:COMPUTERNAME
+        Set-ItemProperty -Path $winlogon -Name DefaultPassword -Value $password
+        Write-Output "### keychain-sessions autologon=PASS  $env:USERNAME logs on at the next boot"
+    }
+    'autologon-clear' {
+        Set-ItemProperty -Path $winlogon -Name AutoAdminLogon -Value '0'
+        Remove-ItemProperty -Path $winlogon -Name DefaultPassword -ErrorAction SilentlyContinue
+        Write-Output '### keychain-sessions autologon-clear=PASS'
+    }
+    'wait-logon' {
+        $began = Get-Date
+        $deadline = $began.AddSeconds(240)
+        $someone = Active-Sessions
+        while ($someone.Count -eq 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2; $someone = Active-Sessions }
+        if ($someone.Count -eq 0) { Write-Output '### keychain-sessions wait-logon=FAIL  nobody logged on within 240 s of ssh coming back'; exit 1 }
+        Write-Output "### keychain-sessions wait-logon=PASS  after $([int]((Get-Date) - $began).TotalSeconds) s: $($someone -join '; ')"
     }
     'logon-install' {
         Remove-Item -Force -ErrorAction SilentlyContinue $logonFile
