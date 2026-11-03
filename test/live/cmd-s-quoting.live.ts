@@ -18,9 +18,16 @@
  *   H2       the same, with a quoted script argument that also has spaces;
  *   H3       an unquoted bare command with a quoted, spaced argument (`node "dir with spaces\probe.cjs"`), the shape most
  *            people write — must keep working under any remedy;
- *   R1-R3    the candidate remedy, measured on the same lines: the whole line wrapped once more, `cmd /d /s /c "<line>"`.
+ *   E1-E3    what a person's line also does: two commands with &&, a pipe, a %VARIABLE%. Whatever replaces today's launch must keep these.
  *
- * It changes nothing in Genie: R* builds its own launch beside `shellLaunch` to measure the remedy before anyone ships it.
+ * MEASURED ON THE VM (batch HH): the CONTROL did not run either. Nothing was wrong with the probe: "today" is the product's own path. The pty engine takes a LIST and joins it for CreateProcessW by the C runtime's rules
+ * (fancy-pty's documented contract: "the helper owns that join"), so each `"` in the line reaches cmd as `\"`, which cmd does not read as a quote. So today no supervised command with a quote in it runs on Windows, spaces or
+ * not. Wrapping the line, the remedy genie#1428 proposed, failed the same way. service-exec.ts escapes this with windowsVerbatimArguments, which a pty has no equivalent of. These remedies put no quote in the argv at all:
+ *
+ *   env       `cmd /d /s /c %GENIE_SHELL_LINE%`, the line in the environment. cmd expands it before it reads quotes, so they are real quotes. It expands once, so a %VARIABLE% inside stays literal: E3 says so.
+ *   env+vars  the same, with each %NAME% this environment defines already replaced in the line. The one change from cmd's own reading: an undefined %NAME% stays as it is, which is what cmd /c does too.
+ *
+ * It changes nothing in Genie: each remedy builds its own launch beside `shellLaunch` to measure it before anyone ships it.
  * Exit 0 always once every case ran (the verdict is the table, for a person to read); 2 on a timeout.
  */
 import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
@@ -63,14 +70,19 @@ const lines: Array<{ name: string; line: string; cwd: string }> = [
     { name: 'H1 quoted path WITH spaces', line: `"${join(spaced, 'node.exe')}" "${join(plain, 'probe.cjs')}" ok`, cwd: plain },
     { name: 'H2 quoted path and quoted argument, both spaced', line: `"${join(spaced, 'node.exe')}" "${join(spaced, 'probe arg.cjs')}" ok`, cwd: plain },
     { name: 'H3 bare command, quoted spaced argument', line: `node "${join(spaced, 'probe arg.cjs')}" ok`, cwd: plain },
+    // The marker is built when it runs: a window title carries the command line, so a marker in the line could read as a run.
+    { name: 'E1 two commands with && and a quote', line: `node -e "console.log('CMDS-'+'PROBE-RAN')" && echo second`, cwd: plain },
+    { name: 'E2 a pipe, no quotes', line: `node probe.cjs ok | findstr PROBE`, cwd: plain },
+    { name: 'E3 a %VARIABLE%', line: `echo %CMDS_PROBE_VAR%`, cwd: plain },
 ];
+process.env.CMDS_PROBE_VAR = MARK;
 
 /**
  * One launch with an EXACT argv, through the same engine (`backend.create`, what fancyTermPort's open calls with
  * `shellLaunch`'s answer): how the remedy's argv is measured without changing Genie.
  */
 let seq = 0;
-function run(launch: { command: string; args: string[] }, cwd: string): Promise<{ out: string; code: number }> {
+function run(launch: { command: string; args: string[]; env?: Record<string, string> }, cwd: string): Promise<{ out: string; code: number }> {
     return new Promise((resolve) => {
         let out = '';
         const id = `cmds_${++seq}`;
@@ -80,7 +92,7 @@ function run(launch: { command: string; args: string[] }, cwd: string): Promise<
             offData(); offExit();
             resolve({ out, code });
         });
-        const created = backend.create({ id, cwd, shell: launch.command, args: launch.args });
+        const created = backend.create({ id, cwd, shell: launch.command, args: launch.args, ...(launch.env ? { env: launch.env } : {}) });
         if (!(created.pid > 0)) { offData(); offExit(); resolve({ out: `(engine could not start it, pid ${created.pid})`, code: -1 }); }
     });
 }
@@ -99,8 +111,13 @@ function runShellLine(line: string, cwd: string): Promise<{ out: string; code: n
     });
 }
 
-const verdict = (out: string) => out.includes(MARK);
-const clean = (out: string) => out.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200);
+// Window titles (OSC) out first: they carry the command line.
+const plainOf = (out: string) => out.replace(/\u001b\][^\u0007\u001b]*(\u0007|\u001b\\)/g, '').replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
+const verdict = (out: string) => plainOf(out).includes(MARK);
+const clean = (out: string) => plainOf(out).replace(/\s+/g, ' ').trim().slice(0, 200);
+const SHELL_LINE = '%GENIE_SHELL_LINE%';
+const envLaunch = (line: string) => ({ command: 'cmd.exe', args: ['/d', '/s', '/c', SHELL_LINE], env: { GENIE_SHELL_LINE: line } });
+const expanded = (line: string) => line.replace(/%([^%\s=]+)%/g, (whole, name: string) => process.env[name] ?? whole);
 
 console.log(`today's launch for a line: ${JSON.stringify(shellLaunch('win32', () => ({ command: 'cmd.exe', args: [] }), '<line>'))}`);
 for (const c of lines) {
@@ -108,9 +125,12 @@ for (const c of lines) {
     console.log(`${verdict(today.out) ? 'RAN   ' : 'NO RUN'}  today   ${c.name} (exit ${today.code}) — ${clean(today.out)}`);
 }
 for (const c of lines) {
-    // THE REMEDY, measured: the whole line wrapped once more, so /s strips the wrapper and leaves the line intact.
-    const remedy = await run({ command: 'cmd.exe', args: ['/d', '/s', '/c', `"${c.line}"`] }, c.cwd);
-    console.log(`${verdict(remedy.out) ? 'RAN   ' : 'NO RUN'}  remedy  ${c.name} (exit ${remedy.code}) — ${clean(remedy.out)}`);
+    const remedy = await run(envLaunch(c.line), c.cwd);
+    console.log(`${verdict(remedy.out) ? 'RAN   ' : 'NO RUN'}  env     ${c.name} (exit ${remedy.code}) — ${clean(remedy.out)}`);
 }
-console.log('CMD-S PROBE DONE: read the table. Expected if genie#1428 is real: CONTROL ran today; H1/H2 did NOT run today; every row ran under the remedy.');
+for (const c of lines) {
+    const remedy = await run(envLaunch(expanded(c.line)), c.cwd);
+    console.log(`${verdict(remedy.out) ? 'RAN   ' : 'NO RUN'}  env+vars ${c.name} (exit ${remedy.code}) — ${clean(remedy.out)}`);
+}
+console.log('CMD-S PROBE DONE: read the table. Expected: today, only the lines with no quote run (E2, E3); env runs all but E3; env+vars runs every row.');
 process.exit(0);
