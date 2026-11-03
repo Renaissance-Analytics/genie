@@ -6,8 +6,8 @@
  *   npm ci && node node_modules/electron/install.js && npm run build
  *   node scripts/smoke-seed.mjs && node scripts/keyring-install-cdp.mjs
  *
- * NO MIRROR: `pacman -S --needed` takes a package from /var/cache/pacman/pkg when the file there is the version the sync database names, so nothing is downloaded. If the cache
- * does not hold it, this says so and stops with exit 3: that needs a VM snapshot taken with `pacman -Sw gnome-keyring` run first.
+ * THE PACKAGE: `pacman -S --needed` takes it from /var/cache/pacman/pkg when the file there is the version the sync database names. If the cache does not hold it, this downloads it first
+ * with `pacman -Sw`, while gnome-keyring is still installed. If the mirror cannot be reached either, it says so and stops with exit 3: that needs a VM snapshot with the package in its cache.
  *
  * NOBODY TYPES A PASSWORD: a polkit rule, written here and removed at the end, lets user genie run pkexec with no prompt. So this proves pkexec and pacman from the host process, and
  * not the password prompt, which only a person can see.
@@ -96,10 +96,12 @@ class Cdp {
 try {
     const version = output('pacman', '-Q', 'gnome-keyring').split(/\s+/)[1] ?? '';
     const syncVersion = output('pacman', '-Si', 'gnome-keyring').split('\n').find((l) => l.startsWith('Version'))?.split(':').slice(1).join(':').trim() ?? '';
-    const file = (() => { try { return readdirSync(CACHE).find((name) => name.startsWith(`gnome-keyring-${syncVersion}-`) && name.endsWith('.pkg.tar.zst')) ?? null; } catch { return null; } })();
+    const inCache = () => { try { return readdirSync(CACHE).find((name) => name.startsWith(`gnome-keyring-${syncVersion}-`) && name.endsWith('.pkg.tar.zst')) ?? null; } catch { return null; } };
+    if (!inCache()) { say('not in the cache: downloading it, with gnome-keyring still installed'); sudo('pacman', '-Sw', '--noconfirm', 'gnome-keyring'); }
+    const file = inCache();
     say(`installed ${version}; the sync database names ${syncVersion}; cached: ${file ?? 'no'}`);
     if (!file) {
-        console.log(`### keyring-install needs-a-snapshot=INFO  ${CACHE} has no gnome-keyring-${syncVersion}: take a VM snapshot with \`sudo pacman -Sw --noconfirm gnome-keyring\` run first`);
+        console.log(`### keyring-install needs-a-snapshot=INFO  ${CACHE} has no gnome-keyring-${syncVersion}, and pacman -Sw could not get it: take a VM snapshot with \`sudo pacman -Sw --noconfirm gnome-keyring\` run first`);
         process.exit(3);
     }
     cached = join(CACHE, file);

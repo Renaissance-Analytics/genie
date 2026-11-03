@@ -156,15 +156,26 @@ function signInCode() {
     return code;
 }
 
-/** A small app run on beta.56's own binary, so its safeStorage holds beta.56's key. Each op: `{ open: base64 }` or `{ seal: text }`. */
-function sealer(root) {
+/**
+ * A small app run on beta.56's own binary, so its safeStorage holds beta.56's key. Each op: `{ open: base64 }` or `{ seal: text }`.
+ * On Linux that key is kept in the Secret Service under the app's NAME (batch BB: a helper with another name got a key of its own, and could not open beta.56's seal). So it takes its name
+ * from beta.56's own package.json, and `known`, a seal beta.56 made, picks between the names that could be it: the first that opens it is the one that has the key.
+ */
+function sealer(root, known) {
     const helperRoot = join(work, 'sealer');
     cpSync(root, helperRoot, { recursive: true, verbatimSymlinks: true });
     rmSync(join(helperRoot, 'resources', 'app.asar'), { force: true });
     rmSync(join(helperRoot, 'resources', 'app.asar.unpacked'), { recursive: true, force: true });
     const app = join(helperRoot, 'resources', 'app');
     mkdirSync(app, { recursive: true });
-    writeFileSync(join(app, 'package.json'), JSON.stringify({ name: 'genie', productName: 'Genie', version: '2.0.0-beta.56', main: 'main.cjs' }));
+    const names = (() => {
+        try {
+            const own = JSON.parse(require('@electron/asar').extractFile(join(root, 'resources', 'app.asar'), 'package.json').toString());
+            say(`beta.56's package.json: name ${own.name}, productName ${own.productName ?? 'none'}`);
+            return [{ name: own.name, ...(own.productName ? { productName: own.productName } : {}) }, { name: own.name }];
+        } catch (error) { say(`could not read beta.56's package.json: ${error instanceof Error ? error.message : String(error)}`); return []; }
+    })();
+    const candidates = [...names, { name: 'genie' }, { name: 'genie', productName: 'Genie' }, { name: 'Genie' }];
     writeFileSync(join(app, 'main.cjs'), `
 const { app, safeStorage } = require('electron');
 const { readFileSync, writeFileSync } = require('node:fs');
@@ -180,7 +191,8 @@ app.whenReady().then(() => {
 });
 `);
     const binary = binaryIn(helperRoot);
-    return (ops) => {
+    const useName = (candidate) => writeFileSync(join(app, 'package.json'), JSON.stringify({ ...candidate, version: '2.0.0-beta.56', main: 'main.cjs' }));
+    const run = (ops) => {
         const input = join(work, 'sealer-in.json');
         const output = join(work, 'sealer-out.json');
         writeFileSync(input, JSON.stringify(ops), { mode: 0o600 });
@@ -194,6 +206,16 @@ app.whenReady().then(() => {
         if (!result.ok) throw new Error(`the sealer: ${result.reason}`);
         return result.results;
     };
+    const tried = [];
+    for (const candidate of candidates) {
+        useName(candidate);
+        try {
+            run([{ open: known }]);
+            say(`the sealer has beta.56's key as ${JSON.stringify(candidate)}`);
+            return run;
+        } catch (error) { tried.push(`${JSON.stringify(candidate)}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
+    throw new Error(`no name opened beta.56's seal: ${tried.join('; ')}`);
 }
 function binaryIn(root) {
     const found = ['genie', 'Genie', 'ai.tynn.genie'].map((name) => join(root, name)).find((file) => existsSync(file));
@@ -249,7 +271,7 @@ try {
     await stopApp();
 
     say('what beta.56 cannot be made to write, sealed by its own binary');
-    const seal = sealer(root);
+    const seal = sealer(root, tynnRow.tokenEnc);
     const [pairing] = seal([{ open: tynnRow.tokenEnc }]);
     check(/^gpk_/.test(pairing), '5-CONTROL-the-sealer-opens-beta56s-real-seal');
     const expected = new Map([['tynn/pairing', pairing]]);
