@@ -6,6 +6,10 @@ import { isLocalPathLike } from '../core/envelope-plan.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { gitMayRun } from './git-read-policy.js';
 
+/** Red: the shape only. */
+export const GIT_READ_LIMIT = { ms: 0 };
+export class GitDidNotAnswer extends Error {}
+
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
  * real git is measured by one test rather than trusted through main.ts. A clone that fails rejects
