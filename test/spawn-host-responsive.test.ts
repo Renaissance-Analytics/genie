@@ -81,6 +81,14 @@ vi.mock('node:child_process', async (original) => {
     };
 });
 
+/** One of main's gaps, read: what is left of it once the whole process's stops are taken off. */
+function heldOf(reading: { gap: number; cpu: number; stalled: number }): number {
+    return reading.gap - reading.stalled;
+}
+
+/** While a gauge runs: stop the gauge's worker for `ms`, with main still running, as a loaded machine can. */
+let starveWorker: (ms: number) => void = () => {};
+
 /**
  * How long MAIN'S THREAD was held during `run`, beyond what this whole process was held at the same moment: a 10 ms
  * heartbeat on main, and one on a worker thread of the same process. Every gap of main's is reduced by the worker's gap
@@ -91,17 +99,22 @@ vi.mock('node:child_process', async (original) => {
 async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     // The worker's gaps over 20 ms, as [end, gap] pairs in a shared ring (slot 0 is the count).
     const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
+    const control = new Int32Array(new SharedArrayBuffer(8));
     const worker = new Worker(`
         const { workerData } = require('node:worker_threads');
-        const ring = new Float64Array(workerData);
+        const ring = new Float64Array(workerData.ring);
+        const control = new Int32Array(workerData.control);
         let last = Date.now();
         setInterval(() => {
+            const starve = Atomics.exchange(control, 0, 0);
+            if (starve > 0) Atomics.wait(control, 1, 0, starve);
             const now = Date.now();
             const gap = now - last - 10;
             last = now;
             if (gap > 20) { const i = ring[0] % 4096; ring[1 + 2 * i] = now; ring[2 + 2 * i] = gap; ring[0] += 1; }
         }, 10);
-    `, { eval: true, workerData: shared.buffer });
+    `, { eval: true, workerData: { ring: shared.buffer, control: control.buffer } });
+    starveWorker = (ms) => { Atomics.store(control, 0, ms); };
     await new Promise((r) => setTimeout(r, 100));
     // A hold on main, while this gauge runs, reads the worker's gaps as they land (shared memory: no event loop needed).
     const ringGaps = (): Array<[number, number]> => {
@@ -123,6 +136,7 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
         await new Promise((r) => setTimeout(r, 60));
     } finally {
         processStalled = () => 0;
+        starveWorker = () => {};
         clearInterval(timer);
         await worker.terminate();
     }
@@ -192,6 +206,33 @@ describe('the hold a spawn on main is made of', () => {
         holdFor(SLOW_MS, { now: () => (t += 1), stalled: (from, to) => overlapWith(gaps, from, to) });
         expect(t, `a ${SLOW_MS} ms hold lasted ${t} ms`).toBeLessThanOrEqual(SLOW_MS + 31);
         expect(t).toBeGreaterThanOrEqual(SLOW_MS);
+    });
+});
+
+describe('the gauge can trust its own control', () => {
+    /*
+     * BATCH Z, AND THREE BATCHES BEFORE IT: 936 ms for a 5,000 ms spawn on main, "main's gap 5032 ms, of it the whole process stopped 4096 ms". Main ran its full hold; the worker was
+     * the one not scheduled (a loaded machine, and main spinning on one of its CPUs), and its gap was taken off main's as if the process had stopped. So a real hold could read as nothing.
+     */
+    it('PROBE: the worker kept off the CPU for most of a real hold: the hold is still read', async () => {
+        const worst = await heartbeatDuring(async () => {
+            starveWorker(4_500);
+            await new Promise((r) => setTimeout(r, 30));
+            hold(SLOW_MS);
+        });
+        expect(worst, `the gauge read ${worst} ms for a ${SLOW_MS} ms hold, with the worker stopped for 4,500 of them`).toBeGreaterThan(SLOW_MS / 2);
+    }, 30_000);
+
+    it('main spun through its gap: held, whatever the worker did', () => {
+        expect(heldOf({ gap: 5_032, cpu: 5_000, stalled: 4_096 })).toBeGreaterThan(SLOW_MS / 2);
+    });
+
+    it('the whole process stopped: not held, because nothing ran', () => {
+        expect(heldOf({ gap: 5_000, cpu: 60, stalled: 4_900 })).toBeLessThan(HELD_BAR_MS);
+    });
+
+    it('main blocked in the kernel with the worker running: held, though it used no CPU', () => {
+        expect(heldOf({ gap: 5_000, cpu: 10, stalled: 0 })).toBeGreaterThan(SLOW_MS / 2);
     });
 });
 
