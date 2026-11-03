@@ -2813,11 +2813,14 @@ async function boot(): Promise<void> {
         // The one gate for every secret (os-cipher.ts): no keyring, no secret; basic_text is never a keyring.
         tynnCipher: osCipher(safeStorage, process.platform),
         secretsLog: (line) => keychainLog(line),
-        legacySecrets: async () => [
-            await settleStaleLegacyPairing({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), log: (line) => keychainLog(line) }).then(() => tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) })),
-            ...await githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }),
-            ...await workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }),
-        ],
+        legacySecrets: async () => {
+            await settleStaleLegacyPairing({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), log: (line) => keychainLog(line) });
+            return [
+                tynnPairingSource({ file: join(genieHome(), 'credentials', 'tynn.json'), legacyFile: join(genieHome(), 'tynn.json'), cipher: osCipher(safeStorage, process.platform), log: (line) => keychainLog(line) }),
+                ...await githubSealedSources({ file: join(genieHome(), 'github.json'), cipher: osCipher(safeStorage, process.platform), v1Settings: () => readV1Settings(v1DatabaseFile()) }),
+                ...await workstationSealedSources({ file: join(genieHome(), 'workstation.json'), cipher: osCipher(safeStorage, process.platform) }),
+            ];
+        },
         onSecretsMoved: () => {
             void githubAccount?.reload().catch(() => {});
             void registerWorkstationNow?.();

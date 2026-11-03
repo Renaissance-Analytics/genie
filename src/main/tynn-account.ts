@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
-import { lstat, readFile, rm } from 'node:fs/promises';
+import { chmod, lstat, readFile, rm } from 'node:fs/promises';
 import { signInCodeFrom, tynnSignInUrl } from '../core/tynn-sign-in.js';
 import type { KeychainRead, KeychainResult, SecretName } from './keychain.js';
 import type { MigrationSource, OldRead } from './keychain-migration.js';
-import { PRIVATE_CREDENTIAL_STORE, type PrivateCredentialStore } from './private-credentials.js';
+import { PRIVATE_CREDENTIAL_STORE, restrictPrivateFile, type PrivateCredentialStore } from './private-credentials.js';
 
 /** The desktop pairing key is in the OS keychain (P3.4 cut c), and the host holds the account. Exchange cookies are cleared;
  * subsequent API calls use only the scoped bearer, never the browser session. */
@@ -120,7 +120,11 @@ const exists = (path: string): Promise<boolean> => lstat(path).then(() => true, 
  * moved, or at once if that already happened.
  */
 async function bringLegacyAcross(store: PrivateCredentialStore, legacyFile: string, file: string): Promise<void> {
-    if (await exists(file)) return;
+    if (await exists(file)) {
+        // Left where it is for now, and still a sealed key: as closed as it would have been coming across.
+        if (await exists(legacyFile)) { await chmod(legacyFile, 0o600).catch(() => {}); await restrictPrivateFile(legacyFile).catch(() => {}); }
+        return;
+    }
     await store.migrate(legacyFile, file);
 }
 
