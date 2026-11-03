@@ -37,12 +37,14 @@ let dir: string;
 let home: string;
 let workspaces: Array<{ id: string; path: string }> = [];
 let services: ComposedServices;
+let hostsFile = '';
+let hostsWrites = 0;
 
 async function launch(): Promise<void> {
     opened.length = 0;
     services = await composed.compose({
         userData: home, pty, v1Settings: () => null, caddyBin: '/opt/genie/runtime/caddy', frontDoorPort: 0, phpWorkers: 1,
-        hostsIo: { read: async () => '', write: async () => {}, stage: async () => ({ command: 'cp', args: [] }) },
+        hostsIo: { read: async () => hostsFile, write: async (next: string) => { hostsFile = next; hostsWrites += 1; }, stage: async () => ({ command: 'cp', args: [] }) },
         elevate: async () => ({ ok: true }), hostsDebounceMs: 1, frontDoorPorts: { probe: async () => 'free', holder: async () => null },
         workspaces: () => workspaces,
     } as Parameters<typeof composeServices>[0]);
@@ -67,6 +69,8 @@ beforeEach(async () => {
     await mkdir(join(dir, 'acme'), { recursive: true });
     await writeFile(join(dir, 'acme', 'project.json'), JSON.stringify({ name: 'Acme', sites: { k1: { repo: '', runMode: 'host', kind: 'http', enabled: true, name: 'web', genName: 'web.gen', command: ['serve-it', '--port=9000'] } } }), 'utf8');
     workspaces = [];
+    hostsFile = '';
+    hostsWrites = 0;
 });
 
 afterEach(async () => {
@@ -105,6 +109,17 @@ describe('through the real composition', () => {
         expect(ran()).toBe(true);
         expect((await rowOf()).firstStart).toBeUndefined();
         expect((await agentCall('restart', { site: 'web.gen' })).isError).toBe(false);
+    });
+
+    it('the hosts file gains a waiting site only when the person starts it: nothing a folder declares reaches it first', async () => {
+        await launch();
+        workspaces = [{ id: 'acme', path: join(dir, 'acme') }];
+        await relaunch();
+        await new Promise((r) => setTimeout(r, 100));
+        expect(hostsFile).not.toContain('web.gen');
+        await handleFeatureAction(services, { kind: 'hosting.startSite', siteId: (await rowOf()).id }, state());
+        for (let i = 0; i < 100 && !hostsFile.includes('web.gen'); i += 1) await new Promise((r) => setTimeout(r, 20));
+        expect(hostsFile).toContain('web.gen');
     });
 
     it('a Retry from the row is the person, too', async () => {
