@@ -99,6 +99,10 @@ async function finish() {
     check(hiddenFiles.size === 0, 'Z-everything-hidden-was-put-back', [...hiddenFiles].join(', ') || 'none left');
     if (failures.length > 0) {
         try {
+            console.log('--- what the lifecycle log says about the keychain');
+            for (const line of readFileSync(join(runtime, 'lifecycle.log'), 'utf8').split('\n').filter((l) => l.includes('keychain'))) console.log(line.slice(0, 220));
+        } catch (error) { console.log(`--- no lifecycle log: ${error instanceof Error ? error.message : String(error)}`); }
+        try {
             console.log('--- the end of the host log');
             for (const line of readFileSync(join(home, 'logs', 'genie-host.log'), 'utf8').split('\n').slice(-30)) console.log(line.slice(0, 220));
         } catch (error) { console.log(`--- no host log: ${error instanceof Error ? error.message : String(error)}`); }
