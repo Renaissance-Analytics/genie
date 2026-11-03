@@ -94,15 +94,20 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     const shared = new Float64Array(new SharedArrayBuffer(8 * (1 + 2 * 4096)));
     // The worker's gaps of 200 ms or more, each with what its own schedstat did across the gap: [end, gap, cpu ns, wait ns, timeslices]. Slot 0 is the count; slot 1 says whether it can read schedstat.
     const why = new Float64Array(new SharedArrayBuffer(8 * (2 + 5 * 64)));
+    // [the witness's thread id, its beats so far]: so main, while a hold has it spinning, can read what that thread is doing.
+    const alive = new Float64Array(new SharedArrayBuffer(8 * 2));
     const worker = new Worker(`
         const { workerData } = require('node:worker_threads');
         const ring = new Float64Array(workerData.ring);
         const why = new Float64Array(workerData.why);
+        const alive = new Float64Array(workerData.alive);
+        if (process.platform === 'linux') { try { alive[0] = Number(require('node:fs').readlinkSync('/proc/thread-self').split('/').pop()); } catch { /* none */ } }
         ${SCHED_SOURCE}
         let schedLast = sched();
         why[1] = schedLast ? 1 : 0;
         let last = Date.now();
         setInterval(() => {
+            alive[1] += 1;
             const now = Date.now();
             const gap = now - last - 10;
             last = now;
@@ -116,7 +121,7 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
             }
             schedLast = schedNow;
         }, 10);
-    `, { eval: true, workerData: { ring: shared.buffer, why: why.buffer } });
+    `, { eval: true, workerData: { ring: shared.buffer, why: why.buffer, alive: alive.buffer } });
     const stealBefore = procStatNow();
     await new Promise((r) => setTimeout(r, 100));
     // A hold on main, while this gauge runs, reads the worker's gaps as they land (shared memory: no event loop needed).
@@ -127,7 +132,24 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
     };
     let ringCount = -1;
     let ringCache: Array<[number, number]> = [];
+    // WHAT THE WITNESS IS DOING WHILE IT DOES NOT BEAT, read from outside it by main, which a hold has spinning here. Beats at the start say whether it had started at all. Linux only.
+    const stuck: string[] = [];
+    const beatsAtStart = alive[1];
+    let lookedAt = Date.now();
+    let beatsLooked = alive[1];
+    const lookAtWitness = () => {
+        const now = Date.now();
+        if (now - lookedAt < 1_000 || process.platform !== 'linux' || alive[0] === 0 || stuck.length >= 6) return;
+        lookedAt = now;
+        const unchanged = alive[1] === beatsLooked;
+        beatsLooked = alive[1]!;
+        if (!unchanged) return;
+        const part = (name: string) => { try { return readFileSync(`/proc/self/task/${alive[0]}/${name}`, 'utf8').trim().replace(/\s+/g, ' ').slice(0, 300); } catch (error) { return `unreadable (${(error as NodeJS.ErrnoException).code ?? 'error'})`; } };
+        const state = part('stat').split(') ')[1]?.split(' ')[0] ?? '?';
+        stuck.push(`beats ${alive[1]}: state ${state}, wchan ${part('wchan')}, syscall ${part('syscall').split(' ')[0]}, stack ${part('stack')}`);
+    };
     processStalled = (from, to) => {
+        lookAtWitness();
         if (shared[0] !== ringCount) { ringCount = shared[0]!; ringCache = ringGaps(); }
         return overlapWith(ringCache, from, to);
     };
@@ -150,6 +172,7 @@ async function heartbeatDuring(run: () => Promise<unknown>): Promise<number> {
             ? `gap ${why[at + 1]} ms: on a CPU ${Math.round(why[at + 2]! / 1e6)} ms, waiting for one ${Math.round(why[at + 3]! / 1e6)} ms, ${why[at + 4]} timeslices`
             : `gap ${why[at + 1]} ms`);
     }
+    console.log(`GAUGE-DIAG: the witness had beaten ${beatsAtStart} times when the gauge began, and ${alive[1]} by its end; while it did not beat: ${stuck.join(' | ') || (process.platform === 'linux' ? 'it was never seen stopped' : `not available on ${process.platform}`)}`);
     console.log(`GAUGE-DIAG: the witness, gaps of 200 ms or more: ${whyLines.join('; ') || 'none'}; schedstat ${why[1] === 1 ? 'read' : process.platform === 'linux' ? 'unreadable' : `not available on ${process.platform}`}; ${stealSince(stealBefore)}`);
     let worst = 0;
     lastReading = { gap: 0, stalled: 0 };
