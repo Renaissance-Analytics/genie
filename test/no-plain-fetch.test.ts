@@ -73,7 +73,7 @@ describe('wired through the window\'s network', () => {
         expect(main).toMatch(/await net\.fetch\('https:\/\/api\.github\.com\/repos\/Renaissance-Analytics\/genie\/releases\?per_page=100'/);
     });
     it('the Tailscale installer', () => {
-        expect(main).toMatch(/installTailscale\(\(url\) => net\.fetch\(url\)\)/);
+        expect(main).toMatch(/installTailscale\(\{ download: \(url\) => net\.fetch\(url\) \}\)/);
     });
 });
 
