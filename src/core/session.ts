@@ -7,7 +7,7 @@ import { REPLAY_META, REPLAY_SUMMARY_META, toStreamEvent, type NoticeMail, type 
 import { extensionsFrom, type ProviderExtensions } from './provider-commands.js';
 import type { AgentId } from './identity.js';
 import type { PromptBlock } from './prompt-content.js';
-import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult } from './process-tree.js';
+import { describeProcesses, newChildrenOf, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree, type ReapResult, startTimeUnknown } from './process-tree.js';
 import { limitReadingsFromMeta, type LimitReading } from './rate-limit-gate.js';
 import { mcpReportsFromMeta, type McpServerReport } from './mcp-missing.js';
 import { RATE_LIMIT_META, headroomFromMeta, type Headroom } from './headroom.js';
@@ -336,6 +336,7 @@ export interface AgentSessionOptions {
      * (hosting plan 1.2). What the host writes into its spawn ledger, so a crash cannot orphan them unrecorded.
      */
     onSpawned?: (processes: readonly ProcessInfo[]) => void;
+    /** The machine could not be read after a spawn, twice: these pids are recorded with no start time. */
     onReadingFailed?: (pids: readonly number[]) => void;
     /** Output arrived from this run after it was stopped (hosting plan 1.4). Said once per run. */
     onStraggler?: () => void;
@@ -1173,9 +1174,16 @@ export class AgentSession {
                 const pids: number[] = [];
                 const read = tree.read.bind(tree);
                 const reading: Promise<void> = Promise.resolve().then(async () => {
-                    const after = await read().catch(() => null);
+                    let after = await read().catch(() => null);
+                    if (after === null && this.#rootsReading === reading) after = await read().catch(() => null);
                     if (this.#rootsReading !== reading) return;
-                    if (after === null) { this.#roots = null; return; }
+                    if (after === null) {
+                        // Still no reading. A crash must not leave this provider unrecorded, so its pid goes in with no start time: said at every boot, and never reaped.
+                        this.#roots = null;
+                        this.#options.onSpawned?.(pids.map((pid) => startTimeUnknown(pid, process.pid)));
+                        this.#options.onReadingFailed?.(pids);
+                        return;
+                    }
                     this.#roots = after.filter((p) => pids.includes(p.pid) && p.ppid === process.pid);
                     this.#members = subtreeOf(after, this.#roots);
                     this.#options.onSpawned?.(this.#members);

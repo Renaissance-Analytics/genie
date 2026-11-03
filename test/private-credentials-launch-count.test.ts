@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const observed = vi.hoisted(() => ({
     launches: [] as { args: readonly string[]; env: NodeJS.ProcessEnv | undefined }[],
@@ -106,6 +106,19 @@ afterEach(async () => {
     observed.nativeFailures.length = 0; observed.nativeAliveAtEof = false;
     vi.restoreAllMocks();
     for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
+});
+
+// The tests named "refuses …" break the native ACL call on purpose: bad output, a closed stdin, a helper that dies or hangs.
+// So here the failure line is expected, and is not printed. Anywhere else in this file it fails the test: a failed ACL is a question about secrets at rest.
+const aclFailures: unknown[][] = [];
+let warnSpy: ReturnType<typeof vi.spyOn> | null = null;
+beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { if (args[0] === 'PRIVATE_CREDENTIAL_ACL_FAILURE') aclFailures.push(args); });
+});
+afterEach(() => {
+    warnSpy?.mockRestore();
+    const failures = aclFailures.splice(0);
+    if (!/refuses/.test(expect.getState().currentTestName ?? '')) expect(failures, 'a failed ACL this test did not provoke').toEqual([]);
 });
 
 describe.skipIf(process.platform !== 'win32')('credential write native launch budget', () => {

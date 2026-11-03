@@ -1543,6 +1543,7 @@ async function boot(): Promise<void> {
             // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
             currentRecord: (id) => registry?.find(id) ?? null,
             lifecycle: {
+                readingFailed: (agentId, run, pids) => lifecycleLog(`reading failed kind=agent owner=${agentId} run=${run} pids=${pids.join(',')}: the machine could not be read after the spawn, twice, so these are recorded with no start time`),
                 spawned: (agentId, run, processes) => {
                     spawnLedger.record({ kind: 'agent', ownerId: agentId, run, processes });
                     lifecycleLog(`spawn kind=agent owner=${agentId} run=${run} pids=${describeProcesses(processes)}`);

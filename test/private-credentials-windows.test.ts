@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, readFile, rm, stat, writeFile, readdir } from 'node:fs/
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { preparePrivateCredential, writePrivateCredential } from '../src/main/private-credentials.js';
 import { TynnAccount } from '../src/main/tynn-account.js';
 import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
@@ -31,6 +31,19 @@ async function windows(script: string): Promise<string[]> {
 const dataPath = (path: string) => `[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(path, 'utf16le').toString('base64')}'))`;
 const readAcl = (path: string, directory: boolean) => windows(`$a=[IO.${directory ? 'Directory' : 'File'}]::GetAccessControl((${dataPath(path)}));'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights}`);
 const readAclSet = (targets: readonly { path: string; directory: boolean }[]) => windows(`$i=0;foreach($t in @(${targets.map(target => `@{Path=(${dataPath(target.path)});Directory=$${target.directory}}`).join(',')})){'target='+$i;$a=if($t.Directory){[IO.Directory]::GetAccessControl($t.Path)}else{[IO.File]::GetAccessControl($t.Path)};'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights};$i++}`);
+
+// The tests named "… restriction failure …" take away the native command on purpose (ENOENT).
+// So here the failure line is expected, and is not printed. Anywhere else in this file it fails the test: a failed ACL is a question about secrets at rest.
+const aclFailures: unknown[][] = [];
+let warnSpy: ReturnType<typeof vi.spyOn> | null = null;
+beforeEach(() => {
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation((...args: unknown[]) => { if (args[0] === 'PRIVATE_CREDENTIAL_ACL_FAILURE') aclFailures.push(args); });
+});
+afterEach(() => {
+    warnSpy?.mockRestore();
+    const failures = aclFailures.splice(0);
+    if (!/restriction failure/.test(expect.getState().currentTestName ?? '')) expect(failures, 'a failed ACL this test did not provoke').toEqual([]);
+});
 
 describe.skipIf(process.platform !== 'win32')('a failed ACL refuses the write: the native command really gone', () => {
     const SECRET = 'rpk_a_secret_that_must_not_be_left_on_disk';

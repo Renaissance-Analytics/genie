@@ -1,4 +1,4 @@
-import { describeProcesses, findIn, subtreeOf, unionOf, type ProcessInfo } from './process-tree.js';
+import { describeProcesses, findIn, START_UNKNOWN, subtreeOf, unionOf, type ProcessInfo } from './process-tree.js';
 
 /**
  * THE SPAWN LEDGER — what Genie started, written down, so a Genie that died cannot leave it running unrecorded
@@ -43,6 +43,29 @@ export function leftoversToEnd(
         out.push({ record, processes: unionOf(alive, subtreeOf(table, alive)) });
     }
     return out;
+}
+
+/**
+ * The records of a previous boot with a process whose start time was never read and whose pid is running now. Nothing here is ended: it may be that provider, or a process that
+ * got its pid. Each stays recorded and is said at every boot until the pid has gone, so it cannot be orphaned out of sight, and no process is ended on a pid alone.
+ */
+export function leftoversUnconfirmed(
+    records: readonly LedgerRecord[],
+    table: readonly ProcessInfo[],
+    bootId: string,
+): Array<{ record: LedgerRecord; running: ProcessInfo[] }> {
+    const out: Array<{ record: LedgerRecord; running: ProcessInfo[] }> = [];
+    for (const record of records) {
+        if (record.bootId === bootId) continue;
+        const unknown = record.processes.filter((p) => p.started === START_UNKNOWN);
+        const running = table.filter((row) => unknown.some((p) => p.pid === row.pid));
+        if (running.length > 0) out.push({ record, running });
+    }
+    return out;
+}
+
+export function unconfirmedLine(record: LedgerRecord, running: readonly ProcessInfo[]): string {
+    return `sweep left kind=${record.kind} owner=${record.ownerId} run=${record.run} boot=${record.bootId} running=${describeProcesses(running)}: its start time was never read, so Genie cannot tell it from a process that got its pid, and leaves it alone`;
 }
 
 /** The lifecycle-log line for one swept record. */
