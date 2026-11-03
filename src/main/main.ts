@@ -3171,7 +3171,7 @@ async function boot(): Promise<void> {
         const identity = await machineIdentity.identity(registered.host).catch(() => null);
         if (!identity || relayFor !== want) { pushFeatures(); return; }
         relayHostNow = startRelayHost({
-            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => machineIdentity.authHeader(registered.host), fetch }),
+            ports: relayHostPorts({ tynnHost: registered.host, workstationId: identity.workstationId, authHeader: () => machineIdentity.authHeader(registered.host), fetch: (url, init) => net.fetch(url, init) }),
             socket: relaySocket,
             workstationId: identity.workstationId,
             fingerprint: identity.fingerprint,

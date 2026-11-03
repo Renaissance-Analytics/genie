@@ -140,7 +140,7 @@ export interface RelayHostPorts {
 }
 
 /** The host's own calls to Tynn: its proof header, no session, no cookies. */
-export function relayHostPorts(input: { tynnHost: string; workstationId: string; authHeader: () => string | Promise<string>; fetch: typeof fetch }): RelayHostPorts {
+export function relayHostPorts(input: { tynnHost: string; workstationId: string; authHeader: () => string | Promise<string>; fetch: (url: string, init?: RequestInit) => Promise<Response> }): RelayHostPorts {
     const base = input.tynnHost.replace(/\/+$/, '');
     return {
         async ticket() {
