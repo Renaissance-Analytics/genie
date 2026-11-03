@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { preparePrivateCredential, writePrivateCredential } from '../src/main/private-credentials.js';
+import { preparePrivateCredential, useAclHelper, writePrivateCredential } from '../src/main/private-credentials.js';
 import { TynnAccount } from '../src/main/tynn-account.js';
 import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
@@ -34,6 +34,8 @@ const readAclSet = (targets: readonly { path: string; directory: boolean }[]) =>
 
 // The tests named "… restriction failure …" take away the native command on purpose (ENOENT).
 // So here the failure line is expected, and is not printed. Anywhere else in this file it fails the test: a failed ACL is a question about secrets at rest.
+// A launch per write: these take the native command away, and a running helper would still have it.
+useAclHelper(null);
 const aclFailures: unknown[][] = [];
 let warnSpy: ReturnType<typeof vi.spyOn> | null = null;
 beforeEach(() => {

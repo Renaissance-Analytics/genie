@@ -33,6 +33,24 @@ function fakeModule(store = new Map<string, string>(), failWith: Error | null | 
     return { module: { AsyncEntry } as unknown as KeyringModule, made, store };
 }
 
+describe('a host with no logon session: a service, or over SSH', () => {
+    // The real words, genie-test-windows over SSH, batch F0.
+    const NO_SESSION = "Couldn't access platform storage: Windows ERROR_NO_SUCH_LOGON_SESSION";
+
+    it('reads as unavailable in those words: not missing, which would read as signed out, and not a throw', async () => {
+        const k = new Keychain(async () => fakeModule(new Map(), new Error(NO_SESSION)).module);
+        expect(await k.get('tynn/pairing')).toEqual({ kind: 'unavailable', reason: expect.stringContaining(NO_SESSION) });
+        expect((await k.probe()).ok).toBe(false);
+        expect((await k.set('tynn/pairing', 'v')).ok).toBe(false);
+    });
+
+    it('start-on-logon is a login item, in the person\'s own session: never a service, which would have no credentials to use', () => {
+        const residence = readFileSync('src/main/tray-residence.ts', 'utf8');
+        expect(residence).toMatch(/setLoginItemSettings/);
+        expect(residence).not.toMatch(/sc\.exe|New-Service|CreateService|systemctl --system/);
+    });
+});
+
 describe('with nothing on the bus, the library throws from its constructor', () => {
     // The real words, omarchy-test, batch V: the service not running and its activation file gone.
     const NOT_ACTIVATABLE = 'Platform failure: DBus error: The name is not activatable';

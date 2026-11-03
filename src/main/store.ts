@@ -1,7 +1,8 @@
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { runtimeDir } from './paths.js';
+import { restrictPrivateFile } from './private-credentials.js';
 
 /**
  * WHAT GENIE REMEMBERS BETWEEN RUNS — workspaces and agent records.
@@ -101,10 +102,32 @@ export const PRIVATE_FILE = { mode: 0o600 } as const;
  * file yet is fine; a failure is said, never fatal (a store that cannot chmod still works, and no worse than before).
  */
 export async function makePrivate(file: string): Promise<void> {
-    if (process.platform === 'win32') return;
+    if (process.platform === 'win32') {
+        // A file that is not there yet is fine, as below. A store that cannot tighten an old file still opens; the ACL path has said why.
+        if (!(await lstat(file).then(() => true, () => false))) return;
+        await restrictPrivateFile(file).catch((error: unknown) => { console.error(`[genie] could not make ${file} private: ${error instanceof Error ? error.message : String(error)}`); });
+        return;
+    }
     await chmod(file, PRIVATE_FILE.mode).catch((error: NodeJS.ErrnoException) => {
         if (error.code !== 'ENOENT') console.error(`[genie] could not make ${file} private: ${error.message}`);
     });
+}
+
+/**
+ * A small secret that is not JSON (host.token, mcp-endpoint.json's text), whole and private before its name appears. On POSIX the mode at create does that; on Windows the temp file is restricted
+ * before the rename, so nobody can read it open under its real name.
+ */
+export async function writeTextPrivate(file: string, text: string): Promise<void> {
+    await mkdir(dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.${++tmpCounter}.tmp`;
+    try {
+        await writeFile(tmp, text, { encoding: 'utf8', mode: PRIVATE_FILE.mode });
+        await restrictPrivateFile(tmp);
+        await rename(tmp, file);
+    } catch (error) {
+        await rm(tmp, { force: true }).catch(() => undefined);
+        throw error;
+    }
 }
 
 export function writeJsonAtomic(file: string, value: unknown, options?: { readonly mode?: number }): Promise<void> {
@@ -131,6 +154,15 @@ async function writeJsonAtomicNow(file: string, value: unknown, mode?: number): 
         await handle.sync();
     } finally {
         await handle.close();
+    }
+    // On Windows the mode above means nothing. The same ACL as a credential's, on the temp file, so the name never points at an open file. A refusal fails the write, and the old file stays.
+    if (mode === PRIVATE_FILE.mode) {
+        try {
+            await restrictPrivateFile(tmp);
+        } catch (error) {
+            await rm(tmp, { force: true }).catch(() => undefined);
+            throw error;
+        }
     }
     for (let attempt = 0; ; attempt += 1) {
         try {

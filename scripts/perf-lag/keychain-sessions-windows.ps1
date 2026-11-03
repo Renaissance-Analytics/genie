@@ -10,9 +10,10 @@
 # Prints `### keychain ...` lines from scripts/perf-lag/keychain-measure.mjs and `### keychain-sessions ...` here. The tasks are removed afterwards. No secret is involved.
 #   ... -Phase autologon        (the password on stdin, never an argument) sets Windows to log genie on at the next boot, in this VM only
 #   ... -Phase wait-logon       waits for a logged-on session after that boot
+#   ... -Phase persist-write    then a reboot, then   ... -Phase persist-read    a value written in one boot and read in the next, each in the logged-on session
 #   ... -Phase autologon-clear  takes it away again
 # The whole sequence, reboot included: scripts/vm-keychain-windows.sh in the envelope.
-param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon')][string]$Phase)
+param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'persist-write', 'persist-read', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon')][string]$Phase)
 # Continue: quser and schtasks write to stderr in ordinary answers, and under Stop PowerShell 5.1 turns that into a throw (quser with nobody on: "No User exists", batch F0).
 $ErrorActionPreference = 'Continue'
 $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
@@ -30,42 +31,53 @@ function Say-Session {
     Write-Output "--- VaultSvc: $((Get-Service VaultSvc).Status)"
 }
 
+# The measure in the logged-on person's session, as a task "run only when logged on". Exit 4 if nobody is logged on.
+function In-Session([string]$measurePhase) {
+    $someone = Active-Sessions
+    if ($someone.Count -eq 0) { Write-Output '### keychain-sessions interactive=NEEDS-A-LOGGED-ON-SESSION  quser shows nobody active: log someone on, or set autologon'; return 4 }
+    Write-Output "--- active: $($someone -join '; ')"
+    $out = Join-Path $env:PUBLIC 'genie-keychain-interactive.txt'
+    $done = "$out.done"
+    Remove-Item -Force -ErrorAction SilentlyContinue $out, $done
+    $cmd = Join-Path $env:PUBLIC 'genie-keychain-interactive.cmd'
+    Set-Content -Encoding ASCII -Path $cmd -Value @"
+@echo off
+cd /d "$repo"
+set KEYCHAIN_MEASURE_ALLOW=1
+whoami /groups > "$out" 2>&1
+"$node" scripts/perf-lag/keychain-measure.mjs $measurePhase >> "$out" 2>&1
+echo %ERRORLEVEL% > "$done"
+"@
+    $name = 'GenieKeychainInteractive'
+    schtasks /Create /TN $name /TR "`"$cmd`"" /SC ONCE /ST 23:59 /IT /F /RL LIMITED | Out-Null
+    try {
+        schtasks /Run /TN $name | Out-Null
+        $deadline = (Get-Date).AddSeconds(240)
+        while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
+        if (-not (Test-Path $done)) { Write-Output '### keychain-sessions interactive=FAIL  the task did not finish within 240 s'; if (Test-Path $out) { Get-Content $out }; return 1 }
+        $text = Get-Content $out
+        $kinds = @('INTERACTIVE', 'NETWORK', 'BATCH') | Where-Object { ($text -join "`n") -match "NT AUTHORITY\\$_\b" }
+        Write-Output "### keychain-sessions interactive-session kinds=$($kinds -join ',')"
+        $text | Where-Object { $_ -notmatch '^(GROUP INFORMATION|Group Name|=|$)' -and $_ -notmatch 'S-1-' }
+        return [int](Get-Content $done).Trim()
+    } finally { schtasks /Delete /TN $name /F 2>$null | Out-Null }
+}
+
+function Run-In-Session([string]$measurePhase) {
+    $code = 1
+    In-Session $measurePhase | ForEach-Object { if ($_ -is [int]) { $code = $_ } else { Write-Output $_ } }
+    exit $code
+}
+
 switch ($Phase) {
     'ssh' {
         Say-Session
         & $node scripts/perf-lag/keychain-measure.mjs before
         exit $LASTEXITCODE
     }
-    'interactive' {
-        $someone = Active-Sessions
-        if ($someone.Count -eq 0) { Write-Output '### keychain-sessions interactive=NEEDS-A-LOGGED-ON-SESSION  quser shows nobody active: log someone on, or set autologon'; exit 4 }
-        Write-Output "--- active: $($someone -join '; ')"
-        $out = Join-Path $env:PUBLIC 'genie-keychain-interactive.txt'
-        $done = "$out.done"
-        Remove-Item -Force -ErrorAction SilentlyContinue $out, $done
-        $cmd = Join-Path $env:PUBLIC 'genie-keychain-interactive.cmd'
-        Set-Content -Encoding ASCII -Path $cmd -Value @"
-@echo off
-cd /d "$repo"
-set KEYCHAIN_MEASURE_ALLOW=1
-whoami /groups > "$out" 2>&1
-"$node" scripts/perf-lag/keychain-measure.mjs before >> "$out" 2>&1
-echo %ERRORLEVEL% > "$done"
-"@
-        $name = 'GenieKeychainInteractive'
-        schtasks /Create /TN $name /TR "`"$cmd`"" /SC ONCE /ST 23:59 /IT /F /RL LIMITED | Out-Null
-        try {
-            schtasks /Run /TN $name | Out-Null
-            $deadline = (Get-Date).AddSeconds(240)
-            while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) { Start-Sleep -Seconds 2 }
-            if (-not (Test-Path $done)) { Write-Output '### keychain-sessions interactive=FAIL  the task did not finish within 240 s'; if (Test-Path $out) { Get-Content $out }; exit 1 }
-            $text = Get-Content $out
-            $kinds = @('INTERACTIVE', 'NETWORK', 'BATCH') | Where-Object { ($text -join "`n") -match "NT AUTHORITY\\$_\b" }
-            Write-Output "### keychain-sessions interactive-session kinds=$($kinds -join ',')"
-            $text | Where-Object { $_ -notmatch '^(GROUP INFORMATION|Group Name|=|$)' -and $_ -notmatch 'S-1-' }
-            exit [int](Get-Content $done).Trim()
-        } finally { schtasks /Delete /TN $name /F 2>$null | Out-Null }
-    }
+    'interactive' { Run-In-Session 'before' }
+    'persist-write' { Run-In-Session 'persist-write' }
+    'persist-read' { Run-In-Session 'persist-read' }
     'autologon' {
         $password = [Console]::In.ReadLine()
         if (-not $password) { Write-Output '### keychain-sessions autologon=FAIL  no password on stdin'; exit 1 }

@@ -258,6 +258,23 @@ probe "a-stale-older-file-goes-only-once-moved" src/main/tynn-account.ts \
     "|| typeof (current as { tokenEnc?: unknown }).tokenEnc === 'string') return;" ") return;" \
     test/tynn-account-host.test.ts "the current one still sealed: not yet"
 
+# One long-lived PowerShell: the launches go, the verification does not
+probe "the-helper-stays-one-launch" src/main/windows-helper.ts \
+    "        if (this.#child) return this.#child;" "" \
+    test/windows-helper.test.ts "one launch, however many requests"
+
+probe "a-dead-helper-loses-its-request" src/main/windows-helper.ts \
+    "        child.once('exit', () => gone('the helper exited'));" "" \
+    test/windows-helper.test.ts "killed mid-request: the request is lost"
+
+probe "a-hung-helper-is-ended" src/main/windows-helper.ts \
+    "        pending.timer = realSetTimeout(() => this.#lose(\`no answer within \${this.#deadlineMs} ms\`), this.#deadlineMs);" "" \
+    test/windows-helper.test.ts "hung past the deadline"
+
+probe "a-refused-script-is-a-refusal" src/main/windows-helper.ts \
+    "            if (done[2] === '0') active.resolve({ stdout: active.text, stderr: '' });" "            if (done[2] !== 'x') active.resolve({ stdout: active.text, stderr: '' });" \
+    test/windows-helper.test.ts "a request the script refused rejects with its code"
+
 # P3.4 cut a: the keychain. The pin is the core: unpinned, a secret is silently lost at the next reboot.
 probe "keychain-every-entry-is-pinned" src/main/keychain.ts \
     "        return new AsyncEntry(KEYCHAIN_SERVICE, name, ENTRY_OPTIONS);" "        return new AsyncEntry(KEYCHAIN_SERVICE, name);" \

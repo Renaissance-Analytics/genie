@@ -1,8 +1,10 @@
-import { execFile, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readdir, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { HelperLost, WindowsHelper, type HelperChild, type WindowsHelperOptions } from './windows-helper.js';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
@@ -115,7 +117,62 @@ interface NativeAcl {
     readonly completed: Promise<{ stdout: string | Buffer; stderr: string | Buffer }>;
 }
 
-function startWindowsAcl(script: string): NativeAcl {
+/**
+ * THE HELPER (windows-helper.ts): the same script, the same read-back, with no launch. One per process, started on first need, and never on Electron main, which keeps a launch per write: main never
+ * holds a process of its own for this, and a window with a host writes none of these. `undefined` is that default, a test can name its own, and `null` is a launch per write, which is what the
+ * launch-count test's fault injection drives.
+ */
+let helper: WindowsHelper | null | undefined;
+export function useAclHelper(chosen: WindowsHelper | null | undefined): void { helper = chosen; }
+export function windowsHelper(options: Partial<Pick<WindowsHelperOptions, 'deadlineMs' | 'log'>> = {}): WindowsHelper {
+    return new WindowsHelper({
+        ...options,
+        spawn: (file, args, env) => {
+            const child = spawn(file, [...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+            // Idle, it must not hold its owner open. While a request runs, the helper refs it again.
+            child.unref();
+            for (const pipe of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) pipe?.unref?.();
+            return child as unknown as HelperChild;
+        },
+    });
+}
+export function sharedWindowsHelper(): WindowsHelper | null {
+    if (helper === undefined) helper = (process as { type?: string }).type === 'browser' ? null : windowsHelper();
+    return helper;
+}
+/** This attempt's: whether to skip the helper, and whether the helper was lost under it. */
+const attempt = new AsyncLocalStorage<{ oneShot: boolean; lost: boolean }>();
+
+/**
+ * THE VERIFICATION IS NEVER SKIPPED. A helper dead, hung or unstartable loses its request, and the whole attempt runs again by a launch, with the same script and the same read-back. A script that
+ * refused is a refusal, and is not tried again: that is the answer, not a failure to get one. If the launch fails too, so does the write.
+ */
+async function withHelperOrALaunch<T>(work: () => Promise<T>): Promise<T> {
+    const state = { oneShot: false, lost: false };
+    try {
+        return await attempt.run(state, work);
+    } catch (error) {
+        if (!state.lost) throw error;
+        return attempt.run({ oneShot: true, lost: false }, work);
+    }
+}
+
+function startWindowsAcl(body: string): NativeAcl {
+    const state = attempt.getStore();
+    const through = state?.oneShot ? null : sharedWindowsHelper();
+    if (through) {
+        const began = performance.now();
+        const request = through.run(body);
+        return {
+            child: { stdin: request.stdin, stdout: request.stdout, kill: () => request.kill() } as unknown as ChildProcess,
+            completed: request.completed.catch((error: unknown) => {
+                if (error instanceof HelperLost) { if (state) state.lost = true; }
+                else recordNativeFailure(error, began);
+                throw new Error(REFUSED);
+            }),
+        };
+    }
+    const script = windowsScript(body);
     const env = { ...process.env };
     for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
     const began = performance.now();
@@ -143,7 +200,7 @@ async function restrict(targets: readonly Target[]): Promise<void> {
         }
         return;
     }
-    await startWindowsAcl(windowsScript(windowsAcl(targets))).completed;
+    await startWindowsAcl(windowsAcl(targets)).completed;
 }
 
 const PREPARED = 'PRIVATE_CREDENTIAL_PREPARED\n';
@@ -152,7 +209,7 @@ const STAGED = 'PRIVATE_CREDENTIAL_STAGED';
 
 /** Keep the native verifier alive across Node's exclusive staging, without sending it credential bytes. */
 async function restrictStagedWrite(targets: readonly Target[], temp: string, stage: () => Promise<void>, cleanup: () => Promise<void>): Promise<void> {
-    const native = startWindowsAcl(windowsScript(`
+    const native = startWindowsAcl(`
         $pipe=[Console]::OpenStandardOutput()
         function Send-PrivateSignal([string]$message) {
             $bytes=[Text.Encoding]::UTF8.GetBytes($message+[Environment]::NewLine)
@@ -168,7 +225,7 @@ async function restrictStagedWrite(targets: readonly Target[], temp: string, sta
             ${windowsAcl([{ path: temp, directory: false }])}
             Send-PrivateSignal ('PRIVATE_CREDENTIAL_VERIFIED:'+$stageId)
         } finally { $reader.Dispose() }
-    `));
+    `);
     const input = native.child.stdin;
     const output = native.child.stdout;
     const stop = () => { try { native.child.kill(); } catch { /* The bounded native call still owns its deadline. */ } };
@@ -246,17 +303,20 @@ async function preparePrivateStorage(file: string, staged?: { temp: string; writ
     }
 }
 
-/** The one file, as a store opening over it would have it. On Windows only for now: elsewhere the caller's chmod is the same thing. */
+/**
+ * A FILE THAT IS NOT A CREDENTIAL'S, BUT HOLDS A SECRET (services.json, host.token). On Windows a mode means nothing: such a file inherited SYSTEM and Administrators from the folder. It gets the same
+ * owner-only ACL and the same read-back. A file that is not there is a refusal: the caller knows which files it means.
+ */
 export async function restrictPrivateFile(file: string): Promise<void> {
     if (process.platform !== 'win32') return;
     const target = { path: resolve(file), directory: false };
     if (!await inspect(target)) throw new Error(REFUSED);
-    try { await restrict([target]); } catch (error) { throw error instanceof SharedCredentialDirectoryError ? error : new Error(REFUSED); }
+    await withHelperOrALaunch(() => restrict([target]));
 }
 
 /** Restrict existing storage before reading it or issuing a credential. Final links are refused. */
 export async function preparePrivateCredential(file: string): Promise<void> {
-    await preparePrivateStorage(file);
+    await withHelperOrALaunch(() => preparePrivateStorage(file));
 }
 
 /** Secure only the legacy FILE, never its shared parent, before moving into a private leaf. */
@@ -291,6 +351,10 @@ export const PRIVATE_CREDENTIAL_STORE: PrivateCredentialStore = {
 
 /** Encrypted JSON is staged exclusively inside its private parent and restricted before replacement. */
 export async function writePrivateCredential(file: string, text: string): Promise<void> {
+    await withHelperOrALaunch(() => writePrivateCredentialOnce(file, text));
+}
+
+async function writePrivateCredentialOnce(file: string, text: string): Promise<void> {
     const temp = `${resolve(file)}.${randomUUID()}.tmp`;
     let created = false;
     const cleanup = async () => {
