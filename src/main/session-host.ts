@@ -1,4 +1,5 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
+import { PROGRAM_LOOKUP_VARIABLE } from '../core/program-lookup.js';
 import { listModels, type ListModelsOptions, type McpServer, type SessionModelState } from '@particle-academy/prism-acp';
 import { homedir } from 'node:os';
 import type { ListProviderModels } from '../core/provider-models.js';
@@ -153,6 +154,8 @@ export function providerLaunchOptions(
     runtime: { readonly execPath: string; readonly electron: boolean },
 ): { binary?: string; binaryArgs?: readonly string[]; parentEnv?: Readonly<Record<string, string | undefined>>; allowEnv?: readonly string[] } {
     let service = serviceEnvDriverOptions(serviceEnv);
+    // A provider starts through a shell, and its environment is an allow-list: what hardenProcess set goes with it.
+    if (process.env[PROGRAM_LOOKUP_VARIABLE]) service = { ...service, parentEnv: { ...(service.parentEnv ?? process.env), [PROGRAM_LOOKUP_VARIABLE]: process.env[PROGRAM_LOOKUP_VARIABLE] }, allowEnv: [...(service.allowEnv ?? []), PROGRAM_LOOKUP_VARIABLE] };
     // Check and repair sets these beside PATH (already in the SDK's base allow-list). Keep only these explicit
     // toolchain overrides, including for model-list probes; an ambient env passthrough would expose credentials.
     const toolchain = ['NPM_CONFIG_PREFIX', 'PHP_INI_SCAN_DIR'].flatMap((name) => {

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { guardRepoPath, parseRepoStatus, type RepoStatus } from './repo-model.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE REPOSITORY PANEL'S GIT (beta.33 item 14; Genie 1 main/repo/index.ts). The engine behind the Repository official
@@ -17,7 +18,7 @@ const fail = (error: string): RepoResult<never> => ({ ok: false, error });
 
 function git(cwd: string, args: readonly string[]): Promise<RepoResult<string>> {
     return new Promise((resolve) => {
-        execFile('git', [...args], { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (error, stdout, stderr) => {
+        execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (error, stdout, stderr) => {
             if (error) resolve(fail(String(stderr ?? '').trim() || error.message));
             else resolve(ok(String(stdout)));
         });

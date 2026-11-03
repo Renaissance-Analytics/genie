@@ -4,6 +4,8 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hardenProcess, resolveProgram } from '../src/core/program-lookup.js';
+import { fancyTermPort } from '../src/main/fancy-term-port.js';
+import { providerLaunchOptions } from '../src/main/session-host.js';
 import { gitFileStatus, gitLogSince, gitShowHead, gitTreeStatus } from '../src/main/git-ports.js';
 import { repoStatus } from '../src/main/repo-git.js';
 
@@ -87,6 +89,44 @@ describe('resolveProgram, on any OS, with a fake machine', () => {
 
     it('elsewhere: the name, for the OS to find', () => {
         expect(resolveProgram('git', { platform: 'linux', env: { PATH: '/usr/bin' }, isFile: () => true })).toBe('git');
+    });
+});
+
+describe("a person's terminal and everyone else's", () => {
+    const backend = () => {
+        const made: Array<Record<string, unknown>> = [];
+        return { made, port: fancyTermPort({ create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 1, shell: 'cmd', existing: false, scrollback: '' }; }, on: () => {}, kill: () => {}, write: () => {}, resize: () => {}, getScrollback: () => '' } as never, { defaultShell: () => ({ command: 'cmd', args: [] }) }) };
+    };
+    const envOf = (made: Array<Record<string, unknown>>) => made[0]!['env'] as Record<string, string | undefined>;
+
+    it("a person's: the variable is taken off, so it behaves as Windows does", () => {
+        const b = backend();
+        b.port.open({ cwd: '/w', personal: true });
+        expect(Object.hasOwn(envOf(b.made), VARIABLE)).toBe(true);
+        expect(envOf(b.made)[VARIABLE]).toBeUndefined();
+    });
+
+    it("an agent's or Genie's: it stays as inherited", () => {
+        const b = backend();
+        b.port.open({ cwd: '/w', command: 'x', shell: true });
+        expect(Object.hasOwn(envOf(b.made), VARIABLE)).toBe(false);
+    });
+
+    it('wired: the tab, Take Over, the scratch terminal and a remote person are personal; an agent is not', () => {
+        for (const file of ['src/main/main.ts', 'src/main/take-over-host.ts', 'src/main/scratch-terminal.ts', 'src/main/host-api.ts']) expect(readFileSync(file, 'utf8'), file).toMatch(/personal: true/);
+        expect(readFileSync('src/main/mcp-tools-more.ts', 'utf8')).not.toMatch(/personal/);
+    });
+});
+
+describe('a provider, whose environment is an allow-list', () => {
+    it('gets the variable when this process has it', () => {
+        const was = process.env[VARIABLE];
+        process.env[VARIABLE] = '1';
+        try {
+            const options = providerLaunchOptions(undefined, {}, { execPath: 'x', electron: false });
+            expect(options.allowEnv).toContain(VARIABLE);
+            expect(options.parentEnv?.[VARIABLE]).toBe('1');
+        } finally { if (was === undefined) delete process.env[VARIABLE]; else process.env[VARIABLE] = was; }
     });
 });
 

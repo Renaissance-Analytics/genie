@@ -1,5 +1,6 @@
 import { ChildProcess, execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
+import { resolveProgram } from './program-lookup.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -302,12 +303,12 @@ const WIN32_ARGS = ['-NoProfile', '-NonInteractive', '-Command', WIN32_SCRIPT];
 const WIN32_OPTIONS = { encoding: 'utf8' as const, timeout: 30_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true };
 
 function win32Snapshot(): ProcessInfo[] {
-    return parseWin32Snapshot(execFileSync('powershell', WIN32_ARGS, WIN32_OPTIONS), process.pid);
+    return parseWin32Snapshot(execFileSync(resolveProgram('powershell'), WIN32_ARGS, WIN32_OPTIONS), process.pid);
 }
 
 /** The same reading, off the event loop (genie#1201). */
 async function win32SnapshotAsync(): Promise<ProcessInfo[]> {
-    const { stdout } = await execFileAsync('powershell', WIN32_ARGS, WIN32_OPTIONS);
+    const { stdout } = await execFileAsync(resolveProgram('powershell'), WIN32_ARGS, WIN32_OPTIONS);
     return parseWin32Snapshot(stdout, process.pid);
 }
 
@@ -340,12 +341,12 @@ const PS_ARGS = ['-A', '-o', 'pid=,ppid=,lstart=,comm='];
 const psOptions = () => ({ encoding: 'utf8' as const, timeout: 20_000, maxBuffer: 32 * 1024 * 1024, env: { ...process.env, LC_ALL: 'C', LANG: 'C' } });
 
 function posixSnapshot(): ProcessInfo[] {
-    return parsePosixSnapshot(execFileSync('ps', PS_ARGS, psOptions()), process.pid);
+    return parsePosixSnapshot(execFileSync(resolveProgram('ps'), PS_ARGS, psOptions()), process.pid);
 }
 
 /** The same reading, off the event loop (genie#1201). */
 async function posixSnapshotAsync(): Promise<ProcessInfo[]> {
-    const { stdout } = await execFileAsync('ps', PS_ARGS, psOptions());
+    const { stdout } = await execFileAsync(resolveProgram('ps'), PS_ARGS, psOptions());
     return parsePosixSnapshot(stdout, process.pid);
 }
 
@@ -389,7 +390,7 @@ export const systemProcessTree: ProcessTree = makeProcessTree({
     // The same kill as killOne below — one pid, never `/T` — without holding the event loop.
     killOneAsync: async (pid) => {
         try {
-            if (process.platform === 'win32') await execFileAsync('taskkill', ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
+            if (process.platform === 'win32') await execFileAsync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { timeout: 20_000, windowsHide: true });
             else process.kill(pid, 'SIGKILL');
         } catch {
             // Already gone is the common case and is a success, not an error.
@@ -407,7 +408,7 @@ export const systemProcessTree: ProcessTree = makeProcessTree({
                  * unrelated service. Every genuine descendant is already in the verified set,
                  * so the tree flag adds only processes nobody checked.
                  */
-                execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
+                execFileSync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
             } else {
                 process.kill(pid, 'SIGKILL');
             }
