@@ -16,6 +16,7 @@ import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { tynnAgentIdentities, type AgentSecrets } from '../src/main/tynn-agent-identities.js';
 import { linkedAgentSecrets } from '../src/main/agent-secrets.js';
+import { until } from './helpers/until.js';
 
 /**
  * AN AGENT'S TYNN KEY IS THE HOST'S (the owner's decision 3, genie#1457: "this should not happen at all. fix it, don't bandaid
@@ -103,7 +104,6 @@ describe('THE BUG: the window process is killed, the host starts an agent, the a
         server.attach(host);
         return { server, host, handed };
     }
-    const until = async (done: () => boolean) => { for (let i = 0; i < 200 && !done(); i += 1) await new Promise((r) => setTimeout(r, 5)); };
 
     it('it starts with the key, and with the host’s own Genie entry beside it', async () => {
         const agent = record();

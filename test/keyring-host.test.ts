@@ -9,6 +9,7 @@ import { LinuxKeyring, type KeyringPorts } from '../src/main/linux-keyring.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
+import { until } from './helpers/until.js';
 
 /**
  * THE KEYRING CARD READS THE HOST (P3.4 cut c). The secrets are in the host's keychain, so whether they can be kept is the host's to say. The window's Chromium store
@@ -46,7 +47,6 @@ async function linked(service: KeyringService) {
     await client.connect(windowSide, TOKEN);
     return { client, replica: client.keyring() };
 }
-const until = async (done: () => boolean) => { for (let i = 0; i < 100 && !done(); i += 1) await new Promise((r) => setTimeout(r, 5)); };
 
 describe('a window shows what the host found', () => {
     it('no daemon running: the card is there as the window connects, in the host’s words', async () => {
