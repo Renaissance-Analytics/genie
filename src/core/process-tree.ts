@@ -104,6 +104,10 @@ export interface ProcessInfo {
     readonly name: string;
 }
 
+/** Reserved for a process whose start time was never read. */
+export const START_UNKNOWN = -1;
+export const startTimeUnknown = (pid: number, ppid: number): ProcessInfo => ({ pid, ppid, started: START_UNKNOWN, name: 'start time unknown' });
+
 export interface ReapResult {
     killed: number;
     /** True when the reap was declined as unsafe. `reason` says why, for a surface to report. */
