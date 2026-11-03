@@ -8,3 +8,9 @@ export function shellLaunch(platform: NodeJS.Platform, defaultShell: () => { com
     if (platform === 'win32') return { command: 'cmd.exe', args: ['/d', '/s', '/c', line] };
     return { command: defaultShell().command, args: ['-lc', line] };
 }
+
+// RED: the shape only.
+export function cmdShellLine(line: string): string { return line; }
+export function verbatimShellLaunch(platform: NodeJS.Platform, defaultShell: () => { command: string; args: string[] }, line: string): { command: string; args: string[]; windowsVerbatimArguments: boolean } {
+    return { ...shellLaunch(platform, defaultShell, line), windowsVerbatimArguments: platform === 'win32' };
+}
