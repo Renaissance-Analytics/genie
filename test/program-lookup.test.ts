@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { hardenProcess, resolveProgram } from '../src/core/program-lookup.js';
+import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from '../src/main/fancy-term-port.js';
 import { providerLaunchOptions } from '../src/main/session-host.js';
 import { gitFileStatus, gitLogSince, gitShowHead, gitTreeStatus } from '../src/main/git-ports.js';
@@ -235,6 +236,26 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
         spawnSync(process.env.ComSpec!, ['/d', '/c', 'git status'], { cwd: folder, env: { ...without(), NODE_OPTIONS: process.env.NODE_OPTIONS, [VARIABLE]: '' }, windowsHide: true });
         console.log(`### lookup empty-value ran=${ran()}`);
     });
+    it("a real pty: a person's terminal has no variable, and an agent's has it", async () => {
+        const settings = { get: (key: string) => (key === 'track_cwd' ? 'off' : key === 'detached_terminals' ? 'off' : undefined) };
+        configureInProcessBackend({ settings, snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false } } as never);
+        const pty = fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
+        const was = process.env[VARIABLE];
+        process.env[VARIABLE] = '1';
+        const say = (personal: boolean) => new Promise<string>((resolve) => {
+            let out = '';
+            const opened = pty.open({ cwd: folder, command: `cmd.exe /d /c if defined ${VARIABLE} (echo HAS-IT) else (echo HAS-NOT)`, ...(personal ? { personal: true } : {}) });
+            const offData = pty.onData((id, data) => { if (id === opened.id) out += data; });
+            const offExit = pty.onExit((id) => { if (id !== opened.id) return; offData(); offExit(); resolve(out); });
+        });
+        try {
+            // The title carries the command line, so only what it printed on a line of its own counts.
+            const lines = (out: string) => out.replace(/\u001b\][^\u0007]*\u0007/g, '').replace(/\u001b\[[0-9;?]*[A-Za-z]/g, '');
+            expect(lines(await say(true))).toMatch(/HAS-NOT/);
+            expect(lines(await say(false))).toMatch(/HAS-IT/);
+        } finally { if (was === undefined) delete process.env[VARIABLE]; else process.env[VARIABLE] = was; }
+    }, 30_000);
+
     it('resolving finds the real one with a PATH of its own', () => {
         const dir = join(folder, 'on path');
         mkdirSync(dir);
