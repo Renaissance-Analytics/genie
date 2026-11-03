@@ -51,6 +51,7 @@ import { workstationKeyStore } from './workstation-identity.js';
 import { WorkstationService } from './workstation-service.js';
 import { DeviceLinkService } from './device-link-service.js';
 import { deviceSocket } from './device-socket.js';
+import { configWriter, writeWorkspaceConfig } from './workspace-config-sync.js';
 import { deviceTokenStore } from './device-tokens.js';
 import { KeyringService } from './keyring-service.js';
 import { hostTynnRecovery, wallClockJumps } from './host-tynn-recovery.js';
@@ -254,7 +255,10 @@ async function main(): Promise<void> {
     let hostTynn: TynnAccount | null = null;
     void tynnOpening.then((account) => { hostTynn = account; }, (error: unknown) => say(`the Tynn account could not open: ${error instanceof Error ? error.message : String(error)}`));
     // THE HOST PREPARES ITS AGENTS (P3.4 cut c), with a window open or not. A start waits for the account: opening has its own deadline.
+    // One writer of a workspace's agent config: preparing an agent and syncing hold the same lock.
+    const withConfig = configWriter();
     const agentKeys = hostAgentKeys({
+        withConfig,
         vaultFile: join(home, 'agent-credentials', 'agents.json'),
         keychain,
         tynn: () => hostTynn,
@@ -294,6 +298,7 @@ async function main(): Promise<void> {
         tynn: new TynnAccountService(tynnOpening, { host: TYNN_HOST, recovery: async (asked) => { await tynnRecovery?.recover(asked); return []; } }),
         github: new GithubAccountService(githubOpening),
         // THIS MACHINE'S KEY IS HERE (P3.4). The relay is the window's until P5, so it asks this to sign.
+        configSync: (asked) => withConfig(asked.workspacePath, () => writeWorkspaceConfig(asked)),
         // Other machines: the host dials them, and holds the tokens that open them (P3.4 cut e).
         deviceLink: new DeviceLinkService({
             tokens: deviceTokenStore(join(runtime, 'device-hosts.json'), keychain),

@@ -44,7 +44,7 @@ import { agentTynnPrep } from './agent-tynn-prep.js';
 import type { AgentSecrets } from './tynn-agent-identities.js';
 import { fileMigrationBook, migrateSecrets, type HostVault, type MigrationSource } from './keychain-migration.js';
 import { McpPreparationError } from './mcp-preparation-error.js';
-import { nodeTynnConfigFs, reconcileLegacyTynnConfig } from './tynn-config-cleanup.js';
+import { configWriter, writeWorkspaceConfig, type WorkspaceConfigRequest } from './workspace-config-sync.js';
 import { PluginHost } from './plugin-host.js';
 import type { Verification } from './mcp-server.js';
 import { PUBLISHER_KEYS } from '../core/plugin-keys.js';
@@ -215,6 +215,8 @@ export interface ComposeInput {
     readonly appInboxEnv?: (source: AppEnvSource) => Readonly<Record<string, string>>;
     /** Genie's own MCP endpoint for agents, once the server listens; `null` until then (config sync refuses). */
     readonly mcpEndpoint?: () => { url: string; token: string } | null;
+    /** With a host, a workspace's agent config is the host's to write. */
+    readonly hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null;
     /**
      * The scoped Tynn account, late-bound because it opens after composition. Used only during private agent preparation.
      */
@@ -1040,12 +1042,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const migrationBook = fileMigrationBook(join(input.userData, 'keychain-migration.json'));
     void moveAgentKeys();
     // Cleanup and normal config sync share one writer; a concurrent sync cannot resurrect a removed legacy entry.
-    const configWork = new Map<string, Promise<unknown>>();
-    const withConfig = <T>(path: string, run: () => Promise<T>): Promise<T> => {
-        const previous = configWork.get(path) ?? Promise.resolve();
-        const next = previous.then(run, run).finally(() => { if (configWork.get(path) === next) configWork.delete(path); });
-        configWork.set(path, next); return next;
-    };
+    const withConfig = configWriter();
     // A window running its own engine prepares its agents here (agent-tynn-prep.ts). With a host, the host does, and this goes unused.
     const tynnPrep = agentTynnPrep({
         vaultFile: tynnVaultFile,
@@ -1204,7 +1201,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         get plugins() { return plugins; },
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
-        syncConfig: async (workspacePath, source = 'start') => withConfig(workspacePath, async () => {
+        syncConfig: async (workspacePath, source = 'start') => {
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) {
                 const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
@@ -1213,26 +1210,13 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
             }
             const values = settings.snapshot();
             const flag = (k: string) => values[k] !== false;
-            const fs = {
-                read: async (p: string) => { try { return await readFileP(p, 'utf8'); } catch { return null; } },
-                write: async (p: string, text: string) => { await mkdir(dirname(p), { recursive: true }); await writeFileP(p, text, 'utf8'); },
-                remove: async (p: string) => { try { await unlinkP(p); } catch { /* not there: nothing to remove */ } },
-                list: async (d: string) => { try { return await readdirP(d); } catch { return []; } },
-            };
-            const flags = { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') };
-            try {
-                await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });
-                await writeAgentGitignore({ workspacePath, fs });
-            } catch {
-                const failed: SyncResult[] = [{ id: 'tynn', label: 'Tynn (legacy config cleanup)', ok: false, error: new McpPreparationError('config').message }];
-                agentFiles.config(workspacePath, failed, Date.now(), source);
-                return failed;
-            }
-            const targets = configSyncTargets({ workspacePath, fs, flags });
-            const results = await configSync(targets, { GENIE_MCP_URL: endpoint.url, GENIE_MCP_TOKEN: endpoint.token });
+            const request: WorkspaceConfigRequest = { workspacePath, endpoint, flags: { mcp_sync_claude: flag('mcp_sync_claude'), mcp_sync_cursor: flag('mcp_sync_cursor'), mcp_sync_codex: flag('mcp_sync_codex'), mcp_sync_hooks: flag('mcp_sync_hooks') } };
+            // One writer (workspace-config-sync.ts): the host's when there is one, and a failure there is not a reason to write here.
+            const host = input.hostConfigSync?.() ?? null;
+            const results = [...await (host ? host.configSync(request) : withConfig(workspacePath, () => writeWorkspaceConfig(request)))];
             agentFiles.config(workspacePath, results, Date.now(), source);
             return results;
-        }),
+        },
         syncAgentDocs: async (workspacePath, source = 'start') => {
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const on = settings.snapshot().mcp_sync_agents !== false;

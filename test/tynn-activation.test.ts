@@ -5,7 +5,9 @@ import type { McpServer } from '@particle-academy/prism-acp';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId, type AgentRecord } from '../src/core/identity.js';
 import { OS_WORKSPACE } from '../src/core/os-agent.js';
+import type { SyncResult } from '../src/core/integrations.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
+import type { WorkspaceConfigRequest } from '../src/main/workspace-config-sync.js';
 import { SessionHost } from '../src/main/session-host.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { TYNN_TOML_BEGIN, TYNN_TOML_END } from '../src/main/tynn-agent-token.js';
@@ -30,7 +32,7 @@ function deferred() {
     return { promise, resolve, reject };
 }
 
-async function fixture() {
+async function fixture(extra: { hostConfigSync?: () => { configSync(request: WorkspaceConfigRequest): Promise<readonly SyncResult[]> } | null } = {}) {
     const workspace = join(dir, 'workspace'); await mkdir(workspace);
     await writeFile(join(workspace, 'project.json'), JSON.stringify({ tynn: { projectId: 'project-42' } }));
     const state = { online: true, encryption: true, signedIn: true, userId: 'user-7', saved: null as string | null, accountLate: false, minted: 0, lists: 0, requests: 0, gate: Promise.resolve() };
@@ -56,7 +58,7 @@ async function fixture() {
             return answer({ token: `rpk_${publicId}.${'a'.repeat(64)}`, mcp_url: entry.url, agent: { id: row.id } });
         } };
     const held = new Map<string, string>();
-    const input = { userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
+    const input = { ...extra, userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
         mcpEndpoint: () => ({ url: 'http://127.0.0.1:1/mcp', token: 'synthetic-genie' }),
         workspaces: () => [{ id: 'workspace', path: workspace }], tynn: () => { if (state.accountLate) { state.accountLate = false; return null; } return account; },
         tynnSecrets: { probe: async () => (state.encryption ? { ok: true as const } : { ok: false as const, reason: 'locked' }), get: async (name: string) => { const value = held.get(name); return !(state.encryption) ? { kind: 'unavailable' as const, reason: 'locked' } : value === undefined ? { kind: 'missing' as const } : { kind: 'value' as const, value }; }, set: async (name: string, value: string) => { if (!(state.encryption)) return { ok: false as const, reason: 'locked' }; held.set(name, value); return { ok: true as const }; } },
@@ -92,6 +94,24 @@ it('config sync removes the legacy shared credential from all three files withou
         expect(text.includes(legacy), `${file} must not contain the shared credential`).toBe(false);
         expect(text.includes('user-server')).toBe(true);
     }
+});
+
+it('with a host, the window writes nothing: the sync goes to the host, and the host\'s answer is the answer', async () => {
+    const asked: WorkspaceConfigRequest[] = [];
+    const answer: SyncResult[] = [{ id: 'claude', label: 'Claude', ok: true }];
+    const t = await fixture({ hostConfigSync: () => ({ configSync: async (request) => { asked.push(request); return answer; } }) });
+    await t.seed();
+    expect(await t.s.syncConfig(t.workspace)).toEqual(answer);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ workspacePath: t.workspace, endpoint: { url: 'http://127.0.0.1:1/mcp', token: 'synthetic-genie' } });
+    for (const file of ['.mcp.json', '.cursor/mcp.json', '.codex/config.toml']) expect((await readFile(join(t.workspace, file), 'utf8')).includes(legacy), `${file} is the host's to change`).toBe(true);
+});
+
+it('a host that fails is not a reason to write here: that would be the second writer again', async () => {
+    const t = await fixture({ hostConfigSync: () => ({ configSync: async () => { throw new Error('the host closed the connection'); } }) });
+    await t.seed();
+    await expect(t.s.syncConfig(t.workspace)).rejects.toThrow('the host closed the connection');
+    expect((await readFile(join(t.workspace, '.mcp.json'), 'utf8')).includes(legacy)).toBe(true);
 });
 
 it('reconciles legacy entries even when each harness sync is disabled', async () => {

@@ -486,6 +486,23 @@ probe "device-socket-survives-its-own-close" src/main/device-socket.ts \
     "    socket.on('error', () => {});" "" \
     test/device-socket.test.ts "cannot take the host down"
 
+# One writer of a workspace's agent config
+probe "a-window-with-a-host-writes-nothing" src/main/compose.ts \
+    "            const host = input.hostConfigSync?.() ?? null;" "            const host = null as ReturnType<NonNullable<typeof input.hostConfigSync>>;" \
+    test/tynn-activation.test.ts "with a host, the window writes nothing"
+
+probe "the-host-prep-holds-the-lock" src/main/host-agent-keys.ts \
+    "        ...(options.withConfig ? { withConfig: options.withConfig } : {})," "" \
+    test/workspace-config-writer.test.ts "wired: the host"
+
+probe "the-lock-is-a-lock" src/main/workspace-config-sync.ts \
+    "        const next = previous.then(run, run).finally(" "        const next = run().finally(" \
+    test/workspace-config-writer.test.ts "work on a workspace runs one at a time"
+
+probe "the-cleanup-comes-before-the-write" src/main/workspace-config-sync.ts \
+    "        await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });" "" \
+    test/workspace-config-writer.test.ts "removes the legacy credential"
+
 # P3.4 cut e: the host dials other machines, and their tokens never reach a window
 probe "the-welcome-loses-its-token" src/main/device-link-service.ts \
     "        const heard = JSON.stringify(rest);" "        const heard = JSON.stringify(message);" \

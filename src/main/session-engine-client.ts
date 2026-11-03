@@ -1,5 +1,7 @@
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
+import type { SyncResult } from '../core/integrations.js';
+import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { DeviceLinkEvent } from './device-link-service.js';
 import { KeyringReplica } from './keyring-replica.js';
 import type { KeyringDump } from './keyring-service.js';
@@ -506,6 +508,13 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#terminals;
+    }
+
+    /** A workspace's agent config: the host writes it. Anything but its answer rejects, so nothing reads as synced. */
+    async configSync(request: WorkspaceConfigRequest): Promise<SyncResult[]> {
+        const reply = await this.call('engine.configSync', [request]);
+        if (!reply.ok) throw new Error(reply.reason);
+        return reply.value as SyncResult[];
     }
 
     /** Other machines: genie-host dials them and holds their device tokens (P3.4 cut e). */

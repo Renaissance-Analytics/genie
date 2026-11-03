@@ -2,6 +2,8 @@ import type { GithubAccountService } from './github-account-service.js';
 import type { HostAgentKeys } from './host-agent-keys.js';
 import type { KeyringService } from './keyring-service.js';
 import type { WorkstationService } from './workstation-service.js';
+import type { SyncResult } from '../core/integrations.js';
+import type { WorkspaceConfigRequest } from './workspace-config-sync.js';
 import type { DeviceLinkEvent, DeviceLinkService } from './device-link-service.js';
 import { hostVault } from './keychain-migration.js';
 import type { TynnAccountService } from './tynn-account-service.js';
@@ -74,6 +76,8 @@ export interface EngineServerOptions {
     readonly workstation?: WorkstationService;
     /** Sockets to other machines (P3.4 cut e): the host dials, and holds their device tokens. */
     readonly deviceLink?: DeviceLinkService;
+    /** A workspace's agent config (P3.4): one writer, here. */
+    readonly configSync?: (asked: WorkspaceConfigRequest) => Promise<readonly SyncResult[]>;
     /** The keyring card, as the host found it (P3.4 cut c). */
     readonly keyring?: KeyringService;
     /** The host's GitHub account (P3.4 cut c). */
@@ -509,6 +513,9 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.configSync':
+                if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
+                return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
             case 'engine.deviceLink':
                 if (!this.#options.deviceLink) throw new Error('This host dials no other machines.');
                 return this.#options.deviceLink.call(conn.id, str(0), Array.isArray(args[1]) ? args[1] : []);

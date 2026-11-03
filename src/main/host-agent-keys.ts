@@ -15,6 +15,8 @@ export interface HostAgentKeysOptions {
     readonly workspaces: AgentTynnPrepOptions['workspaces'];
     readonly ready?: AgentTynnPrepOptions['ready'];
     readonly settled?: () => Promise<void>;
+    /** The lock a workspace's config is written under (workspace-config-sync.ts). */
+    readonly withConfig?: <T>(path: string, run: () => Promise<T>) => Promise<T>;
     /** An agent was prepared: whoever keeps asking for Tynn looks again. */
     readonly onPrepared?: () => void;
 }
@@ -33,6 +35,7 @@ export function hostAgentKeys(options: HostAgentKeysOptions): HostAgentKeys {
         secrets: options.keychain,
         tynn: options.tynn,
         workspaces: options.workspaces,
+        ...(options.withConfig ? { withConfig: options.withConfig } : {}),
         ...(options.ready ? { ready: options.ready } : {}),
         ...(options.settled ? { settled: options.settled } : {}),
     });
