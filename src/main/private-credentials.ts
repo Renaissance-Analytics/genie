@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readdir, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
+import type { WindowsHelper } from './windows-helper.js';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
@@ -246,6 +247,7 @@ async function preparePrivateStorage(file: string, staged?: { temp: string; writ
     }
 }
 
+export function useAclHelper(_helper: WindowsHelper | null | undefined): void {}
 /** The one file, as a store opening over it would have it. On Windows only for now: elsewhere the caller's chmod is the same thing. */
 export async function restrictPrivateFile(file: string): Promise<void> {
     if (process.platform !== 'win32') return;

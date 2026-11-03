@@ -1,4 +1,4 @@
-import { chmod, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
+import { chmod, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { AGENT_RECORD_FIELDS, asAgentId, type AgentRecord } from '../core/identity.js';
 import { runtimeDir } from './paths.js';
@@ -106,6 +106,8 @@ export async function makePrivate(file: string): Promise<void> {
         if (error.code !== 'ENOENT') console.error(`[genie] could not make ${file} private: ${error.message}`);
     });
 }
+
+export async function writeTextPrivate(file: string, text: string): Promise<void> { await writeFile(file, text); }
 
 export function writeJsonAtomic(file: string, value: unknown, options?: { readonly mode?: number }): Promise<void> {
     const previous = inFlight.get(file) ?? Promise.resolve();
