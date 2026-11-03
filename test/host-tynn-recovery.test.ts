@@ -83,7 +83,14 @@ const bearer = (servers: readonly McpServer[]) => {
     const tynn = servers.find((s) => s.name === 'tynn') as { headers?: readonly { name: string; value: string }[] } | undefined;
     return tynn?.headers?.find((h) => h.name === 'Authorization')?.value ?? null;
 };
-const until = async (done: () => boolean) => { for (let i = 0; i < 400 && !done(); i += 1) await new Promise((r) => setTimeout(r, 5)); };
+// By the clock, and it says so: an agent's first preparation took 6 to 10 s on the Windows runner, and running out quietly read as "the driver was never made".
+const until = async (done: () => boolean, ms = 60_000) => {
+    const deadline = Date.now() + ms;
+    while (!done()) {
+        if (Date.now() > deadline) throw new Error(`not within ${ms} ms: ${String(done)}`);
+        await new Promise((r) => setTimeout(r, 5));
+    }
+};
 
 describe('THE BUG: an agent started during an outage, with no window, gets its tools back once Tynn answers, and no window connects', () => {
     function world(t: ReturnType<typeof tynnFake>) {
