@@ -216,6 +216,23 @@ export class LinuxKeyring {
         if (this.state() === 'not-installed' && !this.#plan) this.#plan = await this.#ports.plan();
     }
 
+    /**
+     * THE KEYCHAIN'S ANSWER CHANGED (host-keychain.ts): read the session again, and say so if the card changed. A running step decides for itself when it ends, and several
+     * changes while one read runs are that one read.
+     */
+    recheck(): Promise<void> {
+        if (this.#work) return this.#work;
+        const before = JSON.stringify(this.view());
+        const work = this.#reread()
+            .then(() => {
+                if (this.state() === 'ready') { this.#step = null; this.#failure = null; this.#manualOnFailure = null; }
+                if (JSON.stringify(this.view()) !== before) this.#changed();
+            })
+            .finally(() => { this.#work = null; });
+        this.#work = work;
+        return work;
+    }
+
     /** The card's button: the next step for the state the session is in. A click while one runs joins it. */
     fix(): Promise<void> {
         if (this.#work) return this.#work;

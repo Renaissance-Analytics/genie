@@ -11,6 +11,8 @@
  *   A. THE ORDINARY CASE: daemon stopped, activation file in place. Genie starts, the service comes up with nobody pressing anything, and there is no card.
  *   B. "not-running": installed, and the bus cannot activate it (its activation file hidden; sudo, test VM only). The card must come from the host, and its button must start
  *      the daemon directly (`gnome-keyring-daemon --start`), with no restart of Genie. CONTROL: the keychain really refuses before the click, read over the same bus.
+ *   B, continued: IT GOES AWAY WHILE GENIE RUNS. The daemon is stopped again with the same window open. A saved hello on the device link makes the host read a secret, the
+ *      card comes with nothing pressed and no restart, and the button brings it back.
  *   C. "not-installed": the daemon's binary hidden too. The card says so and names the command. The button is not pressed: a real install needs a package mirror and a polkit
  *      agent, and is covered by unit tests only.
  *
@@ -18,6 +20,7 @@
  */
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir, userInfo } from 'node:os';
 import { join } from 'node:path';
@@ -178,6 +181,30 @@ try {
         const gone = await until('the card to go', 30_000, async () => (await card()) === null);
         check(Boolean(gone), 'B7-the-card-went', JSON.stringify(await card()));
         check(window?.pid === windowPid && alive(windowPid) && alive(host) && hostPid() === host, 'B8-NOBODY-RESTARTED-same-window-and-host', `window ${windowPid}, host ${host}`);
+
+        say('it goes away while Genie runs');
+        stopKeyring();
+        await until('the daemon to go', 15_000, () => !bus().owned);
+        check((await card()) === null, 'B9-CONTROL-no-card-until-something-reads-a-secret');
+        const machine = createServer();
+        new (require('ws').WebSocketServer)({ server: machine });
+        await new Promise((r) => machine.listen(0, '127.0.0.1', r));
+        const url = `ws://127.0.0.1:${machine.address().port}/genie`;
+        const dialled = await cdp.evaluate(`(async () => {
+            const opened = await window.genie.deviceLink.open(${JSON.stringify(url)});
+            if (!opened.ok) return opened;
+            window.genie.tynnNetwork.send(opened.channel, JSON.stringify({ kind: 'hello', auth: { kind: 'saved', label: 'vm' }, label: 'vm' }));
+            return opened;
+        })()`);
+        check(dialled?.ok === true, 'B10-a-secret-was-read', JSON.stringify(dialled));
+        const back = await until('the card to come by itself', 30_000, card);
+        check(back?.state === 'not-running', 'B11-the-card-came-with-nothing-pressed', JSON.stringify(back));
+        check(window?.pid === windowPid && alive(windowPid) && alive(host) && hostPid() === host, 'B12-no-restart');
+        await cdp.evaluate(`window.genie.features.act({ kind: 'keyring.fix' })`);
+        const returned = await until('the card to go again', 60_000, async () => (await card()) === null);
+        check(Boolean(returned), 'B13-the-button-brought-it-back', bus().line);
+        machine.closeAllConnections();
+        machine.close();
         await stopApp();
     }
 
