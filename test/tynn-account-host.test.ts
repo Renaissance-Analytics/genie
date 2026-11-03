@@ -1,7 +1,7 @@
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, renameSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { memoryPair } from '../src/core/line-transport.js';
 import { migrateSecrets, type MigrationBook, type MigrationState } from '../src/main/keychain-migration.js';
@@ -9,7 +9,7 @@ import { hostTynnPorts } from '../src/main/host-tynn-account.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
-import { TynnAccount, tynnPairingSource, type TynnAccountPorts } from '../src/main/tynn-account.js';
+import { settleStaleLegacyPairing, TynnAccount, tynnPairingSource, type TynnAccountPorts } from '../src/main/tynn-account.js';
 import { TynnAccountService } from '../src/main/tynn-account-service.js';
 import type { PrivateCredentialStore } from '../src/main/private-credentials.js';
 
@@ -313,6 +313,118 @@ describe('a window reads a replica, and never holds the token', () => {
         const replica = new SessionEngineClient().tynn();
         expect(replica.status().signedIn).toBe(false);
         await expect(replica.request('/api/v1/me', { method: 'GET' })).rejects.toThrow();
+    });
+});
+
+describe('TWO STORES: the sign-in in credentials/tynn.json and an older tynn.json beside it (the beta.56 upgrade acceptance)', () => {
+    // As the real store behaves: two stores are ambiguous, and it refuses. That refusal read as an unreadable seal, so the pairing never moved, and Genie came up signed out, saying nothing.
+    const strictStore: PrivateCredentialStore = {
+        prepare: async () => {},
+        migrate: async (legacy, into) => {
+            if (!existsSync(legacy)) return;
+            if (existsSync(into)) throw new Error('Private Tynn credential permissions could not be secured.');
+            renameSync(legacy, into);
+        },
+        write: async (path, text) => { writeFileSync(path, text); },
+    };
+    const cipher = { decrypt: (bytes: Buffer) => bytes.toString().replace(/^sealed:/, '') };
+    const OLD_TOKEN = `gpk_${'9'.repeat(26)}.${'c'.repeat(64)}`;
+    /** The shape beta.56 really left: version, state, host, userId, scopes, tokenEnc, usedCodes. */
+    const record = (token: string | null) => JSON.stringify({ version: 1, state: 'signed-in', host: HOST, userId: USER.id, scopes: SCOPES, ...(token ? { tokenEnc: Buffer.from(`sealed:${token}`).toString('base64') } : {}), usedCodes: ['abc'] });
+    const legacyFile = () => join(dirname(file), 'legacy-tynn.json');
+    const memoryBook = (): MigrationBook => { const states: Record<string, MigrationState> = {}; return { read: async () => ({ ...states }), write: async (name, state) => { states[name] = state; } }; };
+    const vaultOver = (k: ReturnType<typeof keychainFake>) => ({ store: (name: string, value: string) => k.set(name, value), compare: async (name: string, value: string) => (k.held.get(name) === value ? 'same' as const : k.held.has(name) ? 'different' as const : 'missing' as const) });
+    const hasToken = (path: string) => readFileSync(path, 'utf8').includes('tokenEnc');
+
+    it('the current sign-in moves, byte for byte, and the older one does not win', async () => {
+        writeFileSync(file, record(TOKEN));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        const k = keychainFake();
+        const source = tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore });
+        expect(await migrateSecrets([source], vaultOver(k) as never, memoryBook())).toEqual([{ name: 'tynn/pairing', status: 'moved' }]);
+        expect(k.held.get('tynn/pairing')).toBe(TOKEN);
+    });
+
+    it('and then no seal is left anywhere: not the current one, not the older one', async () => {
+        writeFileSync(file, record(TOKEN));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        await migrateSecrets([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vaultOver(keychainFake()) as never, memoryBook());
+        expect(hasToken(file)).toBe(false);
+        expect(existsSync(legacyFile())).toBe(false);
+        expect(JSON.parse(readFileSync(file, 'utf8'))).toMatchObject({ state: 'signed-in', userId: USER.id });
+    });
+
+    it('a read-back that differs keeps both: the rule that nothing goes before the read-back holds for the older one too', async () => {
+        writeFileSync(file, record(TOKEN));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        const vault = { store: async () => ({ ok: true as const }), compare: async () => 'different' as const };
+        await migrateSecrets([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vault as never, memoryBook());
+        expect(hasToken(file)).toBe(true);
+        expect(existsSync(legacyFile())).toBe(true);
+    });
+
+    it('it says so, with no token in the words', async () => {
+        writeFileSync(file, record(TOKEN));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        const lines: string[] = [];
+        await tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore, log: (l) => lines.push(l) }).old.read();
+        expect(lines.join('\n')).toMatch(/older/);
+        expect(lines.join('\n')).not.toContain('gpk_');
+    });
+
+    it('a seal that will not open says why, by name, with no value', async () => {
+        writeFileSync(file, record(TOKEN));
+        const lines: string[] = [];
+        const read = await tynnPairingSource({ file, cipher: { decrypt: () => { throw new Error('Error while decrypting'); } }, store: strictStore, log: (l) => lines.push(l) }).old.read();
+        expect(read.kind).toBe('unreadable');
+        expect(lines.join('\n')).toMatch(/tynn\/pairing.*Error while decrypting/);
+    });
+
+    it('CONTROL: only the older file: it still comes across, as it always did', async () => {
+        writeFileSync(legacyFile(), record(TOKEN));
+        const k = keychainFake();
+        await migrateSecrets([tynnPairingSource({ file, legacyFile: legacyFile(), cipher, store: strictStore })], vaultOver(k) as never, memoryBook());
+        expect(k.held.get('tynn/pairing')).toBe(TOKEN);
+        expect(existsSync(legacyFile())).toBe(false);
+    });
+
+    it('moved long ago, an older file beside it: it is stale, and it goes, and a move that already ran never reads it again', async () => {
+        writeFileSync(file, record(null));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        await settleStaleLegacyPairing({ file, legacyFile: legacyFile() });
+        expect(existsSync(legacyFile())).toBe(false);
+    });
+
+    it('CONTROL: the current one still sealed: not yet, the move does that after its read-back', async () => {
+        writeFileSync(file, record(TOKEN));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        await settleStaleLegacyPairing({ file, legacyFile: legacyFile() });
+        expect(existsSync(legacyFile())).toBe(true);
+    });
+
+    it('CONTROL: a current file it cannot read, or none: the older one is kept', async () => {
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        await settleStaleLegacyPairing({ file, legacyFile: legacyFile() });
+        expect(existsSync(legacyFile())).toBe(true);
+        writeFileSync(file, '{ not json');
+        await settleStaleLegacyPairing({ file, legacyFile: legacyFile() });
+        expect(existsSync(legacyFile())).toBe(true);
+    });
+
+    it('an account opening with both is not refused: a window running its own engine reads the current one', async () => {
+        const k = keychainFake();
+        await k.set('tynn/pairing', TOKEN);
+        writeFileSync(file, record(null));
+        writeFileSync(legacyFile(), record(OLD_TOKEN));
+        const account = await open(k, tynnFake(), { legacyFile: legacyFile(), credentials: strictStore });
+        expect(account.status().signedIn).toBe(true);
+    });
+
+    it('wired: main settles the stale file first, and what stays where it was reaches a log someone can read', () => {
+        const main = readFileSync('src/main/main.ts', 'utf8');
+        expect(main).toMatch(/await settleStaleLegacyPairing\(/);
+        expect(main).toMatch(/secretsLog:/);
+        expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/input\.secretsLog/);
     });
 });
 

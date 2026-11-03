@@ -101,7 +101,9 @@ const parseMe = (body: unknown): Me | null => {
  * THE PAIRING AN OLDER GENIE SEALED, for the one-time move (keychain-migration.ts). Only a window can open it. The delete takes the
  * token field out and leaves the rest of the record: who is signed in is still true.
  */
-export function tynnPairingSource(options: { file: string; legacyFile?: string; cipher: { decrypt(bytes: Buffer): string }; store?: PrivateCredentialStore }): MigrationSource {
+export async function settleStaleLegacyPairing(_options: { file: string; legacyFile: string; log?: (line: string) => void }): Promise<void> {}
+
+export function tynnPairingSource(options: { file: string; legacyFile?: string; cipher: { decrypt(bytes: Buffer): string }; store?: PrivateCredentialStore; log?: (line: string) => void }): MigrationSource {
     const store = options.store ?? PRIVATE_CREDENTIAL_STORE;
     const record = async (): Promise<Record<string, unknown> | null> => {
         if (options.legacyFile) await store.migrate(options.legacyFile, options.file);
