@@ -1,9 +1,9 @@
-import type { MigrationSource, OldRead } from './keychain-migration.js';
+import { unreadableFile, type MigrationSource, type OldRead } from './keychain-migration.js';
 import type { SecretName } from './keychain.js';
 import { gitAddSubmodule, gitClone, gitPushMain } from './git-ports.js';
 import type { TynnSecrets } from './tynn-account.js';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { basename, dirname } from 'node:path';
 import {
     GENIE_GITHUB_CLIENT_ID,
     GITHUB_AUTHORIZATIONS_URL,
@@ -111,10 +111,16 @@ export async function githubSealedSources(options: { file: string; cipher: { dec
             return value ? { kind: 'value', value } : { kind: 'unreadable' };
         } catch { return { kind: 'unreadable' }; }
     };
-    const text = await textOf();
+    // Read for itself: "no file" is known absent, anything else that stops the read is not.
+    let text: string | null;
+    try { text = await readFile(options.file, 'utf8'); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return [unreadableFile(basename(options.file), 'github/')];
+        text = null;
+    }
     if (text !== null) {
         let parsed: Record<string, unknown>;
-        try { parsed = JSON.parse(text) as Record<string, unknown>; } catch { return []; }
+        try { parsed = JSON.parse(text) as Record<string, unknown>; } catch { return [unreadableFile(basename(options.file), 'github/')]; }
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return [unreadableFile(basename(options.file), 'github/')];
         const field = (name: SecretName, key: 'tokenEnc' | 'refreshEnc'): MigrationSource[] => (typeof parsed[key] !== 'string' || parsed[key] === '' ? [] : [{
             name,
             old: {

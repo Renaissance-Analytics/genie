@@ -300,7 +300,8 @@ describe('a book that does not parse', () => {
     it('the rule outlives the launch that set it aside: killed partway, the next launch still will not overwrite', async () => {
         keychain.set(NAMED, 'renewed');
         await launch();
-        await launch();
+        expect(JSON.parse(readFileSync(bookFile, 'utf8')).rebuilt).toBe(true);
+        expect(await launch()).toEqual([{ name: NAMED, status: 'keychain-differs' }]);
         expect(keychain.get(NAMED)).toBe('renewed');
         expect(seal).toBe('the-seal');
     });
