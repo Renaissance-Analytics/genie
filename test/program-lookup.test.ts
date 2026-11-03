@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hardenProcess, resolveProgram } from '../src/core/program-lookup.js';
+import { hardenProcess, notFoundWords, resolveProgram } from '../src/core/program-lookup.js';
 import { open as openEngine } from '@particle-academy/fancy-pty';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from '../src/main/fancy-term-port.js';
@@ -102,6 +102,17 @@ describe('resolveProgram, on any OS, with a fake machine', () => {
     });
 });
 
+describe('the words for a name that would not start', () => {
+    const on = (files: string[], path: string) => ({ platform: 'win32' as const, env: { PATH: path, SystemRoot: 'C:\\Windows' }, isFile: (p: string) => files.includes(p.toLowerCase()) });
+    it('a batch file on PATH, asked for by name or with its extension', () => {
+        expect(notFoundWords('npm', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toMatch(/^"npm" is on this machine as C:\\node\\npm\.cmd, a batch file/);
+        expect(notFoundWords('npm.cmd', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toMatch(/^"npm\.cmd" is on this machine as C:\\node\\npm\.cmd, a batch file/);
+    });
+    it('nothing: says not found, and a batch file only in a relative PATH entry does not count', () => {
+        expect(notFoundWords('npm', on(['node\\npm.cmd'], 'node'))).toBe('"npm" was not found on this machine\'s PATH, so nothing was started.');
+    });
+});
+
 describe("a person's terminal and everyone else's", () => {
     const backend = () => {
         const made: Array<Record<string, unknown>> = [];
@@ -131,8 +142,17 @@ describe("a person's terminal and everyone else's", () => {
         };
         expect(opens('win32', { command: 'echo hi', shell: true })).toMatch(/^[A-Za-z]:.*\\System32\\cmd\.exe$/);
         expect(opens('win32', {})).toMatch(/^[A-Za-z]:.*\\System32\\cmd\.exe$/);
-        expect(opens('win32', { command: 'nothing-by-this-name arg' })).toMatch(/^[A-Za-z]:.*\\nothing-by-this-name\.exe$/);
         expect(opens('linux', { command: 'tool arg' })).toBe('tool');
+    });
+
+    it('a name that is not on this machine: it says so in words, naming what was asked for and no path it invented, and the engine is never called', () => {
+        const made: Array<Record<string, unknown>> = [];
+        const port = fancyTermPort({ create: (o: Record<string, unknown>) => { made.push(o); return { id: String(o.id), pid: 1, shell: 'x', existing: false, scrollback: '' }; }, on: () => {}, kill: () => {}, write: () => {}, resize: () => {}, scrollback: () => '', attach: () => null } as never, { defaultShell: () => ({ command: 'cmd.exe', args: [] }), platform: 'win32' });
+        let words = '';
+        try { port.open({ cwd: '/w', command: 'nothing-by-this-name arg' }); } catch (error) { words = (error as Error).message; }
+        expect(words).toMatch(/"nothing-by-this-name" was not found/);
+        expect(words).not.toMatch(/System32|\.exe/);
+        expect(made).toEqual([]);
     });
 
     it("an agent's or Genie's: it stays as inherited", () => {
@@ -201,7 +221,7 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
     });
     afterEach(() => {
         if (before === undefined) delete process.env.NODE_OPTIONS; else process.env.NODE_OPTIONS = before;
-        rmSync(folder, { recursive: true, force: true });
+        rmSync(folder, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     });
 
     it('CONTROL: run by its path it does say so, so the mark can be seen', async () => {
@@ -339,6 +359,41 @@ pty.onExit(end);`;
         engineStartedInTheFolder('.\\git.exe');
         expect(ran()).toBe(true);
     }, 40_000);
+
+    /** Through the real port and the real engine: what a person would read, and whether anything ran. */
+    const openedThroughThePort = (command: string, cwd: string) => {
+        const settings = { get: (key: string) => (key === 'track_cwd' ? 'off' : key === 'detached_terminals' ? 'off' : undefined) };
+        configureInProcessBackend({ settings, snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false } } as never);
+        const port = fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
+        try { const opened = port.open({ cwd, command }); port.kill(opened.id); return ''; } catch (error) { return (error as Error).message; }
+    };
+
+    it('the real message: npm is on this machine as a batch file, and it says that, and no path that is not there', () => {
+        const words = openedThroughThePort('npm run dev', folder);
+        expect(words).toMatch(/"npm" is on this machine as .*npm\.cmd, a batch file/i);
+        expect(words).not.toMatch(/System32/i);
+    });
+
+    it('a batch file and a program of that name in the working folder: not run, and not mentioned as if they were found', async () => {
+        writeFileSync(join(folder, 'plantedtool.cmd'), `@echo ran> "${mark}"\r\n`);
+        copyFileSync(process.execPath, join(folder, 'plantedtool.exe'));
+        const words = openedThroughThePort('plantedtool status', folder);
+        await new Promise((r) => setTimeout(r, 1_500));
+        expect(words).toMatch(/"plantedtool" was not found/);
+        expect(ran()).toBe(false);
+    });
+
+    it('a name in the folder when Genie itself started there: the same', async () => {
+        writeFileSync(join(folder, 'plantedtool.cmd'), `@echo ran> "${mark}"\r\n`);
+        const was = process.cwd();
+        process.chdir(folder);
+        try {
+            const words = openedThroughThePort('plantedtool status', folder);
+            await new Promise((r) => setTimeout(r, 1_500));
+            expect(words).toMatch(/"plantedtool" was not found/);
+            expect(ran()).toBe(false);
+        } finally { process.chdir(was); }
+    });
 
     it('resolving finds the real one with a PATH of its own', () => {
         const dir = join(folder, 'on path');
