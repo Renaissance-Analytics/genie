@@ -92,6 +92,12 @@ export type StreamEvent =
            * when the update carries none. The Dashboard reads a commit's sha from git's own output here (core/delivery.ts).
            */
           output?: string;
+          /**
+           * A SUBAGENT's call: the call that spawned it (prism-acp's {@link PARENT_TOOL_CALL_META}). ABSENT on the agent's own,
+           * and on every row recorded before genie#1473. The session marks every row of such a call, even one that came
+           * unmarked, so a reader can trust a row without following its call.
+           */
+          parentToolCallId?: string;
       }
     | {
           kind: 'usage';
@@ -255,6 +261,12 @@ function thinkingEstimateOf(update: Record<string, unknown>): number | null {
     return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null;
 }
 
+function parentCallField(update: Record<string, unknown>): { parentToolCallId?: string } {
+    const meta = update['_meta'];
+    const parent = isRecord(meta) ? meta[PARENT_TOOL_CALL_META] : undefined;
+    return typeof parent === 'string' ? { parentToolCallId: parent } : {};
+}
+
 /** A tool's answer as text: `rawOutput` (a string, or `{ output | stdout }`), else the text of its `content` blocks. */
 function outputField(update: Record<string, unknown>): { output?: string } {
     const raw = update['rawOutput'];
@@ -307,6 +319,7 @@ export function toStreamEvent(update: Record<string, unknown>): StreamEvent | nu
                 toolKind: toolKindOf(update['kind']),
                 rawInput: update['rawInput'] ?? null,
                 ...outputField(update),
+                ...parentCallField(update),
             };
 
         case 'usage_update': {
