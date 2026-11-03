@@ -1,11 +1,11 @@
 import { fakeKeychain } from './helpers/tynn-storage.js';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { preparePrivateCredential } from '../src/main/private-credentials.js';
+import { preparePrivateCredential, writePrivateCredential } from '../src/main/private-credentials.js';
 import { TynnAccount } from '../src/main/tynn-account.js';
 import { tynnAgentIdentities } from '../src/main/tynn-agent-identities.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
@@ -31,6 +31,41 @@ async function windows(script: string): Promise<string[]> {
 const dataPath = (path: string) => `[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${Buffer.from(path, 'utf16le').toString('base64')}'))`;
 const readAcl = (path: string, directory: boolean) => windows(`$a=[IO.${directory ? 'Directory' : 'File'}]::GetAccessControl((${dataPath(path)}));'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights}`);
 const readAclSet = (targets: readonly { path: string; directory: boolean }[]) => windows(`$i=0;foreach($t in @(${targets.map(target => `@{Path=(${dataPath(target.path)});Directory=$${target.directory}}`).join(',')})){'target='+$i;$a=if($t.Directory){[IO.Directory]::GetAccessControl($t.Path)}else{[IO.File]::GetAccessControl($t.Path)};'protected='+$a.AreAccessRulesProtected;'owner='+$a.GetOwner([Security.Principal.SecurityIdentifier]).Value;$a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])|%{$_.IdentityReference.Value+'|'+$_.IsInherited+'|'+$_.AccessControlType+'|'+$_.FileSystemRights};$i++}`);
+
+describe.skipIf(process.platform !== 'win32')('a failed ACL refuses the write: the native command really gone', () => {
+    const SECRET = 'rpk_a_secret_that_must_not_be_left_on_disk';
+    const holdingTheSecret = async (root: string) => {
+        const found: string[] = [];
+        for (const name of await readdir(root, { recursive: true })) {
+            const text = await readFile(join(root, String(name)), 'utf8').catch(() => '');
+            if (text.includes(SECRET)) found.push(String(name));
+        }
+        return found;
+    };
+    const withNoNativeCommand = async (root: string, run: () => Promise<void>) => {
+        const saved = process.env.SystemRoot;
+        process.env.SystemRoot = join(root, 'missing-system-root');
+        try { await run(); } finally { if (saved === undefined) delete process.env.SystemRoot; else process.env.SystemRoot = saved; }
+    };
+
+    it('after restriction failure a new credential: refused, the secret nowhere, nothing left staged', async () => {
+        const root = await fixture();
+        await withNoNativeCommand(root, () => expect(writePrivateCredential(join(root, 'fresh', 'agents.json'), SECRET)).rejects.toThrow('Private Tynn credential permissions could not be secured.'));
+        expect(await holdingTheSecret(root)).toEqual([]);
+        await expect(stat(join(root, 'fresh'))).rejects.toMatchObject({ code: 'ENOENT' });
+    }, NATIVE_CASE_TIMEOUT_MS);
+
+    it('after restriction failure an existing credential survives, byte for byte, and the secret is nowhere', async () => {
+        const root = await fixture();
+        const folder = join(root, 'existing');
+        await mkdir(folder);
+        const file = join(folder, 'agents.json');
+        await writeFile(file, 'what was already sealed');
+        await withNoNativeCommand(root, () => expect(writePrivateCredential(file, SECRET)).rejects.toThrow('Private Tynn credential permissions could not be secured.'));
+        expect(await readFile(file, 'utf8')).toBe('what was already sealed');
+        expect(await holdingTheSecret(root)).toEqual([]);
+    }, NATIVE_CASE_TIMEOUT_MS);
+});
 
 describe.skipIf(process.platform !== 'win32')('native Windows private credential ACL', () => {
     it('refuses a directory containing unrelated siblings without changing any ACL', async () => {
