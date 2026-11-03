@@ -72,7 +72,7 @@ import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
 import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
 import { DotEnvSync, envFileSites, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
-import { folderGitConfig, setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { fileIsTracked, folderGitConfig, setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
 import { WorkspaceTrust } from './workspace-trust-host.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager, type PhpCgiResolution } from './site-manager.js';
@@ -948,13 +948,20 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const workspaceTrust = new WorkspaceTrust({
         readText: trustFs.readText,
         gitConfig: folderGitConfig,
+        isTracked: fileIsTracked,
         workspaces: workspacesNow,
         record: () => envelopeSites.trustRecord(),
         recordWorkspace: (id, hash) => envelopeSites.recordWorkspace(id, hash),
         approveSites: (id) => envelopeSites.approveSites(id),
     });
     setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.isTrustedPath(path)));
-    const refreshTrust = () => { for (const w of workspacesNow()) workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)); };
+    // One pass at a time, and a quit waits for the one in flight: it reads through git in the workspace's folder and writes the record.
+    let trustPass: Promise<unknown> = Promise.resolve();
+    let trustClosed = false;
+    const refreshTrust = () => {
+        if (trustClosed) return;
+        trustPass = trustPass.then(() => Promise.all(workspacesNow().map((w) => workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)))));
+    };
     refreshTrust();
     // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
     // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
@@ -1370,6 +1377,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
                 await envFiles.close();
+                trustClosed = true;
+                await trustPass;
                 await new Promise<void>((r) => frontDoor.close(r));
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.

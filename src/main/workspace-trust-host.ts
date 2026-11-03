@@ -28,16 +28,28 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] };
 const OUR_SERVERS: ReadonlySet<string> = new Set(['genie', 'tynn', 'genie-agentinbox-channel']);
-/** Settings that run nothing, and that Claude Code itself rewrites as a person works: on the list, each approval would ask again. */
-const SETTINGS_THAT_RUN_NOTHING: ReadonlySet<string> = new Set(['permissions', 'model', 'outputStyle', 'includeCoAuthoredBy', 'cleanupPeriodDays']);
+/** Settings that change how Claude Code looks and nothing else, checked against its published schema. An allow-list, as with git config: anything else goes on the list, a key nobody has heard of included. */
+const SETTINGS_FOR_LOOKS_ONLY: ReadonlySet<string> = new Set(['$schema', 'theme', 'spinnerTipsEnabled', 'terminalProgressBarEnabled', 'showTurnDuration', 'prefersReducedMotion', 'viewMode', 'editorMode', 'syntaxHighlightingDisabled', 'verbose']);
+/** One command's approval, as a person gives one: a tool and a named command. Not a whole tool, and no bare wildcard. */
+const ONE_COMMAND = /^(?:Bash|PowerShell)\([A-Za-z0-9_.\/-][^*()]*(?::\*)?\)$/;
 
-function settingsRows(file: string, text: string): TrustHook[] {
+function settingsRows(file: string, text: string, approvalsOf: { readonly approvals: string[] } | null): TrustHook[] {
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch { return [{ file, event: 'unreadable', command: text.slice(0, 4000) }]; }
     if (!isRecord(parsed)) return [{ file, event: 'unreadable', command: text.slice(0, 4000) }];
     const rows: TrustHook[] = [];
     for (const [key, value] of Object.entries(parsed)) {
-        if (SETTINGS_THAT_RUN_NOTHING.has(key)) continue;
+        if (SETTINGS_FOR_LOOKS_ONLY.has(key)) continue;
+        if (key === 'permissions' && approvalsOf && isRecord(value)) {
+            // A person's approvals, in a file no commit brought. Everything else in permissions still counts, and so does any allow wider than one command.
+            const allow = Array.isArray(value.allow) ? value.allow : [];
+            const narrow = allow.filter((rule): rule is string => typeof rule === 'string' && ONE_COMMAND.test(rule));
+            approvalsOf.approvals.push(...narrow);
+            const rest = { ...value, allow: allow.filter((rule) => !narrow.includes(rule as string)) };
+            if (rest.allow.length === 0) delete (rest as { allow?: unknown }).allow;
+            if (Object.keys(rest).length > 0) rows.push({ file, event: key, command: JSON.stringify(rest) });
+            continue;
+        }
         if (key !== 'hooks' || !isRecord(value)) { rows.push({ file, event: key, command: JSON.stringify(value) }); continue; }
         for (const [event, entries] of Object.entries(value)) {
             for (const entry of Array.isArray(entries) ? entries : [entries]) {
@@ -97,9 +109,13 @@ async function npmScriptOf(root: string, site: ServableSite, read: TrustListPort
 
 export async function readTrustList(path: string, ports: TrustListPorts): Promise<TrustList> {
     const hooks: TrustHook[] = [];
-    for (const name of ['settings.json', 'settings.local.json']) {
-        const text = await ports.readText(join(path, '.claude', name));
-        if (text !== null) hooks.push(...settingsRows(`.claude/${name}`, text));
+    const approvals: string[] = [];
+    const committed = await ports.readText(join(path, '.claude', 'settings.json'));
+    if (committed !== null) hooks.push(...settingsRows('.claude/settings.json', committed, null));
+    const local = await ports.readText(join(path, '.claude', 'settings.local.json'));
+    if (local !== null) {
+        const tracked = await (ports.isTracked?.(path, '.claude/settings.local.json') ?? Promise.resolve(true)).catch(() => true);
+        hooks.push(...settingsRows('.claude/settings.local.json', local, tracked ? null : { approvals }));
     }
     const servers: TrustServer[] = [];
     const mcp = await ports.readText(join(path, '.mcp.json'));
@@ -124,7 +140,7 @@ export async function readTrustList(path: string, ports: TrustListPorts): Promis
             if (!seen.has(id)) { seen.add(id); gitKeys.push(entry); }
         }
     }
-    return { sites, hooks, servers, gitKeys, approvals: [] };
+    return { sites, hooks, servers, gitKeys, approvals };
 }
 
 const inside = (root: string, path: string): boolean => {

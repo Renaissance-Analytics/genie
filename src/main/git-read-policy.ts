@@ -38,6 +38,15 @@ export async function folderGitConfig(cwd: string): Promise<GitConfigEntry[]> {
     });
 }
 
+/** Whether git tracks this file. `git ls-files` reads the index and runs nothing it is configured with; where git may not run at all, this can't say, and throws. */
+export async function fileIsTracked(root: string, relativePath: string): Promise<boolean> {
+    if (!(await gitMayRun(root))) throw new Error('git may not run here');
+    const r = await execFileRunner(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', relativePath], { cwd: root, timeoutMs: 10_000 });
+    if (r.exitCode === 0) return true;
+    if (r.exitCode === 1 || r.exitCode === 128) return false;
+    throw new Error(`git ls-files answered ${r.exitCode}`);
+}
+
 /** Git runs in a trusted workspace, and in any other folder whose git config holds nothing that could run something. */
 export function trustAwarePolicy(isTrusted: (cwd: string) => boolean): GitReadPolicy {
     return async (cwd) => {
