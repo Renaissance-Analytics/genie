@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NODE_LTS_DEFAULT, nodeBinaryRel, nodeNpmCliRel } from '../src/core/node-versions.js';
 import { installNodeVersion, listNodeVersions, removeNodeVersion, type NodeVersionsPorts } from '../src/main/node-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
 const results: boolean[] = [];
@@ -30,12 +31,12 @@ async function main(): Promise<void> {
     const platform = process.platform as NodeVersionsPorts['platform'];
     const ports: NodeVersionsPorts = {
         platform, arch: process.arch === 'arm64' ? 'arm64' : 'x64', root, fs: nodePhpVersionsFs(), run,
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = NODE_LTS_DEFAULT;
 
     console.log('1. a tampered SHASUMS256.txt');
-    const tampered = await installNodeVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/^[0-9a-f]{64}(?=\s+node-v)/gm, 'f'.repeat(64)) } : r; } });
+    const tampered = await installNodeVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/^[0-9a-f]{64}(?=\s+node-v)/gm, 'f'.repeat(64)) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 nodejs\.org publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 140) : tampered.kind);
     check(nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 

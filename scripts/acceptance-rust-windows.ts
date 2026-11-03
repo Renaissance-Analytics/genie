@@ -17,7 +17,8 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RUST_RECIPES } from '../src/core/rust-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { installRustVersion, listRustVersions, managedRust, removeRustVersion, type RustVersionsPorts } from '../src/main/rust-versions.js';
 import { nodeLinkFs, restoreDefaultsEnv, setDefault } from '../src/main/toolchain-defaults.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
@@ -35,7 +36,7 @@ async function main(): Promise<void> {
     nodePhpVersionsFs().mkdirp(root);
     const ports: RustVersionsPorts = {
         platform: 'win32', arch: 'x64', root, fs: nodePhpVersionsFs(), run,
-        fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
+        fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); },
     };
     const V = RUST_RECIPES[0]!.version;
     const pathBefore = userPath();

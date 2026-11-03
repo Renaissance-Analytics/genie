@@ -19,7 +19,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { NODE_LTS_DEFAULT } from '../src/core/node-versions.js';
 import { installNodeVersion, managedNode, removeNodeVersion, type NodeVersionsPorts } from '../src/main/node-versions.js';
-import { httpFetch, nodePhpVersionsFs } from '../src/main/php-versions.js';
+import { httpFetchOver, nodePhpVersionsFs } from '../src/main/php-versions.js';
+const liveFetch = httpFetchOver(fetch);
 import { checkAndRepair, nodeToolchainFs, processEnv, restoreToolchainEnv, type ToolchainOpsPorts } from '../src/main/toolchain-ops.js';
 import { execFileRunner } from '../src/main/toolchain-runner.js';
 
@@ -38,10 +39,10 @@ async function main(): Promise<void> {
     const root = join(base, 'genie2-toolchain', 'node-versions');
     mkdirSync(root, { recursive: true });
     const V = NODE_LTS_DEFAULT;
-    const ports: NodeVersionsPorts = { platform: 'win32', root, fs: nodePhpVersionsFs(), run, fetchBytes: httpFetch.bytes, fetchText: httpFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); } };
+    const ports: NodeVersionsPorts = { platform: 'win32', root, fs: nodePhpVersionsFs(), run, fetchBytes: liveFetch.bytes, fetchText: liveFetch.text, progress: (s) => { if (s) console.log(`    … ${s}`); } };
 
     console.log(`1. a tampered SHASUMS256.txt`);
-    const tampered = await installNodeVersion(V, true, { ...ports, fetchText: async (u) => { const r = await httpFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/^[0-9a-f]{64}(?=\s+node-v[\d.]+-win-x64\.zip)/m, 'f'.repeat(64)) } : r; } });
+    const tampered = await installNodeVersion(V, true, { ...ports, fetchText: async (u) => { const r = await liveFetch.text(u); return r.ok ? { ok: true, body: r.body.replace(/^[0-9a-f]{64}(?=\s+node-v[\d.]+-win-x64\.zip)/m, 'f'.repeat(64)) } : r; } });
     check(tampered.kind === 'not-installed' && /does not match the sha256 nodejs\.org publishes/.test(tampered.kind === 'not-installed' ? tampered.reason : ''), 'refused on a checksum mismatch', tampered.kind === 'not-installed' ? tampered.reason.slice(0, 160) : tampered.kind);
     check(managedNode(ports).length === 0 && nodePhpVersionsFs().list(root).length === 0, 'nothing of it is left', nodePhpVersionsFs().list(root).join(', '));
 
