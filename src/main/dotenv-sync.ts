@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { gitMayRun } from './git-read-policy.js';
 import { dotEnvServiceVars, dotEnvTargets, envFileName, parseDotEnv, upsertDotEnv } from '../core/dotenv.js';
 
 /**
@@ -56,6 +57,7 @@ type Exec = (binary: string, args: readonly string[], options?: { timeoutMs?: nu
  */
 export function gitIgnoredOver(exec: Exec): DotEnvSyncPorts['gitIgnored'] {
     return async (dir, file) => {
+        if (!(await gitMayRun(dir))) return 'no-repo';
         try {
             const r = await exec('git', ['check-ignore', '-q', '--', file], { cwd: dir, timeoutMs: 10_000 });
             return r.exitCode === 0 ? 'ignored' : r.exitCode === 1 ? 'not-ignored' : 'no-repo';

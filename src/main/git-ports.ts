@@ -4,6 +4,7 @@ import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';
 import { isLocalPathLike } from '../core/envelope-plan.js';
 import { resolveProgram } from '../core/program-lookup.js';
+import { gitMayRun } from './git-read-policy.js';
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -148,9 +149,9 @@ export function gitShowHead(root: string, rel: string): Promise<string | null> {
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return new Promise<string | null>((resolve) => {
+    return gitMayRun(cwd).then((may) => (!may ? null : new Promise<string | null>((resolve) => {
         execFile(resolveProgram('git'), ['show', `HEAD:./${name}`], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
-    });
+    })));
 }
 
 /**
@@ -162,14 +163,14 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return new Promise<GitFileState | null>((resolve) => {
+    return gitMayRun(cwd).then((may) => (!may ? null : new Promise<GitFileState | null>((resolve) => {
         execFile(resolveProgram('git'), ['status', '--porcelain=v1', '--', name], { cwd, windowsHide: true }, (error, stdout) => {
             if (error) { resolve(null); return; }
             const line = String(stdout).split('\n').find((l) => l.length > 0);
             if (line !== undefined) { resolve(line.startsWith('??') ? 'untracked' : 'modified'); return; }
             execFile(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', name], { cwd, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
         });
-    });
+    })));
 }
 
 /**
@@ -178,15 +179,16 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
  * "nothing to show" is the honest answer there.
  */
 export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]> {
-    return new Promise<GitCommit[]>((resolve) => {
-        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x1f%s%x1f%an%x1f%ct'], { cwd: path, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(path).then((may) => (!may ? [] : new Promise<GitCommit[]>((resolve) => {
+        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x00%s%x00%an%x00%ct%x00'], { cwd: path, windowsHide: true }, (error, stdout) => {
             if (error) { resolve([]); return; }
-            resolve(String(stdout).split('\n').filter((line) => line.length > 0).map((line) => {
-                const [sha, subject, author, ct] = line.split('\x1f');
-                return { sha: sha ?? '', subject: subject ?? '', author: author ?? '', at: Number(ct ?? 0) * 1000 };
-            }));
+            // NUL between fields: a commit's text cannot hold one, so a subject cannot shift the fields after it.
+            const fields = String(stdout).split('\0');
+            const commits: GitCommit[] = [];
+            for (let i = 0; i + 3 < fields.length; i += 4) commits.push({ sha: fields[i]!.trim(), subject: fields[i + 1]!, author: fields[i + 2]!, at: Number(fields[i + 3]!) * 1000 });
+            resolve(commits);
         });
-    });
+    })));
 }
 
 /** A changed file's state, as the tree colours it (beta.33 item 15; Genie 1 FileTree's git colours). */
@@ -198,7 +200,7 @@ export type GitTreeState = 'modified' | 'added' | 'deleted' | 'untracked';
  * workspace's prefix and anything outside it is dropped. Not a repository: an empty map, "nothing to show".
  */
 export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState>> {
-    return new Promise((resolve) => {
+    return gitMayRun(root).then((may) => (!may ? {} : new Promise((resolve) => {
         execFile(resolveProgram('git'), ['rev-parse', '--show-prefix'], { cwd: root, windowsHide: true }, (error, prefixOut) => {
             if (error) { resolve({}); return; }
             const prefix = String(prefixOut).trim();
@@ -222,5 +224,5 @@ export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState
                 resolve(out);
             });
         });
-    });
+    })));
 }

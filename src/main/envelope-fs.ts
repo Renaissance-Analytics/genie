@@ -20,6 +20,7 @@ import {
 } from '../core/envelope-plan.js';
 import type { EnvelopePorts } from './envelope-wizard-host.js';
 import { resolveProgram } from '../core/program-lookup.js';
+import { gitMayRun } from './git-read-policy.js';
 
 /**
  * THE REAL DISK AND GIT THE ENVELOPE BUILD RUNS ON (Add workspace parity item 7). main.ts hands these to
@@ -34,14 +35,16 @@ const isDir = async (p: string) => { try { return (await stat(p)).isDirectory();
 const exists = async (p: string) => { try { await stat(p); return true; } catch { return false; } };
 
 /** One read-only git command; `null` when it fails (not a repo, no such config, no git). */
-function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
+async function gitRead(cwd: string, args: readonly string[]): Promise<string | null> {
+    if (!(await gitMayRun(cwd))) return null;
     return new Promise((done) => {
         execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => done(error ? null : String(stdout)));
     });
 }
 
 /** git with input on stdin (Genie 1's runGitWithStdin): `check-ignore` exits 1 for "none matched", which is an answer. */
-function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
+async function gitWithStdin(cwd: string, args: readonly string[], input: string): Promise<string> {
+    if (!(await gitMayRun(cwd))) return '';
     return new Promise((done) => {
         const child = spawn(resolveProgram('git'), [...args], { cwd, stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
         let out = '';

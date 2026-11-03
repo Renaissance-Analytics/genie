@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
 import { guardRepoPath, parseRepoStatus, type RepoStatus } from './repo-model.js';
 import { resolveProgram } from '../core/program-lookup.js';
 
@@ -16,7 +17,8 @@ export type RepoResult<T> = { ok: true; value: T } | { ok: false; error: string 
 const ok = <T,>(value: T): RepoResult<T> => ({ ok: true, value });
 const fail = (error: string): RepoResult<never> => ({ ok: false, error });
 
-function git(cwd: string, args: readonly string[]): Promise<RepoResult<string>> {
+async function git(cwd: string, args: readonly string[]): Promise<RepoResult<string>> {
+    if (!(await gitMayRun(cwd))) return fail(GIT_NEEDS_TRUST);
     return new Promise((resolve) => {
         execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }, (error, stdout, stderr) => {
             if (error) resolve(fail(String(stderr ?? '').trim() || error.message));
