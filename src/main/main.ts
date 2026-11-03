@@ -2666,7 +2666,7 @@ async function boot(): Promise<void> {
             return r;
         },
         install: async () => {
-            const r = await installTailscale((url) => net.fetch(url));
+            const r = await installTailscale({ download: (url) => net.fetch(url) });
             openHttps(r.url);
             await refreshTailscale();
             return r;
