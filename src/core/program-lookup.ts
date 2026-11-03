@@ -83,7 +83,7 @@ export function resolveProgram(name: string, ports: LookupPorts = { platform: pr
 
 /** Why a name can't be started, in words: what was asked for, and the batch file of that name on PATH if there is one. Names no path that isn't there. */
 export function notFoundWords(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
-    const batch = /\.(cmd|bat)$/i.test(name) ? null : onPath([`${name}.cmd`, `${name}.bat`], ports);
+    const batch = onPath(/\.(cmd|bat)$/i.test(name) ? [name] : [`${name}.cmd`, `${name}.bat`], ports);
     return batch
         ? `"${name}" is on this machine as ${batch}, a batch file, and Genie cannot start a batch file here directly yet. Nothing was started.`
         : `"${name}" was not found on this machine's PATH, so nothing was started.`;
