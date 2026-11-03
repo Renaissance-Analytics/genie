@@ -69,6 +69,73 @@ describe("a folder's own git config", () => {
         expect(existsSync(mark)).toBe(false);
     };
 
+    describe('reading the config itself', () => {
+        const read = (...args: string[]) => execFileSync('git', ['config', ...args], { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        const keys = (text: string) => text.split('\0').filter(Boolean).map((entry) => entry.split('\n')[0]!.toLowerCase());
+        const plantEverything = () => {
+            const tool = script();
+            for (const key of ['core.fsmonitor', 'core.sshCommand', 'core.pager', 'core.editor', 'core.askPass', 'core.hooksPath', 'core.gitProxy', 'diff.external', 'diff.x.textconv', 'diff.x.command', 'filter.x.clean', 'filter.x.smudge', 'filter.x.process', 'merge.x.driver', 'credential.helper', 'gpg.program', 'sequence.editor', 'pager.config', 'alias.config', 'interactive.diffFilter']) {
+                git('config', key, key === 'alias.config' ? `!${tool}` : tool);
+            }
+        };
+        it('--local --list runs none of twenty command-bearing keys, a folder alias named config included', () => {
+            plantEverything();
+            const listed = keys(read('--local', '--list', '-z'));
+            console.log(`### first-run config-read local-list ran=${existsSync(mark)} shows-fsmonitor=${listed.includes('core.fsmonitor')} keys=${listed.length}`);
+            expect(existsSync(mark)).toBe(false);
+        });
+        it('include.path: what --local shows without and with --includes, and neither runs it', () => {
+            const included = join(root, 'included.cfg');
+            writeFileSync(included, `[core]\n\tfsmonitor = ${script()}\n`);
+            git('config', 'include.path', included.replace(/\\/g, '/'));
+            const without = keys(read('--local', '--list', '-z'));
+            const withIncludes = keys(read('--local', '--includes', '--list', '-z'));
+            console.log(`### first-run config-read include without-includes shows=${without.includes('core.fsmonitor')} with-includes shows=${withIncludes.includes('core.fsmonitor')} ran=${existsSync(mark)}`);
+            expect(existsSync(mark)).toBe(false);
+            // CONTROL: an ordinary status does take it from the included file.
+            git('status', '--porcelain');
+            console.log(`### first-run config-read include status-ran=${existsSync(mark)}`);
+        });
+        it('includeIf.gitdir: the same', () => {
+            const included = join(root, 'included-if.cfg');
+            writeFileSync(included, `[core]\n\tfsmonitor = ${script()}\n`);
+            git('config', `includeIf.gitdir:${repo.replace(/\\/g, '/')}/.git.path`, included.replace(/\\/g, '/'));
+            const withIncludes = keys(read('--local', '--includes', '--list', '-z'));
+            console.log(`### first-run config-read include-if with-includes shows=${withIncludes.includes('core.fsmonitor')} ran=${existsSync(mark)}`);
+            expect(existsSync(mark)).toBe(false);
+        });
+        it('a worktree config: what --local and --worktree show', () => {
+            git('config', 'extensions.worktreeConfig', 'true');
+            git('config', '--worktree', 'core.fsmonitor', script());
+            const local = keys(read('--local', '--includes', '--list', '-z'));
+            const worktree = keys(read('--worktree', '--includes', '--list', '-z'));
+            console.log(`### first-run config-read worktree local-shows=${local.includes('core.fsmonitor')} worktree-shows=${worktree.includes('core.fsmonitor')} ran=${existsSync(mark)}`);
+            expect(existsSync(mark)).toBe(false);
+            git('status', '--porcelain');
+            console.log(`### first-run config-read worktree status-ran=${existsSync(mark)}`);
+        });
+        it('a .git file naming another folder: which config --local reads', () => {
+            const elsewhere = join(root, 'elsewhere.git');
+            execFileSync('git', ['init', '-q', '--bare', elsewhere], { windowsHide: true });
+            execFileSync('git', ['config', 'core.fsmonitor', script()], { cwd: elsewhere, windowsHide: true });
+            const folder = join(root, 'pointing');
+            mkdirSync(folder);
+            writeFileSync(join(folder, '.git'), `gitdir: ${elsewhere.replace(/\\/g, '/')}\n`);
+            const listed = keys(execFileSync('git', ['config', '--local', '--includes', '--list', '-z'], { cwd: folder, encoding: 'utf8', windowsHide: true }));
+            console.log(`### first-run config-read git-file shows=${listed.includes('core.fsmonitor')} ran=${existsSync(mark)}`);
+            expect(existsSync(mark)).toBe(false);
+        });
+        it('a folder inside another repo: --local reads the parent repo unless told where to stop', () => {
+            const parentConfig = script();
+            git('config', 'core.fsmonitor', parentConfig);
+            const inner = join(repo, 'inner');
+            mkdirSync(inner);
+            const plain = keys(execFileSync('git', ['config', '--local', '--includes', '--list', '-z'], { cwd: inner, encoding: 'utf8', windowsHide: true }));
+            console.log(`### first-run config-read nested shows-parent=${plain.includes('core.fsmonitor')} ran=${existsSync(mark)}`);
+            expect(existsSync(mark)).toBe(false);
+        });
+    });
+
     it('CONTROL: this git really runs it', () => {
         git('config', 'core.fsmonitor', script());
         git('status', '--porcelain');
