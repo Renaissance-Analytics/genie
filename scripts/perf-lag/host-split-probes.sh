@@ -338,7 +338,7 @@ probe "sign-out-removes-the-entry" src/main/tynn-account.ts \
     test/tynn-account-host.test.ts "a sign-out removes it"
 
 probe "only-a-real-pairing-token-moves" src/main/tynn-account.ts \
-    "                    return tokenValid(token) ? { kind: 'value', value: token } : { kind: 'unreadable' };" "                    return { kind: 'value', value: token };" \
+    "                    if (tokenValid(token)) return { kind: 'value', value: token };" "                    if (token) return { kind: 'value', value: token };" \
     test/tynn-account-host.test.ts "is not a pairing token"
 
 probe "a-window-reads-signed-in-at-once" src/main/session-engine-server.ts \
