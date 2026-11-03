@@ -247,8 +247,7 @@ probe "over-the-limit-stays-where-it-was" src/main/keychain-migration.ts \
 
 # Two stores: the current sign-in wins, and nothing goes before its read-back
 probe "the-current-sign-in-is-not-held-up-by-an-older-file" src/main/tynn-account.ts \
-    "    if (await exists(file)) return;
-    await store.migrate(legacyFile, file);" "    await store.migrate(legacyFile, file);" \
+    "    if (await exists(file)) {" "    if (false) {" \
     test/tynn-account-host.test.ts "the current sign-in moves, byte for byte"
 
 probe "the-older-seal-goes-with-the-move" src/main/tynn-account.ts \
