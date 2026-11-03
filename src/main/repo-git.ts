@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { GitDidNotAnswer, withinGitLimit } from './git-ports.js';
 import { GIT_NEEDS_TRUST, gitMayRun } from './git-read-policy.js';
 import { guardRepoPath, parseRepoStatus, type RepoStatus } from './repo-model.js';
 import { resolveProgram } from '../core/program-lookup.js';
@@ -36,14 +37,18 @@ async function inRepo(root: string, repoRel: string, args: readonly string[]): P
 
 const done = (r: RepoResult<string>): RepoResult<null> => (r.ok ? ok(null) : r);
 
+/** A read has a limit; a push or a pull, which may wait on a network or a person's key, does not. */
+const asRead = (run: () => Promise<RepoResult<string>>): Promise<RepoResult<string>> =>
+    withinGitLimit(run).catch((error: unknown) => { if (error instanceof GitDidNotAnswer) return fail(error.message); throw error; });
+
 export async function repoStatus(root: string, repoRel: string): Promise<RepoResult<RepoStatus>> {
-    const r = await inRepo(root, repoRel, ['status', '--porcelain=v1', '--branch', '-uall']);
+    const r = await asRead(() => inRepo(root, repoRel, ['status', '--porcelain=v1', '--branch', '-uall']));
     return r.ok ? ok(parseRepoStatus(r.value)) : r;
 }
 
 /** One file's unified diff, staged or not. An untracked file has none yet — empty, not an error. */
 export async function repoDiff(root: string, repoRel: string, file: string, staged: boolean): Promise<RepoResult<{ patch: string }>> {
-    const r = await inRepo(root, repoRel, ['diff', ...(staged ? ['--cached'] : []), '--', file]);
+    const r = await asRead(() => inRepo(root, repoRel, ['diff', ...(staged ? ['--cached'] : []), '--', file]));
     return r.ok ? ok({ patch: r.value }) : r;
 }
 

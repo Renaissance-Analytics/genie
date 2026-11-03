@@ -6,9 +6,29 @@ import { isLocalPathLike } from '../core/envelope-plan.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { gitMayRun } from './git-read-policy.js';
 
-/** Red: the shape only. */
-export const GIT_READ_LIMIT = { ms: 0 };
-export class GitDidNotAnswer extends Error {}
+/**
+ * HOW LONG A GIT READ MAY TAKE. Long enough that a slow real repository doesn't reach it: a status on a huge tree, with a scanner in the way, takes tens of seconds. A read past it is a failure the person sees, with a Retry, never an empty list that reads as "nothing changed".
+ * A hook's child can hold git's output open after git is gone, so the wait itself ends at the limit, whatever the process does.
+ */
+export const GIT_READ_LIMIT = { ms: 120_000 };
+
+export class GitDidNotAnswer extends Error {
+    constructor() {
+        super(`git did not answer within ${Math.round(GIT_READ_LIMIT.ms / 1000)} s`);
+    }
+}
+
+/** The read, or a {@link GitDidNotAnswer} at the limit. `stop` ends what it started. */
+export function withinGitLimit<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const stop = new AbortController();
+    return new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => { reject(new GitDidNotAnswer()); stop.abort(); }, GIT_READ_LIMIT.ms);
+        run(stop.signal).then(
+            (value) => { clearTimeout(timer); resolve(value); },
+            (error: unknown) => { clearTimeout(timer); reject(error); },
+        );
+    });
+}
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -153,9 +173,9 @@ export function gitShowHead(root: string, rel: string): Promise<string | null> {
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return gitMayRun(cwd).then((may) => (!may ? null : new Promise<string | null>((resolve) => {
-        execFile(resolveProgram('git'), ['show', `HEAD:./${name}`], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
-    })));
+    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((signal) => new Promise<string | null>((resolve) => {
+        execFile(resolveProgram('git'), ['show', `HEAD:./${name}`], { cwd, signal, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
+    }))));
 }
 
 /**
@@ -167,14 +187,14 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return gitMayRun(cwd).then((may) => (!may ? null : new Promise<GitFileState | null>((resolve) => {
-        execFile(resolveProgram('git'), ['status', '--porcelain=v1', '--', name], { cwd, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((signal) => new Promise<GitFileState | null>((resolve) => {
+        execFile(resolveProgram('git'), ['status', '--porcelain=v1', '--', name], { cwd, signal, windowsHide: true }, (error, stdout) => {
             if (error) { resolve(null); return; }
             const line = String(stdout).split('\n').find((l) => l.length > 0);
             if (line !== undefined) { resolve(line.startsWith('??') ? 'untracked' : 'modified'); return; }
-            execFile(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', name], { cwd, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
+            execFile(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', name], { cwd, signal, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
         });
-    })));
+    }))));
 }
 
 /**
@@ -183,8 +203,8 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
  * "nothing to show" is the honest answer there.
  */
 export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]> {
-    return gitMayRun(path).then((may) => (!may ? [] : new Promise<GitCommit[]>((resolve) => {
-        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x00%s%x00%an%x00%ct%x00'], { cwd: path, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(path).then((may) => (!may ? [] : withinGitLimit((signal) => new Promise<GitCommit[]>((resolve) => {
+        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x00%s%x00%an%x00%ct%x00'], { cwd: path, signal, windowsHide: true }, (error, stdout) => {
             if (error) { resolve([]); return; }
             // NUL between fields: a commit's text cannot hold one, so a subject cannot shift the fields after it.
             const fields = String(stdout).split('\0');
@@ -192,7 +212,7 @@ export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]>
             for (let i = 0; i + 3 < fields.length; i += 4) commits.push({ sha: fields[i]!.trim(), subject: fields[i + 1]!, author: fields[i + 2]!, at: Number(fields[i + 3]!) * 1000 });
             resolve(commits);
         });
-    })));
+    }))));
 }
 
 /** A changed file's state, as the tree colours it (beta.33 item 15; Genie 1 FileTree's git colours). */
@@ -204,11 +224,11 @@ export type GitTreeState = 'modified' | 'added' | 'deleted' | 'untracked';
  * workspace's prefix and anything outside it is dropped. Not a repository: an empty map, "nothing to show".
  */
 export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState>> {
-    return gitMayRun(root).then((may) => (!may ? {} : new Promise((resolve) => {
-        execFile(resolveProgram('git'), ['rev-parse', '--show-prefix'], { cwd: root, windowsHide: true }, (error, prefixOut) => {
+    return gitMayRun(root).then((may) => (!may ? {} : withinGitLimit((signal) => new Promise((resolve) => {
+        execFile(resolveProgram('git'), ['rev-parse', '--show-prefix'], { cwd: root, signal, windowsHide: true }, (error, prefixOut) => {
             if (error) { resolve({}); return; }
             const prefix = String(prefixOut).trim();
-            execFile(resolveProgram('git'), ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
+            execFile(resolveProgram('git'), ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, signal, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
                 if (e2) { resolve({}); return; }
                 const out: Record<string, GitTreeState> = {};
                 const fields = String(stdout).split('\0');
@@ -228,5 +248,5 @@ export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState
                 resolve(out);
             });
         });
-    })));
+    }))));
 }

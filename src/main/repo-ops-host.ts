@@ -2,7 +2,7 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { addRepo, listRepos, relocateRepo, removeRepo, type RepoEntry } from '../core/repo-registry.js';
 import { branchFromHead, lockState, type LockState } from '../core/repo-status.js';
 import type { RepoCommit } from '../core/commits.js';
-import { gitLogSince } from './git-ports.js';
+import { GitDidNotAnswer, gitLogSince } from './git-ports.js';
 
 /**
  * REPO OPERATIONS IN THE APP (§6.1) — the main-process half over the pure registry. Reads the envelope's
@@ -118,16 +118,21 @@ export async function relocateRepoIn(ports: RepoOpsPorts, workspaceId: string, s
  * The commits in every registered repo since a moment (the board's `Commits` in an observed agent's index), merged
  * newest first, each with its repo's slug — git's own account, so the author is the committer's name, not a guess.
  */
-export async function commitsSinceIn(ports: RepoOpsPorts, workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: RepoCommit[] } | { ok: false; reason: string }> {
+export async function commitsSinceIn(ports: RepoOpsPorts, workspaceId: string, sinceMs: number): Promise<{ ok: true; commits: RepoCommit[] } | { ok: false; reason: string; gitDidNotAnswer?: boolean }> {
     const m = await manifestOf(ports, workspaceId);
     if (!m.ok) return m;
     const ws = ports.registry.workspace(workspaceId)!;
     const log = ports.gitLog ?? gitLogSince;
-    const lists = await Promise.all(listRepos(m.manifest).map(async (r) => {
-        const root = r.path === '.' ? ws.path : join(ws.path, ...r.path.split('/'));
-        return (await log(root, sinceMs)).map((c): RepoCommit => ({ repo: r.slug, ...c }));
-    }));
-    return { ok: true, commits: lists.flat().sort((a, b) => b.at - a.at) };
+    try {
+        const lists = await Promise.all(listRepos(m.manifest).map(async (r) => {
+            const root = r.path === '.' ? ws.path : join(ws.path, ...r.path.split('/'));
+            return (await log(root, sinceMs)).map((c): RepoCommit => ({ repo: r.slug, ...c }));
+        }));
+        return { ok: true, commits: lists.flat().sort((a, b) => b.at - a.at) };
+    } catch (error) {
+        if (error instanceof GitDidNotAnswer) return { ok: false, reason: error.message, gitDidNotAnswer: true };
+        throw error;
+    }
 }
 
 export async function addRepoTo(ports: RepoOpsPorts, workspaceId: string, input: { name: string; path: string; url?: string }): Promise<{ ok: true; slug: string } | { ok: false; reason: string }> {
