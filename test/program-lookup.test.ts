@@ -162,7 +162,7 @@ describe('no bare name is spawned', () => {
     });
 
     it('the shell line names the system cmd', () => {
-        expect(code('src/core/shell-launch.ts')).toMatch(/resolveProgram\('cmd\.exe'\)/);
+        expect(code('src/core/shell-launch.ts')).toMatch(/resolveProgram\('cmd\.exe',/);
     });
 });
 
