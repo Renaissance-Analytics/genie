@@ -98,22 +98,25 @@ interface GaugeForcing {
     readonly stopTheWitness?: boolean;
 }
 
-/** The witness: a process of its own, beating every 10 ms. It writes `ready` after three beats, then each gap over 20 ms as `<end> <gap>`. It ends when its stdin does, so it cannot outlive a test. */
+/**
+ * The witness: a process of its own that SPINS on the clock, and writes each gap over 20 ms as `<end> <gap>`. It writes `ready` first. A witness that sleeps between beats reads false stops: on omarchy-test a plain C sleeper woke hundreds of ms late, up to 1.9 s,
+ * on an idle guest, while a spinner beside it saw no gap at all. So a gap here means this process or its CPU really stopped, which is what the gauge subtracts. It costs a CPU for the gauge's few seconds. It ends if the test's process goes, and in any case within a limit.
+ */
 const WITNESS = `
     const { appendFileSync } = require('node:fs');
     const file = process.argv[1];
+    const parent = process.ppid;
+    appendFileSync(file, 'ready ' + Date.now() + '\\n');
     let last = Date.now();
-    let beats = 0;
-    setInterval(() => {
+    const limit = last + 120000;
+    for (let turn = 0; ; turn += 1) {
         const now = Date.now();
-        const gap = now - last - 10;
+        const gap = now - last;
         last = now;
-        beats += 1;
-        if (beats === 3) appendFileSync(file, 'ready ' + now + '\\n');
         if (gap > 20) appendFileSync(file, now + ' ' + gap + '\\n');
-    }, 10);
-    process.stdin.on('end', () => process.exit(0));
-    process.stdin.resume();
+        if (now > limit) process.exit(0);
+        if (turn % 4096 === 0 && process.ppid !== parent) process.exit(0);
+    }
 `;
 
 const witnessGaps = (file: string): Array<[number, number]> => {
@@ -130,7 +133,7 @@ const witnessGaps = (file: string): Array<[number, number]> => {
 async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
     const dir = mkdtempSync(join(tmpdir(), 'gauge-witness-'));
     const file = join(dir, 'gaps.txt');
-    const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: ['pipe', 'ignore', 'ignore'], windowsHide: true });
+    const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: 'ignore', windowsHide: true });
     const stopped = new Promise<void>((r) => { witness.once('exit', () => r()); witness.once('error', () => r()); });
     // Another thread of this process, stopped on request: what the old in-process witness read as the whole process stopping.
     const stall = new Int32Array(new SharedArrayBuffer(4));
@@ -142,15 +145,15 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         Atomics.wait(stall, 0, 1);
     `, { eval: true, workerData: stall.buffer }) : null;
     try {
-        // A REAL HANDSHAKE: it has beaten, or the gauge does not begin.
+        // A REAL HANDSHAKE: it says it is running, or the gauge does not begin.
         const handshakeEnd = Date.now() + 20_000;
-        while (!existsSync(file)) {
+        while (!(existsSync(file) && readFileSync(file, 'utf8').startsWith('ready'))) {
             if (Date.now() > handshakeEnd) throw new Error('the gauge\'s witness never beat, so nothing it says could be read');
             await new Promise((r) => setTimeout(r, 10));
         }
         if (stalledThread) while (Atomics.load(stall, 0) !== 1) await new Promise((r) => setTimeout(r, 5));
         // What the file says at the moment the gauge begins, not what the wait above assumed.
-        const witnessBeatsAtStart = readFileSync(file, 'utf8').startsWith('ready') ? 3 : 0;
+        const witnessReady = readFileSync(file, 'utf8').startsWith('ready');
         // A hold on main reads the witness's gaps from the file as they land: a spinning main has no event loop for a pipe.
         let readAt = 0;
         let cache: Array<[number, number]> = [];
@@ -174,19 +177,18 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         }
         const theirs = witnessGaps(file);
         let worst = 0;
-        lastReading = { gap: 0, stalled: 0, witnessBeatsAtStart };
+        lastReading = { gap: 0, stalled: 0, witnessReady };
         for (const [end, gap] of mine) {
             const start = end - gap;
             // The same measure the hold uses (`overlapWith`): the longest witness gap overlapping this one of main's.
             const process = overlapWith(theirs, start, end);
-            if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process, witnessBeatsAtStart }; }
+            if (gap - process > worst) { worst = gap - process; lastReading = { gap, stalled: process, witnessReady }; }
         }
         return worst;
     } finally {
         Atomics.store(stall, 0, 0);
         Atomics.notify(stall, 0);
         await stalledThread?.terminate();
-        witness.stdin?.end();
         witness.kill();
         await stopped;
         rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
@@ -194,7 +196,7 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
 }
 
 /** The worst reading's parts: main's heartbeat gap, and how much of it the whole process was stopped (subtracted). */
-let lastReading: { gap: number; stalled: number; witnessBeatsAtStart?: number } = { gap: 0, stalled: 0 };
+let lastReading: { gap: number; stalled: number; witnessReady?: boolean } = { gap: 0, stalled: 0 };
 
 type HostModule = typeof import('../src/main/spawn-host-client.js');
 let stopHost: (() => Promise<void>) | null = null;
@@ -309,7 +311,7 @@ describe('main never waits on a spawn (genie#1397)', () => {
 
     it('the gauge begins only once its witness has really beaten', async () => {
         await onMainDuring({});
-        expect(lastReading.witnessBeatsAtStart ?? 0).toBeGreaterThanOrEqual(3);
+        expect(lastReading.witnessReady).toBe(true);
     }, 30_000);
 
     it("a supervised process (a site's php-cgi) whose pty takes 5 s to open: main is never held for it (under a fifth of it); it runs, its pid and output arrive, a stop ends it", async () => {
