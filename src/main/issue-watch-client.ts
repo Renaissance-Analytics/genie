@@ -62,6 +62,10 @@ export type IssueWatchRefreshAnswer =
 
 /** How long a dropped or refused connection waits before it tries again. */
 export const RECONNECT_MS = 5_000;
+/** The longest a connection that keeps failing waits between tries. */
+export const RECONNECT_MAX_MS = 300_000;
+/** How long a dialled socket may say nothing before it counts as failed. */
+export const CONNECT_DEADLINE_MS = 15_000;
 
 export class IssueWatchClient {
     readonly #ports: IssueWatchClientPorts;

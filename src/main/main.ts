@@ -202,7 +202,8 @@ import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
 import { AppInboxKeys } from './app-inbox-keys.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
 import { type AppSourceKind } from '../core/app-inbox.js';
-import { IssueWatchClient, type IssueWatchRefreshAnswer, type SocketLike } from './issue-watch-client.js';
+import { IssueWatchClient, type IssueWatchRefreshAnswer } from './issue-watch-client.js';
+import { dialTynnSocket } from './tynn-socket.js';
 import { IssueWatchDelivery } from './issue-watch-delivery.js';
 import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
@@ -461,7 +462,7 @@ function tynnBoardLive(): TynnBoardLive {
             if (!account || account.status().signedIn !== true) return null;
             return { request: (path, init) => account.request(path, init) };
         },
-        socket: (url) => new WebSocket(url) as unknown as SocketLike,
+        socket: (url) => dialTynnSocket(url, tynnAccount?.host() ?? TYNN_HOST),
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onRing: (projectId, ring) => tynnBoardLiveSignal(projectId, { ring }),
         onState: (projectId, state) => tynnBoardLiveSignal(projectId, { state }),
@@ -3132,7 +3133,7 @@ async function boot(): Promise<void> {
             if (!account || userId === null) return null;
             return { userId, request: (path, init) => account.request(path, init) };
         },
-        socket: (url) => new WebSocket(url) as unknown as SocketLike,
+        socket: (url) => dialTynnSocket(url, tynnAccount?.host() ?? TYNN_HOST),
         schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         onEvents: (projectId, events) => {
             issueWatchRecent.set(projectId, [...[...events].reverse(), ...(issueWatchRecent.get(projectId) ?? [])].slice(0, PANEL_RECENT));

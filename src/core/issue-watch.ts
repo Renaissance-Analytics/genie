@@ -263,6 +263,8 @@ export function tynnProjectIdOf(manifest: string | null): string | null {
 /** What IssueWatch knows of one workspace now: the client's state, whether it is linked to a Tynn project, its latest entry. */
 export interface IssueWatchSummary {
     readonly state: 'signed-out' | 'connecting' | 'live' | 'reconnecting' | 'stopped';
+    /** Why it is not live: the client's last failure, in its own words (genie#1478). */
+    readonly reason?: string | undefined;
     /** Linked to a Tynn project (project.json `tynn.projectId`). */
     readonly linked: boolean;
     /** The latest entry Tynn sent for it; absent until one arrives. */
