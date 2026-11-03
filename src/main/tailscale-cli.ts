@@ -490,7 +490,7 @@ const WIN_INSTALLER_URL = 'https://pkgs.tailscale.com/stable/tailscale-setup-lat
  * Returns `{ started: true }` when the Windows installer was launched, or a `url`
  * for the caller to open instead (other platforms, or a download failure).
  */
-export async function installTailscale(): Promise<{
+export async function installTailscale(download: (url: string) => Promise<Response>): Promise<{
     started: boolean;
     url?: string;
     message?: string;
@@ -503,7 +503,7 @@ export async function installTailscale(): Promise<{
         return { started: false, url: TAILSCALE_DOWNLOAD_PAGE };
     }
     try {
-        const res = await fetch(WIN_INSTALLER_URL);
+        const res = await download(WIN_INSTALLER_URL);
         if (!res.ok) throw new Error(`Download failed (HTTP ${res.status}).`);
         const buf = Buffer.from(await res.arrayBuffer());
         const dest = path.join(os.tmpdir(), `tailscale-setup-${Date.now()}.exe`);

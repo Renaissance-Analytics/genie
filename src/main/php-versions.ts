@@ -490,27 +490,29 @@ export function nodePhpVersionsFs(): PhpVersionsFs {
     };
 }
 
-// RED: the shape only.
-export function httpFetchOver(_get: (url: string, init: { redirect: 'follow' }) => Promise<Response>) { return httpFetch; }
-
-/** The real network: `fetch`, redirects followed (windows.php.net answers from downloads.php.net). */
-export const httpFetch = {
-    bytes: async (url: string): Promise<Fetched<Uint8Array>> => {
-        try {
-            const r = await fetch(url, { redirect: 'follow' });
-            if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-            return { ok: true, body: new Uint8Array(await r.arrayBuffer()) };
-        } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : String(error) };
-        }
-    },
-    text: async (url: string): Promise<Fetched<string>> => {
-        try {
-            const r = await fetch(url, { redirect: 'follow' });
-            if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
-            return { ok: true, body: await r.text() };
-        } catch (error) {
-            return { ok: false, error: error instanceof Error ? error.message : String(error) };
-        }
-    },
-};
+/**
+ * Downloads, over the network they are handed: the window's `net.fetch` (Chromium's trust and the OS's proxies; main.ts). Redirects are followed across origins, because a download is sent on to a CDN
+ * (windows.php.net answers from downloads.php.net). Tynn's "no redirects" rule is about a bearer token, and there is none here: a download's checksum, in the caller, is what is trusted.
+ */
+export function httpFetchOver(get: (url: string, init: { redirect: 'follow' }) => Promise<Response>) {
+    return {
+        bytes: async (url: string): Promise<Fetched<Uint8Array>> => {
+            try {
+                const r = await get(url, { redirect: 'follow' });
+                if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+                return { ok: true, body: new Uint8Array(await r.arrayBuffer()) };
+            } catch (error) {
+                return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            }
+        },
+        text: async (url: string): Promise<Fetched<string>> => {
+            try {
+                const r = await get(url, { redirect: 'follow' });
+                if (!r.ok) return { ok: false, error: `HTTP ${r.status}` };
+                return { ok: true, body: await r.text() };
+            } catch (error) {
+                return { ok: false, error: error instanceof Error ? error.message : String(error) };
+            }
+        },
+    };
+}
