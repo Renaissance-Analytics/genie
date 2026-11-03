@@ -71,7 +71,9 @@ import { RemoteHost, type HostApi } from './remote-host.js';
 import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
 import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
-import { DotEnvSync, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
+import { DotEnvSync, envFileSites, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
+import { folderGitConfig, setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { WorkspaceTrust } from './workspace-trust-host.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager, type PhpCgiResolution } from './site-manager.js';
 import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
@@ -280,6 +282,8 @@ export interface ComposedServices {
     readonly sites: SiteManager;
     /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
     readonly envelopeSites: EnvelopeSites;
+    /** What each workspace's own files say would run, and whether the person has said yes to it. */
+    readonly workspaceTrust: WorkspaceTrust;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
     readonly engines: ServiceRegistry;
     /**
@@ -939,13 +943,26 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // first snapshot lists them. A workspace added, hibernated or woken later is synced as it happens.
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     await envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] the workspaces' sites could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
+    // One verdict for each workspace. Until a workspace has been read it is not trusted, so git reads there check its config first.
+    const trustFs = nodeEnvelopeFs();
+    const workspaceTrust = new WorkspaceTrust({
+        readText: trustFs.readText,
+        gitConfig: folderGitConfig,
+        workspaces: workspacesNow,
+        record: () => envelopeSites.trustRecord(),
+        recordWorkspace: (id, hash) => envelopeSites.recordWorkspace(id, hash),
+        approveSites: (id) => envelopeSites.approveSites(id),
+    });
+    setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.isTrustedPath(path)));
+    const refreshTrust = () => { for (const w of workspacesNow()) workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)); };
+    refreshTrust();
     // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
     // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
     frontDoorCtl.beginHosts();
     // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
     const envFiles = new DotEnvSync({
         envFor: (workspaceId) => engines.envFor(workspaceId),
-        sites: () => sites.list(),
+        sites: () => envFileSites(sites.list()),
         fs: nodeEnvelopeFs(),
         gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
         // The name each workspace was registered with (Settings → General "Env file name"); none recorded is `.env`.
@@ -957,7 +974,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     engines.onChange(syncEnvFiles);
     sites.onChange(syncEnvFiles);
     const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
-        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`));
+        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(refreshTrust);
     }) ?? (() => {});
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
@@ -1145,6 +1162,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         supervisor,
         sites,
         envelopeSites,
+        workspaceTrust,
         engines,
         engineReconcile,
         envFiles,
@@ -1334,6 +1352,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         setFlowToolCaller: (call) => { flowToolCall = call; handFlowTools(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
+            setGitReadPolicy(null);
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();

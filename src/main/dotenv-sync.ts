@@ -67,6 +67,11 @@ export function gitIgnoredOver(exec: Exec): DotEnvSyncPorts['gitIgnored'] {
     };
 }
 
+/** The sites a `.env` is kept for: not one waiting for its first start here. Nothing is written into a folder, and git is not asked about it, for a site the person has not let run. */
+export function envFileSites<T extends { readonly firstStart?: unknown }>(sites: readonly T[]): T[] {
+    return sites.filter((site) => site.firstStart === undefined);
+}
+
 export class DotEnvSync {
     readonly #ports: DotEnvSyncPorts;
     #queue: Promise<unknown> = Promise.resolve();
