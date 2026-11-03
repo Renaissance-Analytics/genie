@@ -303,7 +303,7 @@ export function issueWatchCountLine(c: IssueWatchCounts): string {
 export function issueWatchWhyNot(s: IssueWatchSummary): string | null {
     if (!s.linked) return 'this workspace is not linked to a Tynn project (project.json tynn.projectId)';
     if (s.state === 'signed-out') return 'not signed in to Tynn (Settings → Accounts → Tynn → Open Tynn in your browser)';
-    if (s.state !== 'live' && s.entry === undefined) return 'IssueWatch is not connected to Tynn yet';
+    if (s.state !== 'live' && s.entry === undefined) return s.reason ? `IssueWatch is not connected to Tynn: ${s.reason}` : 'IssueWatch is not connected to Tynn yet';
     if (s.entry === undefined) return 'Tynn has sent nothing for this workspace yet';
     return null;
 }
@@ -467,7 +467,7 @@ export function issueWatchPanelView(summary: IssueWatchSummary, recent: readonly
     // fresh; older, it says how old, in warning words — the socket being up says nothing about the list.
     const line: IssueWatchPanelView['line'] = !summary.linked ? { tone: 'muted', text: issueWatchWhyNot(summary)! }
         : why !== null ? { tone: 'warn', text: why }
-        : summary.state !== 'live' ? { tone: 'warn', text: 'Reconnecting to Tynn — showing what it last sent' }
+        : summary.state !== 'live' ? { tone: 'warn', text: summary.reason ? `Not connected to Tynn (${summary.reason}) — showing what it last sent` : 'Reconnecting to Tynn — showing what it last sent' }
         : delivered === undefined ? { tone: 'ok', text: 'Live from Tynn' }
         : now - delivered > ISSUE_WATCH_STALE_MS ? { tone: 'warn', text: `Tynn last sent this list ${shortAge(delivered, now)} ago — it may be out of date. Refresh asks for it now.` }
         : { tone: 'ok', text: `Live from Tynn · updated ${shortAge(delivered, now)} ago` };

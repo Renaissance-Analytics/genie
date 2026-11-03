@@ -66,6 +66,14 @@ export function encodePong(): string {
     return JSON.stringify({ event: 'pusher:pong', data: {} });
 }
 
+/** What a `pusher:error` frame says, or `null` when the frame is not one. Reverb sends `data` as `{code, message}`. */
+export function pusherErrorOf(frame: PusherFrame): { readonly code: number | null; readonly message: string } | null {
+    if (frame.event !== 'pusher:error') return null;
+    const d = frame.data as { code?: unknown; message?: unknown } | string | null | undefined;
+    if (typeof d === 'string') return { code: null, message: d };
+    return { code: typeof d?.code === 'number' ? d.code : null, message: typeof d?.message === 'string' && d.message !== '' ? d.message : 'no reason given' };
+}
+
 /** The socket's id, from `pusher:connection_established` — what a private channel's signature is made for. */
 export function socketIdOf(frame: PusherFrame): string | null {
     if (frame.event !== 'pusher:connection_established') return null;

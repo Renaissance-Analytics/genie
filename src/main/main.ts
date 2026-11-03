@@ -429,6 +429,8 @@ const issueWatchLatest = new Map<string, IwEntry>();
 /** When each project's latest entry arrived: the panel says how old its list is (the owner, 2026-10-21). */
 const issueWatchDelivered = new Map<string, number>();
 let issueWatchState: IssueWatchSummary['state'] = 'stopped';
+/** Why it is not live (genie#1478): what `checkIssues`, imDone and the panel say instead of "not connected yet". */
+let issueWatchReason: string | undefined;
 /** What happened lately per Tynn project, newest first, capped — the GitHub panel's "Lately". */
 const issueWatchRecent = new Map<string, IwEvent[]>();
 /** A workspace's Tynn project, from its project.json `tynn.projectId`; `null` = not linked. */
@@ -551,7 +553,7 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
     const projectId = tynnProjectFor(workspaceId);
     const entry = projectId === null ? undefined : issueWatchLatest.get(projectId);
     const deliveredAt = projectId === null ? undefined : issueWatchDelivered.get(projectId);
-    return { state: issueWatchState, linked: projectId !== null, ...(entry ? { entry } : {}), ...(deliveredAt !== undefined ? { deliveredAt } : {}) };
+    return { state: issueWatchState, linked: projectId !== null, ...(issueWatchReason !== undefined ? { reason: issueWatchReason } : {}), ...(entry ? { entry } : {}), ...(deliveredAt !== undefined ? { deliveredAt } : {}) };
 }
 let terminals: TerminalHost | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
@@ -3151,6 +3153,7 @@ async function boot(): Promise<void> {
         },
         onState: (state) => {
             issueWatchState = state.kind;
+            issueWatchReason = 'reason' in state ? state.reason : undefined;
             pushFeatures();
             console.log(`[genie] issuewatch: ${state.kind}${'reason' in state && state.reason ? ` — ${state.reason}` : ''}`);
         },

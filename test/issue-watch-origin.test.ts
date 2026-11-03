@@ -377,7 +377,8 @@ describe('the reconcile does not wait for the socket', () => {
         h.client.start();
         await settle();
         expect(h.client.state()).toEqual({ kind: 'reconnecting', reason: 'Tynn has no push configured' });
-        expect(h.entries.length).toBeGreaterThan(0);
+        expect(pullsOf(h)).toBe(2);
+        expect(h.entries).toEqual([PROJECT, PROJECT]);
     });
 
     it('CONTROL: signed out, nothing is asked', async () => {
@@ -418,16 +419,34 @@ describe('the reconcile does not wait for the socket', () => {
         expect(h.heard).toEqual([]);
     });
 
-    it('a pull still out when it stops is dropped: signing out does not bring the list back', async () => {
+    it('a pull still out when it stops is dropped, and the one asked for after it never goes: signing out does not bring the list back', async () => {
         const f = fakeSockets();
         let release: (v: unknown) => void = () => {};
         const h = harness({ config: CONFIG, socket: f.socket, pull: () => new Promise((r) => { release = r; }) });
         h.client.start();
         await settle();
+        f.sockets[0]!.emit(REFUSAL);
+        await settle();
         h.client.stop();
         release({ workspaces: [entry([item('a:issue:1')])] });
         await settle();
         expect(h.entries).toEqual([]);
+        expect(pullsOf(h)).toBe(1);
+    });
+
+    it('a restart while the push config is out dials once: the older dial goes no further (COUNTED)', async () => {
+        const f = fakeSockets();
+        const h = harness({ config: CONFIG, socket: f.socket });
+        h.client.start();
+        h.client.stop();
+        h.client.start();
+        await settle();
+        expect(f.sockets).toHaveLength(1);
+        expect(liveTimers(h).map((t) => t.ms)).toEqual([CONNECT_DEADLINE_MS]);
+        // Live, the one deadline it has is gone: nothing can come along later and close a healthy socket.
+        f.sockets[0]!.emit({ event: 'pusher:connection_established', data: JSON.stringify({ socket_id: '1.2' }) });
+        await settle();
+        expect(liveTimers(h)).toEqual([]);
     });
 });
 
@@ -447,10 +466,14 @@ describe('the reason reaches whoever asks', () => {
     });
 
     describe('the tools', () => {
-        let dir = '';
-        afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+        let dirs: string[] = [];
+        afterEach(async () => {
+            for (const dir of dirs) await rm(dir, { recursive: true, force: true });
+            dirs = [];
+        });
         const call = async (summary: IssueWatchSummary, name: string) => {
-            dir = await mkdtemp(join(tmpdir(), 'genie2-iw-origin-'));
+            const dir = await mkdtemp(join(tmpdir(), 'genie2-iw-origin-'));
+            dirs.push(dir);
             const inbox = await InboxStore.open(dir);
             const attention = await AttentionStore.open(dir, inbox);
             const atlas = agentRecord({ id: mintAgentId(), workspaceId: 'tynn', provider: 'claude', name: 'atlas' });
