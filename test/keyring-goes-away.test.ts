@@ -149,6 +149,19 @@ describe('the keyring goes away while Genie runs', () => {
         expect(o.heard.slice(heardBefore).filter((v) => v !== null), 'no card flashes up').toEqual([]);
     });
 
+    it('a re-check that finds the card as it was tells nobody: windows hear a change, not a look', async () => {
+        const o = await opened();
+        o.w.answers = false;
+        o.w.listing = ACTIVATABLE;
+        const heardBefore = o.heard.length;
+        await o.keychain.get(NAME);
+        o.w.wakesOnRead = true;
+        await settle();
+        expect(o.w.answers, 'CONTROL: the re-check really ran, and woke it').toBe(true);
+        expect(o.service.dump().view).toBeNull();
+        expect(o.heard.slice(heardBefore)).toEqual([]);
+    });
+
     it('it comes back by itself: the next read that answers takes the card away, and whoever waits for secrets hears', async () => {
         const o = await opened();
         o.w.answers = false;

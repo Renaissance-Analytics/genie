@@ -534,7 +534,11 @@ probe "the-keychain-says-only-a-change" src/main/keychain.ts \
 
 probe "a-recheck-tells-only-a-change" src/main/linux-keyring.ts \
     "                if (JSON.stringify(this.view()) !== before) this.#changed();" "                this.#changed();" \
-    test/keyring-goes-away.test.ts "shows no card"
+    test/keyring-goes-away.test.ts "a re-check that finds the card as it was tells nobody"
+
+probe "a-burst-reads-the-session-once" src/main/keychain.ts \
+    "        if (this.#answers === answers) return;" "" \
+    test/keyring-goes-away.test.ts "a burst of failing reads reads the session once"
 
 # P3.4 cut e: the host dials other machines, and their tokens never reach a window
 probe "the-welcome-loses-its-token" src/main/device-link-service.ts \
