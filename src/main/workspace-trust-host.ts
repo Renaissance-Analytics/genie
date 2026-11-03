@@ -12,6 +12,8 @@ import { isExactlyGenieStopHook } from './config-sync-targets.js';
 export interface TrustListPorts {
     readText(path: string): Promise<string | null>;
     gitConfig(cwd: string): Promise<GitConfigEntry[]>;
+    /** Whether git tracks this file. Throws, or is absent, when it can't say, which counts as yes. */
+    isTracked?(root: string, relativePath: string): Promise<boolean>;
 }
 
 export interface TrustView { readonly trusted: boolean; readonly changed: boolean; readonly list: TrustList }
@@ -24,7 +26,7 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
-const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [] };
+const NOTHING: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] };
 const OUR_SERVERS: ReadonlySet<string> = new Set(['genie', 'tynn', 'genie-agentinbox-channel']);
 /** Settings that run nothing, and that Claude Code itself rewrites as a person works: on the list, each approval would ask again. */
 const SETTINGS_THAT_RUN_NOTHING: ReadonlySet<string> = new Set(['permissions', 'model', 'outputStyle', 'includeCoAuthoredBy', 'cleanupPeriodDays']);
@@ -122,7 +124,7 @@ export async function readTrustList(path: string, ports: TrustListPorts): Promis
             if (!seen.has(id)) { seen.add(id); gitKeys.push(entry); }
         }
     }
-    return { sites, hooks, servers, gitKeys };
+    return { sites, hooks, servers, gitKeys, approvals: [] };
 }
 
 const inside = (root: string, path: string): boolean => {

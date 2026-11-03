@@ -18,6 +18,8 @@ export interface TrustList {
     readonly hooks: readonly TrustHook[];
     readonly servers: readonly TrustServer[];
     readonly gitKeys: readonly GitConfigEntry[];
+    /** Commands a person approved one at a time in an untracked settings.local.json: shown on the list, and not hashed, or each approval would ask again. */
+    readonly approvals: readonly string[];
 }
 
 export interface TrustRecord { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> }
@@ -53,7 +55,7 @@ export function npmRunTarget(command: string): string | null {
 }
 
 const sorted = (rows: readonly unknown[]): string[] => rows.map((row) => JSON.stringify(row)).sort();
-const NOTHING = (): TrustList => ({ sites: [], hooks: [], servers: [], gitKeys: [] });
+const NOTHING = (): TrustList => ({ sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] });
 
 /** The list as one value, whatever order it was found in. What a site shows but doesn't run by (its words) is left out: only its fingerprint and its npm script count. */
 export function trustHash(list: TrustList): string {

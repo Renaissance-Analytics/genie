@@ -5,7 +5,7 @@ import { npmRunTarget, parseGitConfigList, trustHash, trustVerdict, unsafeGitKey
  * WHAT A WORKSPACE WOULD RUN, AND WHETHER THE PERSON HAS SAID YES TO IT. One record on this machine, one verdict, and a hash of the list that asks again when it changes. The pure half.
  */
 
-const empty: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [] };
+const empty: TrustList = { sites: [], hooks: [], servers: [], gitKeys: [], approvals: [] };
 const nul = String.fromCharCode(0);
 const newline = String.fromCharCode(10);
 
