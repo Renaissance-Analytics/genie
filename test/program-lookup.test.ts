@@ -311,10 +311,34 @@ describe.skipIf(process.platform !== 'win32')('on Windows, through the real func
         expect(ran()).toBe(false);
     }, 30_000);
 
-    it('CONTROL the engine: asked for the working folder by name, it runs it, so the two above can see', async () => {
-        await throughTheEngine(['.\\git.exe', 'status']);
+    it('CONTROL the engine: by its whole path it runs, so the two above can see', async () => {
+        await throughTheEngine([join(folder, 'git.exe'), 'status']);
         expect(ran()).toBe(true);
     }, 30_000);
+
+    /** The engine in a node of its own, whose current folder is the planted one: a relative name means that folder, not the `cwd` option. */
+    const engineStartedInTheFolder = (program: string) => {
+        const entry = join(process.cwd(), 'node_modules', '@particle-academy', 'fancy-pty', 'dist', 'index.cjs');
+        const script = `const { open } = require(${JSON.stringify(entry)});
+const pty = open({ argv: [${JSON.stringify(program)}, 'status'], cwd: process.cwd(), env: { ...process.env, NODE_OPTIONS: '--require ' + JSON.stringify(process.env.HOOK) }, cols: 80, rows: 24 });
+let out = '';
+pty.onData((chunk) => { out += chunk.toString('utf8'); });
+const end = () => { process.stdout.write(out); process.exit(0); };
+pty.onError((error) => { out += error.message; end(); });
+pty.onExit(end);`;
+        return inChild(script, without(), folder);
+    };
+
+    it('the engine, started in the folder: a bare name runs the installed program, not the one beside it', () => {
+        const child = engineStartedInTheFolder('git');
+        expect(ran()).toBe(false);
+        expect(child.stdout).toMatch(/not a git repository/);
+    }, 40_000);
+
+    it('CONTROL the engine, started in the folder: asked for that folder by name, it runs it, so the row above can see', () => {
+        engineStartedInTheFolder('.\\git.exe');
+        expect(ran()).toBe(true);
+    }, 40_000);
 
     it('resolving finds the real one with a PATH of its own', () => {
         const dir = join(folder, 'on path');
