@@ -1,4 +1,3 @@
-import { spawn as spawnChild } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { join } from 'node:path';
 
@@ -33,10 +32,15 @@ export interface HelperRequest {
 }
 
 export interface WindowsHelperOptions {
-    readonly spawn?: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => HelperChild;
+    /** Who starts it: private-credentials.ts, which already may. This module spawns nothing itself (test/no-spawn-on-main-guard.test.ts). */
+    readonly spawn: (file: string, args: readonly string[], env: NodeJS.ProcessEnv) => HelperChild;
     readonly deadlineMs?: number;
     readonly log?: (line: string) => void;
 }
+
+// Real timers, taken at load: a test faking the clock (or advancing it 30 s) is not a helper past its deadline.
+const realSetTimeout = globalThis.setTimeout;
+const realClearTimeout = globalThis.clearTimeout;
 
 /** A script past this is hung: a write takes milliseconds here, and a cold start under two seconds. Long enough for a stalled machine, and the caller still has a launch to try. */
 const DEFAULT_DEADLINE_MS = 20_000;
@@ -81,7 +85,7 @@ interface Pending {
 }
 
 export class WindowsHelper {
-    readonly #spawn: NonNullable<WindowsHelperOptions['spawn']>;
+    readonly #spawn: WindowsHelperOptions['spawn'];
     readonly #deadlineMs: number;
     readonly #log: (line: string) => void;
     #child: HelperChild | null = null;
@@ -91,13 +95,8 @@ export class WindowsHelper {
     #next = 0;
     #lastPid: number | null = null;
 
-    constructor(options: WindowsHelperOptions = {}) {
-        this.#spawn = options.spawn ?? ((file, args, env) => {
-            const child = spawnChild(file, [...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
-            child.unref();
-            for (const pipe of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) pipe?.unref?.();
-            return child as unknown as HelperChild;
-        });
+    constructor(options: WindowsHelperOptions) {
+        this.#spawn = options.spawn;
         this.#deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
         this.#log = options.log ?? (() => {});
     }
@@ -118,7 +117,7 @@ export class WindowsHelper {
         });
         this.#queue.push(pending);
         // After this turn, so a caller can attach to stdout before anything can arrive.
-        setImmediate(() => this.#pump());
+        queueMicrotask(() => this.#pump());
         return { stdin, stdout, completed, kill: () => { if (this.#active === pending) this.#lose('the request was ended'); } };
     }
 
@@ -143,6 +142,8 @@ export class WindowsHelper {
         this.#child = child;
         this.#lastPid = child.pid ?? null;
         this.#buffer = '';
+        // Writing to a helper that has just died is its exit's to report, not an uncaught EPIPE's.
+        (child.stdin as unknown as Partial<EventEmitter> | null)?.on?.('error', () => {});
         child.stdout?.on('data', (data: Buffer | string) => { if (this.#child === child) this.#heard(data.toString()); });
         const gone = (why: string): void => { if (this.#child === child) { this.#child = null; this.#failActive(why); this.#pump(); } };
         child.once('exit', () => gone('the helper exited'));
@@ -161,7 +162,7 @@ export class WindowsHelper {
         }
         this.#active = pending;
         this.#refChild(child, true);
-        pending.timer = setTimeout(() => this.#lose(`no answer within ${this.#deadlineMs} ms`), this.#deadlineMs);
+        pending.timer = realSetTimeout(() => this.#lose(`no answer within ${this.#deadlineMs} ms`), this.#deadlineMs);
         try {
             child.stdin?.write(`${pending.id} ${Buffer.from(pending.body, 'utf16le').toString('base64')}\n`);
         } catch (error) {
@@ -197,7 +198,7 @@ export class WindowsHelper {
             if (done[2] === '0') active.resolve({ stdout: active.text, stderr: '' });
             else active.reject(Object.assign(new Error('the script refused'), { code: 1 }));
             if (this.#child) this.#refChild(this.#child, false);
-            setImmediate(() => this.#pump());
+            queueMicrotask(() => this.#pump());
             return;
         }
         active.text += `${line}\n`;
@@ -205,7 +206,7 @@ export class WindowsHelper {
     }
 
     #settle(pending: Pending): void {
-        if (pending.timer) clearTimeout(pending.timer);
+        if (pending.timer) realClearTimeout(pending.timer);
         pending.timer = null;
         if (this.#active === pending) this.#active = null;
     }
@@ -223,7 +224,7 @@ export class WindowsHelper {
         this.#child = null;
         this.#failActive(why);
         try { child?.kill(); } catch { /* already gone */ }
-        setImmediate(() => this.#pump());
+        queueMicrotask(() => this.#pump());
     }
 
     #failAll(why: string): void {

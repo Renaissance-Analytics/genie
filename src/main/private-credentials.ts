@@ -1,10 +1,10 @@
-import { execFile, type ChildProcess } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { chmod, lstat, mkdir, open, readdir, rename, rm, rmdir } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { HelperLost, WindowsHelper } from './windows-helper.js';
+import { HelperLost, WindowsHelper, type HelperChild, type WindowsHelperOptions } from './windows-helper.js';
 
 const run = promisify(execFile);
 const REFUSED = 'Private Tynn credential permissions could not be secured.';
@@ -118,13 +118,26 @@ interface NativeAcl {
 }
 
 /**
- * THE HELPER (windows-helper.ts): the same script, the same read-back, with no launch. One per process, started on first need. `undefined` is that default, a test can name its own, and `null` is a
- * launch per write, which is what the launch-count test's fault injection drives.
+ * THE HELPER (windows-helper.ts): the same script, the same read-back, with no launch. One per process, started on first need, and never on Electron main, which keeps a launch per write: main never
+ * holds a process of its own for this, and a window with a host writes none of these. `undefined` is that default, a test can name its own, and `null` is a launch per write, which is what the
+ * launch-count test's fault injection drives.
  */
 let helper: WindowsHelper | null | undefined;
 export function useAclHelper(chosen: WindowsHelper | null | undefined): void { helper = chosen; }
+export function windowsHelper(options: Partial<Pick<WindowsHelperOptions, 'deadlineMs' | 'log'>> = {}): WindowsHelper {
+    return new WindowsHelper({
+        ...options,
+        spawn: (file, args, env) => {
+            const child = spawn(file, [...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+            // Idle, it must not hold its owner open. While a request runs, the helper refs it again.
+            child.unref();
+            for (const pipe of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) pipe?.unref?.();
+            return child as unknown as HelperChild;
+        },
+    });
+}
 export function sharedWindowsHelper(): WindowsHelper | null {
-    if (helper === undefined) helper = new WindowsHelper();
+    if (helper === undefined) helper = (process as { type?: string }).type === 'browser' ? null : windowsHelper();
     return helper;
 }
 /** This attempt's: whether to skip the helper, and whether the helper was lost under it. */

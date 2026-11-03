@@ -46,7 +46,9 @@ fs.open = async (...args) => {
     }
     return handle;
 };
-require('./helper.cjs').writePrivateCredential(process.argv[2], 'encrypted fixture bytes')
+const credentials = require('./helper.cjs');
+credentials.useAclHelper(null);
+credentials.writePrivateCredential(process.argv[2], 'encrypted fixture bytes')
     .then(() => process.send({ unexpectedCompletion: true }), () => { process.send({ refusedBeforeStage: true }); process.exit(2); });
 `);
         const parent = fork(join(root, 'parent.cjs'), [file], { execArgv: [], windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });

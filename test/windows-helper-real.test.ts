@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { preparePrivateCredential, restrictPrivateFile, useAclHelper, writePrivateCredential } from '../src/main/private-credentials.js';
+import { preparePrivateCredential, restrictPrivateFile, useAclHelper, windowsHelper, writePrivateCredential } from '../src/main/private-credentials.js';
 import { makePrivate, PRIVATE_FILE, writeJsonAtomic, writeTextPrivate } from '../src/main/store.js';
 import { WindowsHelper, helperSpawnArgs } from '../src/main/windows-helper.js';
 
@@ -17,7 +17,7 @@ const fixture = async () => { const root = await mkdtemp(join(tmpdir(), 'windows
 const windowsPowerShell = (script: string) => execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true }).trim();
 const sid = () => windowsPowerShell('[Security.Principal.WindowsIdentity]::GetCurrent().User.Value');
 /** Owner, protection and rules, read by something the product did not write. */
-const aclOf = (path: string) => JSON.parse(windowsPowerShell(`$a=Get-Acl -LiteralPath '${path}'; @{ owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; protected=$a.AreAccessRulesProtected; rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value }) } | ConvertTo-Json -Compress`)) as { owner: string; protected: boolean; rules: string | string[] };
+const aclOf = (path: string) => JSON.parse(windowsPowerShell(`$p='${path}'; $a=if ([IO.Directory]::Exists($p)) { [IO.Directory]::GetAccessControl($p) } else { [IO.File]::GetAccessControl($p) }; @{ owner=$a.GetOwner([Security.Principal.SecurityIdentifier]).Value; protected=$a.AreAccessRulesProtected; rules=@($a.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) | ForEach-Object { $_.IdentityReference.Value }) } | ConvertTo-Json -Compress`)) as { owner: string; protected: boolean; rules: string | string[] };
 const ownerOnly = (path: string) => { const acl = aclOf(path); expect(acl).toMatchObject({ owner: sid(), protected: true }); expect([acl.rules].flat()).toEqual([sid()]); };
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 
@@ -75,14 +75,14 @@ describe.skipIf(process.platform !== 'win32')('the helper on Windows', () => {
     }, WIDE);
 
     it('HUNG PAST THE DEADLINE: the helper is ended, nothing is left of it, and a request says it was lost', async () => {
-        const helper = new WindowsHelper({ deadlineMs: 2_000 });
+        const helper = windowsHelper({ deadlineMs: 2_000 });
         const request = helper.run('Start-Sleep -Seconds 60');
         await expect(request.completed).rejects.toMatchObject({ name: 'HelperLost' });
         await expect.poll(() => (helper.pid === null ? false : alive(helper.pid)), { timeout: 20_000 }).toBe(false);
     }, WIDE);
 
     it('GARBAGE: a request it cannot read says so, and it lives', async () => {
-        const helper = new WindowsHelper();
+        const helper = windowsHelper();
         const bad = helper.run('this is { not a script');
         await expect(bad.completed).rejects.toMatchObject({ code: 1 });
         await helper.run('$null').completed;

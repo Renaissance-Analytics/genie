@@ -47,6 +47,11 @@ function files(dir: string): string[] {
     return readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name).replaceAll('\\', '/')] : []));
 }
 
+it('the Windows helper is never started on Electron main, and spawns nothing of its own', () => {
+    expect(readFileSync('src/main/windows-helper.ts', 'utf8')).not.toMatch(/node:child_process/);
+    expect(readFileSync('src/main/private-credentials.ts', 'utf8')).toMatch(/\.type === 'browser' \? null : windowsHelper\(\)/);
+});
+
 describe('no process is created on Electron main (genie#1397)', () => {
     const spawning = [...files('src/main'), ...files('src/core')].filter((f) => IMPORT.test(readFileSync(f, 'utf8')));
 
