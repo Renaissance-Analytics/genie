@@ -159,14 +159,18 @@ async function launch(command, args) {
 const launchNew = () => launch(require('electron'), ['.']);
 const features = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => ({ user: d?.integrations?.tynn?.user?.name ?? null, keyring: d?.integrations?.keyring ?? null }))');
 
+// Windows' curl is schannel: it asks for a revocation answer the alias's local certificate cannot give, and refuses without one (batch II: CRYPT_E_NO_REVOCATION_CHECK). Only that check is off; the chain and the name are still checked (0a, 0b). And it has no /dev/null.
+const CURL_OS = process.platform === 'win32' ? ['--ssl-no-revoke'] : [];
+const NOWHERE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
 /** A sign-in code from tynn.gen, by curl, which reads the OS store this VM's alias CA is in. Never printed. */
 function signInCode() {
     const jar = join(work, 'jar');
-    const curl = (...args) => execFileSync('curl', ['-sS', '-A', 'Genie-upgrade-acceptance', '-c', jar, '-b', jar, ...args], { encoding: 'utf8', timeout: 30_000 });
-    curl('-o', '/dev/null', `${TYNN}/login`);
+    const curl = (...args) => execFileSync('curl', ['-sS', ...CURL_OS, '-A', 'Genie-upgrade-acceptance', '-c', jar, '-b', jar, ...args], { encoding: 'utf8', timeout: 30_000 });
+    curl('-o', NOWHERE, `${TYNN}/login`);
     const xsrf = readFileSync(jar, 'utf8').split('\n').map((l) => l.split('\t')).find((f) => f[5] === 'XSRF-TOKEN')?.[6];
     if (!xsrf) throw new Error('no XSRF cookie from /login');
-    const status = curl('-o', '/dev/null', '-w', '%{http_code}', '-H', `X-XSRF-TOKEN: ${decodeURIComponent(xsrf)}`, '-H', 'Accept: text/html', '--data-urlencode', `email=${ACCOUNT}`, `${TYNN}/dev/quick-login`);
+    const status = curl('-o', NOWHERE, '-w', '%{http_code}', '-H', `X-XSRF-TOKEN: ${decodeURIComponent(xsrf)}`, '-H', 'Accept: text/html', '--data-urlencode', `email=${ACCOUNT}`, `${TYNN}/dev/quick-login`);
     if (status !== '302') throw new Error(`quick login answered ${status}: not a local Tynn, or no such seeded account`);
     const code = /token=([A-Za-z0-9]{64})/.exec(curl(`${TYNN}/genie/callback?return=genie%3A%2F%2Foauth%2Fcallback`))?.[1];
     if (!code) throw new Error('no 64-character code on the callback page');
@@ -261,6 +265,16 @@ try {
     const { address: resolved } = await lookup('tynn.ai');
     if (resolved !== '127.0.0.1' && resolved !== '::1') throw new Error(`tynn.ai resolves to ${resolved}: the alias is not up, and this would reach production`);
     check(true, '0-tynn-ai-is-the-alias', resolved);
+    if (WINDOWS) {
+        // What the flag changes, and what it must not. The output of a refusal is curl's own words; nothing here carries a value.
+        const tryCurl = (...args) => { try { execFileSync('curl', ['-sS', '-o', NOWHERE, ...args], { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] }); return { ok: true, words: '' }; } catch (error) { return { ok: false, words: String(error.stderr ?? error.message).trim().split(/\r?\n/)[0].slice(0, 200) }; } };
+        const plain = tryCurl(`${TYNN}/login`);
+        console.log(`### upgrade measure-curl-with-no-flag answered=${plain.ok ? 'yes' : `no  ${plain.words}`}`);
+        const flagged = tryCurl(...CURL_OS, `${TYNN}/login`);
+        check(flagged.ok, '0a-with-only-revocation-off-the-alias-answers', flagged.words);
+        const otherName = tryCurl(...CURL_OS, '--connect-to', 'other.example:443:127.0.0.1:443', 'https://other.example/');
+        check(!otherName.ok, '0b-a-wrong-name-is-still-refused', otherName.ok ? 'it was accepted: this flag turned off more than it should' : otherName.words);
+    }
 
     say('the real beta.56');
     const image = join(work, WINDOWS ? 'beta56-setup.exe' : 'beta56.AppImage');
