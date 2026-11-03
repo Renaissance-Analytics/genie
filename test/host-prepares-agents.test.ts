@@ -14,6 +14,7 @@ import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import type { TynnSessionPort } from '../src/main/tynn-agent-token.js';
 import { fakeKeychain } from './helpers/tynn-storage.js';
+import { until } from './helpers/until.js';
 
 /**
  * THE HOST PREPARES ITS AGENTS (P3.4 cut c). With the account in the host, there is one path: the host mints, verifies and holds an agent's
@@ -79,7 +80,6 @@ const bearer = (servers: readonly McpServer[]) => {
     const tynn = servers.find((s) => s.name === 'tynn') as { headers?: readonly { name: string; value: string }[] } | undefined;
     return tynn?.headers?.find((h) => h.name === 'Authorization')?.value ?? null;
 };
-const until = async (done: () => boolean) => { for (let i = 0; i < 200 && !done(); i += 1) await new Promise((r) => setTimeout(r, 5)); };
 
 function world(keys: ReturnType<typeof hostAgentKeys>) {
     const handed = new Map<string, readonly McpServer[]>();

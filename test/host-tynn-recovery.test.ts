@@ -19,6 +19,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { Store } from '../src/main/store.js';
 import type { TynnSessionPort } from '../src/main/tynn-agent-token.js';
 import { fakeKeychain } from './helpers/tynn-storage.js';
+import { until } from './helpers/until.js';
 
 /**
  * TYNN COMES BACK, AND NOBODY HAS TO OPEN A WINDOW (P3.4 cut c; the owner's "this should not happen at all"). The host owns the account and
@@ -83,7 +84,6 @@ const bearer = (servers: readonly McpServer[]) => {
     const tynn = servers.find((s) => s.name === 'tynn') as { headers?: readonly { name: string; value: string }[] } | undefined;
     return tynn?.headers?.find((h) => h.name === 'Authorization')?.value ?? null;
 };
-const until = async (done: () => boolean) => { for (let i = 0; i < 400 && !done(); i += 1) await new Promise((r) => setTimeout(r, 5)); };
 
 describe('THE BUG: an agent started during an outage, with no window, gets its tools back once Tynn answers, and no window connects', () => {
     function world(t: ReturnType<typeof tynnFake>) {

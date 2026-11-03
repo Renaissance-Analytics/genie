@@ -273,9 +273,12 @@ describe('genie-host as its own process', () => {
         await until('the agent to take a prompt', () => first.client.promptable(agent.id) !== null, 60_000);
         expect(first.client.refusals.has(agent.id)).toBe(false);
         expect(JSON.stringify(first.client.rowsFor(agent.id))).not.toMatch(/workspace or Tynn project link is unavailable/);
+        // In the ledger BEFORE the stop. A run's processes reach it after a reading of the machine, seconds on Windows, so a ledger read now can be empty with the provider
+        // running. Read as "gone", that left the provider holding this folder as its cwd (EBUSY), and its row turned up during the next test as a dead provider.
+        const pids = await until('its provider in the spawn ledger', async () => { const p = await providerPids(); return p.length > 0 ? p : null; }, 90_000);
         await first.client.stop(agent.id);
-        // Gone from the ledger before the next test reads it: a provider on its way out would read as one that died.
         await until('its provider to leave the spawn ledger', async () => (await providerPids()).length === 0, 30_000);
+        await until('its processes to be gone', () => pids.every((p) => !pidAlive(p)), 30_000);
         first.transport.close();
         await rm(added, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
     }, 120_000);

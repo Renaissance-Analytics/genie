@@ -255,7 +255,11 @@ describe('git runs in the host: a window asks, and hears the outcome', () => {
         const service = new GithubAccountService(account);
         const into = join(dir, 'cloned');
         await service.call('gitClone', [source, into, null]);
-        expect(readFileSync(join(into, 'a.txt'), 'utf8')).toBe('hello\n');
+        // The commit's own bytes, and a clean tree. What a checkout writes is git's setting on this machine (core.autocrlf on Windows), so the file on disk cannot say whether the clone altered anything.
+        const inClone = (...args: string[]) => execFileSync('git', args, { cwd: into, encoding: 'utf8' });
+        expect(inClone('show', 'HEAD:a.txt')).toBe('hello\n');
+        expect(inClone('status', '--porcelain')).toBe('');
+        expect(readFileSync(join(into, 'a.txt'), 'utf8').replace(/\r\n/g, '\n')).toBe('hello\n');
     });
 
     it('main.ts holds no credential and runs no authenticated git, with a host', () => {
