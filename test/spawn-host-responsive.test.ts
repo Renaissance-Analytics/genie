@@ -119,6 +119,47 @@ const WITNESS = `
     }
 `;
 
+/**
+ * DIAGNOSTIC, GAUGE_SAMPLER=1 on Linux: what main's thread is doing, read from outside it, by a process that spins so it can't wake late itself. One line per 20 ms: time, main's state, its CPU, utime, stime, its syscall, and each child's "pid:state:cpu".
+ * GAUGE_PIN=1 also keeps main on CPUs 0-1 and every child, the spinners included, on the rest.
+ */
+const SAMPLER = `
+    const { appendFileSync, readFileSync } = require('node:fs');
+    const { execFileSync } = require('node:child_process');
+    const [pid, file, pin] = process.argv.slice(1);
+    const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
+    const fields = (id) => { const text = read('/proc/' + id + '/stat'); return text.slice(text.lastIndexOf(')') + 2).split(' '); };
+    const pinned = new Set();
+    const taskset = (spec, id) => { try { execFileSync('taskset', ['-a', '-p', '-c', spec, String(id)], { stdio: 'ignore' }); } catch { /* it has gone */ } };
+    if (pin === '1') { taskset('0-1', pid); taskset('0-1', process.pid); }
+    appendFileSync(file, 'ready\\n');
+    const limit = Date.now() + 120000;
+    let next = 0;
+    for (;;) {
+        const now = Date.now();
+        if (now > limit) process.exit(0);
+        if (now < next) continue;
+        next = now + 20;
+        const main = fields(pid);
+        if (main.length < 40) process.exit(0);
+        const kids = read('/proc/' + pid + '/task/' + pid + '/children').trim().split(' ').filter(Boolean).filter((id) => id !== String(process.pid));
+        if (pin === '1') for (const id of kids) if (!pinned.has(id)) { pinned.add(id); taskset('2-99', id); }
+        const about = kids.map((id) => { const k = fields(id); return id + ':' + k[0] + ':' + k[36]; }).join(',');
+        appendFileSync(file, [now, main[0], main[36], main[11], main[12], read('/proc/' + pid + '/syscall').trim().split(' ')[0], about].join(' ') + '\\n');
+    }
+`;
+/** What the samples say about one of main's gaps. Reading it: asleep in epoll with its timer overdue is a late wake-up. On a CPU, or blocked in another call, is main really held. */
+function samplerSays(file: string, start: number, end: number): string {
+    const rows = readFileSync(file, 'utf8').split('\n').map((line) => line.split(' ')).filter((row) => row.length >= 6 && Number(row[0]) >= start && Number(row[0]) <= end);
+    if (rows.length === 0) return 'no samples in it';
+    const count = (at: number) => { const seen = new Map<string, number>(); for (const row of rows) seen.set(row[at]!, (seen.get(row[at]!) ?? 0) + 1); return [...seen].map(([k, n]) => `${k}x${n}`).join(','); };
+    const first = rows[0]!;
+    const last = rows[rows.length - 1]!;
+    const kids = new Map<string, Set<string>>();
+    for (const row of rows) for (const kid of (row[6] ?? '').split(',').filter(Boolean)) { const [id, state, cpu] = kid.split(':'); if (!kids.has(id!)) kids.set(id!, new Set()); kids.get(id!)!.add(`${state}@${cpu}`); }
+    return `${rows.length} samples; state ${count(1)}; cpu ${count(2)}; syscall ${count(5)}; utime +${Number(last[3]) - Number(first[3])} stime +${Number(last[4]) - Number(first[4])} ticks; children ${[...kids].map(([id, seen]) => `${id}[${[...seen].slice(0, 6).join(' ')}]`).join(' ') || 'none'}`;
+}
+
 const witnessGaps = (file: string): Array<[number, number]> => {
     let text = '';
     try { text = readFileSync(file, 'utf8'); } catch { return []; }
@@ -133,6 +174,12 @@ const witnessGaps = (file: string): Array<[number, number]> => {
 async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
     const dir = mkdtempSync(join(tmpdir(), 'gauge-witness-'));
     const file = join(dir, 'gaps.txt');
+    const began = Date.now();
+    const samplerFile = join(dir, 'sampler.txt');
+    const sampler = process.env.GAUGE_SAMPLER === '1' && process.platform === 'linux'
+        ? spawn(process.execPath, ['-e', SAMPLER, '--', String(process.pid), samplerFile, process.env.GAUGE_PIN === '1' ? '1' : '0'], { stdio: 'ignore' })
+        : null;
+    const samplerStopped = sampler ? new Promise<void>((r) => { sampler.once('exit', () => r()); sampler.once('error', () => r()); }) : Promise.resolve();
     const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: 'ignore', windowsHide: true });
     const stopped = new Promise<void>((r) => { witness.once('exit', () => r()); witness.once('error', () => r()); });
     // Another thread of this process, stopped on request: what the old in-process witness read as the whole process stopping.
@@ -154,6 +201,11 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         if (stalledThread) while (Atomics.load(stall, 0) !== 1) await new Promise((r) => setTimeout(r, 5));
         // What the file says at the moment the gauge begins, not what the wait above assumed.
         const witnessReady = readFileSync(file, 'utf8').startsWith('ready');
+        while (sampler && !existsSync(samplerFile)) {
+            if (Date.now() > handshakeEnd) throw new Error('the sampler never started');
+            await new Promise((r) => setTimeout(r, 10));
+        }
+        const ready = Date.now();
         // A hold on main reads the witness's gaps from the file as they land: a spinning main has no event loop for a pipe.
         let readAt = 0;
         let cache: Array<[number, number]> = [];
@@ -176,6 +228,10 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
             clearInterval(timer);
         }
         const theirs = witnessGaps(file);
+        if (sampler) {
+            const long = mine.filter(([, gap]) => gap >= 500);
+            console.log(`GAUGE-MAIN: handshake ${ready - began} ms, the run ${Date.now() - ready} ms; main's gaps of 500 ms or more: ${long.map(([end, gap]) => `${gap} ms: ${samplerSays(samplerFile, end - gap, end)}`).join(' | ') || 'none'}`);
+        }
         let worst = 0;
         lastReading = { gap: 0, stalled: 0, witnessReady };
         for (const [end, gap] of mine) {
@@ -190,7 +246,9 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         Atomics.notify(stall, 0);
         await stalledThread?.terminate();
         witness.kill();
+        sampler?.kill();
         await stopped;
+        await samplerStopped;
         rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     }
 }
