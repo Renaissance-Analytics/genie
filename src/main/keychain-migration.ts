@@ -124,6 +124,16 @@ export function migrateSecrets(sources: readonly MigrationSource[], vault: HostV
     return work;
 }
 
+export interface SourceGroup {
+    readonly file: string;
+    readonly covers: string;
+    readonly sources: () => Promise<readonly MigrationSource[]>;
+}
+// RED: as it behaves today, one rejection takes all of them.
+export async function gatherSources(groups: readonly SourceGroup[]): Promise<MigrationSource[]> {
+    return (await Promise.all(groups.map((group) => group.sources()))).flat();
+}
+
 // RED: the shape only.
 export function stuckLines(_outcomes: readonly MigrationOutcome[], _said: Set<string>): string[] { return []; }
 
