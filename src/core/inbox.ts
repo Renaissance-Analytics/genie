@@ -1,4 +1,5 @@
 import type { AgentId, AgentRecord } from './identity.js';
+import type { LiveSession } from './roster.js';
 import { isOsAgent } from './os-agent.js';
 
 /**
@@ -22,6 +23,16 @@ export type Participant = AgentId | typeof HUMAN | `app:${string}`;
  * their mail without a lookup.
  */
 export const HUMAN = 'human' as const;
+
+/** Read-only availability, late-bound so a provider pause or recovery applies to the next message. */
+export type InboxSessionProbe = (agentId: AgentId) => Pick<LiveSession, 'limit' | 'accountPaused'> | null;
+
+/** A reported provider pause, never inferred from being idle, busy, stopped or signed out. */
+export function pausedAgentReply(session: ReturnType<InboxSessionProbe>): string | null {
+    if (!session?.accountPaused && (!session?.limit || session.limit.state === 'open')) return null;
+    return 'Automatic reply from Genie: this agent is paused and cannot respond right now. '
+        + 'Your message has been saved for them. If you are blocked, ask your user for guidance.';
+}
 
 export interface Address {
     /** The workspace as written: its slug, its id, `system` for the OS agent — or `null` when only a name was given. */

@@ -22,8 +22,7 @@ const ratePause: GateView = { state: 'paused', window: 'session', resetsAtMs: 10
 beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'genie-paused-inbox-'));
     sessions = new Map([[recipient.id, { limit: ratePause }]]);
-    // The existing store ignores this probe: the regression must fail on missing mail, not a missing method.
-    // @ts-expect-error -- Test-first: the following implementation adds the session probe argument.
+    // Read the current snapshot on every arrival, including after the agent resumes.
     inbox = await InboxStore.open(dir, now, (id: AgentId) => sessions.get(id) ?? null);
 });
 afterEach(async () => { await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); });
@@ -66,7 +65,6 @@ describe('mail to a paused agent', () => {
 
     it('keeps both messages durable without generating another reply on reopening', async () => {
         await inbox.send({ from: sender.id, to: recipient.id, text: 'Waiting on a decision.' });
-        // @ts-expect-error -- Test-first: the following implementation adds the session probe argument.
         const reopened = await InboxStore.open(dir, now, (id: AgentId) => sessions.get(id) ?? null);
         expect(reopened.all()).toHaveLength(2);
         expect((await reopened.receive({ participant: sender.id, acknowledge: false })).messages).toHaveLength(1);
@@ -100,7 +98,6 @@ describe('mail to a paused agent', () => {
         expect(new Set(inbox.all().map((m) => m.seq)).size).toBe(4);
         const originals = inbox.all().filter((m) => m.to === recipient.id);
         const replies = inbox.all().filter((m) => m.to === sender.id);
-        // @ts-expect-error -- Test-first: the following implementation adds the generated-reply marker.
         expect(replies.map((m) => m.automaticReply!.inReplyTo).sort()).toEqual(originals.map((m) => m.id).sort());
         sessions.delete(recipient.id);
         await inbox.send({ from: sender.id, to: recipient.id, text: 'Resumed.' });
@@ -129,7 +126,6 @@ describe('mail to a paused agent', () => {
     });
 
     it('still delivers ordinary mail if the availability probe fails', async () => {
-        // @ts-expect-error -- Test-first: the following implementation adds the session probe argument.
         const unknown = await InboxStore.open(join(dir, 'unknown'), now, () => { throw new Error('probe unavailable'); });
         await unknown.send({ from: sender.id, to: recipient.id, text: 'Keep this message.' });
         expect(unknown.all()).toHaveLength(1);

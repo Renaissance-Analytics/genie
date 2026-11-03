@@ -94,7 +94,6 @@ beforeEach(async () => {
     time = fakeTime();
     woken = [];
     appTurns = new Map();
-    // @ts-expect-error -- Test-first: the following implementation wires the inbox session probe.
     services = await composeServices({ userData: dir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, roster: () => roster, docker: async () => ({ stdout: '', exitCode: 1 }), portFree: async () => true, inboxSession: (id: AgentId) => host?.probe(id) ?? null });
     host = new SessionHost({ userData: dir, driverFor, processTree: noProcessTree });
     const appBudget: NonNullable<InboxPushPorts['appBudget']> = {

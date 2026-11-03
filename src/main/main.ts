@@ -2381,6 +2381,7 @@ async function boot(): Promise<void> {
     const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
     const composed = await composeServices({
         userData: genieHome(),
+        inboxSession: (id) => host?.probe(id) ?? null,
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
         // main's own engine takes them only if the spawn host cannot start.

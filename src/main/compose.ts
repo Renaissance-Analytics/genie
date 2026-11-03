@@ -23,7 +23,7 @@ import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-tools.js';
-import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
+import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
@@ -92,6 +92,8 @@ import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
 
 export interface ComposeInput {
     readonly userData: string;
+    /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
+    readonly inboxSession?: InboxSessionProbe;
     readonly pty: PtyPort;
     /**
      * The supervisor's pty engine (sites, queue workers, the front door), when it is not `pty`: in Electron, the spawn
@@ -689,7 +691,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const settings = await SettingsStore.open(input.userData, iso);
     await settings.carryOverFromV1(input.v1Settings());
 
-    const inbox = await InboxStore.open(input.userData, iso);
+    const inbox = await InboxStore.open(input.userData, iso, input.inboxSession);
     const attention = await AttentionStore.open(input.userData, inbox, iso);
     const knowledge = KnowledgeStore.open(input.userData, iso);
     // Genie 1's memories, once (knowledge-store.ts records it). Not gated on ~/.genie/v1-import.json: installs that
