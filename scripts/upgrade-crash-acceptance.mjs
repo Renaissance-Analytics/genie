@@ -144,12 +144,14 @@ try {
     const access = `ghu_${randomBytes(18).toString('hex')}`;
     const refresh = `ghr_${randomBytes(18).toString('hex')}`;
     mkdirSync(home, { recursive: true });
+    say('sealing two test words');
     const [tokenEnc, refreshEnc] = seal([access, refresh]);
     check(Boolean(tokenEnc && refreshEnc), '2-sealed-two-test-words');
 
     for (const { step, keychain, sealed, book } of CASES) {
         say(`S4 ${step}: a fresh profile, the test build, the window killed where it stops`);
         await stopApp();
+        say('clearing the keychain');
         await forget(ACCESS);
         await forget(REFRESH);
         rmSync(bookFile, { force: true });
