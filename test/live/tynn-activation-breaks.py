@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 
 if os.environ.get('GENIE_TEST_VM') != '1':
-    raise SystemExit('Run in a test VM through the shared FIFO.')
+    raise SystemExit('Run in a test VM, as one of the coordinator\'s jobs.')
 
 controls = [
     ('main connection', 'src/main/main.ts',
@@ -14,8 +14,8 @@ controls = [
     ('legacy cleanup', 'src/main/compose.ts',
      'await reconcileLegacyTynnConfig({ workspacePath, fs: nodeTynnConfigFs(workspacePath) });', 'void workspacePath;',
      'test/tynn-activation.test.ts', 'config sync removes the legacy shared credential', '.mcp.json must not contain'),
-    ('agent identity isolation', 'src/main/compose.ts',
-     'workspacePath: workspace.path, agent, signal, tynn,', "workspacePath: workspace.path, agent: { ...agent, id: 'agent_shared' }, signal, tynn,",
+    ('agent identity isolation', 'src/main/agent-tynn-prep.ts',
+     'workspacePath: here.path, agent, signal, tynn,', "workspacePath: here.path, agent: { ...agent, id: 'agent_shared' }, signal, tynn,",
      'test/tynn-activation.test.ts', 'uses distinct keys', 'expected true to be false'),
     ('inherited denial', 'src/main/session-host.ts',
      "const inheritedPolicy = extras?.mcpServers?.some((server) => server.name === 'tynn') ? {} : { disabledMcpServers: ['tynn'] };", 'const inheritedPolicy = {};',

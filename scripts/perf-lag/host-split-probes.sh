@@ -516,7 +516,7 @@ probe "only-ws-is-dialled" src/main/device-link-service.ts \
     test/device-link.test.ts "only ws:// and wss:// are dialled"
 
 probe "no-method-returns-a-device-token" src/main/device-link-service.ts \
-    "            default: throw new Error(`The device link has no ${method}.`);" "            default: return this.#options.tokens.tokenFor(String(args[0] ?? ''));" \
+    "            default: throw new Error(\`The device link has no \${method}.\`);" "            default: return this.#options.tokens.tokenFor(String(args[0] ?? ''));" \
     test/device-link.test.ts "no method returns a token"
 
 probe "a-dropped-window-lets-its-sockets-go" src/main/session-engine-server.ts \
@@ -528,7 +528,7 @@ probe "a-device-token-must-read-back" src/main/device-tokens.ts \
     test/device-link.test.ts "a read-back that differs by a byte"
 
 probe "localStorage-only-after-the-read-back" src/renderer/remote-session.ts \
-    "        if (moved) tokens.forget(url);" "        tokens.forget(url);" \
+    "        if (moved) tokens.forget(url);" "        if (moved || !moved) tokens.forget(url);" \
     test/device-link-window.test.ts "a token the host did not read back stays"
 
 probe "a-drone-stops-before-the-host" src/main/device-link-gate.ts \
