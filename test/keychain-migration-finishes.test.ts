@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -208,5 +208,154 @@ describe('gathering the sources', () => {
     it('wired: the window\'s sources and the agents\' go through it', () => {
         expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/gatherSources\(\[/);
         expect(readFileSync('src/main/main.ts', 'utf8')).toMatch(/legacySecrets: \(\) => gatherSources\(\[/);
+    });
+});
+
+/**
+ * A BOOK THAT DOES NOT PARSE cannot leave anyone signed out. It used to stop every move on every launch. It is kept beside itself and the book is rebuilt from what is there, under one rule: a value already in the
+ * keychain is never overwritten by a seal, since it may be a renewed key. A book merely unreadable for a moment stays the safe stop, and so does one from a newer Genie: those may yet say what they say.
+ */
+describe('a book that does not parse', () => {
+    const NAMED = 'github/access' as const;
+    let dir: string;
+    let bookFile: string;
+    let seal: string | null;
+    let removed: number;
+    let stores: number;
+    let keychain: Map<string, string>;
+    let lines: string[];
+    const vault = (): HostVault => ({
+        store: async (name, value) => { stores += 1; keychain.set(name, value); return { ok: true }; },
+        compare: async (name, value) => { const held = keychain.get(name); return held === undefined ? 'missing' : held === value ? 'same' : 'different'; },
+    });
+    const sources = () => [{ name: NAMED, old: { read: async () => (seal === null ? { kind: 'none' as const } : { kind: 'value' as const, value: seal }), remove: async () => { seal = null; removed += 1; } } }];
+    const launch = () => migrateSecrets(sources(), vault(), fileMigrationBook(bookFile, { log: (line) => lines.push(line) }));
+    const row = () => JSON.parse(readFileSync(bookFile, 'utf8')).secrets[NAMED];
+    const asides = () => readdirSync(dir).filter((name) => name.startsWith('keychain-migration.json.corrupt-'));
+    beforeEach(() => {
+        dir = mkdtempSync(join(tmpdir(), 'book-corrupt-'));
+        bookFile = join(dir, 'keychain-migration.json');
+        writeFileSync(bookFile, '{ not json');
+        seal = 'the-seal';
+        removed = 0;
+        stores = 0;
+        keychain = new Map();
+        lines = [];
+    });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('a seal, and nothing in the keychain: it moves, read back before the delete', async () => {
+        expect(await launch()).toEqual([{ name: NAMED, status: 'moved' }]);
+        expect(keychain.get(NAMED)).toBe('the-seal');
+        expect(seal).toBeNull();
+        expect(row()).toBe('done');
+    });
+
+    it('a seal, and the same value in the keychain: finished, with nothing written to the keychain', async () => {
+        keychain.set(NAMED, 'the-seal');
+        expect(await launch()).toEqual([{ name: NAMED, status: 'moved' }]);
+        expect(stores).toBe(0);
+        expect(seal).toBeNull();
+        expect(row()).toBe('done');
+    });
+
+    it('a seal, and a different value in the keychain: the keychain wins, the seal stays, and it says so', async () => {
+        keychain.set(NAMED, 'renewed');
+        expect(await launch()).toEqual([{ name: NAMED, status: 'keychain-differs' }]);
+        expect(keychain.get(NAMED)).toBe('renewed');
+        expect(stores).toBe(0);
+        expect(seal).toBe('the-seal');
+        expect(removed).toBe(0);
+        expect(row()).toBeUndefined();
+        expect(stuckLines([{ name: NAMED, status: 'keychain-differs' }] as never, new Set())).toEqual(['[keychain] github/access stays where it was: keychain-differs']);
+    });
+
+    it('no seal, and a value in the keychain: done, and the value stays', async () => {
+        seal = null;
+        keychain.set(NAMED, 'the-value');
+        await launch();
+        expect(row()).toBe('done');
+        expect(keychain.get(NAMED)).toBe('the-value');
+        expect(stores).toBe(0);
+    });
+
+    it('no seal, and no value: nothing to do', async () => {
+        seal = null;
+        expect(await launch()).toEqual([{ name: NAMED, status: 'nothing' }]);
+        expect(keychain.has(NAMED)).toBe(false);
+        expect(stores).toBe(0);
+    });
+
+    it('the bad file is kept, byte for byte, and said once, by name', async () => {
+        await launch();
+        expect(asides()).toHaveLength(1);
+        expect(readFileSync(join(dir, asides()[0]!), 'utf8')).toBe('{ not json');
+        expect(lines).toEqual([expect.stringContaining('keychain-migration.json')]);
+        expect(lines[0]).toContain(asides()[0]);
+        await launch();
+        expect(asides()).toHaveLength(1);
+        expect(lines).toHaveLength(1);
+    });
+
+    it('the rule outlives the launch that set it aside: killed partway, the next launch still will not overwrite', async () => {
+        keychain.set(NAMED, 'renewed');
+        await launch();
+        await launch();
+        expect(keychain.get(NAMED)).toBe('renewed');
+        expect(seal).toBe('the-seal');
+    });
+
+    it.each([['the wrong shape', JSON.stringify({ version: 1, secrets: 'no' })], ['a state it should not hold', JSON.stringify({ version: 1, secrets: { [NAMED]: 'perhaps' } })], ['nothing at all', ''], ['null', 'null']])('%s is the same', async (_, text) => {
+        writeFileSync(bookFile, text);
+        keychain.set(NAMED, 'renewed');
+        expect(await launch()).toEqual([{ name: NAMED, status: 'keychain-differs' }]);
+    });
+});
+
+describe('a book that may yet say what it says: the safe stop, for this launch', () => {
+    const NAMED = 'github/access' as const;
+    let dir: string;
+    let bookFile: string;
+    const untouched = { store: async () => { throw new Error('asked to store'); }, compare: async () => { throw new Error('asked to compare'); } } as HostVault;
+    const seal = [{ name: NAMED, old: { read: async () => ({ kind: 'value' as const, value: 'seal' }), remove: async () => { throw new Error('asked to remove'); } } }];
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'book-stop-')); bookFile = join(dir, 'keychain-migration.json'); });
+    afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+    it('it cannot be read at all (here a folder, standing for a lock or a permission error): nothing touched, nothing set aside, and the next launch can go on', async () => {
+        mkdirSync(bookFile);
+        expect(await migrateSecrets(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'book-failed' }]);
+        expect(readdirSync(dir)).toEqual(['keychain-migration.json']);
+        rmSync(bookFile, { recursive: true });
+        writeFileSync(bookFile, JSON.stringify({ version: 1, secrets: { [NAMED]: 'done' } }));
+        expect(await migrateSecrets(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'already' }]);
+    });
+
+    it('it is from a newer Genie: not ours to set aside', async () => {
+        const text = JSON.stringify({ version: 2, secrets: { [NAMED]: 'something-new' } });
+        writeFileSync(bookFile, text);
+        expect(await migrateSecrets(seal, untouched, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'book-failed' }]);
+        expect(readFileSync(bookFile, 'utf8')).toBe(text);
+        expect(readdirSync(dir)).toEqual(['keychain-migration.json']);
+    });
+
+    it('CONTROL: with no book at all, the old copy is the truth, as it always was: a stale entry is replaced', async () => {
+        const held = new Map([[NAMED as string, 'stale']]);
+        const vault: HostVault = { store: async (name, value) => { held.set(name, value); return { ok: true }; }, compare: async (name, value) => (held.get(name) === value ? 'same' : 'different') };
+        const sources = [{ name: NAMED, old: { read: async () => ({ kind: 'value' as const, value: 'seal' }), remove: async () => {} } }];
+        expect(await migrateSecrets(sources, vault, fileMigrationBook(bookFile))).toEqual([{ name: NAMED, status: 'moved' }]);
+        expect(held.get(NAMED)).toBe('seal');
+        expect(existsSync(bookFile)).toBe(true);
+    });
+});
+
+describe('the book decides nothing about a sign-in', () => {
+    it('only the move reads it', () => {
+        const names = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? names(join(dir, e.name)) : /\.tsx?$/.test(e.name) ? [join(dir, e.name)] : []));
+        const readers = names('src').filter((file) => /keychain-migration\.json|fileMigrationBook/.test(readFileSync(file, 'utf8'))).map((file) => file.split(/[\\/]/).pop());
+        expect(readers.sort()).toEqual(['compose.ts', 'keychain-migration.ts']);
+    });
+
+    it('wired: what is set aside is said where someone can read it', () => {
+        expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/fileMigrationBook\(join\(input\.userData, 'keychain-migration\.json'\), \{ log:/);
     });
 });

@@ -153,7 +153,8 @@ export function hostVault(keychain: Pick<Keychain, 'get' | 'set'>): HostVault {
 const STATES: ReadonlySet<unknown> = new Set<MigrationState>(['verified', 'done']);
 
 /** Names and states, never a value. Each write is atomic and durable (store.ts) before the step that depends on it runs. */
-export function fileMigrationBook(file: string): MigrationBook {
+// RED: `_options` is the shape only.
+export function fileMigrationBook(file: string, _options: { log?: (line: string) => void } = {}): MigrationBook {
     const load = async (): Promise<Record<string, MigrationState>> => {
         let text: string;
         try {
