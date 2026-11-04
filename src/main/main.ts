@@ -2408,6 +2408,7 @@ async function boot(): Promise<void> {
     const composed = await composeServices({
         onTrustVerdict: (workspaceId) => { trustVerdicts?.changed(workspaceId); requestFeaturePush(); },
         userData: genieHome(),
+        inboxSession: (id) => host?.probe(id) ?? null,
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
         // main's own engine takes them only if the spawn host cannot start.

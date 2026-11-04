@@ -2,6 +2,7 @@ import type { AgentId, AgentRecord } from '../core/identity.js';
 import type { LiveSession } from '../core/roster.js';
 import type { PromptContext } from '../core/session.js';
 import type { NoticeMail } from '../core/stream-event.js';
+import { inboxAgentPaused } from '../core/inbox.js';
 import { AppTurnBudget, appDelivery, isAppSender, type AppDelivery } from '../core/app-inbox.js';
 
 /**
@@ -156,6 +157,8 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     // Only the agent the event is about is considered: another agent's batch is told on ITS events, not on this one's.
     // `arrival`: new mail, not a session event — a notice the provider already has may be overtaken (below).
     const push = (only: string, arrival = false): void => {
+        // Held mail remains due. The host's resume/start event retries it; no notice bypasses a provider pause.
+        if (inboxAgentPaused(host.probe(only as AgentId))) return;
         const prior = out.get(only);
         if (settle(only as AgentId)) {
             // NEW MAIL ON TOP OF A NOTICE THE PROVIDER HAS (Claude folded it, or its turn is running): told now, as typed
@@ -214,6 +217,7 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
     // Only an ARRIVAL wakes an agent with no session: on the host's own events (its stop among them) it is not restarted.
     const offSend = inbox.onSend((to, message) => {
         if (to === 'human') return;
+        if (inboxAgentPaused(host.probe(to as AgentId))) return;
         const app = message ? ports.appMail?.(to as AgentId, message) ?? null : null;
         // Only WHETHER a stopped agent is started differs for an app's message; one with a session is told as for any.
         if (host.runOf(to as AgentId) === null && ports.wake && app !== 'push-no-wake') {
