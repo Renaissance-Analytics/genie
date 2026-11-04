@@ -399,6 +399,8 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
 
 interface Running {
     session: AgentSession;
+    /** What this run's launch read of the workspace's verdict; unset until it has. */
+    launchedUntrusted?: boolean;
     /** The provider it runs on: whose rate-limit login holds it (Tynn #793). */
     provider: string;
     /** The ledger, with arrival times. Timestamps are recorded HERE because this is where the
@@ -443,6 +445,7 @@ export class SessionHost {
     readonly #driverFor: DriverFor;
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
+    readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
@@ -526,7 +529,7 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
-        /** Skeleton. */
+        /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
         untrustedNow?: (record: AgentRecord) => boolean;
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
@@ -584,6 +587,7 @@ export class SessionHost {
         this.#driverFor = options.driverFor ?? realDriverFor;
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
+        this.#untrustedNow = options.untrustedNow;
         this.#prepareMcpServers = options.prepareMcpServers;
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
@@ -802,17 +806,19 @@ export class SessionHost {
         const mcpServers = this.#mcpServersFor?.(record) ?? [];
         const serviceEnv = this.#serviceEnvFor?.(record.workspaceId) ?? {};
         // Read before each launch, not kept: a workspace trusted or changed since the last one counts now. A failure here starts nothing.
-        let untrustedNow = false;
         const driverFactory = this.#prepareMcpServers || this.#untrustedFilesFor ? deferredDriverFactory(async (signal) => {
             const untrusted = (await this.#untrustedFilesFor?.(record)) ?? null;
-            untrustedNow = untrusted !== null;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const prepared = this.#prepareMcpServers ? await this.#prepareMcpServers(record, cwd, signal) : mcpServers;
             if (signal.aborted) throw new Error('Preparation was cancelled.');
             const factory = this.#driverFor(record, cwd, record.threadId, { mcpServers: prepared, serviceEnv, ...(untrusted ? { untrusted } : {}) });
             if (!factory) throw new Error('The provider is unsupported.');
             const current = this.#running.get(record.id);
-            if (current) current.mcp = prepared.map((server) => server.name);
+            if (current) {
+                current.mcp = prepared.map((server) => server.name);
+                current.launchedUntrusted = untrusted !== null;
+                this.#emit(record.id);
+            }
             return factory;
         }) : this.#driverFor(record, cwd, record.threadId, { mcpServers, serviceEnv });
         if (!driverFactory) {
@@ -903,7 +909,7 @@ export class SessionHost {
             ...(this.#onHeadroom ? { onHeadroom: (room: Headroom) => this.#onHeadroom!(record.provider, room) } : {}),
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
-            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: untrustedNow }) } : {}),
+            ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true }) } : {}),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1247,14 +1253,24 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.hasQueuedPrompt(id) ?? false;
     }
 
-    /** Skeleton. */
-    launchedUntrusted(_agentId: AgentId): boolean | null {
-        return null;
+    /** What this run was launched under; `null` = no session, or its launch has not read the verdict yet. */
+    launchedUntrusted(agentId: AgentId): boolean | null {
+        return this.#running.get(agentId)?.launchedUntrusted ?? null;
     }
 
     /** Skeleton. */
-    quiet(_agentId: AgentId): boolean {
+    holdForNextWork(_agentId: AgentId, _text: string): boolean {
+        return true;
+    }
+
+    /** Skeleton. */
+    withdrawHeld(_agentId: AgentId): boolean {
         return false;
+    }
+
+    /** A restart now would cut nothing (`AgentSession.quiet`); `false` when the agent has no session. */
+    quiet(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.quiet ?? false;
     }
 
     /** The agent's current RUN while it has a session, promptable or not; `null` when it has none. */

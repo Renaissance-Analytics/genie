@@ -23,7 +23,7 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
     record(): { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> };
     recordWorkspace(workspaceId: string, hash: string): Promise<void>;
     approveSites(workspaceId: string): Promise<void>;
-    /** Skeleton. */
+    /** The verdict differs from the last one read, or this is the first. */
     verdictMoved?(workspaceId: string): void;
 }
 
@@ -175,7 +175,7 @@ export class WorkspaceTrust {
         const record = this.#ports.record();
         if (record.carried.includes(workspaceId) && record.workspaces[workspaceId] === undefined && hash !== trustHash(NOTHING)) await this.#ports.recordWorkspace(workspaceId, hash);
         const view = { ...trustVerdict(this.#ports.record(), workspaceId, hash), list };
-        this.#views.set(workspaceId, { path: workspace.path, view });
+        this.#keep(workspaceId, workspace.path, view);
         return view;
     }
 
@@ -187,8 +187,14 @@ export class WorkspaceTrust {
         await this.#ports.recordWorkspace(workspaceId, trustHash(list));
         await this.#ports.approveSites(workspaceId);
         const view: TrustView = { trusted: true, changed: false, list };
-        this.#views.set(workspaceId, { path: workspace.path, view });
+        this.#keep(workspaceId, workspace.path, view);
         return view;
+    }
+
+    #keep(workspaceId: string, path: string, view: TrustView): void {
+        const before = this.#views.get(workspaceId)?.view.trusted;
+        this.#views.set(workspaceId, { path, view });
+        if (before !== view.trusted) this.#ports.verdictMoved?.(workspaceId);
     }
 
     /** As last read. A workspace not read yet is not trusted; nor is a folder in none. */

@@ -211,6 +211,8 @@ export interface ComposeInput {
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
     readonly mcpTools?: () => readonly { name: string; description: string }[];
+    /** A workspace's trust verdict moved. */
+    readonly onTrustVerdict?: (workspaceId: string) => void;
     /**
      * The live agent roster — the same one the agents' own inbox tool resolves against. Late-bound: the registry
      * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
@@ -287,6 +289,8 @@ export interface ComposedServices {
     readonly workspaceTrust: WorkspaceTrust;
     /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
     untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
+    /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
+    untrustedNow(record: { readonly workspaceId: string }): boolean;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
     readonly engines: ServiceRegistry;
     /**
@@ -956,6 +960,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         record: () => envelopeSites.trustRecord(),
         recordWorkspace: (id, hash) => envelopeSites.recordWorkspace(id, hash),
         approveSites: (id) => envelopeSites.approveSites(id),
+        verdictMoved: (id) => input.onTrustVerdict?.(id),
     });
     setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.isTrustedPath(path)));
     // One pass at a time, and a quit waits for the one in flight: it reads through git in the workspace's folder and writes the record.
@@ -1186,6 +1191,11 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             const view = await workspaceTrust.refresh(workspace.id);
             if (view === null || view.trusted) return null;
             return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
+        },
+        untrustedNow(record) {
+            const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
+            if (!workspace) return false;
+            return workspaceTrust.view(workspace.id)?.trusted !== true;
         },
         engines,
         engineReconcile,

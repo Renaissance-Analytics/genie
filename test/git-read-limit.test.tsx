@@ -1,10 +1,10 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GIT_READ_LIMIT, GitDidNotAnswer, gitFileStatus, gitLogSince, gitShowHead, gitTreeStatus } from '../src/main/git-ports.js';
 import { repoDiff, repoStatus } from '../src/main/repo-git.js';
 import { GitReadProblem } from '../src/renderer/components/GitReadProblem.js';
@@ -53,10 +53,44 @@ describe('the limit', () => {
     });
 });
 
+describe('past it, what the read started is ended', () => {
+    const alive = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; } };
+    let mark: string;
+    let child = 0;
+
+    beforeEach(() => {
+        mark = join(root, 'child.pid');
+        child = 0;
+        // Its own real pid on every system, its folder the repository's. It ends itself in time, so a red run leaves nothing behind.
+        const script = join(root, 'child.cjs');
+        writeFileSync(script, 'require("fs").writeFileSync(process.argv[2], String(process.pid)); setInterval(() => {}, 1000); setTimeout(() => process.exit(0), 90000);\n');
+        const hook = join(root, 'starts-a-child.sh');
+        const slashes = (p: string) => p.replace(/\\/g, '/');
+        writeFileSync(hook, `#!/bin/sh\n"${slashes(process.execPath)}" "${slashes(script)}" "${slashes(mark)}"\n`);
+        chmodSync(hook, 0o755);
+        git('config', 'core.fsmonitor', slashes(hook));
+        GIT_READ_LIMIT.ms = 6000;
+    });
+    afterEach(() => { if (child !== 0 && alive(child)) process.kill(child); });
+
+    it.each([
+        ['gitTreeStatus', () => gitTreeStatus(repo).then(() => 'answered', (error: Error) => error.message)],
+        ['repoStatus', () => repoStatus(repo, '.').then((r) => (r.ok ? 'answered' : r.error))],
+    ])('%s: the hook\'s child is running at the limit, is gone after it, and the folder can be removed', async (_name, read) => {
+        const reading = read();
+        await vi.waitFor(() => { expect(existsSync(mark) && readFileSync(mark, 'utf8') !== '').toBe(true); }, { timeout: 5500, interval: 50 });
+        child = Number(readFileSync(mark, 'utf8'));
+        expect(alive(child)).toBe(true);
+        expect(await reading).toMatch(/did not answer/);
+        await vi.waitFor(() => { expect(alive(child)).toBe(false); }, { timeout: 40_000, interval: 200 });
+        await vi.waitFor(() => { rmSync(repo, { recursive: true, force: true }); expect(existsSync(repo)).toBe(false); }, { timeout: 5000, interval: 200 });
+    }, 70_000);
+});
+
 describe('past it', () => {
     beforeEach(() => {
         const hook = join(root, 'never.sh');
-        writeFileSync(hook, '#!/bin/sh\nsleep 4\n');
+        writeFileSync(hook, '#!/bin/sh\nsleep 30\n');
         chmodSync(hook, 0o755);
         git('config', 'core.fsmonitor', hook.replace(/\\/g, '/'));
         GIT_READ_LIMIT.ms = 500;

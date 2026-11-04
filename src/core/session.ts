@@ -558,9 +558,13 @@ export class AgentSession {
         this.#changed();
     }
 
-    /** Skeleton. */
+    /**
+     * QUIET: a restart now would cut nothing. Promptable, no prompt waiting, not on a limit, and past the Cooling wait, because
+     * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
+     * For a restart Genie chooses by itself; the person's own Restart does not ask.
+     */
     get quiet(): boolean {
-        return true;
+        return this.promptable && !this.#held && this.#afterTurn.length === 0 && this.#coolingCancel === null;
     }
 
     get turnState(): TurnState {

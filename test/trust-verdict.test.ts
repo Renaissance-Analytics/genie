@@ -70,7 +70,7 @@ function rig(startUntrusted: boolean, options: { launchGate?: Promise<void>; res
         untrustedNow: () => untrusted,
     });
     const notices: string[] = [];
-    const told: Array<[string, string | null]> = [];
+    const held: string[] = [];
     const restarts: string[] = [];
     const verdicts = new TrustVerdicts({
         agentsOf: () => [record.id],
@@ -78,7 +78,8 @@ function rig(startUntrusted: boolean, options: { launchGate?: Promise<void>; res
         launchedUntrusted: (id) => host.launchedUntrusted(id),
         quiet: (id) => host.quiet(id),
         runOf: (id) => host.runOf(id),
-        tell: (id, text) => { const taken = host.handOff(id, text, 'genie') !== null; if (taken) told.push([text, 'genie']); return taken; },
+        hold: (id, text) => { const taken = host.holdForNextWork(id, text); if (taken) held.push(text); return taken; },
+        withdraw: (id) => host.withdrawHeld(id),
         notice: (id, text) => { notices.push(text); host.notice(id, text); },
         restart: async (id) => {
             restarts.push(id);
@@ -91,7 +92,7 @@ function rig(startUntrusted: boolean, options: { launchGate?: Promise<void>; res
     const off = host.subscribe((id) => verdicts.check(id));
     stopAll = async () => { off(); host.stopAll(); await host.settled(); };
     return {
-        host, record, launches, fakes, notices, told, restarts, verdicts,
+        host, record, launches, fakes, notices, held, restarts, verdicts,
         set: (value: boolean) => { untrusted = value; verdicts.changed('acme'); },
         last: () => fakes[fakes.length - 1]!,
         endTurn: () => fakes[fakes.length - 1]!.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null }),
@@ -103,8 +104,10 @@ describe('the answer to a shell call', () => {
         const t = rig(false);
         expect(t.host.start(t.record, dir)).toEqual({ ok: true });
         await flush();
+        t.host.prompt(t.record.id, 'go', 'you');
         expect(await t.last().events.onRequestPermission!(shellAsk)).toEqual({ outcome: 'selected', optionId: 'allow_once' });
 
+        // In a turn, so the restart below waits and this one session answers both.
         t.set(true);
         let answered = false;
         void t.last().events.onRequestPermission!(shellAsk).then(() => { answered = true; });
@@ -214,25 +217,88 @@ describe('gone untrusted: a restart, when the turn has ended', () => {
     });
 });
 
-describe('gone trusted: one message into the session', () => {
-    it('one, from Genie, however often the verdict moves in this run; no restart', async () => {
+describe('gone trusted: one message, ahead of the next real work', () => {
+    const alongside = (work: string) => `${NOW_TRUSTED}\n\n${work}`;
+
+    it('idle: nothing is sent, so no turn and no tokens. The next work carries it, once; the chat shows it was said', async () => {
         const t = rig(true);
         t.host.start(t.record, dir);
         await flush();
-        expect(t.told).toEqual([]);
         t.set(false);
         await flush();
-        expect(t.told).toEqual([[NOW_TRUSTED, 'genie']]);
-        expect(t.last().prompts).toContain(NOW_TRUSTED);
+        expect(t.held).toEqual([NOW_TRUSTED]);
+        expect(t.last().prompts).toEqual([]);
+        expect(t.host.inTurn(t.record.id)).toBe(false);
+
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual([alongside('work')]);
+        t.endTurn();
+        await flush();
+        t.host.prompt(t.record.id, 'more', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual([alongside('work'), 'more']);
+        expect(t.restarts).toEqual([]);
+    });
+
+    it('mid-turn: not folded into that turn, even with a message sent during it. The first work after it carries it', async () => {
+        const t = rig(true);
+        t.host.start(t.record, dir);
+        await flush();
+        t.host.prompt(t.record.id, 'go', 'you');
+        t.set(false);
+        await flush();
+        t.host.prompt(t.record.id, 'also', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual(['go', 'also']);
+        t.endTurn();
+        await flush();
+        expect(t.last().prompts).toEqual(['go', 'also']);
+        t.host.prompt(t.record.id, 'next', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual(['go', 'also', alongside('next')]);
+    });
+
+    it('untrusted again before any work came: it is withdrawn, and a later trust holds it again, one', async () => {
+        const t = rig(true);
+        t.host.start(t.record, dir);
+        await flush();
+        t.set(false);
+        await flush();
+        t.set(true);
+        await flush();
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual(['work']);
+        t.endTurn();
+        await flush();
+        t.set(false);
+        await flush();
+        t.host.prompt(t.record.id, 'more', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual(['work', alongside('more')]);
+    });
+
+    it('once said, not again in this run, however the verdict moves', async () => {
+        const t = rig(true);
+        t.host.start(t.record, dir);
+        await flush();
+        t.set(false);
+        await flush();
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
+        t.endTurn();
+        await flush();
         t.set(true);
         await flush();
         t.set(false);
         await flush();
-        expect(t.told).toHaveLength(1);
-        expect(t.restarts).toEqual([]);
+        t.host.prompt(t.record.id, 'more', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual([alongside('work'), 'more']);
     });
 
-    it('the verdict moved while the launch was being prepared: the launch reads old, the message still comes', async () => {
+    it('the verdict moved while the launch was being prepared: the launch reads old, and the next work still carries it', async () => {
         let open: () => void = () => {};
         const launchGate = new Promise<void>((r) => { open = r; });
         const t = rig(true, { launchGate });
@@ -240,21 +306,26 @@ describe('gone trusted: one message into the session', () => {
         await flush();
         t.set(false);
         await flush();
-        expect(t.told).toEqual([]);
+        expect(t.held).toEqual([]);
         open();
         await flush();
         expect(t.launches).toEqual([FILES]);
-        expect(t.told).toEqual([[NOW_TRUSTED, 'genie']]);
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
+        expect(t.last().prompts).toEqual([alongside('work')]);
     });
 
-    it('CONTROL: launched trusted, nothing to say', async () => {
+    it('CONTROL: launched trusted, nothing is held and the work goes as written', async () => {
         const t = rig(false);
         t.host.start(t.record, dir);
         await flush();
         t.verdicts.changed('acme');
         await flush();
-        expect(t.told).toEqual([]);
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
+        expect(t.held).toEqual([]);
         expect(t.notices).toEqual([]);
+        expect(t.last().prompts).toEqual(['work']);
     });
 });
 
@@ -265,7 +336,7 @@ describe('an agent with no session', () => {
         await flush();
         expect(t.restarts).toEqual([]);
         expect(t.notices).toEqual([]);
-        expect(t.told).toEqual([]);
+        expect(t.held).toEqual([]);
     });
 });
 
