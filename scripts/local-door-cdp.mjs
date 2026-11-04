@@ -264,9 +264,11 @@ try {
     const args = ['.', `--remote-debugging-port=${PORT}`, `--inspect=${INSPECT}`, `--user-data-dir=${join(root, 'profile')}`];
     if (!WIN) args.push('--no-sandbox');
     if (process.platform === 'linux' && ['wayland', 'x11'].includes(process.env.XDG_SESSION_TYPE)) args.push(`--ozone-platform=${process.env.XDG_SESSION_TYPE}`);
-    app = process.platform === 'linux'
-        ? spawn('xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args], { env: childEnv, detached: true, stdio: ['ignore', fd, fd] })
-        : spawn(electron, args, { env: childEnv, windowsHide: true, stdio: ['ignore', fd, fd] });
+    const needsXvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+    log(`launcher: ${needsXvfb ? 'xvfb-run (no display)' : 'Electron directly (existing display or non-Linux)'}`);
+    app = spawn(needsXvfb ? 'xvfb-run' : electron,
+        needsXvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args,
+        { env: childEnv, detached: !WIN, windowsHide: true, stdio: ['ignore', fd, fd] });
     closeSync(fd);
     app.on('error', (error) => log(`launch error: ${error.message}`));
     phase = '1 launch and inspect';
