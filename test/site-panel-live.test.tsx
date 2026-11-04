@@ -56,7 +56,9 @@ describe('the Electron half (read from source)', () => {
         expect(code).toMatch(/workspaceBrowserSession\(/);
         expect(code).toMatch(/options\.workspaceOfHost\(/);
         expect(code).toMatch(/'site-panel:prepare'[\s\S]*?await [^\n]*routed/);
-        expect(code).not.toMatch(/defaultSession|fromPartition|panelKey/);
+        expect(code).not.toMatch(/defaultSession|fromPartition/);
+        // Not the panel that asked: the store is worked out from the site alone.
+        expect(code.slice(code.indexOf('const storeFor'), code.indexOf('const ours'))).not.toMatch(/panelKey/);
     });
 
     it('webviewTag is on for the main window alone, and never for a window driving another machine', () => {

@@ -178,6 +178,11 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     const entryOf = (event: IpcMainInvokeEvent) => [...windows.values()].find((w) => !w.win.isDestroyed() && event.sender === w.win.webContents) ?? null;
     // The chrome's calls, registered once; answered only for a browser window's own chrome — the brain of THAT window.
     const brain = (event: IpcMainInvokeEvent): GenieBrowser | null => entryOf(event)?.browser ?? null;
+    const restartThisProcess = (): void => { app.relaunch(); app.exit(0); };
+    const closeIfSingle = (event: IpcMainInvokeEvent): void => {
+        const key = [...windows].find(([, w]) => w.win.webContents === event.sender)?.[0];
+        if (key?.startsWith(SINGLE)) windows.get(key)?.win.close();
+    };
     ipcMain.handle('browser-window:state', (event) => brain(event)?.snapshot() ?? null);
     ipcMain.handle('browser-window:navigate', (event, address: unknown) => brain(event)?.navigate(String(address ?? '')) ?? NOT_OURS);
     ipcMain.handle('browser-window:open', (event, address: unknown) => brain(event)?.open(String(address ?? '')) ?? NOT_OURS);
@@ -189,11 +194,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     ipcMain.handle('browser-window:back', (event) => brain(event)?.back());
     ipcMain.handle('browser-window:forward', (event) => brain(event)?.forward());
     ipcMain.handle('browser-window:reload', (event) => brain(event)?.reload());
-    ipcMain.handle('browser-window:restart', () => { app.relaunch(); app.exit(0); });
-    ipcMain.handle('browser-window:pop-back', (event) => {
-        const key = [...windows].find(([, w]) => w.win.webContents === event.sender)?.[0];
-        if (key?.startsWith(SINGLE)) windows.get(key)?.win.close();
-    });
+    ipcMain.handle('browser-window:restart', (event) => brain(event) && restartThisProcess());
+    ipcMain.handle('browser-window:pop-back', (event) => brain(event) && closeIfSingle(event));
     ipcMain.handle('browser-window:preset', (event, id: unknown) => brain(event)?.setPreset(String(id)));
     ipcMain.handle('browser-window:bounds', (event, raw: unknown) => {
         const b = brain(event);

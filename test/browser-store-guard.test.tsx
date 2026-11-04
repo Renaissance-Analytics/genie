@@ -34,6 +34,15 @@ describe('the store', () => {
     });
 });
 
+describe('the words', () => {
+    it('say why, that nothing was lost, what to do, and that a restart is needed', () => {
+        expect(STORE_LOCKED).toMatch(/keyring/i);
+        expect(STORE_LOCKED).toMatch(/safe/i);
+        expect(STORE_LOCKED).toMatch(/unlock/i);
+        expect(STORE_LOCKED).toMatch(/restart/i);
+    });
+});
+
 describe('the window', () => {
     it('main says so before a page is tried, and no webview is given a store', () => {
         const src = strip('src/main/site-panels-electron.ts');
@@ -86,7 +95,8 @@ describe('the browser process', () => {
         expect(src).toMatch(/isEncryptionAvailable\(\)/);
         expect(src).toMatch(/enabledHosts: \(\) => \(locked \? \[\] : hosts\)/);
         const chrome = strip('src/main/genie-browser-electron.ts');
-        expect(chrome).toMatch(/'browser-window:restart'[\s\S]*?app\.relaunch\(\);[\s\S]*?app\.exit\(0\)/);
+        expect(chrome).toMatch(/'browser-window:restart', \(event\) => brain\(event\) && restartThisProcess\(\)/);
+        expect(chrome).toMatch(/restartThisProcess = \(\): void => \{ app\.relaunch\(\); app\.exit\(0\); \}/);
     });
 
     it('its chrome offers it beside the notice', () => {
