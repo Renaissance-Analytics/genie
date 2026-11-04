@@ -2521,8 +2521,6 @@ async function boot(): Promise<void> {
         registry: { workspace: (id) => registry?.workspace(id) ?? null },
     };
     // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
-    ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
-        (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
     ipcMain.handle('genie:host-list-dir', (_event, path: unknown) => listHostDir(typeof path === 'string' ? path : '/'));
     // The folder picker's New folder: made on this machine, inside the folder the picker is in (host-fs.ts makeHostDir).
     ipcMain.handle('genie:host-mkdir', (_event, parent: unknown, name: unknown) =>
@@ -2532,22 +2530,6 @@ async function boot(): Promise<void> {
     // ADD FROM A GIT URL (§6.1): the parent folder is picked on the host; the plan is shown before the clone.
     // The parent is picked in the window over the host's disk (Tynn #835).
     const previewGit = async (url: string, parent: string) => { const plan = await previewAddFromGit(workspaceOps, url, parent); return plan.ok ? { ...plan, parent } : plan; };
-    ipcMain.handle('genie:workspace-preview-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
-        (typeof rawUrl === 'string' && typeof rawParent === 'string' && rawParent !== '' ? previewGit(rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    ipcMain.handle('genie:workspace-confirm-add-git', (_event, rawUrl: unknown, rawParent: unknown) =>
-        (typeof rawUrl === 'string' && typeof rawParent === 'string' ? addWorkspaceFromGit(workspaceOps, rawUrl, rawParent) : { ok: false, reason: 'give a git URL and a parent folder' }));
-    // OPEN EXISTING FOLDER / IMPORT FROM GIT (Add workspace parity item 7, Genie 1's wizard): read the source, then build a
-    // NEW <slug>.agi beside it — the source is never written. Submodules from a GitHub remote clone with the sign-in's
-    // credential, through git's environment, as the clone does.
-    ipcMain.handle('genie:workspace-read-source', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? readSource(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-stage-git', (_event, raw: unknown) => (typeof raw === 'string' && raw.trim() !== '' ? stageFromGit(workspaceOps, envelopePorts, raw) : { ok: false, reason: 'give a git URL' }));
-    ipcMain.handle('genie:workspace-register-existing', (_event, raw: unknown) => (typeof raw === 'string' && raw !== '' ? registerExisting(workspaceOps, raw) : { ok: false, reason: 'no folder picked' }));
-    ipcMain.handle('genie:workspace-build-envelope', (_event, raw: unknown, rawRemote: unknown) => buildFromWindow(raw, rawRemote));
-    ipcMain.handle('genie:workspace-discard-staged', (_event, raw: unknown) => (typeof raw === 'string' ? discardStaged(envelopePorts, raw) : { ok: true }));
-    ipcMain.handle('genie:workspace-github-repos', () => githubRepos());
-    // ADD FROM TYNN (§6.1, Genie 1's): the signed-in person's projects to pick from; then the parent folder, picked on the
-    // host, and the plan for THAT project before anything is written.
-    ipcMain.handle('genie:workspace-tynn-projects', () => listTynnProjects(workspaceOps));
     // THE TYNN TAB (genie#1295): the workspace's own project's board, through the person's pairing — never an agent's key.
     ipcMain.handle('genie:workspace-tynn-board', (_event, rawId: unknown, rawScope: unknown) =>
         (typeof rawId === 'string' ? readTynnBoard(tynnBoardPorts(), rawId, (rawScope ?? {}) as BoardScope) : { ok: false, state: 'error', reason: 'name a workspace' }));
@@ -2578,21 +2560,6 @@ async function boot(): Promise<void> {
             return sacredNameOf(await tynnAccount.projects(), projectId);
         },
     };
-    ipcMain.handle('genie:workspace-imported-agents', (_event, raw: unknown) => (typeof raw === 'string' ? readImportedAgents(adoptionPorts, raw) : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-adopt-agent', (_event, rawId: unknown, rawName: unknown) =>
-        (typeof rawId === 'string' && typeof rawName === 'string' && rawName !== '' ? adoptAgent(adoptionPorts, rawId, rawName) : { ok: false, reason: 'name a workspace and an agent' }));
-    ipcMain.handle('genie:workspace-preview-add-tynn', (_event, rawId: unknown, rawParent: unknown) =>
-        (typeof rawId === 'string' && rawId.length > 0 && typeof rawParent === 'string' && rawParent !== '' ? previewAddFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'choose a Tynn project and a parent folder' }));
-    ipcMain.handle('genie:workspace-confirm-add-tynn', (_event, rawParent: unknown, rawId: unknown) =>
-        (typeof rawParent === 'string' && typeof rawId === 'string' ? addWorkspaceFromTynn(workspaceOps, rawParent, rawId) : { ok: false, reason: 'give a parent folder and a Tynn project' }));
-    ipcMain.handle('genie:workspace-confirm-add', (_event, raw: unknown) => (typeof raw === 'string' ? addWorkspaceOp(workspaceOps, raw) : { ok: false, reason: 'confirmAdd names a folder' }));
-    // A NEW workspace (Genie 1's): a name and a folder; Genie makes <folder>/<slug>.agi (main/workspace-ops-host.ts).
-    // Optionally linked to a Tynn project (Add workspace parity item 5): its id, looked up in Tynn's own list on this side.
-    ipcMain.handle('genie:workspace-create', (_event, rawName: unknown, rawParent: unknown, rawRemote: unknown, rawProject: unknown) =>
-        (typeof rawName === 'string' && typeof rawParent === 'string' ? createFromWindow(rawName, rawParent, rawRemote, typeof rawProject === 'string' && rawProject !== '' ? rawProject : undefined) : { ok: false, reason: 'give the workspace a name and a folder' }));
-    // The optional link's "New project" (Genie 1's CreateProjectForm): who may own it, and the project made on Tynn.
-    ipcMain.handle('genie:workspace-tynn-owner-options', () => listTynnOwners(workspaceOps));
-    ipcMain.handle('genie:workspace-create-tynn-project', (_event, raw: unknown) => { const input = parseTynnProjectInput(raw); return input ? createTynnProject(workspaceOps, input) : { ok: false, reason: 'give the project a name' }; });
     ipcMain.handle('genie:workspace-hibernate', (_event, raw: unknown) =>
         typeof raw === 'string' ? hibernateWorkspace(workspaceOps, raw, { handoffWaitMs: 20_000, pollMs: 500 }).finally(() => registry?.touch()) : { ok: false, reason: 'hibernate names a workspace' });
     ipcMain.handle('genie:workspace-wake', (_event, raw: unknown) => (typeof raw === 'string' ? wakeWorkspace(workspaceOps, raw) : { ok: false, reason: 'wake names a workspace' }));

@@ -43,11 +43,11 @@ function fixture(refusals: number, reason = 'Genie is still starting') {
     };
     vi.stubGlobal('window', { genieLocalProtocol: port });
     const snapshot = vi.fn(async () => ({ workspaces: null }));
-    const previewAdd = vi.fn(async () => ({ ok: false, reason: 'no folder picked' }));
+    const hibernate = vi.fn(async () => ({ ok: false, reason: 'agent still working' }));
     const oldSettings = vi.fn(async () => ({ ok: true, values: {}, overridden: [] }));
-    const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { settings: oldSettings, previewAdd } } as unknown as PreloadBridge;
+    const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: { settings: oldSettings, hibernate } } as unknown as PreloadBridge;
     const bridge = pageBridge(preload);
-    return { bridge, preload, snapshot, previewAdd, oldSettings, attempts: () => attempts, active: () => active.size,
+    return { bridge, preload, snapshot, hibernate, oldSettings, attempts: () => attempts, active: () => active.size,
         listenerCount: () => listeners.size, settingReads: () => settingReads, stopped: () => stopped,
         allow: () => { refusals = -1; },
         close: () => { for (const handle of active) for (const listener of listeners) listener('closed', handle, ''); active.clear(); },
@@ -72,7 +72,7 @@ describe('the local page connection retries only a bounded starting refusal', ()
         await Promise.resolve(); await Promise.resolve();
         expect(f.attempts()).toBe(1);
         expect(await f.bridge.snapshot()).toEqual({ workspaces: null });
-        expect(await f.bridge.workspaces.previewAdd!('')).toEqual({ ok: false, reason: 'no folder picked' });
+        expect(await f.bridge.workspaces.hibernate('work')).toEqual({ ok: false, reason: 'agent still working' });
         await vi.advanceTimersByTimeAsync(10_000);
         expect(await pending).toMatchObject({ ok: true, values: { workspace_tabs: '{"tabs":[]}' } });
         expect(f.attempts()).toBe(3);
@@ -81,7 +81,7 @@ describe('the local page connection retries only a bounded starting refusal', ()
         expect(f.settingReads()).toBe(1);
         expect(f.oldSettings).not.toHaveBeenCalled();
         expect(f.snapshot).toHaveBeenCalledTimes(1);
-        expect(f.previewAdd).toHaveBeenCalledExactlyOnceWith('');
+        expect(f.hibernate).toHaveBeenCalledExactlyOnceWith('work');
         expect(pageBridge(f.preload)).toBe(f.bridge);
         expect(control(f.bridge)?.state()).toMatchObject({ phase: 'ready', reason: null, revision: 0 });
         f.close();
@@ -101,7 +101,7 @@ describe('the local page connection retries only a bounded starting refusal', ()
         await vi.advanceTimersByTimeAsync(30_000);
         expect(f.attempts()).toBe(attempts);
         expect(await f.bridge.snapshot()).toEqual({ workspaces: null });
-        expect(await f.bridge.workspaces.previewAdd!('')).toEqual({ ok: false, reason: 'no folder picked' });
+        expect(await f.bridge.workspaces.hibernate('work')).toEqual({ ok: false, reason: 'agent still working' });
         const local = control(f.bridge);
         expect(local).toBeDefined();
         expect(local!.state()).toEqual({ phase: 'failed', reason: 'Genie is still starting', revision: 0 });
@@ -115,7 +115,7 @@ describe('the local page connection retries only a bounded starting refusal', ()
         expect(f.settingReads()).toBe(1);
         expect(f.oldSettings).not.toHaveBeenCalled();
         expect(f.snapshot).toHaveBeenCalledTimes(1);
-        expect(f.previewAdd).toHaveBeenCalledTimes(1);
+        expect(f.hibernate).toHaveBeenCalledTimes(1);
         off(); f.close();
     });
 

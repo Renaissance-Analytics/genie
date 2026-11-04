@@ -4,7 +4,10 @@ import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
 
 export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'removeRepoLock' | 'locateRepo' | 'commitsSince'
-    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged';
+    | 'settings' | 'setSetting' | 'resetSetting' | 'setGoverns' | 'setDefaultAgent' | 'setColor' | 'onSettingsChanged'
+    | 'previewAdd' | 'confirmAdd' | 'create' | 'previewAddFromGit' | 'confirmAddFromGit' | 'readSource'
+    | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
+    | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn';
 type Workspaces = GenieBridge['workspaces'];
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
@@ -89,6 +92,29 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
             retry: () => { if (state.phase === 'failed') ready = start(true); },
         },
         workspaces: {
+            previewAdd: (path) => request((ws) => ws.previewAdd(path)),
+            confirmAdd: (path) => request((ws) => ws.confirmAdd(path)),
+            create: (name, parent, remote, project) => request((ws) => ws.create!(name, parent, remote, project)),
+            previewAddFromGit: (url, parent) => request((ws) => ws.previewAddFromGit(url, parent)),
+            confirmAddFromGit: (url, parent) => request((ws) => ws.confirmAddFromGit(url, parent)),
+            readSource: (path) => request((ws) => ws.readSource!(path)),
+            stageFromGit: (url) => request((ws) => ws.stageFromGit!(url)),
+            registerExisting: (path) => request((ws) => ws.registerExisting!(path)),
+            buildEnvelope: (plan, remote) => request((ws) => ws.buildEnvelope!(plan, remote)),
+            discardStaged: (path) => request((ws) => ws.discardStaged!(path)),
+            githubRepos: async () => {
+                const result = await request((ws) => ws.githubRepos!());
+                // The repository picker renders RepoListing, including during local startup failure.
+                if (result !== null && 'ok' in result) return { status: 'failed', message: result.reason };
+                return result;
+            },
+            tynnProjects: () => request((ws) => ws.tynnProjects()),
+            tynnOwnerOptions: () => request((ws) => ws.tynnOwnerOptions!()),
+            createTynnProject: (input) => request((ws) => ws.createTynnProject!(input)),
+            importedAgents: (id) => request((ws) => ws.importedAgents!(id)),
+            adoptAgent: (id, name) => request((ws) => ws.adoptAgent!(id, name)),
+            previewAddFromTynn: (project, parent) => request((ws) => ws.previewAddFromTynn(project, parent)),
+            confirmAddFromTynn: (parent, project) => request((ws) => ws.confirmAddFromTynn(parent, project)),
             listRepos: (id) => request((ws) => ws.listRepos(id)),
             addRepo: (id, input) => request((ws) => ws.addRepo(id, input)),
             removeRepo: (id, slug) => request((ws) => ws.removeRepo(id, slug)),
