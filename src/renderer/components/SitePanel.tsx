@@ -14,6 +14,11 @@ export interface SitePanelLive {
     /** What the page can do, as it changes. Answers the leaving function. */
     readonly onState: (panelKey: string, listener: (state: SiteState) => void) => () => void;
     readonly onOpenInWindow: (host: string) => void;
+    /** Its site is out in its own window. */
+    readonly popped?: boolean;
+    readonly onPopBack?: (panelKey: string) => void;
+    /** Whether it is out, as that changes. Answers the leaving function. */
+    readonly onPopped?: (panelKey: string, listener: (out: boolean) => void) => () => void;
 }
 
 /**
@@ -40,7 +45,22 @@ export function SitePanel({ host, onPick, live }: { host: string | null; onPick:
     if (!live) {
         return <p className="flex flex-1 items-center justify-center p-4 text-[12px] text-[var(--fg-3)]">{host} is served by the machine this window drives; it shows live in that machine’s own Genie window.</p>;
     }
-    return <LiveSite host={host} live={live} />;
+    return <PanelSite host={host} live={live} />;
+}
+
+function PanelSite({ host, live }: { host: string; live: SitePanelLive }) {
+    const [out, setOut] = useState(live.popped === true);
+    const { panelKey, onPopped } = live;
+    const subscribe = useRef(onPopped);
+    subscribe.current = onPopped;
+    useEffect(() => subscribe.current?.(panelKey, setOut), [panelKey]);
+    if (!out) return <LiveSite host={host} live={live} />;
+    return (
+        <div data-site-popped={panelKey} className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-[12px] text-[var(--fg-3)]">
+            <p>{host} is in its own window.</p>
+            <Button size="xs" type="button" data-site-action="pop-back" title="Back to the panel: the page reloads here" onClick={() => live.onPopBack?.(panelKey)}>Back to the panel (reloads)</Button>
+        </div>
+    );
 }
 
 function LiveSite({ host, live }: { host: string; live: SitePanelLive }) {

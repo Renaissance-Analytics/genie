@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('genieBrowser', {
     forward: () => ipcRenderer.invoke('browser-window:forward'),
     reload: () => ipcRenderer.invoke('browser-window:reload'),
     setPreset: (id: string) => ipcRenderer.invoke('browser-window:preset', id),
+    popBack: () => ipcRenderer.invoke('browser-window:pop-back'),
     setBounds: (bounds: { x: number; y: number; width: number; height: number }) => ipcRenderer.invoke('browser-window:bounds', bounds),
     // The native buttons sit over the title row on Windows and Linux; macOS draws its own traffic lights.
     overlay: process.platform !== 'darwin',

@@ -155,6 +155,10 @@ export interface GenieBridge {
         /** May this site load, with its store routed? The page itself is a <webview> the window holds (site-webview-layer.ts). */
         prepare(host: string): Promise<{ ok: true } | { ok: false; error: string }>;
         openWindow(host: string): Promise<void>;
+        popOut(panelKey: string, host: string): Promise<void>;
+        popBack(panelKey: string): Promise<void>;
+        popped(): Promise<ReadonlyArray<{ readonly panelKey: string; readonly host: string }>>;
+        onPoppedBack(listener: (panelKey: string) => void): () => void;
     };
     /** The Genie browser window (beta.35 item 36): this machine's Genie sites. Host-only: absent on a remote bridge. */
     /** `hosts`: the `.gen` names of the workstation a remote window is driving (main decides which browser by the window). */

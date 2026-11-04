@@ -19,6 +19,8 @@ export interface BrowserLinkPorts {
     facts(facts: BrowserFacts): void;
     door(up: boolean): void;
     open(url: string | null, activation: BrowserActivation): void;
+    openSingle?(panelKey: string, url: string): void;
+    closeSingle?(panelKey: string): void;
     /** A call into a page, from the `pages` tool. */
     pageCall?(event: Extract<BrowserEvent, { kind: 'pageCall' }>, client: BrowserLinkClient): void;
     /** Linked: the current pages are said again. */
@@ -33,23 +35,25 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
     let stopped = false;
     let client: BrowserLinkClient | null = null;
     let known = false;
-    const held: Array<{ url: string | null; activation: BrowserActivation }> = [];
+    const held: Array<() => void> = [];
     let firstLink: () => void = () => {};
     const linked = new Promise<void>((resolve) => { firstLink = resolve; });
 
     const onFacts = (facts: BrowserFacts): void => {
         ports.facts(facts);
         known = true;
-        for (const { url, activation } of held.splice(0)) ports.open(url, activation);
+        for (const run of held.splice(0)) run();
     };
     const onEvent = (event: BrowserEvent): void => {
         if (event.kind === 'facts') onFacts(event.facts);
         else if (event.kind === 'door') ports.door(event.up);
         else if (event.kind === 'quit') ports.quit();
-        else if (event.kind === 'pages') return;
+        else if (event.kind === 'pages' || event.kind === 'poppedBack') return;
+        else if (event.kind === 'closeSingle') ports.closeSingle?.(event.panelKey);
+        else if (event.kind === 'openSingle') { if (known) ports.openSingle?.(event.panelKey, event.url); else held.push(() => ports.openSingle?.(event.panelKey, event.url)); }
         else if (event.kind === 'pageCall') { if (client) ports.pageCall?.(event, client); }
         else if (known) ports.open(event.url, event.activation);
-        else held.push({ url: event.url, activation: event.activation });
+        else held.push(() => ports.open(event.url, event.activation));
     };
 
     const link = async (): Promise<void> => {

@@ -37,6 +37,10 @@ export interface SiteWebviewLayer {
     /** What the panel's page can do, as it changes. Answers the leaving function. */
     onState(panelKey: string, listener: (state: SiteState) => void): () => void;
     retainIn(workspaceId: string, keep: ReadonlySet<string>): void;
+    /** Its site is out in its own window, or back: out, its page closes, and a show makes none. */
+    setPopped(panelKey: string, out: boolean): void;
+    isPopped(panelKey: string): boolean;
+    onPopped(panelKey: string, listener: (out: boolean) => void): () => void;
 }
 
 export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonly prepare: (host: string) => Promise<Prepared> }): SiteWebviewLayer {
@@ -55,6 +59,8 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
     };
 
     const listeners = new Map<string, Set<(state: SiteState) => void>>();
+    const popped = new Set<string>();
+    const poppedListeners = new Map<string, Set<(out: boolean) => void>>();
     const pages = new Map<string, { back(): void; forward(): void }>();
     const safely = (fn: (() => void) | undefined): void => { try { fn?.(); } catch { /* Electron throws until the page's dom-ready */ } };
 
@@ -104,6 +110,7 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
     return {
         async show(panelKey, host, bounds) {
             const mine = ticket(panelKey);
+            if (popped.has(panelKey)) return { ok: true };
             const prepared = await options.prepare(host);
             if (tickets.get(panelKey) !== mine) return { ok: true };
             if (!prepared.ok) {
@@ -125,17 +132,33 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
             return () => { set.delete(listener); };
         },
         retainIn(workspaceId, keep) { views.retainIn(workspaceId, keep); },
+        setPopped(panelKey, out) {
+            if (out === popped.has(panelKey)) return;
+            ticket(panelKey);
+            if (out) { popped.add(panelKey); views.remove(panelKey); } else popped.delete(panelKey);
+            for (const listener of [...(poppedListeners.get(panelKey) ?? [])]) listener(out);
+        },
+        isPopped(panelKey) { return popped.has(panelKey); },
+        onPopped(panelKey, listener) {
+            const set = poppedListeners.get(panelKey) ?? new Set();
+            poppedListeners.set(panelKey, set);
+            set.add(listener);
+            return () => { set.delete(listener); };
+        },
     };
 }
 
 const layers = new WeakMap<object, SiteWebviewLayer>();
 
 /** One layer per bridge: a Workspace mounting again finds the pages it left. */
-export function siteWebviewLayerFor(bridge: { prepare(host: string): Promise<Prepared> }): SiteWebviewLayer {
+export function siteWebviewLayerFor(bridge: { prepare(host: string): Promise<Prepared>; popped(): Promise<ReadonlyArray<{ readonly panelKey: string }>>; onPoppedBack(listener: (panelKey: string) => void): () => void }): SiteWebviewLayer {
     let found = layers.get(bridge);
     if (!found) {
         found = siteWebviewLayer({ doc: document as unknown as LayerDocument, prepare: (host) => bridge.prepare(host) });
         layers.set(bridge, found);
+        const layer = found;
+        bridge.onPoppedBack((panelKey) => layer.setPopped(panelKey, false));
+        void bridge.popped().then((list) => { for (const { panelKey } of list) layer.setPopped(panelKey, true); }, () => {});
     }
     return found;
 }

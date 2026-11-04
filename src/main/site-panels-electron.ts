@@ -29,6 +29,8 @@ export interface SitePanelsOptions {
      * panel's button is the person's; a page opening a window — its own script, or an agent driving it — is background.
      */
     readonly openInWindow: (url: string, activation: Activation) => void;
+    /** The host's browser service, for a panel's site in its own window. Null with no host. */
+    readonly browserCall: (method: string, args: readonly unknown[]) => Promise<unknown> | null;
 }
 
 export interface LiveSitePanels {
@@ -54,6 +56,9 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
         await store.routed;
         return { ok: true };
     });
+    ipcMain.handle('site-panel:pop-out', async (event, panelKey: unknown, host: unknown) => { if (ours(event)) await options.browserCall('popOut', [key(panelKey), key(host)]); });
+    ipcMain.handle('site-panel:pop-back', async (event, panelKey: unknown) => { if (ours(event)) await options.browserCall('popBack', [key(panelKey)]); });
+    ipcMain.handle('site-panel:popped', async (event) => (ours(event) ? (await options.browserCall('popped', [])) ?? [] : []));
     ipcMain.handle('site-panel:open-window', (event, host: unknown) => { if (ours(event)) options.openInWindow(`https://${key(host)}/`, 'user-gesture'); });
 
     return {
