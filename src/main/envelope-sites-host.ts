@@ -1,7 +1,7 @@
 import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join, relative } from 'node:path';
 import { insideOrRoot } from './workspace-confine.js';
-import { editedSiteEntry, formatLike, readEnvelopeSites, siteEntryFor, siteKeyFor, withSiteEntry } from '../core/envelope-sites.js';
+import { editedSiteEntry, firstStartWords, formatLike, parseTrustBook, readEnvelopeSites, siteEntryFor, siteKeyFor, siteRunFingerprint, withSiteEntry, type ServableSite, type TrustBook } from '../core/envelope-sites.js';
 import type { CreateSiteInput, SiteInfo, SiteManager } from './site-manager.js';
 
 /**
@@ -19,6 +19,11 @@ import type { CreateSiteInput, SiteInfo, SiteManager } from './site-manager.js';
  * - **The person's Stop is machine-local** (genie#407): `enabled` lives in the git-tracked envelope — the
  *   project's fact — while "I stopped it" is one person's decision on one machine, kept under Genie's own
  *   data. A Start lifts it. Hibernation is not a person's stop and leaves no mark.
+ * - **The first start on a machine is the person's.** A site runs by that rule only once the person has started it here,
+ *   with what it runs now (`TrustBook`, kept under Genie's own data, never in a repo). Until then it is listed, stopped,
+ *   and its row names what a Start runs. Only the person's own Start, Restart or Edit gets past that (`{ person: true }`);
+ *   an agent's call is refused. A site made here through Genie is recorded as it is made. The workspaces already
+ *   registered when the record is first written carry over once, so an upgrade stops none of a person's own sites.
  * - **Created and removed sites are written back** to the envelope's `sites` key — atomically, every other
  *   key carried through, in the file's own indentation and line endings. A workspace with no project.json
  *   is told to convert first, the same refusal the repo operations give.
@@ -34,6 +39,8 @@ export interface EnvelopeSitesPorts {
     };
     /** The person's machine-local stops, as `<workspaceId>/<key>` ids. */
     readonly runState: { load(): Promise<readonly string[]>; save(stopped: readonly string[]): Promise<void> };
+    /** The record of what the person has let run on this machine. `load`: `null` when there is none yet; throws when it cannot be read. */
+    readonly trust: { load(): Promise<unknown>; save(book: TrustBook): Promise<void> };
     /** The workspace's service env (its engines + the shared ones), for every process of its sites. */
     readonly envFor: (workspaceId: string) => Readonly<Record<string, string>>;
     readonly log?: (line: string) => void;
@@ -91,6 +98,13 @@ interface Tracked {
     readonly key: string;
     readonly enabled: boolean;
     readonly servable: boolean;
+    /** What it runs, for recording the person's first start. `null`: nothing Genie 2 would run. */
+    readonly fingerprint: string | null;
+}
+
+/** Whose call this is. Absent is not the person: the wait for a first start refuses it. */
+export interface SiteActor {
+    readonly person?: boolean;
 }
 
 export class EnvelopeSites {
@@ -101,6 +115,7 @@ export class EnvelopeSites {
     /** workspace id → what was seen of it at the last sync. */
     readonly #workspaces = new Map<string, { path: string; asleep: boolean }>();
     #stopped: Set<string> | null = null;
+    #trust: TrustBook | null = null;
     #queue: Promise<void> = Promise.resolve();
 
     constructor(sites: SiteManager, ports: EnvelopeSitesPorts) {
@@ -122,6 +137,7 @@ export class EnvelopeSites {
 
     async #sync(workspaces: readonly WorkspaceRef[]): Promise<void> {
         const stopped = await this.#stops();
+        await this.#openTrust(workspaces);
         const seen = new Set<string>();
         for (const w of workspaces) {
             seen.add(w.id);
@@ -145,7 +161,89 @@ export class EnvelopeSites {
                 this.#sites.remove(siteId);
                 this.#tracked.delete(siteId);
             }
+            await this.#forgetWorkspace(id);
         }
+    }
+
+    /**
+     * Read the record once. None at all is the first launch with this rule: every workspace registered right now carries
+     * over, and the record is written at once, so nothing added after this moment ever does. One that cannot be believed
+     * carries nothing: each row asks, which a person can see and answer, instead of running what nobody can vouch for.
+     */
+    async #openTrust(workspaces: readonly WorkspaceRef[]): Promise<void> {
+        if (this.#trust !== null) return;
+        const empty = (carried: readonly string[]): TrustBook => ({ version: 1, carried: [...carried], pendingCarry: [...carried], sites: {} });
+        let loaded: unknown;
+        try {
+            loaded = await this.#ports.trust.load();
+        } catch (error) {
+            this.#ports.log?.(`[sites] the record of sites started here could not be read; each site waits for its first start: ${error instanceof Error ? error.message : String(error)}`);
+            this.#trust = empty([]);
+            await this.#saveTrust();
+            return;
+        }
+        if (loaded === null) {
+            this.#trust = empty(workspaces.map((w) => w.id));
+            await this.#saveTrust();
+            return;
+        }
+        const book = parseTrustBook(loaded);
+        if (book === null) {
+            this.#ports.log?.('[sites] the record of sites started here could not be believed; each site waits for its first start');
+            this.#trust = empty([]);
+            await this.#saveTrust();
+            return;
+        }
+        this.#trust = book;
+    }
+
+    async #saveTrust(): Promise<void> {
+        try {
+            await this.#ports.trust.save(this.#trust!);
+        } catch (error) {
+            this.#ports.log?.(`[sites] the record of sites started here could not be saved: ${error instanceof Error ? error.message : String(error)}`);
+        }
+    }
+
+    /** A workspace waiting to carry over, once its project.json has been read: what it declares enabled now is what it had been running. */
+    async #carryOver(workspaceId: string, sites: readonly ServableSite[]): Promise<void> {
+        const book = this.#trust!;
+        if (!book.pendingCarry.includes(workspaceId)) return;
+        for (const site of sites) {
+            if (site.enabled) book.sites[`${workspaceId}/${site.key}`] = siteRunFingerprint(site);
+        }
+        book.pendingCarry = book.pendingCarry.filter((id) => id !== workspaceId);
+        await this.#saveTrust();
+    }
+
+    async #forgetWorkspace(workspaceId: string): Promise<void> {
+        const book = this.#trust!;
+        const prefix = `${workspaceId}/`;
+        const kept = Object.entries(book.sites).filter(([id]) => !id.startsWith(prefix));
+        if (kept.length === Object.keys(book.sites).length && !book.pendingCarry.includes(workspaceId)) return;
+        book.sites = Object.fromEntries(kept);
+        book.pendingCarry = book.pendingCarry.filter((id) => id !== workspaceId);
+        await this.#saveTrust();
+    }
+
+    async #record(workspaceId: string, key: string, fingerprint: string | null): Promise<void> {
+        if (fingerprint === null || this.#trust === null) return;
+        this.#trust.sites[`${workspaceId}/${key}`] = fingerprint;
+        await this.#saveTrust();
+    }
+
+    /** The person's own action on a site waiting for its first start: it is recorded, and nothing refuses it now. */
+    async #lift(siteId: string, by: SiteActor): Promise<void> {
+        if (by.person !== true || this.#sites.get(siteId)?.firstStart === undefined) return;
+        const t = this.#tracked.get(siteId);
+        this.#sites.setFirstStart(siteId, null);
+        if (t) await this.#record(t.workspaceId, t.key, t.fingerprint);
+    }
+
+    /** What a site written to `manifest` under `key` runs, read the way the next launch will read it. */
+    #declaredAs(manifest: Record<string, unknown>, key: string, entry: Record<string, unknown>): ServableSite | null {
+        const site = readEnvelopeSites({ ...manifest, sites: { [key]: entry } })[0];
+        return site?.ok ? site : null;
     }
 
     async #load(w: WorkspaceRef, asleep: boolean, stopped: Set<string>): Promise<void> {
@@ -153,17 +251,23 @@ export class EnvelopeSites {
         let manifest: unknown;
         try {
             const text = await this.#ports.fs.readText(path);
-            if (text === null) return;
+            if (text === null) {
+                // A folder that is here with no project.json has nothing to carry; a folder that is away may yet.
+                if (await this.#ports.fs.exists(w.path)) await this.#carryOver(w.id, []);
+                return;
+            }
             manifest = JSON.parse(text);
         } catch (error) {
             this.#ports.log?.(`[sites] ${path} could not be read; its sites are not listed: ${error instanceof Error ? error.message : String(error)}`);
             return;
         }
-        for (const site of readEnvelopeSites(manifest)) {
+        const declared = readEnvelopeSites(manifest);
+        await this.#carryOver(w.id, declared.filter((site): site is ServableSite => site.ok));
+        for (const site of declared) {
             const repoPath = site.repoDir === null ? w.path : site.repoDir === '.' ? w.path : join(w.path, ...site.repoDir.split('/'));
             const unservable = (host: string, reason: string) => {
                 const info = this.#sites.declareUnservable({ workspaceId: w.id, name: site.name, host, repoPath, reason, key: site.key });
-                this.#tracked.set(info.id, { workspaceId: w.id, key: site.key, enabled: site.enabled, servable: false });
+                this.#tracked.set(info.id, { workspaceId: w.id, key: site.key, enabled: site.enabled, servable: false, fingerprint: null });
             };
             if (!site.ok) { unservable(site.host, site.reason); continue; }
             const host = `${site.name}.gen`;
@@ -187,14 +291,20 @@ export class EnvelopeSites {
                 unservable(host, error instanceof Error ? error.message : String(error));
                 continue;
             }
-            this.#tracked.set(info.id, { workspaceId: w.id, key: site.key, enabled: site.enabled, servable: true });
+            const fingerprint = siteRunFingerprint(site);
+            this.#tracked.set(info.id, { workspaceId: w.id, key: site.key, enabled: site.enabled, servable: true, fingerprint });
+            const recorded = this.#trust!.sites[`${w.id}/${site.key}`];
+            if (recorded !== fingerprint) {
+                this.#sites.setFirstStart(info.id, { ...firstStartWords(site), changed: recorded !== undefined });
+                continue;
+            }
             if (site.enabled && !asleep && !stopped.has(`${w.id}/${site.key}`)) this.#tryStart(info.id);
         }
     }
 
     #resume(workspaceId: string, stopped: Set<string>): void {
         for (const [siteId, t] of this.#tracked) {
-            if (t.workspaceId === workspaceId && t.servable && t.enabled && !stopped.has(`${workspaceId}/${t.key}`)) this.#tryStart(siteId);
+            if (t.workspaceId === workspaceId && t.servable && t.enabled && !stopped.has(`${workspaceId}/${t.key}`) && this.#sites.get(siteId)?.firstStart === undefined) this.#tryStart(siteId);
         }
     }
 
@@ -246,8 +356,9 @@ export class EnvelopeSites {
         return true;
     }
 
-    /** The person's Start: lifts a remembered stop, and starts it (throws the reason when it cannot be served). */
-    async start(siteId: string): Promise<SiteInfo> {
+    /** Start: lifts a remembered stop, and starts it (throws the reason when it cannot be served, or when it waits for the person's first start and this is not the person). */
+    async start(siteId: string, by: SiteActor = {}): Promise<SiteInfo> {
+        await this.#lift(siteId, by);
         const info = this.#sites.start(siteId);
         await this.#remember(siteId, false);
         return info;
@@ -258,7 +369,8 @@ export class EnvelopeSites {
      * lifted. A second Restart while the first is still in its first answer window JOINS it (genie#1393: a double click, or
      * a person and an agent at once, never starts two).
      */
-    async restart(siteId: string): Promise<SiteInfo> {
+    async restart(siteId: string, by: SiteActor = {}): Promise<SiteInfo> {
+        await this.#lift(siteId, by);
         const info = this.#sites.restart(siteId, { join: true });
         await this.#remember(siteId, false);
         return info;
@@ -302,13 +414,16 @@ export class EnvelopeSites {
      * built BEFORE the write, and the write happens BEFORE the running site is touched. A refused name, a folder that is
      * not one of the workspace's repos, or a write that fails leaves the site exactly as it was.
      */
-    async update(siteId: string, input: CreateSiteInput): Promise<SiteInfo> {
+    async update(siteId: string, input: CreateSiteInput, by: SiteActor = {}): Promise<SiteInfo> {
         const t = this.#tracked.get(siteId);
         if (!t) throw new Error(`${siteId} is not a site a workspace declares; only a site kept in a project.json can be edited`);
         if (!t.servable) throw new Error(`${siteId} is listed with the reason Genie 2 cannot serve it; edit it in its project.json`);
         if (input.workspaceId !== t.workspaceId) throw new Error(`a site stays in its own workspace (${t.workspaceId})`);
         const before = this.#sites.get(siteId);
         if (!before) throw new Error(`no site ${siteId}`);
+        // An edit recorded as allowed would be a way around the wait. The person's edit keeps waiting, naming what it now runs.
+        const waiting = before.firstStart;
+        if (waiting !== undefined && by.person !== true) throw new Error(`${before.host} was not changed: it has not run on this machine yet, so the person edits and starts it from Hosting`);
         this.#sites.assertNameFree(input.name, siteId);
         const m = await this.#manifest(t.workspaceId);
         // The SHARED lexical check (genie#1354, workspace-confine.ts): `..shop` is a folder inside, `../shop` is not. An agent's
@@ -329,16 +444,22 @@ export class EnvelopeSites {
         const entry = typeof existing === 'object' && existing !== null && !Array.isArray(existing) ? editedSiteEntry(existing as Record<string, unknown>, built.entry) : built.entry;
         await this.#ports.fs.writeTextAtomic(m.path, formatLike(m.text, withSiteEntry(m.manifest, t.key, entry)));
         const wasUp = before.state === 'running' || before.state === 'starting' || before.state === 'restarting' || before.state === 'external';
+        const declared = this.#declaredAs(m.manifest, t.key, entry);
+        const fingerprint = declared ? siteRunFingerprint(declared) : null;
+        if (waiting === undefined) await this.#record(t.workspaceId, t.key, fingerprint);
         // Tracked under the new id from here on, with the same key: the remembered Stop and the next launch agree.
         this.#tracked.delete(siteId);
         try {
-            return this.#sites.replace(siteId, input, { start: wasUp });
+            const info = this.#sites.replace(siteId, input, { start: wasUp });
+            if (waiting === undefined || declared === null) return info;
+            this.#sites.setFirstStart(info.id, { ...firstStartWords(declared), changed: waiting.changed });
+            return this.#sites.get(info.id) ?? info;
         } catch (error) {
             // The edit IS kept (project.json was written, the site is listed as edited with the reason); only its start failed.
             throw new Error(`${input.name.toLowerCase()}.gen was saved to ${m.path}, but did not start: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
             const now = this.#sites.list(t.workspaceId).find((s) => s.host === `${input.name.toLowerCase()}.gen`);
-            if (now) this.#tracked.set(now.id, t);
+            if (now) this.#tracked.set(now.id, { ...t, fingerprint });
         }
     }
 
@@ -385,7 +506,10 @@ export class EnvelopeSites {
             this.#sites.remove(info.id);
             throw new Error(`${input.name}.gen was not kept: ${m.path} could not be written (${error instanceof Error ? error.message : String(error)})`);
         }
-        this.#tracked.set(info.id, { workspaceId: input.workspaceId, key, enabled: true, servable: true });
+        const declared = this.#declaredAs(m.manifest, key, entry.entry);
+        const fingerprint = declared ? siteRunFingerprint(declared) : null;
+        this.#tracked.set(info.id, { workspaceId: input.workspaceId, key, enabled: true, servable: true, fingerprint });
+        await this.#record(input.workspaceId, key, fingerprint);
         return info;
     }
 
@@ -401,6 +525,10 @@ export class EnvelopeSites {
             if (t.key in sites) await this.#ports.fs.writeTextAtomic(m.path, formatLike(m.text, withSiteEntry(m.manifest, t.key, null)));
             await this.#remember(siteId, false);
             this.#tracked.delete(siteId);
+            if (this.#trust !== null && `${t.workspaceId}/${t.key}` in this.#trust.sites) {
+                delete this.#trust.sites[`${t.workspaceId}/${t.key}`];
+                await this.#saveTrust();
+            }
         }
         return this.#sites.remove(siteId);
     }

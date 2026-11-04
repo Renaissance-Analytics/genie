@@ -7,6 +7,7 @@ import type { ProcessLog } from '../core/output-tail.js';
 import type { EngineChoice, ServiceInstance } from '../core/services.js';
 import type { ComposedServices } from './compose.js';
 import type { ProcessState, ProcessStatus } from './process-supervisor.js';
+import type { SiteActor } from './envelope-sites-host.js';
 import type { CreateSiteInput, SiteInfo } from './site-manager.js';
 
 /**
@@ -161,22 +162,22 @@ export type UpdateSiteOutcome ={ readonly kind: 'problems'; readonly problems: P
  * written back to its project.json entry and served as edited (core/envelope-sites.ts keeps every field the edit did
  * not touch). A folder outside the workspace is refused. `repoPath` absent = the folder it serves now.
  */
-export async function updateSite(s: HostingServices, input: { siteId: string; form: SiteForm; repoPath?: string }): Promise<UpdateSiteOutcome> {
+export async function updateSite(s: HostingServices, input: { siteId: string; form: SiteForm; repoPath?: string; person?: boolean }): Promise<UpdateSiteOutcome> {
     const target = siteEditTarget(s, input.siteId);
     const problems = siteEditProblems(s, input.siteId, input.form);
     if (problems.length > 0) return { kind: 'problems', problems };
-    const site = await s.envelopeSites.update(input.siteId, siteInputOf(s, { workspaceId: target.workspaceId, repoPath: input.repoPath ?? target.site.repoPath, form: input.form }));
+    const site = await s.envelopeSites.update(input.siteId, siteInputOf(s, { workspaceId: target.workspaceId, repoPath: input.repoPath ?? target.site.repoPath, form: input.form }), { person: input.person === true });
     return { kind: 'updated', site };
 }
 
 /** Start: serves a listed site that is not running, and lifts a remembered Stop. Throws the reason it cannot be served. */
-export async function startSite(s: HostingServices, siteId: string): Promise<SiteInfo> {
-    return s.envelopeSites.start(siteId);
+export async function startSite(s: HostingServices, siteId: string, by: SiteActor = {}): Promise<SiteInfo> {
+    return s.envelopeSites.start(siteId, by);
 }
 
 /** Restart: stopped and started again as Start starts it (its config and env read anew); a remembered Stop is lifted (it is running now). Throws why it cannot. */
-export async function restartSite(s: HostingServices, siteId: string): Promise<SiteInfo> {
-    return s.envelopeSites.restart(siteId);
+export async function restartSite(s: HostingServices, siteId: string, by: SiteActor = {}): Promise<SiteInfo> {
+    return s.envelopeSites.restart(siteId, by);
 }
 
 /** One of a site's processes and the end of its output — the dev server, or Caddy and (php) its worker. */
