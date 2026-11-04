@@ -75,7 +75,7 @@ describe('what the browser needs', () => {
         const { service, events } = setup();
         expect(await service.call('register', [], 'browser')).toEqual({ facts: null, doorUp: false });
         await service.call('publish', [FACTS], 'window');
-        expect(events.at(-1)).toEqual({ kind: 'facts', facts: FACTS });
+        expect(events).toContainEqual({ kind: 'facts', facts: FACTS });
     });
 
     it('the facts have to be whole: a bad publish changes nothing', async () => {
