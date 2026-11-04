@@ -124,7 +124,7 @@ const WITNESS = `
  * GAUGE_PIN=1 also keeps main on CPUs 0-1 and every child, the spinners included, on the rest.
  */
 const SAMPLER = `
-    const { appendFileSync, readFileSync } = require('node:fs');
+    const { appendFileSync, readFileSync, statSync, writeFileSync } = require('node:fs');
     const { execFileSync } = require('node:child_process');
     const [pid, file, pin, poke] = process.argv.slice(1);
     let nextPoke = 0;
@@ -146,8 +146,12 @@ const SAMPLER = `
         if (main.length < 40) process.exit(0);
         const kids = read('/proc/' + pid + '/task/' + pid + '/children').trim().split(' ').filter(Boolean).filter((id) => id !== String(process.pid));
         if (pin === '1') for (const id of kids) if (!pinned.has(id)) { pinned.add(id); taskset('2-99', id); }
+        const tick = file + '.tick';
+        writeFileSync(tick, 'x');
+        const lag = Date.now() - Math.floor(statSync(tick).mtimeMs);
+        const call = read('/proc/' + pid + '/syscall').trim().split(' ');
         const about = kids.map((id) => { const k = fields(id); return id + ':' + k[0] + ':' + k[36]; }).join(',');
-        appendFileSync(file, [now, main[0], main[36], main[11], main[12], read('/proc/' + pid + '/syscall').trim().split(' ')[0], about].join(' ') + '\\n');
+        appendFileSync(file, [now, main[0], main[36], main[11], main[12], call[0], about || '-', lag, call[1] ?? '-', call[4] ?? '-'].join(' ') + '\\n');
     }
 `;
 /** What the samples say about one of main's gaps. Reading it: asleep in epoll with its timer overdue is a late wake-up. On a CPU, or blocked in another call, is main really held. */
@@ -159,7 +163,12 @@ function samplerSays(file: string, start: number, end: number): string {
     const last = rows[rows.length - 1]!;
     const kids = new Map<string, Set<string>>();
     for (const row of rows) for (const kid of (row[6] ?? '').split(',').filter(Boolean)) { const [id, state, cpu] = kid.split(':'); if (!kids.has(id!)) kids.set(id!, new Set()); kids.get(id!)!.add(`${state}@${cpu}`); }
-    return `${rows.length} samples; state ${count(1)}; cpu ${count(2)}; syscall ${count(5)}; utime +${Number(last[3]) - Number(first[3])} stime +${Number(last[4]) - Number(first[4])} ticks; children ${[...kids].map(([id, seen]) => `${id}[${[...seen].slice(0, 6).join(' ')}]`).join(' ') || 'none'}`;
+    const lags = rows.map((row) => Number(row[7])).filter(Number.isFinite);
+    const coarse = lags.length ? `coarse clock behind by ${Math.min(...lags)} to ${Math.max(...lags)} ms; ` : '';
+    const waits = rows.filter((row) => row[5] === '281');
+    const seen = (at: number) => { const m = new Map<string, number>(); for (const row of waits) m.set(row[at]!, (m.get(row[at]!) ?? 0) + 1); return [...m].map(([k, n]) => `${k}x${n}`).join(','); };
+    const inWait = waits.length ? `epoll fd ${seen(8)} timeout ${seen(9)}; ` : '';
+    return `${coarse}${inWait}${rows.length} samples; state ${count(1)}; cpu ${count(2)}; syscall ${count(5)}; utime +${Number(last[3]) - Number(first[3])} stime +${Number(last[4]) - Number(first[4])} ticks; children ${[...kids].map(([id, seen]) => `${id}[${[...seen].slice(0, 6).join(' ')}]`).join(' ') || 'none'}`;
 }
 
 const witnessGaps = (file: string): Array<[number, number]> => {
@@ -181,7 +190,9 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
     // GAUGE_POKE: a signal every 200 ms. An event loop asleep past its timer wakes to it and runs the timer, so the gap ends.
     // A main held in a synchronous call or a spin does not run its timers, so the gap stays. The CONTROL row is the proof of the second.
     const poke = process.env.GAUGE_POKE === '1' && process.env.GAUGE_SAMPLER === '1' && process.platform === 'linux';
-    const onPoke = () => {};
+    const pokes: number[] = [];
+    const onPoke = () => { pokes.push(Date.now()); };
+    const loopAtStart = performance.eventLoopUtilization();
     if (poke) process.on('SIGUSR2', onPoke);
     const sampler = process.env.GAUGE_SAMPLER === '1' && process.platform === 'linux'
         ? spawn(process.execPath, ['-e', SAMPLER, '--', String(process.pid), samplerFile, process.env.GAUGE_PIN === '1' ? '1' : '0', poke ? '1' : '0'], { stdio: 'ignore' })
@@ -237,7 +248,7 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         const theirs = witnessGaps(file);
         if (sampler) {
             const long = mine.filter(([, gap]) => gap >= 500);
-            console.log(`GAUGE-MAIN: handshake ${ready - began} ms, the run ${Date.now() - ready} ms; main's gaps of 500 ms or more: ${long.map(([end, gap]) => `${gap} ms: ${samplerSays(samplerFile, end - gap, end)}`).join(' | ') || 'none'}`);
+            console.log(`GAUGE-MAIN: handshake ${ready - began} ms, the run ${Date.now() - ready} ms; main's busy ${Math.round(performance.eventLoopUtilization(loopAtStart).active)} ms; gaps of 500 ms or more: ${long.map(([end, gap]) => `signal JS ran ${pokes.filter((at) => at >= end - gap && at <= end).length}x; ${gap} ms: ${samplerSays(samplerFile, end - gap, end)}`).join(' | ') || 'none'}`);
         }
         let worst = 0;
         lastReading = { gap: 0, stalled: 0, witnessReady };
