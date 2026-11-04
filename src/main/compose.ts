@@ -1147,6 +1147,14 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             now,
             asleep,
             ports: (flow) => ({
+                escapesPromptValues: (address) => {
+                    const found = resolveOnRoster(address, roster(), input.workspaceSlugs?.());
+                    if (found.kind !== 'one') return false;
+                    const agent = roster().find((r) => r.id === found.id);
+                    if (agent?.provider !== 'codex') return false;
+                    const workspace = workspacesNow().find((w) => w.id === agent.workspaceId);
+                    return workspace !== undefined && workspaceTrust.view(workspace.id)?.trusted !== true;
+                },
                 promptAgent: agentPrompter({
                     sessions,
                     resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
