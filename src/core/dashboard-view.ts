@@ -132,9 +132,21 @@ const STATE_ORDER: Record<AgentState, number> = {
  * treated the same as Working in terms of how the dashboard list is sorted"). Counted with Working too, rather than as a
  * chip of its own: a `1 cooling` chip would appear and vanish every turn, the flicker this state exists to remove, and
  * the count then always agrees with the Working group the row sits in.
+ *
+ * Background work is Working here too (the owner, genie#1528: "an agent that is working in the background is not an idle
+ * agent, just an idle chat"). This is the board's rank only: `row.state` stays `idle`, as its chat is.
  */
-export function rankOf(state: AgentState): Exclude<AgentState, 'cooling'> {
-    return state === 'cooling' ? 'working' : state;
+export function rankOf(row: Pick<AgentRow, 'state' | 'fidelity' | 'background'>): Exclude<AgentState, 'cooling'> {
+    if (workingInBackground(row)) return 'working';
+    return row.state === 'cooling' ? 'working' : row.state;
+}
+
+/**
+ * ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks are still running. Only a declared
+ * agent: an observed one is seen as bytes, and a remote one as presence.
+ */
+function workingInBackground(row: Pick<AgentRow, 'state' | 'fidelity' | 'background'>): boolean {
+    return row.state === 'idle' && row.fidelity === 'declared' && (row.background ?? 0) > 0;
 }
 
 export interface StatusCell {
@@ -181,8 +193,7 @@ export function statusOf(row: AgentRow): StatusCell {
             if ((row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: 'Cooling', detail: null, tone: 'cool' };
         default:
-            // ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks still running read Working.
-            if (row.fidelity !== 'observed' && (row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
+            if (workingInBackground(row)) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: row.fidelity === 'observed' ? 'Quiet' : 'Idle', detail: row.duration, tone: 'muted' };
     }
 }
@@ -330,9 +341,9 @@ export function groupByWorkspace(
         const mine = rows
             .filter((r) => r.workspaceId === workspaceId)
             .slice()
-            .sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state]);
+            .sort((a, b) => STATE_ORDER[rankOf(a)] - STATE_ORDER[rankOf(b)]);
 
-        const count = (s: AgentState): number => mine.filter((r) => rankOf(r.state) === s).length;
+        const count = (s: AgentState): number => mine.filter((r) => rankOf(r) === s).length;
         const parts: string[] = [];
         if (mine.length > 0) parts.push(`${mine.length} ${mine.length === 1 ? 'agent' : 'agents'}`);
         if (count('waiting') > 0) parts.push(`${count('waiting')} waiting`);
@@ -360,7 +371,7 @@ export function summaryChips(rows: readonly AgentRow[]): readonly SummaryChip[] 
     const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
 
     return order.flatMap((state) => {
-        const n = rows.filter((r) => rankOf(r.state) === state).length;
+        const n = rows.filter((r) => rankOf(r) === state).length;
         return n > 0 ? [{ label: `${n} ${label[state]}`, state }] : [];
     });
 }
@@ -382,7 +393,7 @@ export function groupByStatus(rows: readonly AgentRow[]): readonly StatusGroup[]
     const order: Exclude<AgentState, 'cooling'>[] = ['waiting', 'broken', 'working', 'idle', 'remote'];
     return order.flatMap((state) => {
         // In the order given: a row going Working -> Cooling keeps its place in the Working group.
-        const mine = rows.filter((r) => rankOf(r.state) === state);
+        const mine = rows.filter((r) => rankOf(r) === state);
         return mine.length > 0 ? [{ state, label: label[state], rows: mine }] : [];
     });
 }
