@@ -538,6 +538,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
+        trust: services.trustSteps(),
         hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
         // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
         // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
@@ -1698,9 +1699,14 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.syncAgentDocs(action.workspacePath, 'you');
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
-        case 'workspace.trust':
-            // Skeleton.
+        case 'workspace.trust': {
+            // The person's yes: recorded first, then what it now allows. Genie's files go in, by you, as Sync now does.
+            const trusted = await services.workspaceTrust.trust(action.workspaceId);
+            if (trusted === null) throw new Error(`There is no workspace "${action.workspaceId}" to trust.`);
+            await services.syncAgentDocs(action.workspacePath, 'you');
+            next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
+        }
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);

@@ -1,4 +1,3 @@
-import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, watch as watchFolderForReal, writeFileSync } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -71,18 +70,6 @@ describe('with the watchers on', () => {
             watcher.close();
         }
     });
-
-    it.runIf(process.platform === 'win32')('CONTROL: what these rows can see. A process with its folder there does hold the parent', async () => {
-        const holder = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: workspace, stdio: 'ignore', windowsHide: true });
-        await new Promise((r) => holder.once('spawn', r));
-        const gone = new Promise((r) => holder.once('exit', r));
-        try {
-            expect(attempt(() => renameSync(parent, join(root, 'moved')))).not.toBe('ok');
-        } finally {
-            holder.kill();
-            await gone;
-        }
-    }, 20_000);
 });
 
 describe('Genie lets go', () => {

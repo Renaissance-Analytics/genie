@@ -193,6 +193,9 @@ describe('the trust step, through the real composition', () => {
     const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
     const stepOf = async () => (await featureSnapshot(services, state())).trust?.find((row) => row.workspaceId === 'acme');
     beforeEach(async () => {
+        // Added after the upgrade: a first launch with it would carry it over as trusted.
+        await launch();
+        await services.shutdown();
         workspaces = [{ id: 'acme', path: repo }];
         // With an endpoint, so Genie has files to write once it may.
         services = await composed.compose({

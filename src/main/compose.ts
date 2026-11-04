@@ -294,6 +294,8 @@ export interface ComposedServices {
     readonly workspaceTrust: WorkspaceTrust;
     /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
     untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
+    /** The workspaces read and not trusted, with what would run: the person's trust step. */
+    trustSteps(): readonly { readonly workspaceId: string; readonly changed: boolean; readonly list: import('../core/workspace-trust.js').TrustList }[];
     /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
     untrustedNow(record: { readonly workspaceId: string }): boolean;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
@@ -1216,6 +1218,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             if (view === null || view.trusted) return null;
             return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
         },
+        trustSteps: () => workspacesNow().flatMap((workspace) => {
+            const view = workspaceTrust.view(workspace.id);
+            return view === null || view.trusted ? [] : [{ workspaceId: workspace.id, changed: view.changed, list: view.list }];
+        }),
         untrustedNow(record) {
             const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
             if (!workspace) return false;

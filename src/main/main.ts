@@ -1248,6 +1248,7 @@ async function boot(): Promise<void> {
         userData: genieHome(),
         untrustedFilesFor: async (record) => (await composedServices).untrustedFilesFor(record),
         untrustedNow: (record) => composedNow?.untrustedNow(record) ?? true,
+        markGenieWords: (id) => { void registry?.markGenieWords(id); },
         // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
         currentRecord: (id) => registry?.find(id) ?? null,
         lifecycle: {
@@ -2405,7 +2406,7 @@ async function boot(): Promise<void> {
     /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
     const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
     const composed = await composeServices({
-        onTrustVerdict: (workspaceId) => trustVerdicts?.changed(workspaceId),
+        onTrustVerdict: (workspaceId) => { trustVerdicts?.changed(workspaceId); requestFeaturePush(); },
         userData: genieHome(),
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
