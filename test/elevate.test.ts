@@ -74,6 +74,14 @@ describe('the program an elevated step runs', () => {
         expect(() => elevationBatchPlan('win32', [{ command: 'caddy', args: [] }])).toThrow(/caddy/);
     });
 
+    it('that refusal reaches the person in words, through the one route every elevation takes, and no prompt was raised', async () => {
+        const raised: unknown[] = [];
+        const elevator = new Elevator((steps) => runElevatedBatch('win32', steps, async (plan) => { raised.push(plan); return { exitCode: 0, stdout: '' }; }));
+        const outcome = await elevator.run([{ id: 'one', label: 'Trust', step: { command: 'caddy', args: [] } }]);
+        expect(outcome).toEqual({ ok: false, failed: null, error: expect.stringContaining('caddy is not a Windows system program') });
+        expect(raised).toEqual([]);
+    });
+
     it('CONTROL: a whole path stays as given; other systems are untouched', () => {
         expect(elevationPlan('win32', { command: 'C:\\Tools\\caddy.exe', args: [] }).args[3]).toContain("-FilePath 'C:\\Tools\\caddy.exe'");
         expect(elevationPlan('linux', { command: 'cp', args: [] }).args).toEqual(['cp']);

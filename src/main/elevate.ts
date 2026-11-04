@@ -1,3 +1,4 @@
+import { systemProgram } from '../core/program-lookup.js';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { hostsFilePath } from '../core/front-door-caddy.js';
@@ -55,6 +56,9 @@ const shQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 const appleScriptString = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 const psQuote = (s: string): string => `'${s.replace(/'/g, "''")}'`;
 
+/** What runs elevated goes by its whole path: an elevation does not use Genie's lookup. */
+const elevatedProgram = (command: string): string => (/[\\/]/.test(command) ? command : systemProgram(command));
+
 export function elevationPlan(platform: NodeJS.Platform, step: Step): Plan {
     const env = Object.entries(step.env ?? {});
     if (platform === 'win32') {
@@ -68,7 +72,7 @@ export function elevationPlan(platform: NodeJS.Platform, step: Step): Plan {
         // on stderr), and no process object is a failure too — never a success.
         return {
             command: 'powershell',
-            args: ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; ${setEnv}$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath ${psQuote(step.command)}${list ? ` -ArgumentList @(${list})` : ''}; if ($null -eq $p) { exit 1 }; exit $p.ExitCode`],
+            args: ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; ${setEnv}$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath ${psQuote(elevatedProgram(step.command))}${list ? ` -ArgumentList @(${list})` : ''}; if ($null -eq $p) { exit 1 }; exit $p.ExitCode`],
         };
     }
     if (platform === 'darwin') {
@@ -100,7 +104,7 @@ export function elevationBatchPlan(platform: NodeJS.Platform, steps: readonly St
         const script = [
             ...steps.flatMap((s, i) => [
                 ...Object.entries(s.env ?? {}).map(([k, v]) => `$env:${k}=${psQuote(v)}`),
-                `& ${psQuote(s.command)}${s.args.map((a) => ` ${psQuote(a)}`).join('')}`,
+                `& ${psQuote(elevatedProgram(s.command))}${s.args.map((a) => ` ${psQuote(a)}`).join('')}`,
                 `if ($LASTEXITCODE -ne 0) { exit ${PRIVILEGED_STEP_EXIT_BASE + i} }`,
             ]),
             'exit 0',
@@ -108,7 +112,7 @@ export function elevationBatchPlan(platform: NodeJS.Platform, steps: readonly St
         const encoded = Buffer.from(script, 'utf16le').toString('base64');
         return {
             command: 'powershell',
-            args: ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'powershell' -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','${encoded}'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`],
+            args: ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath ${psQuote(systemProgram('powershell'))} -ArgumentList @('-NoProfile','-NonInteractive','-EncodedCommand','${encoded}'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`],
         };
     }
     // Both unix platforms run the same /bin/sh script; only the wrapper differs.

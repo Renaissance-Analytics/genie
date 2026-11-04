@@ -68,9 +68,14 @@ function onPath(files: readonly string[], ports: LookupPorts): string | null {
 }
 
 /** The whole path of what this name would start with no shell, or `null` when nothing would. Windows only; elsewhere the name, as the OS's own search is already this. */
-/** Skeleton. */
-export function systemProgram(name: string, _env: NodeJS.ProcessEnv = process.env): string {
-    return name;
+/**
+ * A Windows system program's whole path, for text another program runs: a script, or an elevation's target. Those are out of
+ * reach of this module's runner, and each has its own search. Not a guess: a name not in the table is refused.
+ */
+export function systemProgram(name: string, env: NodeJS.ProcessEnv = process.env): string {
+    const parts = SYSTEM[name.toLowerCase().replace(/\.exe$/, '')];
+    if (!parts) throw new Error(`${name} is not a Windows system program Genie knows the path of`);
+    return [systemRoot(env), ...parts].join('\\');
 }
 
 export function findProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string | null {
