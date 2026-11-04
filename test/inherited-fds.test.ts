@@ -2,6 +2,11 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { O_CLOEXEC, inheritedFds, type FdInfo } from '../src/main/inherited-fds.js';
 import { spawn } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import { buildSync } from 'esbuild';
 import { connect, createServer, type AddressInfo } from 'node:net';
 
 /**
@@ -58,34 +63,48 @@ describe('the entries that start processes close what they inherited first, but 
     });
 });
 
-/** A real child, given a real socket on fd 3 the way a parent's would leak, importing the two in the entries' order. */
+/**
+ * A real child, given a real socket on fd 3 the way a parent's would leak, importing the two in the entries' order. Plain node and a plain
+ * bundle, with no loader in it: a loader opens pipes of its own when a file is not in its cache, and that is not the entry's doing.
+ */
 describe.runIf(process.platform === 'linux')('a real child, on Linux', () => {
     const child = async (imports: readonly string[]) => {
+        const out = mkdtempSync(join(tmpdir(), 'inherited-fds-'));
+        const bundles = imports.map((name) => {
+            const outfile = join(out, name.replace(/\.ts$/, '.mjs'));
+            buildSync({ entryPoints: [join('src/main', name)], bundle: true, platform: 'node', format: 'esm', outfile, logLevel: 'silent' });
+            return pathToFileURL(outfile).href;
+        });
         const server = createServer();
         await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
         const socket = connect((server.address() as AddressInfo).port, '127.0.0.1');
         await new Promise<void>((r) => socket.once('connect', () => r()));
-        const list = "require('node:fs').readdirSync('/proc/self/fd').filter((fd) => { try { return /^(socket|pipe):/.test(require('node:fs').readlinkSync('/proc/self/fd/' + fd)); } catch { return false; } }).map(Number).filter((fd) => fd >= 3)";
-        const script = `const list = () => ${list}; const before = list(); (async () => { ${imports.map((name) => `await import(${JSON.stringify(new URL(`../src/main/${name}`, import.meta.url).href)});`).join(' ')} console.log(JSON.stringify({ before, after: list() })); process.exit(0); })();`;
-        const running = spawn(process.execPath, ['--import', 'tsx', '-e', script], { stdio: ['ignore', 'pipe', 'inherit', socket] });
-        let out = '';
-        running.stdout!.on('data', (d) => { out += d; });
+        const script = `
+            const { readdirSync, readlinkSync } = require('node:fs');
+            const list = () => readdirSync('/proc/self/fd').flatMap((fd) => { try { const to = readlinkSync('/proc/self/fd/' + fd); return Number(fd) >= 3 && /^(socket|pipe):/.test(to) ? [fd + '=' + to.replace(/:.*/, '')] : []; } catch { return []; } });
+            const before = list();
+            (async () => { ${bundles.map((url) => `await import(${JSON.stringify(url)});`).join(' ')} console.log(JSON.stringify({ before, after: list() })); process.exit(0); })();
+        `;
+        const running = spawn(process.execPath, ['-e', script], { stdio: ['ignore', 'pipe', 'inherit', socket] });
+        let text = '';
+        running.stdout!.on('data', (d) => { text += d; });
         await new Promise((r) => running.once('exit', r));
         socket.destroy();
         server.close();
-        return JSON.parse(out.trim().split('\n').pop()!) as { before: number[]; after: number[] };
+        rmSync(out, { recursive: true, force: true });
+        return JSON.parse(text.trim().split('\n').pop()!) as { before: string[]; after: string[] };
     };
 
     it('in the entries order, what it inherited is closed', async () => {
         const { before, after } = await child(['process-start.ts', 'close-inherited-fds.ts']);
         // CONTROL: the socket was there to close.
-        expect(before).toContain(3);
-        expect(after).not.toContain(3);
+        expect(before).toContain('3=socket');
+        expect(after).not.toContain('3=socket');
     }, 30_000);
 
-    it('process-start alone leaves it, and adds no socket or pipe of its own', async () => {
+    it('process-start alone leaves it, and adds no socket or pipe of its own (the assertion names any it did)', async () => {
         const { before, after } = await child(['process-start.ts']);
-        expect(before).toContain(3);
+        expect(before).toContain('3=socket');
         expect(after).toEqual(before);
     }, 30_000);
 });
