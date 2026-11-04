@@ -16,8 +16,8 @@ import { toPromptCmds, type ProviderCommand } from '../src/core/provider-command
  *    computes its x overflow to `auto` too, and the over-wide row becomes a horizontal scrollbar. The cure is rows that
  *    wrap or truncate long tokens inside the menu's width, not hiding the scrollbar over them.
  *
- * Both live in react-fancy's `PromptInput`, which Genie does not patch (they go to the fancy agent); these rows are
- * Genie's acceptance for the release that fixes them. A rendered claim, so happy-dom (docs/decisions.md D3, as
+ * Both live in react-fancy's `PromptInput`, which Genie does not patch; react-fancy 6.7.2 fixes them, and these rows
+ * are Genie's acceptance for it (red on 6.3.0, CI run 41915954216). A rendered claim, so happy-dom (docs/decisions.md D3, as
  * test/rail-keyboard.test.tsx). Rendered in textarea mode: Genie's composer uses the inline paste editor, but the menu
  * is the same markup after either editor, and the textarea is the one a DOM without layout can type into.
  */
