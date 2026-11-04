@@ -11,7 +11,7 @@
  * check failed; 2 cannot run here. Every wait has a deadline, and the whole run has one.
  */
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -21,6 +21,7 @@ if (process.env.CI !== 'true' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { con
 const PORT = Number(process.env.CDP_PORT ?? 9333);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
+const walk = (dir, found = []) => { let names = []; try { names = readdirSync(dir); } catch { return found; } for (const name of names) { const p = join(dir, name); try { if (statSync(p).isDirectory()) walk(p, found); else found.push(p); } catch { /* gone */ } } return found; };
 function check(ok, label, detail = '') {
     console.log(`${ok ? 'PASS' : 'FAIL'} ${label}${detail ? `: ${detail}` : ''}`);
     if (!ok) failures.push(label);
@@ -76,7 +77,7 @@ const end = (code) => {
     if (code !== 0) { try { console.log(readFileSync(join(tmpdir(), 'site-panel-electron.log'), 'utf8').slice(-3000)); } catch { /* none */ } }
     process.exit(code);
 };
-setTimeout(() => { console.log('FAIL the run\'s own deadline, 240 s'); end(1); }, 240_000).unref?.();
+setTimeout(() => { console.log('FAIL the run\'s own deadline, 260 s'); end(1); }, 260_000).unref?.();
 
 const targets = async () => (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
 try {
@@ -133,6 +134,14 @@ try {
         const inside = await Cdp.connect(guest.webSocketDebuggerUrl);
         const seen = await until('the guest to answer', 15_000, () => inside.evaluate(`JSON.stringify({ genie: typeof window.genie, require: typeof require, process: typeof process })`));
         check(seen !== null && JSON.parse(seen).genie === 'undefined' && JSON.parse(seen).require === 'undefined' && JSON.parse(seen).process === 'undefined', 'the guest has no preload API and no Node', String(seen));
+        // The guest's session is the store: a cookie set through the guest lands in that folder's file. Prepare alone makes the folder.
+        await inside.send('Network.enable');
+        const cookie = await inside.send('Network.setCookie', { name: 'panelrowcookie', value: 'panelrowvalue', domain: HOST, path: '/', secure: true, expires: Date.now() / 1000 + 3600 });
+        check(cookie.result?.success === true, 'CONTROL a cookie can be set through the guest', JSON.stringify(cookie.result ?? cookie.error));
+        const inFile = (dir) => walk(dir).filter((file) => /Cookies$/.test(file) && readFileSync(file).includes('panelrowcookie'));
+        const landed = await until('the cookie to reach the store', 60_000, () => inFile(join(home, 'browser', WORKSPACE, 'window')).length > 0);
+        check(landed === true, 'the guest\'s cookies are in the workspace\'s store');
+        check(inFile(data).length === 0, 'and not in the window\'s own profile');
         inside.close();
     }
     const store = join(home, 'browser', WORKSPACE, 'window');
