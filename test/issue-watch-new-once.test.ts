@@ -187,7 +187,7 @@ describe('GitHub lists that roll', () => {
     it('each source has its own baseline: GitHub moving later rules out no Tynn report', () => {
         const feed = new IssueWatchFeed();
         feed.apply(entry([i601], OPEN, [i1535]));
-        const report = issue(650, '2026-11-02T00:00:00+00:00');
+        const report = issue(650, '2026-11-04T00:00:00+00:00');
         expect(kinds(feed.apply(entry([report], OPEN, [i1535])))).toEqual(['feedback.new #650']);
     });
 });
