@@ -2,6 +2,7 @@
  * GENIE 1'S FIREWALL RULE, PORTED (v1 main/mobile/firewall.ts; Tynn #820). Unchanged but for the rule's name (below).
  */
 import { spawn } from 'node:child_process';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * Windows Firewall rule management for the Mobile server port.
@@ -202,7 +203,7 @@ export async function ensureFirewallRule(
 function runNetsh(args: string[]): Promise<ExecResult> {
     return new Promise((resolve) => {
         try {
-            const child = spawn('netsh', args, { windowsHide: true });
+            const child = spawn(resolveProgram('netsh'), args, { windowsHide: true });
             let stdout = '';
             child.stdout?.on('data', (d: Buffer) => {
                 stdout += d.toString();
@@ -221,7 +222,7 @@ function runPowershell(script: string): Promise<number> {
     return new Promise((resolve) => {
         try {
             const child = spawn(
-                'powershell.exe',
+                resolveProgram('powershell.exe'),
                 ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script],
                 { windowsHide: true },
             );

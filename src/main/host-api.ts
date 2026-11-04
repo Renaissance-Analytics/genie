@@ -381,7 +381,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 const options = (args[1] ?? {}) as { cols?: unknown; rows?: unknown; command?: unknown };
                 const env = deps.serviceEnvFor(workspace.id);
                 const command = typeof options.command === 'string' && options.command.trim() ? options.command : undefined;
-                return deps.terminals.open({ workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, ...(Object.keys(env).length > 0 ? { env } : {}) });
+                return deps.terminals.open({ workspaceId: workspace.id, cwd: workspace.path, cols: num(options.cols), rows: num(options.rows), command, personal: true, ...(Object.keys(env).length > 0 ? { env } : {}) });
             }
             case 'terminals.write':
                 return deps.terminals.write(str(args[0]), str(args[1]));

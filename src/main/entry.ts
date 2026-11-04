@@ -1,3 +1,4 @@
+import './process-start.js';
 import { app } from 'electron';
 import { entryFor } from '../core/entry-mode.js';
 import { appUserModelIdFor } from './app-identity.js';

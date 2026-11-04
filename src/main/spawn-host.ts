@@ -1,3 +1,4 @@
+import './process-start.js';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from './fancy-term-port.js';
 import { processChannel } from './spawn-host-protocol.js';
