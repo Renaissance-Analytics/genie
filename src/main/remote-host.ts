@@ -81,6 +81,8 @@ interface Connection {
     pendingPair: string | null;
     /** `mobile`: a phone (genie#1346) — the snapshot and its watched agents only, no terminals. */
     profile: 'mobile' | null;
+    /** Only the local frame door proves this; a hello alone never does. */
+    local: boolean;
     /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
     readonly watching: Map<string, WindowState<WireRow>>;
 }
@@ -156,6 +158,7 @@ export class RemoteHost {
 
     /** Someone is connected and known: hear the host API (once, however many connect). */
     #listen(): void {
+        if (![...this.#connections.values()].some((connection) => connection.auth !== null)) return;
         this.#stopListening ??= this.#api.onEvent((channel, payload) => this.#broadcast(channel, payload), { wantsAgent: (agentId) => this.#wantsAgent(agentId) });
     }
 
@@ -261,7 +264,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, watching: new Map() };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map() };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -298,6 +301,7 @@ export class RemoteHost {
             await this.#hello(connection, message);
             return;
         }
+        if (message.kind === 'hello') return this.#refuse(connection, 'this connection has already said hello', false);
         if (message.kind !== 'call') return; // A client sends calls; anything else is noise, not an error worth a frame.
         this.#send(connection, await this.#call(connection, message.id, message.method, message.args));
     }
@@ -307,14 +311,20 @@ export class RemoteHost {
         const label = auth.label ?? message.label ?? 'a device';
         let token: string | undefined;
         if (connection.pendingPair !== null) return this.#refuse(connection, `this device is already waiting for Allow on ${this.#hostName}`, false);
+        const pre = connection.socket.preAuth;
+        if (auth.kind === 'local' && pre?.kind !== 'local') return this.#refuse(connection, 'local authentication is available only on this Genie window’s protocol door', true);
+        if (pre?.kind === 'local' && auth.kind !== 'local') return this.#refuse(connection, 'this local window connection accepts only local authentication', true);
         /*
          * SECURITY (pairing vs share link, H1): a connection the Tynn relay admitted is already somebody, proved by its Tynn
          * grant; that grant is its only way in. A PIN or a device token are tailnet hellos: said over the relay they would
          * let a guest admitted by a link pair as the owner. Refused before anything is redeemed, so a
          * refused hello spends no PIN try and raises no "Pair this device?".
          */
-        if (connection.socket.preAuth && auth.kind !== 'relay') return this.#refuse(connection, `this connection came through the Tynn relay: its Tynn grant admits it, never a PIN or a device token`, true);
-        if (auth.kind === 'pin') {
+        if (pre && pre.kind !== 'local' && auth.kind !== 'relay') return this.#refuse(connection, `this connection came through the Tynn relay: its Tynn grant admits it, never a PIN or a device token`, true);
+        if (auth.kind === 'local') {
+            connection.local = true;
+            connection.auth = { label: pre!.label, isOwner: true, workspaceId: null, readonly: false };
+        } else if (auth.kind === 'pin') {
             const r = this.#pins.redeem(auth.code);
             if (!r.ok) return this.#refuse(connection, r.reason, true);
             // THE CONFIRM (q_8c07b142; Genie 1's confirmPair): the right PIN only raises "Pair this device?" on this screen.
@@ -349,7 +359,7 @@ export class RemoteHost {
             if (!pre) return this.#refuse(connection, 'this connection did not come through the Tynn relay', true);
             connection.auth = { label: pre.label, isOwner: pre.isOwner, workspaceId: pre.workspaceId, readonly: pre.readonly };
         }
-        if (message.profile === 'mobile') connection.profile = 'mobile';
+        if (!connection.local && message.profile === 'mobile') connection.profile = 'mobile';
         this.#send(connection, {
             kind: 'welcome',
             connectionId: connection.id,
@@ -406,13 +416,15 @@ export class RemoteHost {
                 return ok({ aborted: this.#staging.abort(connection.id, String(args[0] ?? '')) });
         }
 
+        const capability = capabilityOf(method);
+        if (capability === 'local' && !connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+
         // Allow is pressed on THIS machine's screen, never sent from another device — not even the owner's (q_8c07b142).
         if (method === 'features.act' && isAnswerPair(args)) return refuse(`a device is allowed on ${this.#hostName}’s own screen, never from another device`);
 
         // A phone has no terminals (genie#1346): refused here, before anything on the host is asked.
         if (connection.profile === 'mobile' && PHONE_REFUSES(method)) return refuse(`${method}: a phone has no terminals; open one on ${this.#hostName}`);
 
-        const capability = capabilityOf(method);
         // A read-only grant (Tynn #838): reads, nothing else.
         if (auth.readonly && capability !== 'read') return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
         // Only the owner changes the host itself — a guest of the whole host included.
@@ -430,7 +442,7 @@ export class RemoteHost {
             if (method === 'takeOver') return refuse(`takeOver opens a window on ${this.#hostName}; do it there`);
             return refuse(`${method} places a view on ${this.#hostName}'s own window; there is nothing to do remotely`);
         }
-        if (capability !== 'read') {
+        if (!connection.local && (capability === 'write' || capability === 'upgrade')) {
             const may = this.#baton.may(connection.id, capability, { isOwner: auth.isOwner });
             if (!may.ok) return refuse(may.reason);
             if (capability === 'write' && this.#baton.holder() === null) return refuse(`nobody is driving ${this.#hostName}; take the baton to make changes`);
@@ -490,6 +502,7 @@ export class RemoteHost {
         const auth = connection.auth!;
         if (auth.workspaceId !== null && this.#api.workspaceOfAgent(agentId) !== auth.workspaceId) throw new Error(`${agentId} is not in the workspace this link shares`);
         const detail = (await this.#api.invoke('agentDetail', [agentId])) as ({ rows?: readonly WireRow[] } & Record<string, unknown>) | null;
+        if (!this.#connections.has(connection.id)) throw new Error('the connection closed before its agent watch was ready');
         if (detail === null || detail === undefined) {
             connection.watching.delete(agentId);
             return { seq: 0, detail: null, rows: { base: null, keep: 0, append: [] } };

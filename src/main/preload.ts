@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.js';
 import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
 import type { Headroom } from '../core/headroom.js';
@@ -428,6 +429,21 @@ const bridge: PreloadBridge = {
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+
+// One string frame pair, separate from the bridge families that have not moved yet. Admission belongs to main.
+contextBridge.exposeInMainWorld('genieLocalProtocol', {
+    send: (action, connection, text) => {
+        if (typeof action !== 'string' || typeof connection !== 'string' || typeof text !== 'string') throw new TypeError('the local protocol port accepts strings only');
+        ipcRenderer.send(LOCAL_FRAME_CHANNELS.toHost, action, connection, text);
+    },
+    onFrame: (listener) => {
+        const onFrame = (_event: unknown, action: unknown, connection: unknown, text: unknown): void => {
+            if ((action === 'frame' || action === 'closed') && typeof connection === 'string' && typeof text === 'string') listener(action, connection, text);
+        };
+        ipcRenderer.on(LOCAL_FRAME_CHANNELS.toWindow, onFrame);
+        return () => { ipcRenderer.removeListener(LOCAL_FRAME_CHANNELS.toWindow, onFrame); };
+    },
+} satisfies LocalFramePort);
 
 // THIS WINDOW'S OWN STALLS (beta.53 freezes): a long task, or no frame presented while visible, over 1 s — sent to main's
 // stall watchdog for lifecycle.log. Imported by THIS preload only: a module two preloads share becomes a chunk a sandboxed

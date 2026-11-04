@@ -28,6 +28,7 @@ import { lastNumberedTurn } from '../core/turn-numbers.js';
 import { commsOf } from '../core/comms.js';
 import { BrowserWindow, ClipboardItem, Menu, Notification, Tray, app, clipboard, dialog, ipcMain, net, powerMonitor, safeStorage, session, shell } from 'electron';
 import { electronClipboardPort, registerClipboardIpc } from './clipboard-ipc.js';
+import { localProtocolDoor } from './local-protocol-door.js';
 import { guardWindowLinks } from './external-links.js';
 import { WHATS_NEW_ROUTE, genieDocsUrl, whatsNewFor } from '../core/whats-new.js';
 import { RELEASE_NOTES } from './release-notes.js';
@@ -305,6 +306,8 @@ if (launch.kind === 'exit') {
 }
 
 let window: BrowserWindow | null = null;
+/** Only the window constructors using preload.cjs admit contents to this local frame door. */
+const localDoor = localProtocolDoor(ipcMain);
 /**
  * THE STALL WATCHDOG (beta.53 freezes; main/stall-watchdog.ts): main's held event loop, slow renderer requests and slow
  * outbound calls, the windows' own long tasks and frame gaps, hung renderers and gone child processes — each a line in
@@ -782,6 +785,7 @@ function openTakeOverWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => takeOvers?.windowClosed(terminalId));
@@ -804,6 +808,7 @@ function openFilesWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     win.on('closed', () => filesWindows?.windowClosed(workspaceId));
@@ -831,6 +836,7 @@ function openFlowEditorWindow(route: string, activation: Activation): void {
         webPreferences: { preload: join(here, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
@@ -969,6 +975,7 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
         },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
+    localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     // The renderer's console reaches no file, so main writes the lines Genie keeps: the composer-focus log (genie#1235,
     // core/composer-focus.ts) and a surface's render error (parity audit #7), which also goes to the lifecycle log.
@@ -2706,6 +2713,7 @@ async function boot(): Promise<void> {
     });
     remoteSocketNow = remoteSocket;
     const remoteHub = transportHub(remoteSocket.transport);
+    remoteHub.add(localDoor);
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -4219,6 +4227,7 @@ const quitPorts: QuitPorts = {
         // itself. Over the host's link it is the host's: nothing to end from here.
         void spawnHostNow?.stop();
         void remoteSocketNow?.stop();
+        localDoor.dispose();
         void filesHost?.close();
         filesWatch?.close();
         clearGenieRunning(genieHome());

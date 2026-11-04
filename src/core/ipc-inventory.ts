@@ -1,11 +1,14 @@
 import { CLIPBOARD_WRITE_CHANNEL } from './clipboard-wire.js';
+import { LOCAL_FRAME_CHANNELS } from './local-frame.js';
 
 /** P4's remaining IPC registrations. Protocol rows disappear with their handler in that family's PR. */
-export type IpcDestination = `protocol:${string}` | 'window-port' | `later:${string}`;
+export type IpcDestination = `protocol:${string}` | 'protocol-door' | 'window-port' | `later:${string}`;
 export type IpcInventoryEntry = readonly [channel: string, destination: IpcDestination];
 
 /** Protocol destinations include the local-only methods to be registered as their families move. */
 export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
+    // The only retained protocol input: frames, never a handler per method. The reply channel has no ipcMain registration.
+    [LOCAL_FRAME_CHANNELS.toHost, 'protocol-door'],
     [CLIPBOARD_WRITE_CHANNEL, 'window-port'],
 
     ['doctor:facts', 'later:doctor window'],
