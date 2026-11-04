@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -26,9 +27,10 @@ beforeEach(() => {
     git('commit', '-q', '-m', 'first');
     writeFileSync(join(repo, 'a.txt'), 'two\n');
 });
-afterEach(() => {
+afterEach(async () => {
     GIT_READ_LIMIT.ms = savedLimit;
-    rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
+    // The promise form: it retries a busy folder (the hook's child, which the limit does not end, still has it open). rmSync's retries do not cover EBUSY on a directory.
+    await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
 });
 
 describe('the limit', () => {
