@@ -12,9 +12,9 @@
  *   trusted. A second workspace nobody trusted is the control: the step still shows for it, in both runs.
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const PORT = Number(process.env.TRUST_CDP_PORT ?? 9344);
@@ -191,6 +191,19 @@ try {
     }
     await stop(app);
     if (failures.length > 0 && existsSync(log)) console.log(readFileSync(log, 'utf8').slice(-2000));
+    if (failures.length > 0) {
+        // Where the record really is: a home the app did not take would make the obstacle above stand in nothing's way.
+        const found = [];
+        const look = (dir, depth) => {
+            for (const entry of readdirSync(dir, { withFileTypes: true })) {
+                const path = join(dir, entry.name);
+                if (entry.name === 'workspace-trust.json') found.push(`${path}${entry.isDirectory() ? ' (folder)' : ''}`);
+                if (entry.isDirectory() && depth < 5) look(path, depth + 1);
+            }
+        };
+        try { look(home, 0); } catch (error) { console.log(`  could not look: ${String(error)}`); }
+        console.log(`  the record: expected ${record}; found ${found.join(', ') || 'none under the home'}; os home in this script ${homedir()}`);
+    }
     try { rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 }); } catch { /* the runner cleans up */ }
 }
 
