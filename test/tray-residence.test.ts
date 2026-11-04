@@ -158,6 +158,15 @@ describe('wireLoginItem', () => {
         expect(set.at(-1)).toEqual({ openAtLogin: true, path: WIN.execPath, args: [] });
     });
 
+    it('Linux: the mark’s own entry, found at the next boot, is not Genie 1’s: the setting stays off', async () => {
+        const store = await SettingsStore.open(dir);
+        const file = '/home/a/.config/autostart/genie.desktop';
+        const { port, files } = fakePort({ files: [file] });
+        await wireLoginItem(store, port, { platform: 'linux', packaged: true, execPath: '/opt/Genie/genie', appImage: null, configHome: '/home/a/.config' }, { now: () => true, onChange: () => {} });
+        expect(store.get('launch_at_login')).not.toBe(true);
+        expect(files.get(file)).toContain('--hidden');
+    });
+
     it('Linux writes and removes the autostart file', async () => {
         const store = await SettingsStore.open(dir);
         const { port, files } = fakePort();
