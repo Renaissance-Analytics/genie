@@ -116,16 +116,92 @@ describe('closed', () => {
     });
 });
 
-describe('CONTROL: GitHub items are a whole list, and keep their rules', () => {
+/**
+ * GITHUB'S LISTS ARE WINDOWS TOO. Tynn's poller reads one page of each stream, `per_page=50` (IssueWatchPoller::STREAMS), and
+ * GitHub's `/issues` counts pull requests in that 50 before Tynn filters them out. Measured on Renaissance-Analytics/genie,
+ * 2026-11-04: 27 open issues and 29 open PRs, so the page held 21 issues, and the last four were #1359, #1343, #1339 and #1295.
+ * A merged PR frees a place and lets the next older issue in: those four were announced as new, unchanged for days.
+ * `/pulls` and the three security streams are capped at 50 the same way. Those four issues' times are the real ones.
+ */
+describe('GitHub lists that roll', () => {
+    const REPO = { owner: 'Renaissance-Analytics', repo: 'genie' };
+    const gh = (kind: string, number: number, createdAt: string | null, updatedAt: string | null = createdAt) => ({
+        kind, key: `Renaissance-Analytics/genie:${kind}:${number}`, number, title: `Item ${number}`, url: `https://github.com/Renaissance-Analytics/genie/issues/${number}`,
+        createdAt, updatedAt, author: 'wishborn', severity: null, ...REPO, source: 'own', unread: false,
+    });
+    const i1535 = gh('issue', 1535, '2026-11-04T14:00:00Z');
+    const i1508 = gh('issue', 1508, '2026-11-02T10:00:00Z', '2026-11-03T10:00:00Z');
+    const i1359 = gh('issue', 1359, '2026-10-31T00:58:43Z');
+    const i1343 = gh('issue', 1343, '2026-10-30T04:07:16Z');
+    const i1339 = gh('issue', 1339, '2026-10-29T17:52:34Z');
+    const i1295 = gh('issue', 1295, '2026-10-27T20:37:52Z', '2026-10-27T21:06:41Z');
+    const AFTER = '2026-11-04T18:00:00Z';
+
+    it('the four from the report: older issues entering the list, unchanged, are not new (COUNTED)', () => {
+        const feed = new IssueWatchFeed();
+        expect(feed.apply(entry([], 0, [i1535, i1508]))).toEqual([]);
+        expect(kinds(feed.apply(entry([], 0, [i1535, i1508, i1359, i1343, i1339, i1295])))).toEqual([]);
+    });
+
+    it('an issue going out and coming back, unchanged, is never new (COUNTED)', () => {
+        const feed = new IssueWatchFeed();
+        feed.apply(entry([], 0, [i1535, i1359]));
+        for (let round = 0; round < 3; round += 1) {
+            feed.apply(entry([], 0, [i1535]));
+            expect(kinds(feed.apply(entry([], 0, [i1535, i1359])))).toEqual([]);
+        }
+    });
+
+    it('one that moved while it was out, or that was outside the first list and moved since, is a change, not new', () => {
+        const feed = new IssueWatchFeed();
+        feed.apply(entry([], 0, [i1535, i1359]));
+        feed.apply(entry([], 0, [i1535]));
+        expect(kinds(feed.apply(entry([], 0, [i1535, { ...i1359, updatedAt: AFTER }])))).toEqual(['issue.updated #1359']);
+        expect(kinds(feed.apply(entry([], 0, [i1535, { ...i1359, updatedAt: AFTER }, { ...i1295, updatedAt: AFTER }])))).toEqual(['issue.updated #1295']);
+    });
+
+    it('POSITIVE CONTROL: an issue, a PR and an alert created since the first list are new, once, in the same second too', () => {
+        const feed = new IssueWatchFeed();
+        feed.apply(entry([], 0, [i1535]));
+        const fresh = [gh('issue', 1540, AFTER), gh('pr', 1541, AFTER), gh('dependabot', 92, i1535.updatedAt)];
+        expect(kinds(feed.apply(entry([], 0, [i1535, ...fresh])))).toEqual(['issue.new #1540', 'pr.new #1541', 'security.new #92']);
+        feed.apply(entry([], 0, [i1535]));
+        expect(kinds(feed.apply(entry([], 0, [i1535, ...fresh])))).toEqual([]);
+    });
+
+    it('PRs and security alerts roll the same way', () => {
+        const feed = new IssueWatchFeed();
+        feed.apply(entry([], 0, [i1535]));
+        const OLD = '2026-10-20T00:00:00Z';
+        expect(kinds(feed.apply(entry([], 0, [i1535, gh('pr', 1200, OLD), gh('dependabot', 70, OLD), gh('code-scanning', 5, OLD), gh('secret-scanning', 2, OLD)])))).toEqual([]);
+    });
+
+    it('a row from before Tynn kept createdAt is judged by when it last moved; with no time at all it is told, once', () => {
+        const feed = new IssueWatchFeed();
+        feed.apply(entry([], 0, [i1535]));
+        expect(kinds(feed.apply(entry([], 0, [i1535, gh('issue', 1100, null, '2026-10-20T00:00:00Z')])))).toEqual([]);
+        expect(kinds(feed.apply(entry([], 0, [i1535, gh('issue', 1101, null, null)])))).toEqual(['issue.new #1101']);
+        expect(kinds(feed.apply(entry([], 0, [i1535, gh('issue', 1101, null, null)])))).toEqual([]);
+    });
+
+    it('each source has its own baseline: GitHub moving later rules out no Tynn report', () => {
+        const feed = new IssueWatchFeed();
+        feed.apply(entry([i601], OPEN, [i1535]));
+        const report = issue(650, '2026-11-02T00:00:00+00:00');
+        expect(kinds(feed.apply(entry([report], OPEN, [i1535])))).toEqual(['feedback.new #650']);
+    });
+});
+
+describe('CONTROL: GitHub items, new, moved and closed, beside a rolling feedback window', () => {
     const gh = (key: string, number: number, updatedAt: string) => ({ kind: 'issue', key, number, title: 't', url: 'u', createdAt: updatedAt, updatedAt, author: 'octo', severity: null, owner: 'acme', repo: 'app', source: 'github', unread: true });
 
-    it('new, moved and closed, beside a rolling feedback window', () => {
+    it('a gone item is still counted closed: nothing in the entry can tell a close from leaving the page (a named limit)', () => {
         const feed = new IssueWatchFeed();
         const a = gh('acme/app:issue:1', 1, '2026-11-04T10:00:00Z');
         const b = gh('acme/app:issue:2', 2, '2026-11-04T10:00:00Z');
         feed.apply(entry([i633], OPEN, [a, b]));
         const moved = { ...a, updatedAt: '2026-11-04T11:00:00Z' };
-        const c = gh('acme/app:issue:3', 3, '2026-11-04T09:00:00Z');
+        const c = gh('acme/app:issue:3', 3, '2026-11-04T12:00:00Z');
         expect(kinds(feed.apply(entry([i632], OPEN, [moved, c])))).toEqual(['issue.updated #1', 'issue.new #3', 'closed 1']);
     });
 });
