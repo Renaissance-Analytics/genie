@@ -2,7 +2,10 @@ import { execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { agentRecord, mintAgentId } from '../src/core/identity.js';
+import type { ProcessTree } from '../src/core/process-tree.js';
+import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import type { ComposedServices, composeServices } from '../src/main/compose.js';
 import { envFileSites } from '../src/main/dotenv-sync.js';
 import { gitMayRun } from '../src/main/git-read-policy.js';
@@ -114,4 +117,72 @@ describe('the env files', () => {
         // And it is what the composition gives the env files, which the row above cannot see.
         expect(readFileSync('src/main/compose.ts', 'utf8')).toMatch(/sites: \(\) => envFileSites\(sites\.list\(\)\)/);
     });
+});
+
+describe('a real pull moves the verdict, and the gate holds', () => {
+    const run = (cwd: string, ...args: string[]) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid', ...args], { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const SETTINGS = (hook: string) => JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: hook }] }] } });
+    let origin: string;
+    let clone: string;
+
+    beforeEach(async () => {
+        origin = join(dir, 'origin');
+        mkdirSync(join(origin, '.claude'), { recursive: true });
+        run(origin, 'init', '-q');
+        writeFileSync(join(origin, '.claude', 'settings.json'), SETTINGS('before'));
+        run(origin, 'add', '.');
+        run(origin, 'commit', '-q', '-m', 'first');
+        clone = join(dir, 'clone');
+        execFileSync('git', ['clone', '-q', origin, clone], { windowsHide: true, stdio: 'ignore' });
+        workspaces = [{ id: 'pulled', path: clone }];
+        await launch();
+        await services.workspaceTrust.trust('pulled');
+    });
+
+    it('with only the watchers to notice it: untrusted without anyone asking, and no work reaches the run launched before it', async () => {
+        const prompts: string[] = [];
+        const noTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
+        const driverFor: DriverFor = () => () => ({ start: () => {}, prompt: (content: unknown) => { prompts.push(String(content)); }, kill: () => {}, cancel: () => {}, cliSessionId: null, ready: Promise.resolve() }) as never;
+        const host = new SessionHost({ userData: join(dir, 'agents'), driverFor, processTree: noTree, stopGraceMs: 0, untrustedFilesFor: (record) => services.untrustedFilesFor(record), untrustedNow: (record) => services.untrustedNow(record) });
+        const record = agentRecord({ id: mintAgentId(), workspaceId: 'pulled', provider: 'claude', name: 'atlas' });
+        expect(host.start(record, clone)).toEqual({ ok: true });
+        await vi.waitFor(() => { expect(host.launchedUntrusted(record.id)).toBe(false); expect(host.quiet(record.id)).toBe(true); }, { timeout: 20_000 });
+
+        // CONTROL: before the pull the same route hands work to the run.
+        host.prompt(record.id, 'before', 'you');
+        expect(prompts).toEqual(['before']);
+
+        writeFileSync(join(origin, '.claude', 'settings.json'), SETTINGS('added by the pull'));
+        run(origin, 'add', '.');
+        run(origin, 'commit', '-q', '-m', 'a new hook');
+        run(clone, 'pull', '-q');
+
+        // Long of a watcher, far short of the slow pass, which this composition sets too long to help.
+        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false, changed: true }); }, { timeout: 15_000, interval: 100 });
+        expect(services.untrustedNow(record)).toBe(true);
+        host.prompt(record.id, 'after', 'you');
+        await new Promise((r) => setTimeout(r, 200));
+        expect(prompts).toEqual(['before']);
+        expect(host.workWaiting(record.id)).toBe(true);
+        host.stopAll();
+        await host.settled();
+    }, 60_000);
+
+    it('CONTROL: a pull that touches nothing the verdict reads leaves it trusted', async () => {
+        writeFileSync(join(origin, 'code.ts'), 'export {};\n');
+        run(origin, 'add', '.');
+        run(origin, 'commit', '-q', '-m', 'code');
+        run(clone, 'pull', '-q');
+        await new Promise((r) => setTimeout(r, 1500));
+        expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true });
+    }, 30_000);
+
+    it('the watchers lost: the slow pass notices', async () => {
+        await services.shutdown();
+        await composed.compose({ userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, workspaces: () => workspaces, trustWatchEveryMs: 200, trustWatchFolders: false } as Parameters<typeof composeServices>[0]).then((next) => { services = next; });
+        await services.workspaceTrust.refresh('pulled');
+        expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: true });
+        writeFileSync(join(clone, '.claude', 'settings.json'), SETTINGS('edited by hand'));
+        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false }); }, { timeout: 15_000, interval: 100 });
+    }, 40_000);
 });

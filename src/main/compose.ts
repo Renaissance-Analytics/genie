@@ -213,6 +213,10 @@ export interface ComposeInput {
     readonly mcpTools?: () => readonly { name: string; description: string }[];
     /** A workspace's trust verdict moved. */
     readonly onTrustVerdict?: (workspaceId: string) => void;
+    /** Skeleton. */
+    readonly trustWatchEveryMs?: number;
+    /** Skeleton. */
+    readonly trustWatchFolders?: boolean;
     /**
      * The live agent roster — the same one the agents' own inbox tool resolves against. Late-bound: the registry
      * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
