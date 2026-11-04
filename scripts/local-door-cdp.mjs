@@ -232,9 +232,12 @@ try {
     const workspace = join(root, 'workspace'); mkdirSync(workspace);
     server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Local door panel</title><p>door control</p>'); });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    writeFileSync(join(workspace, 'project.json'), JSON.stringify({ name: 'Local door', sites: { doorpanelaaaaaaaa: { repo: '', name: 'doorpanel', genName: 'doorpanel.gen', kind: 'http', runMode: 'host', hostPort: server.address().port, enabled: true } } }));
     childEnv = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE2_CODEX_BINARY: resolve('scripts/stub-codex.mjs') };
-    execFileSync(process.execPath, ['scripts/smoke-seed.mjs'], { env: childEnv, timeout: 15_000, stdio: 'pipe' });
+    execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env: childEnv, timeout: 15_000, stdio: 'pipe' });
+    // Only the manifest just created in this private workspace is extended; the checkout is untouched.
+    const manifest = readJson(join(workspace, 'project.json'));
+    demand(manifest, 'private workspace seed manifest exists');
+    writeFileSync(join(workspace, 'project.json'), JSON.stringify({ ...manifest, name: 'Local door', sites: { doorpanelaaaaaaaa: { repo: '', name: 'doorpanel', genName: 'doorpanel.gen', kind: 'http', runMode: 'host', hostPort: server.address().port, enabled: true } } }));
     writeFileSync(join(root, '.genie', 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'tynn', path: workspace }]));
     // Ticker ownership is checked; a concurrent harness is not overwritten.
     let marker; try { marker = Number(readFileSync(TICKER, 'utf8').trim()); } catch { /* absent */ }
