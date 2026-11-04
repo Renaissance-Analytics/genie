@@ -33,7 +33,10 @@ export interface IwItem {
 export interface IwEntry {
     readonly projectId: string;
     readonly items: readonly IwItem[];
+    /** A WINDOW of the open Tynn issues, not all of them: the most recently moved, bounded (Tynn's FEEDBACK_ITEMS_LIMIT). */
     readonly feedback: readonly IwItem[];
+    /** How many Tynn issues are open (`counts.feedback`); absent or `null` = Tynn did not say. */
+    readonly feedbackTotal?: number | null | undefined;
 }
 
 const str = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
@@ -67,8 +70,10 @@ export function parseIssueWatchEntry(raw: unknown): IwEntry | null {
     const projectId = str(r.projectId) ?? str(r.workspaceId);
     if (projectId === null || !Array.isArray(r.items)) return null;
     const keep = <T>(v: T | null): v is T => v !== null;
+    const total = (r.counts as { feedback?: unknown } | null | undefined)?.feedback;
     return {
         projectId,
+        feedbackTotal: typeof total === 'number' && Number.isFinite(total) ? total : null,
         items: r.items.map((i) => readItem(i, false)).filter(keep),
         feedback: (Array.isArray(r.feedbackItems) ? r.feedbackItems : []).map((i) => readItem(i, true)).filter(keep),
     };
@@ -119,25 +124,71 @@ export const IW_EVENT_KINDS: ReadonlyArray<{ kind: IwEventKind; label: string; d
 const family = (item: IwItem): 'issue' | 'pr' | 'security' | 'feedback' =>
     item.kind === 'feedback' ? 'feedback' : SECURITY.has(item.kind) ? 'security' : item.kind === 'pr' ? 'pr' : 'issue';
 
-/** Consecutive entries, per project, into events. Holds only each item's last `updatedAt`. */
+const timeOf = (iso: string | null | undefined): number | null => {
+    const at = iso ? Date.parse(iso) : Number.NaN;
+    return Number.isNaN(at) ? null : at;
+};
+
+/** The latest `updatedAt` in a window: `null` when none has a readable time. */
+function latestMove(window: readonly IwItem[]): number | null {
+    const times = window.map((i) => timeOf(i.updatedAt)).filter((t): t is number => t !== null);
+    return times.length > 0 ? Math.max(...times) : null;
+}
+
+/** What the feed remembers of one project. */
+interface FeedMemory {
+    /** Each GitHub item's last `updatedAt`. Those lists are whole, so this is replaced by each entry. */
+    items: Map<string, string>;
+    /** The Tynn issues in the last window, for what closed. */
+    window: ReadonlySet<string>;
+    /** Every Tynn issue seen since boot. Never forgotten: leaving the window says nothing about an issue. */
+    readonly known: Set<string>;
+    /** Tynn's clock at the baseline: the latest move in the first window (see `apply`). */
+    readonly baseline: number | null;
+}
+
+/**
+ * Consecutive entries, per project, into events.
+ *
+ * THE TYNN ISSUES ARE A WINDOW, NOT A LIST (genie#1531): the most recently moved open ones. An issue enters and leaves it
+ * with nothing changing on that issue, because another one moved, closed or was bulk-touched. So absence never means
+ * closed or forgotten, and first being seen never means new. New is: not seen since boot, and created after the baseline.
+ * The window is ordered by `updatedAt`, so its latest move is the latest of EVERY open issue: anything open then was created
+ * no later than that, and anything created since at or after it. Both times are Tynn's, so no clock here can skew it.
+ * An issue with no readable time can't be ruled out, so it is told, once.
+ */
 export class IssueWatchFeed {
-    readonly #seen = new Map<string, Map<string, string>>();
+    readonly #seen = new Map<string, FeedMemory>();
 
     apply(entry: IwEntry): IwEvent[] {
-        const all = [...entry.items, ...entry.feedback];
+        const items = new Map(entry.items.map((i) => [i.key, i.updatedAt ?? '']));
+        const window = new Set(entry.feedback.map((i) => i.key));
         const before = this.#seen.get(entry.projectId);
-        this.#seen.set(entry.projectId, new Map(all.map((i) => [i.key, i.updatedAt ?? ''])));
-        if (before === undefined) return [];
+        if (before === undefined) {
+            this.#seen.set(entry.projectId, { items, window, known: new Set(window), baseline: latestMove(entry.feedback) });
+            return [];
+        }
         const events: IwEvent[] = [];
-        for (const item of all) {
-            const was = before.get(item.key);
+        for (const item of entry.items) {
+            const was = before.items.get(item.key);
             const f = family(item);
             if (was === undefined) events.push({ kind: `${f}.new` as IwEventKind, item });
-            else if (f !== 'feedback' && (item.updatedAt ?? '') > was) events.push({ kind: `${f}.updated` as IwEventKind, item });
+            else if ((item.updatedAt ?? '') > was) events.push({ kind: `${f}.updated` as IwEventKind, item });
         }
-        const now = new Set(all.map((i) => i.key));
-        const closed = [...before.keys()].filter((k) => !now.has(k)).length;
+        for (const item of entry.feedback) {
+            if (before.known.has(item.key)) continue;
+            before.known.add(item.key);
+            const created = timeOf(item.createdAt);
+            const fromBefore = before.baseline !== null && created !== null && created < before.baseline;
+            if (!fromBefore) events.push({ kind: 'feedback.new', item });
+        }
+        // Gone from a GitHub list is closed. Gone from the window is only known to be closed when it holds every open issue.
+        const whole = (entry.feedbackTotal ?? 0) <= entry.feedback.length;
+        const closed = [...before.items.keys()].filter((k) => !items.has(k)).length
+            + (whole ? [...before.window].filter((k) => !window.has(k)).length : 0);
         if (closed > 0) events.push({ kind: 'closed', count: closed });
+        before.items = items;
+        before.window = window;
         return events;
     }
 }

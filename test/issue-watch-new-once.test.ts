@@ -8,7 +8,8 @@ import { IssueWatchFeed, parseIssueWatchEntry, type IwEvent } from '../src/core/
  * `feedbackItems` IS A WINDOW, NOT THE LIST: Tynn sends the 10 most recently moved open issues (IssueWatchService::
  * FEEDBACK_ITEMS_LIMIT), with the whole number in `counts.feedback`. Measured on the tynn project, 2026-11-04: over 30 open
  * issues, many sharing one `updated_at` second from a bulk touch, so which 10 are sent changes with nothing changing on any
- * of them. The shapes below are what feedbackItemsFor sends, with those issue numbers and times.
+ * of them. The shapes below are what feedbackItemsFor sends. The times of #633, #632, #623 and #622 are the measured ones;
+ * #606 and #601 did not appear in that listing, so theirs are stand-ins of the same age order.
  */
 const issue = (number: number, createdAt: string, updatedAt: string = createdAt) => ({
     key: `tynn-issue:01m6${number}`, number, title: `Report ${number}`, source: 'mcp',
