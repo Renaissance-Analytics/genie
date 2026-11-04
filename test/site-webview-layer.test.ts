@@ -20,6 +20,13 @@ function fakeDocument() {
             appendChild(child: FakeElement) { child.parent = el; child.attrsAtAttach = { ...child.attrs }; el.children.push(child); child.appended = (child.appended ?? 0) + 1; return child; },
             remove() { if (el.parent) el.parent.children = el.parent.children.filter((c) => c !== el); el.parent = null; el.removed = true; },
             reload: vi.fn(),
+            goBack: vi.fn(),
+            goForward: vi.fn(),
+            canGoBack: vi.fn(() => false),
+            canGoForward: vi.fn(() => false),
+            listeners: {},
+            addEventListener(event: string, listener: () => void) { (el.listeners[event] ??= []).push(listener); },
+            emit(event: string) { for (const listener of el.listeners[event] ?? []) listener(); },
         };
         made.push(el);
         return el;
@@ -40,6 +47,13 @@ interface FakeElement {
     appendChild(child: FakeElement): FakeElement;
     remove(): void;
     reload: ReturnType<typeof vi.fn>;
+    goBack: ReturnType<typeof vi.fn>;
+    goForward: ReturnType<typeof vi.fn>;
+    canGoBack: ReturnType<typeof vi.fn>;
+    canGoForward: ReturnType<typeof vi.fn>;
+    listeners: Record<string, Array<() => void>>;
+    addEventListener(event: string, listener: () => void): void;
+    emit(event: string): void;
 }
 
 const BOX = { x: 10, y: 20, width: 300, height: 200 };
@@ -99,6 +113,49 @@ describe('showing', () => {
         expect(views()[0]!.attrs.src).toBe('https://moic.gen/');
         expect(views()[1]!.attrsAtAttach).toEqual({ src: 'https://shop.gen/' });
         expect(views()[1]!.style.left).toBe('10px');
+    });
+});
+
+describe('its history and loading', () => {
+    it('back and forward reach that page, and do not throw before it is ready', async () => {
+        const { doc, views } = fakeDocument();
+        const layer = siteWebviewLayer({ doc, prepare: yes });
+        await layer.show('ws:t:0', 'moic.gen', BOX);
+        layer.back('ws:t:0');
+        layer.forward('ws:t:0');
+        expect(views()[0]!.goBack).toHaveBeenCalledTimes(1);
+        expect(views()[0]!.goForward).toHaveBeenCalledTimes(1);
+        views()[0]!.goBack.mockImplementation(() => { throw new Error('not ready'); });
+        expect(() => layer.back('ws:t:0')).not.toThrow();
+    });
+
+    it('says what the page can do as it navigates and loads', async () => {
+        const { doc, views } = fakeDocument();
+        const layer = siteWebviewLayer({ doc, prepare: yes });
+        const heard: unknown[] = [];
+        layer.onState('ws:t:0', (state) => heard.push(state));
+        await layer.show('ws:t:0', 'moic.gen', BOX);
+        const view = views()[0]!;
+        view.emit('did-start-loading');
+        expect(heard.at(-1)).toMatchObject({ loading: true });
+        view.canGoBack.mockReturnValue(true);
+        view.emit('did-navigate');
+        view.emit('did-stop-loading');
+        expect(heard.at(-1)).toEqual({ canGoBack: true, canGoForward: false, loading: false });
+    });
+
+    it('a listener can leave, and a later page of the panel still reports', async () => {
+        const { doc, views } = fakeDocument();
+        const layer = siteWebviewLayer({ doc, prepare: yes });
+        const heard: unknown[] = [];
+        const leave = layer.onState('ws:t:0', (state) => heard.push(state));
+        await layer.show('ws:t:0', 'moic.gen', BOX);
+        await layer.show('ws:t:0', 'shop.gen', BOX);
+        views()[1]!.emit('did-start-loading');
+        expect(heard).toHaveLength(1);
+        leave();
+        views()[1]!.emit('did-stop-loading');
+        expect(heard).toHaveLength(1);
     });
 });
 

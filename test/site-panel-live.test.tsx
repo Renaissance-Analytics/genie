@@ -19,8 +19,8 @@ describe('a site panel with a site', () => {
         const html = render('moic.gen');
         expect(html).toMatch(/data-site-panel="ws1:tab-1:0"/);
         expect(html).toContain('moic.gen');
-        expect(html).toMatch(/data-site-panel-action="reload"/);
-        expect(html).toMatch(/data-site-panel-action="open-window"[^>]*>[\s\S]*?Open in browser/);
+        expect(html).toMatch(/data-site-action="reload"/);
+        expect(html).toMatch(/data-site-action="pop"[^>]*>[\s\S]*?Pop out/);
         expect(html).toMatch(/data-site-panel-box=""/);
         expect(html).not.toContain('<iframe');
     });
