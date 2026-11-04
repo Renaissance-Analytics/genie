@@ -67,13 +67,13 @@ describe('what the browser needs', () => {
     it('published by the window, handed to a browser that links later', async () => {
         const { service, events } = setup();
         await service.call('publish', [FACTS], 'window');
-        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS });
+        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: true });
         expect(events).toContainEqual({ kind: 'facts', facts: FACTS });
     });
 
     it('nothing published yet: the browser hears null, and hears the facts when they come', async () => {
         const { service, events } = setup();
-        expect(await service.call('register', [], 'browser')).toEqual({ facts: null });
+        expect(await service.call('register', [], 'browser')).toEqual({ facts: null, doorUp: false });
         await service.call('publish', [FACTS], 'window');
         expect(events.at(-1)).toEqual({ kind: 'facts', facts: FACTS });
     });
@@ -82,7 +82,7 @@ describe('what the browser needs', () => {
         const { service } = setup();
         await service.call('publish', [FACTS], 'window');
         await expect(service.call('publish', [{ frontDoorPort: 'x' }], 'window')).rejects.toThrow(/facts/);
-        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS });
+        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: true });
     });
 });
 
@@ -99,6 +99,31 @@ describe('a browser leaving', () => {
         await service.call('register', [], 'browser');
         service.dropped('window');
         expect(await service.call('open', ['https://moic.gen/', 'background'], 'window2')).toEqual({ browserUp: true });
+    });
+
+    it('the window that published going means the front door is gone: the browser hears it, in time to say so', async () => {
+        const { service, events } = setup();
+        await service.call('publish', [FACTS], 'window');
+        await service.call('register', [], 'browser');
+        service.dropped('window');
+        expect(events.at(-1)).toEqual({ kind: 'door', up: false });
+        await service.call('publish', [FACTS], 'window2');
+        expect(events).toContainEqual({ kind: 'door', up: true });
+    });
+
+    it('CONTROL: another client going says nothing about the door', async () => {
+        const { service, events } = setup();
+        await service.call('publish', [FACTS], 'window');
+        const before = events.length;
+        service.dropped('someone-else');
+        expect(events).toHaveLength(before);
+    });
+
+    it('a browser linking after the window went hears that too', async () => {
+        const { service } = setup();
+        await service.call('publish', [FACTS], 'window');
+        service.dropped('window');
+        expect(await service.call('register', [], 'browser')).toEqual({ facts: FACTS, doorUp: false });
     });
 
     it('a method it does not know is refused', async () => {
