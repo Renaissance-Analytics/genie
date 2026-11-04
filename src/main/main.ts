@@ -118,6 +118,7 @@ import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRu
 import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
+import { materializeHostRuntime } from './host-runtime.js';
 import { LoginHost } from './login-host.js';
 import { openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
@@ -1477,6 +1478,11 @@ async function boot(): Promise<void> {
      * in-process engine below, said on the Deck (plan §4.1).
      */
     {
+        // P6: the host runs from a copy under Genie's home, so an update doesn't have to end it. Only the first run of a new
+        // Electron copies the runtime; every failure answers the install, with the reason.
+        const hostBuildNow = hostBuild(app.getVersion(), join(here, 'host.js'));
+        const hostRuntime = await materializeHostRuntime({ packaged: app.isPackaged, platform: process.platform, execPath: process.execPath, electronVersion: process.versions.electron ?? 'unknown', appRoot: app.getAppPath(), unpackedRoot: `${app.getAppPath()}.unpacked`, hostHash: hostBuildNow.replace(/[^A-Za-z0-9._-]/g, '_'), genieHome: genieHome(), log: lifecycleLog });
+        if (hostRuntime.error !== null) mainErrors.record('agent-host', new Error(hostRuntime.error));
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
             onLinked: (client) => { handProxyAnswers = () => reportProxies(client, lifecycleLog); void handProxyAnswers(); },
@@ -1485,9 +1491,9 @@ async function boot(): Promise<void> {
                 runtimeDir: runtimeDir(genieHome()),
                 logsDir: join(genieHome(), 'logs'),
                 // The host's build: this version, and the host bundle's own bytes — a rebuilt host is a new host.
-                build: hostBuild(app.getVersion(), join(here, 'host.js')),
-                hostScript: join(here, 'host.js'),
-                execPath: process.execPath,
+                build: hostBuildNow,
+                hostScript: hostRuntime.hostScript,
+                execPath: hostRuntime.execPath,
                 genieHome: genieHome(),
                 env: process.env,
                 log: lifecycleLog,
