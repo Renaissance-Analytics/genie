@@ -12,6 +12,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -57,9 +58,11 @@ const data = mkdtempSync(join(tmpdir(), 'site-panel-data-'));
 const ws = mkdtempSync(join(tmpdir(), 'site-panel-ws-'));
 const WORKSPACE = 'sitepanelws';
 const HOST = 'panelsite.gen';
-mkdirSync(join(ws, 'public'), { recursive: true });
-writeFileSync(join(ws, 'public', 'index.html'), '<!doctype html><title>panelsite</title><p>panel page</p>\n');
-writeFileSync(join(ws, 'project.json'), `${JSON.stringify({ name: 'Site panel', sites: { panelsiteaaaaaaaa: { repo: '', runMode: 'host', kind: 'http', enabled: true, name: 'panelsite', genName: HOST, hostServe: { mode: 'static', root: 'public' } } } }, null, 2)}\n`);
+// A site with its own server: a route with no Caddy, as a site's proxy needs none here.
+const siteServer = createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><title>panelsite</title><p>panel page</p>'); });
+await new Promise((r) => siteServer.listen(0, '127.0.0.1', r));
+siteServer.unref();
+writeFileSync(join(ws, 'project.json'), `${JSON.stringify({ name: 'Site panel', sites: { panelsiteaaaaaaaa: { repo: '', runMode: 'host', kind: 'http', enabled: true, name: 'panelsite', genName: HOST, hostPort: siteServer.address().port } } }, null, 2)}\n`);
 mkdirSync(join(home, 'runtime'), { recursive: true });
 writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WORKSPACE, path: ws }], null, 2));
 
@@ -98,15 +101,25 @@ try {
     await sleep(2500);
     check((await webviews()).length === 0, 'a file:// and an open-web webview are refused: no guest', JSON.stringify((await webviews()).map((t) => t.url)));
 
-    const prepared = await until(`${HOST} to be served`, 45_000, async () => { const r = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`); console.log(`  prepare: ${JSON.stringify(r)}`); return r.ok ? r : null; });
+    // A site waits for the person's first start; this is that click's action.
+    const prepared = await until(`${HOST} to be served`, 45_000, async () => {
+        const r = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`);
+        if (r.ok) return r;
+        const state = await cdp.evaluate(`window.genie.features.snapshot().then((d) => JSON.stringify((d.hosting?.sites ?? []).map((x) => ({ id: x.id, host: x.host, state: x.state, reason: x.reason ?? x.error ?? null }))))`);
+        console.log(`  prepare: ${JSON.stringify(r)}; sites: ${state}`);
+        const site = JSON.parse(state ?? '[]').find((x) => x.host === HOST);
+        if (site) console.log(`  start: ${JSON.stringify(await cdp.evaluate(`window.genie.features.act({ kind: 'hosting.startSite', siteId: ${JSON.stringify(site.id)} }).then((r) => JSON.stringify(r ?? null), (e) => String(e))`))}`);
+        return null;
+    });
     check(prepared?.ok === true, 'CONTROL an enabled site is allowed, with its store routed', JSON.stringify(prepared));
 
     // Through the product: the tab's panel, not a tag of ours.
     const tabs = { tabs: [{ id: 'sitetab', name: 'SiteTab', layout: 'single', cells: [{ kind: 'site', ref: HOST }] }] };
     const set = await cdp.evaluate(`window.genie.workspaces.setSetting(${JSON.stringify(WORKSPACE)}, 'workspace_tabs', ${JSON.stringify(JSON.stringify(tabs))})`);
     console.log(`  setSetting: ${JSON.stringify(set)}`);
-    await cdp.evaluate(`window.location.hash = '#genie://workspace/${WORKSPACE}'; true`);
-    const opened = await until('the tab', 20_000, () => cdp.evaluate(`(() => { const t = [...document.querySelectorAll('button,[role=tab]')].find((b) => b.textContent.trim() === 'SiteTab'); if (t) t.click(); return !!document.querySelector('[data-site-panel-box]'); })()`));
+    await cdp.evaluate(`window.location.hash = '#genie://workspace/${WORKSPACE}?view=tab:sitetab'; true`);
+    const opened = await until('the tab', 20_000, () => cdp.evaluate(`!!document.querySelector('[data-site-panel-box]')`));
+    if (opened !== true) console.log(`  at the failure: ${await cdp.evaluate(`JSON.stringify({ hash: location.hash, text: (document.querySelector('[data-surface="workspace"]')?.textContent ?? 'no workspace surface').slice(0, 300) })`)}`);
     check(opened === true, 'the workspace tab shows the site panel');
 
     const guest = await until('the guest', 20_000, async () => (await webviews()).find((t) => t.url.includes(HOST)) ?? null);
@@ -127,7 +140,7 @@ try {
     const before = (await webviews()).find((t) => t.url.includes(HOST))?.id;
     await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
     await sleep(1500);
-    const hidden = await cdp.evaluate(`getComputedStyle([...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)}))).visibility`);
+    const hidden = await cdp.evaluate(`(() => { const v = [...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)})); return v ? getComputedStyle(v).visibility : 'no such webview'; })()`);
     check(hidden === 'hidden', 'off screen, the page is hidden', String(hidden));
     check((await webviews()).find((t) => t.url.includes(HOST))?.id === before && before !== undefined, 'and the same guest is still there', String(before));
     cdp.close();
