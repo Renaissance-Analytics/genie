@@ -25,7 +25,7 @@ const shellAsk: PermissionRequestLike = {
 };
 let home: string;
 let folder: string;
-let run: DoctorRun;
+let run: DoctorRun | null = null;
 const kai = agentRecord({ id: mintAgentId(), workspaceId: 'ws', provider: 'claude', name: 'kai' });
 
 beforeEach(async () => {
@@ -37,7 +37,8 @@ beforeEach(async () => {
     await store.writeAgents([kai]);
 });
 afterEach(async () => {
-    await run.stop();
+    await run?.stop();
+    run = null;
     await rm(home, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
 });
 
@@ -51,9 +52,10 @@ function doctor() {
             return { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } };
         }) as unknown as SessionDriverFactory;
     };
-    run = new DoctorRun({ genieHome: home, besideHome: join(home, 'doctor-beside'), genieRunning: () => ({ running: false, pid: null, agents: null }) as never, prepareOsaHome: async () => {}, driverFor, processTree: tree });
+    const made = new DoctorRun({ genieHome: home, besideHome: join(home, 'doctor-beside'), genieRunning: () => ({ running: false, pid: null, agents: null }) as never, prepareOsaHome: async () => {}, driverFor, processTree: tree });
+    run = made;
     const call = async (name: string, args: Record<string, unknown>) => {
-        const tool = run.tools().find((t) => t.definition.name === name);
+        const tool = made.tools().find((t) => t.definition.name === name);
         if (!tool) throw new Error(`no tool ${name}`);
         const r = await tool.handler(args as never, { server: 'genie', tool: name, headers: {} });
         return { isError: r.isError, json: JSON.parse(r.text) as Record<string, any> };
