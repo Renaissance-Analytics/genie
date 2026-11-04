@@ -40,19 +40,41 @@ describe('with no site chosen', () => {
 });
 
 describe('the Electron half (read from source)', () => {
-    const code = readFileSync('src/main/site-panels-electron.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
-    it('the Genie browser’s own session — its .gen routing and Genie’s CA — not the window’s', () => {
-        expect(code).toMatch(/genieBrowserSession\(/);
-        expect(code).not.toMatch(/defaultSession|fromPartition/);
+    const strip = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+    const code = strip('src/main/site-panels-electron.ts');
+
+    it('no view of main\u2019s: the page is a <webview> in the window, so no bounds or show cross to main', () => {
+        expect(code).not.toMatch(/WebContentsView|site-panel:show|site-panel:hide|site-panel:reload/);
     });
-    it('a page isolated from Node, with no preload, not sandboxed (a sandboxed child view renders blank, electron#44897)', () => {
-        const prefs = /new WebContentsView\(\{ webPreferences: \{([^}]*)\} \}\)/.exec(code)?.[1] ?? '';
-        expect(prefs).toMatch(/contextIsolation: true/);
-        expect(prefs).toMatch(/nodeIntegration: false/);
-        expect(prefs).toMatch(/sandbox: false/);
-        expect(prefs).not.toMatch(/preload/);
+
+    it('each main window is guarded as it is built, and its guests are driven as any page', () => {
+        expect(code).toMatch(/guardSiteWebviews\(window\.webContents, /);
+        expect(code).toMatch(/attachPageNavigation\(/);
     });
-    it('a page’s new window opens in the Genie browser window, never a window of its own', () => {
-        expect(code).toMatch(/setWindowOpenHandler\(\(\{ url \}\) => \{\s*options\.openInWindow\(url, 'background'\);\s*return \{ action: 'deny' \};/);
+
+    it('the session is the site\u2019s workspace\u2019s store, from main\u2019s own list, and routed before the renderer may load', () => {
+        expect(code).toMatch(/workspaceBrowserSession\(/);
+        expect(code).toMatch(/options\.workspaceOfHost\(/);
+        expect(code).toMatch(/'site-panel:prepare'[\s\S]*?await [^\n]*routed/);
+        expect(code).not.toMatch(/defaultSession|fromPartition|panelKey/);
+    });
+
+    it('webviewTag is on for the main window alone, and never for a window driving another machine', () => {
+        const main = strip('src/main/main.ts');
+        expect(main.match(/webviewTag/g) ?? []).toHaveLength(1);
+        expect(main).toMatch(/webviewTag: !search,/);
+    });
+
+    it('a workspace store comes from a chosen path, and is guarded and routed like the browser\u2019s', () => {
+        const browser = strip('src/main/genie-browser-electron.ts');
+        const fn = browser.slice(browser.indexOf('export function workspaceBrowserSession'));
+        expect(fn).toMatch(/session\.fromPath\(browserStorePath\(/);
+        expect(fn).toMatch(/guardSession\(/);
+        expect(fn).toMatch(/routeSession\(/);
+    });
+
+    it('the renderer keeps its panels in step with the tabs, from the layer', () => {
+        const workspace = strip('src/renderer/components/Workspace.tsx');
+        expect(workspace).toMatch(/\.retainIn\(workspace\.id, sitePanelKeys\(workspace\.id, /);
     });
 });
