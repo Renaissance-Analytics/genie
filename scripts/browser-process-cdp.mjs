@@ -77,7 +77,7 @@ const xvfb = spawn('Xvfb', [DISPLAY, '-screen', '0', '1440x900x24'], { stdio: 'i
 xvfb.unref();
 await sleep(1000);
 const env = { ...process.env, DISPLAY, HOME: user, GENIE_HOME: home };
-const app = spawn('npx', ['electron', '.', '--no-sandbox', `--remote-debugging-port=${PORT}`, `--genie-browser-debug-port=${BROWSER_PORT}`, `--user-data-dir=${data}`], { env, stdio: ['ignore', log, log], detached: true });
+const app = spawn('npx', ['electron', '.', '--no-sandbox', '--password-store=gnome-libsecret', `--remote-debugging-port=${PORT}`, `--genie-browser-debug-port=${BROWSER_PORT}`, `--user-data-dir=${data}`], { env, stdio: ['ignore', log, log], detached: true });
 const end = (code) => {
     for (const p of processes()) if (p.args.includes(data) || p.args.includes('--genie-browser') || p.args.includes(home)) { try { process.kill(p.pid, 'SIGKILL'); } catch { /* gone */ } }
     try { process.kill(-app.pid, 'SIGKILL'); } catch { /* gone */ }
