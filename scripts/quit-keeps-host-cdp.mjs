@@ -200,7 +200,7 @@ function launch(label) {
     const out = openSync(log, 'a');
     const argv = ['electron', `--inspect=${INSPECT}`, '.', `--remote-debugging-port=${PORT}`, ...launchArgs()];
     // GENIE_TRAY_PROBE=1: main.ts's read-only tray probe exists only in a launch that asks for it (this proof's).
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE2_CODEX_BINARY: process.env.GENIE2_CODEX_BINARY || join(process.cwd(), 'scripts', 'stub-codex.mjs'), GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     const exited = new Promise((r) => {
         child.once('exit', (code, signal) => { gone = true; r({ code, signal }); });
