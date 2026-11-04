@@ -1,7 +1,8 @@
+import { claudeArgs } from '@particle-academy/prism-acp';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { permissionDecisionFor } from '../src/core/agent-ops.js';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
@@ -25,20 +26,29 @@ afterEach(() => { rmSync(dir, { recursive: true, force: true, maxRetries: 20, re
 
 describe('the launch', () => {
     it('trusted: nothing changes', () => {
-        expect(claudeTrustOptions({}, null)).toEqual({});
-        expect(claudeTrustOptions({ binaryArgs: ['/s.mjs'] }, null)).toEqual({});
+        expect(claudeTrustOptions(null)).toEqual({});
     });
 
     it("untrusted: the person's own settings only, Genie's own servers only, and Genie's words by file", () => {
-        expect(claudeTrustOptions({}, FILES)).toEqual({
+        expect(claudeTrustOptions(FILES)).toEqual({
             settingSources: ['user'],
             strictMcpConfig: true,
-            binaryArgs: ['--append-system-prompt-file', FILES.promptFile, '--plugin-dir', FILES.pluginDir],
+            appendSystemPromptFile: FILES.promptFile,
+            pluginDirs: [FILES.pluginDir],
         });
     });
 
-    it('a provider configured as a script stays first: the flags are arguments to it', () => {
-        expect(claudeTrustOptions({ binaryArgs: ['/s.mjs'] }, FILES).binaryArgs).toEqual(['/s.mjs', '--append-system-prompt-file', FILES.promptFile, '--plugin-dir', FILES.pluginDir]);
+    it('what the provider library really puts on the command line for them, and the paths it requires', () => {
+        const absolute = { promptFile: resolve('/genie/prompt.md'), pluginDir: resolve('/genie/plugin') };
+        const args = claudeArgs({ cwd: absolute.pluginDir, ...claudeTrustOptions(absolute) });
+        expect(args.slice(args.indexOf('--append-system-prompt-file'), args.indexOf('--append-system-prompt-file') + 2)).toEqual(['--append-system-prompt-file', absolute.promptFile]);
+        expect(args.slice(args.indexOf('--plugin-dir'), args.indexOf('--plugin-dir') + 2)).toEqual(['--plugin-dir', absolute.pluginDir]);
+        expect(args).toEqual(expect.arrayContaining(['--strict-mcp-config', '--setting-sources', 'user']));
+        expect(() => claudeArgs({ cwd: absolute.pluginDir, ...claudeTrustOptions({ promptFile: 'relative/prompt.md', pluginDir: absolute.pluginDir }) })).toThrow(/appendSystemPromptFile/);
+    });
+
+    it('no flags of its own through binaryArgs: a provider configured as a script keeps exactly its own', () => {
+        expect(claudeTrustOptions(FILES)).not.toHaveProperty('binaryArgs');
     });
 
     it('Codex: an agent set to run unasked does not, while untrusted', () => {
