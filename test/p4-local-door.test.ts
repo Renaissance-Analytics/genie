@@ -42,6 +42,8 @@ let dir: string;
 let devices: DeviceStore;
 let invoke: ReturnType<typeof vi.fn<HostApi['invoke']>>;
 let eventListeners: Set<(channel: string, payload: unknown) => void>;
+let activeConnections: Set<protocol.ServerConnection>;
+let acceptRemote: (connection: protocol.ServerConnection) => void;
 const clients: RemoteClient[] = [];
 
 function port(contents: FakeContents, frame = contents.mainFrame): LocalFramePort {
@@ -77,8 +79,23 @@ function attachHost(transport: protocol.ServerTransport) {
             workspaceOfAgent: () => 'work',
         },
         hostName: 'door-contract-host', baton, devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
-        transport,
+        transport: { onConnection: (listener) => transport.onConnection((connection) => {
+            activeConnections.add(connection);
+            connection.onClose(() => { activeConnections.delete(connection); });
+            listener(connection);
+        }) },
     });
+}
+
+async function remoteDriver() {
+    const pair = protocol.inMemoryPair();
+    acceptRemote(pair.server);
+    const client = connectRemote(pair.client, { kind: 'token', token: devices.pair('remote driver').token }, 'remote driver');
+    clients.push(client);
+    await settled();
+    expect(await client.ready).toEqual({ ok: true });
+    expect(await client.takeBaton()).toEqual({ ok: true });
+    return client;
 }
 
 beforeEach(async () => {
@@ -89,13 +106,18 @@ beforeEach(async () => {
     devices = await DeviceStore.open(dir, { now: Date.now, random: () => `door-fixture-${++tokenSeq}` });
     baton = new Baton();
     eventListeners = new Set();
+    activeConnections = new Set();
     invoke = vi.fn(async () => ({ seen: true }));
-    host = attachHost(door);
+    const hub = protocol.transportHub({ onConnection: (listener) => { acceptRemote = listener; return () => {}; } });
+    hub.add(door);
+    host = attachHost(hub);
 });
 
 afterEach(async () => {
     for (const c of clients.splice(0)) c.close();
     await settled();
+    expect(activeConnections.size).toBe(0);
+    expect(eventListeners.size).toBe(0);
     door.dispose();
     vi.restoreAllMocks();
     await devices.flushed();
@@ -110,7 +132,7 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         expect(client.state()).toMatchObject({ isOwner: true, workspaceId: null, token: null });
         expect(frames().find((f) => f.kind === 'welcome')).not.toHaveProperty('token');
         expect(devices.list()).toEqual([]);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
         expect(eventListeners.size).toBe(1);
     });
 
@@ -120,7 +142,7 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         await settled();
         expect(opened.frames()).toContainEqual({ kind: 'refused', reason: expect.stringMatching(/window|preload|admit/i) });
         expect(await opened.client.ready).toMatchObject({ ok: false, reason: expect.any(String) });
-        expect(host.connections()).toEqual([]);
+        expect(activeConnections.size).toBe(0);
         expect(eventListeners.size).toBe(0);
     });
 
@@ -132,7 +154,7 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         expect(child.frames()).toContainEqual({ kind: 'refused', reason: expect.stringMatching(/top.level|main frame/i) });
         expect(await child.client.ready).toMatchObject({ ok: false });
         await connected(contents);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
     });
 
     it('the real door is the positive control for a local-capability call, with exact method, arguments and null result', async () => {
@@ -153,7 +175,7 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         opened.transport.send(JSON.stringify({ kind: 'hello', auth: { kind: 'local' } }));
         await settled();
         expect(opened.client.state().lastRefusal).toMatch(/already|hello/i);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
     });
 });
 
@@ -184,45 +206,49 @@ describe('the door answers while Genie is still starting', () => {
         const ready = await connected(contents);
         expect(await ready.client.bridge.workspaces.settings('work')).toEqual({ seen: true });
         expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work']);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
         expect(eventListeners.size).toBe(1);
     });
 });
 
 describe('door connection ownership and cleanup', () => {
-    it('opening again replaces the live connection and releases its baton and subscriptions', async () => {
+    it('opening again replaces the local connection and preserves the remote driver', async () => {
         const contents = new FakeContents();
         door.admit(contents.asPort());
+        await remoteDriver();
+        const holder = baton.holder();
         const first = await connected(contents);
-        expect(await first.client.takeBaton()).toEqual({ ok: true });
-        expect(baton.holder()).not.toBeNull();
         const second = await connected(contents);
         expect(first.client.state().connected).toBe(false);
         expect(second.client.state().connected).toBe(true);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(2);
         expect(eventListeners.size).toBe(1);
-        expect(baton.holder()).toBeNull();
+        expect(baton.holder()).toEqual(holder);
         first.transport.send(JSON.stringify({ kind: 'call', id: 99, method: 'workspaces.settings', args: ['work'] }));
         await settled();
         expect(invoke).not.toHaveBeenCalled();
     });
 
-    it.each(['reload', 'destroy', 'renderer gone', 'client close', 'door disposal'])('%s releases the connection, baton and API listener', async (how) => {
+    it.each(['reload', 'destroy', 'renderer gone', 'client close', 'door disposal'])('%s releases the local connection while preserving the remote driver; last close releases the API listener', async (how) => {
         const contents = new FakeContents();
         door.admit(contents.asPort());
+        const remote = await remoteDriver();
+        const holder = baton.holder();
         const opened = await connected(contents);
-        await opened.client.takeBaton();
-        expect(baton.holder()).not.toBeNull();
         if (how === 'reload') contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
         if (how === 'destroy') contents.destroy();
         if (how === 'renderer gone') contents.emit('render-process-gone');
         if (how === 'client close') opened.client.close();
         if (how === 'door disposal') door.dispose();
         await settled();
-        expect(host.connections()).toEqual([]);
+        expect(activeConnections.size).toBe(1);
+        expect(baton.holder()).toEqual(holder);
+        expect(eventListeners.size).toBe(1);
+        expect(opened.client.state().connected).toBe(false);
+        remote.close(); await settled();
+        expect(activeConnections.size).toBe(0);
         expect(baton.holder()).toBeNull();
         expect(eventListeners.size).toBe(0);
-        expect(opened.client.state().connected).toBe(false);
     });
 
     it('same-document and subframe navigation retain the connection; reload permits a new top-level frame', async () => {
@@ -240,7 +266,7 @@ describe('door connection ownership and cleanup', () => {
         const second = await connected(contents);
         expect(first.client.state().connected).toBe(false);
         expect(second.client.state().connected).toBe(true);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
     });
 
     it('closing one window keeps the other window and its subscriptions alive', async () => {
@@ -251,13 +277,11 @@ describe('door connection ownership and cleanup', () => {
         const live = await connected(b);
         a.destroy();
         await settled();
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
         expect(eventListeners.size).toBe(1);
-        const snapshots: unknown[] = [];
-        live.client.bridge.subscribe((snapshot) => snapshots.push(snapshot));
-        for (const listener of eventListeners) listener('snapshot', { workspaces: null });
+        for (const listener of eventListeners) listener('workspace-settings-changed', 'work');
         await settled();
-        expect(snapshots).toEqual([{ workspaces: null }]);
+        expect(live.frames()).toContainEqual({ kind: 'event', channel: 'workspace-settings-changed', payload: 'work' });
     });
 
     it('old connection frames and close messages leave a replacement connection alive', async () => {
@@ -271,7 +295,7 @@ describe('door connection ownership and cleanup', () => {
         await settled();
         expect(invoke).not.toHaveBeenCalled();
         expect(replacement.client.state().connected).toBe(true);
-        expect(host.connections()).toHaveLength(1);
+        expect(activeConnections.size).toBe(1);
     });
 
     it('an in-flight result from before reload never reaches the new frame or connection', async () => {
@@ -324,7 +348,7 @@ describe('the local door retains a 1 MiB UTF-8 protocol frame cap in both direct
         await settled();
         expect(invoke).not.toHaveBeenCalled();
         expect(opened.frames()).toContainEqual({ kind: 'refused', reason: expect.stringMatching(/string|text/i) });
-        expect(host.connections()).toEqual([]);
+        expect(activeConnections.size).toBe(0);
         expect(eventListeners.size).toBe(0);
     });
 
@@ -343,7 +367,7 @@ describe('the local door retains a 1 MiB UTF-8 protocol frame cap in both direct
             expect(invoke).not.toHaveBeenCalled();
             expect(opened.frames()).toContainEqual({ kind: 'refused', reason: expect.stringContaining('1 MiB') });
             expect(opened.client.state().connected).toBe(false);
-            expect(host.connections()).toEqual([]);
+            expect(activeConnections.size).toBe(0);
         }
     });
 
@@ -361,7 +385,7 @@ describe('the local door retains a 1 MiB UTF-8 protocol frame cap in both direct
         else {
             expect(opened.frame.sent.some((f) => f.text === text)).toBe(false);
             expect(opened.frames()).toContainEqual({ kind: 'refused', reason: expect.stringContaining('1 MiB') });
-            expect(host.connections()).toEqual([]);
+            expect(activeConnections.size).toBe(0);
             expect(eventListeners.size).toBe(0);
         }
     });

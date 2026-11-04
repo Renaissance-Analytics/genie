@@ -90,6 +90,9 @@ interface Connection {
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
 const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.');
 
+/** Extended only when a family moves. Unmoved local views retain their existing subscriptions. */
+const LOCAL_EVENTS = new Set(['workspace-settings-changed']);
+
 /** A push a connection does not receive. */
 const NOT_SENT = Symbol('not sent');
 
@@ -165,7 +168,7 @@ export class RemoteHost {
     /** Someone wants this agent's detail: a window that is not a phone (it hears every agent), or a phone watching it. */
     #wantsAgent(agentId: string): boolean {
         for (const c of this.#connections.values()) {
-            if (c.auth === null) continue;
+            if (c.auth === null || c.local) continue;
             if (c.profile !== 'mobile' || c.watching.has(agentId)) return true;
         }
         return false;
@@ -178,7 +181,7 @@ export class RemoteHost {
             connection.pendingPair = null;
         }
         const was = this.#connections.delete(connection.id);
-        if (was && connection.auth !== null) this.#changed();
+        if (was && connection.auth !== null && !connection.local) this.#changed();
         if ([...this.#connections.values()].some((c) => c.auth !== null)) return;
         this.#stopListening?.();
         this.#stopListening = null;
@@ -248,7 +251,7 @@ export class RemoteHost {
     connections(): Array<{ id: string; label: string; isOwner: boolean; workspaceId: string | null; driving: boolean }> {
         const driver = this.#baton.holder()?.connectionId ?? null;
         return [...this.#connections.values()]
-            .filter((c) => c.auth !== null)
+            .filter((c) => c.auth !== null && !c.local)
             .map((c) => ({ id: c.id, label: c.auth!.label, isOwner: c.auth!.isOwner, workspaceId: c.auth!.workspaceId, driving: c.id === driver }));
     }
 
@@ -369,13 +372,15 @@ export class RemoteHost {
             ...(token ? { token } : {}),
         });
         this.#listen();
-        this.#changed();
+        if (!connection.local) this.#changed();
     }
 
     async #call(connection: Connection, id: number, method: RemoteMethod | ControlMethod, args: unknown[]): Promise<WireMessage> {
         const auth = connection.auth!;
         const ok = (value: unknown): WireMessage => ({ kind: 'result', id, ok: true, value });
         const refuse = (reason: string): WireMessage => ({ kind: 'result', id, ok: false, reason });
+
+        if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
 
         switch (method) {
             case 'baton.take': {
@@ -545,6 +550,7 @@ export class RemoteHost {
     #broadcast(channel: string, payload: unknown): void {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
+            if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);
