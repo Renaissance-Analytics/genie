@@ -46,7 +46,7 @@ describe('elevationPlan', () => {
             command: 'powershell',
             args: ['-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop'; $env:XDG_DATA_HOME='C:\\Users\\me\\.genie\\caddy\\data'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\Program Files\\Genie\\resources\\runtime\\caddy.exe' -ArgumentList @('"trust"','"--config"','"C:\\Users\\me\\.genie\\caddy\\Caddyfile"','"--adapter"','"caddyfile"'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`],
         });
-        expect(elevationPlan('win32', { command: 'x.exe', args: ["it's"] }).args[3]).toBe(`$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'x.exe' -ArgumentList @('"it''s"'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
+        expect(elevationPlan('win32', { command: 'C:\\x.exe', args: ["it's"] }).args[3]).toBe(`$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\x.exe' -ArgumentList @('"it''s"'); if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
     });
 
     // The bug this fixes: `Start-Process -Wait` alone returns nothing, so the launcher exited 0 whatever the elevated
@@ -58,7 +58,7 @@ describe('elevationPlan', () => {
         expect(script.startsWith(`$ErrorActionPreference='Stop'; `)).toBe(true);
         expect(script).toContain("-ArgumentList @('\"-addstore\"','\"-f\"','\"Root\"','\"C:\\Users\\me\\.genie\\runtime\\gen-ca\\ca.crt\"')");
         // No arguments: no empty -ArgumentList (Start-Process refuses an empty array).
-        expect(elevationPlan('win32', { command: 'x.exe', args: [] }).args[3]).toBe(`$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'x.exe'; if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
+        expect(elevationPlan('win32', { command: 'C:\\x.exe', args: [] }).args[3]).toBe(`$ErrorActionPreference='Stop'; $p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\x.exe'; if ($null -eq $p) { exit 1 }; exit $p.ExitCode`);
     });
 });
 
@@ -133,7 +133,7 @@ describe('ONE prompt for a batch (genie#604): elevationBatchPlan', () => {
         expect(plan.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command']);
         // COUNTED: one RunAs — one prompt — for two steps.
         expect(plan.args[3]!.match(/-Verb RunAs/g) ?? []).toHaveLength(1);
-        expect(plan.args[3]).toMatch(/^\$ErrorActionPreference='Stop'; \$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1\\.0\\\\powershell\\.exe' -ArgumentList @\('-NoProfile','-NonInteractive','-EncodedCommand','[A-Za-z0-9+/=]+'\); if \(\$null -eq \$p\) \{ exit 1 \}; exit \$p\.ExitCode$/);
+        expect(plan.args[3]).toMatch(/^\$ErrorActionPreference='Stop'; \$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe' -ArgumentList @\('-NoProfile','-NonInteractive','-EncodedCommand','[A-Za-z0-9+/=]+'\); if \(\$null -eq \$p\) \{ exit 1 \}; exit \$p\.ExitCode$/);
         expect(decoded(plan).split('\n')).toEqual([
             `& 'C:\\Windows\\System32\\certutil.exe' '-addstore' '-f' 'Root' 'C:\\Users\\Jo Example\\.genie\\runtime\\gen-ca\\ca.crt'`,
             'if ($LASTEXITCODE -ne 0) { exit 90 }',
