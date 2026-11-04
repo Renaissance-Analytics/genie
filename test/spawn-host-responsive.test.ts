@@ -190,8 +190,12 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         });
         try {
             if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGSTOP');
-            await run();
-            if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGCONT');
+            // Woken whatever the run did: a stopped process does not end when it's told to, and the gauge waits for it to.
+            try {
+                await run();
+            } finally {
+                if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGCONT');
+            }
             // Long enough for a held main's queued beat to be read, and for a witness that just woke to write the gap it woke to.
             await moreBeats(forcing.stopTheWitness ? 12 : 3);
         } finally {
