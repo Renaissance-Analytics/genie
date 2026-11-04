@@ -1,8 +1,9 @@
-import { execFile } from 'node:child_process';
+import { execFile, type ChildProcess, type ExecFileOptions } from 'node:child_process';
 import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';
 import { isLocalPathLike } from '../core/envelope-plan.js';
+import { subtreeOf, systemProcessTree, type ProcessTree } from '../core/process-tree.js';
 import { resolveProgram } from '../core/program-lookup.js';
 import { gitMayRun } from './git-read-policy.js';
 
@@ -18,12 +19,54 @@ export class GitDidNotAnswer extends Error {
     }
 }
 
-/** The read, or a {@link GitDidNotAnswer} at the limit. `stop` ends what it started. */
-export function withinGitLimit<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
-    const stop = new AbortController();
+/** A read inside the limit runs its git through this, so the limit knows what to end. */
+export interface GitLimit {
+    /** The child, for what writes to it; `null` when the limit has already passed and `callback` has been told. */
+    git(args: readonly string[], options: ExecFileOptions, callback: (error: Error | null, stdout: string | Buffer, stderr: string | Buffer) => void): ChildProcess | null;
+}
+
+/**
+ * What the limit ends: git, and what git started under it, a hook's child above all, which keeps the folder open and
+ * would never end by itself. Read BEFORE the kill: once git is gone, its children's link to it is what cannot be walked.
+ * Through the process tree's rules (`core/process-tree.ts`): the same process by pid, start time and name, the descendants
+ * this reading verified, no `/T`. A child that a hook detached from its parent before the reading is not found.
+ */
+async function endGitTrees(children: readonly ChildProcess[], tree: ProcessTree): Promise<void> {
+    const running = children.filter((child) => child.exitCode === null && child.signalCode === null && child.pid !== undefined);
+    if (running.length === 0) return;
+    try {
+        const table = tree.read ? await tree.read() : tree.snapshot();
+        if (table !== null) {
+            const pids = new Set(running.map((child) => child.pid));
+            const targets = subtreeOf(table, table.filter((p) => pids.has(p.pid)));
+            if (tree.reap) await tree.reap(targets, table);
+            else tree.killTree(targets, table);
+        }
+    } finally {
+        // Whatever the reading could not find or refused: git itself still ends.
+        for (const child of running) child.kill();
+    }
+}
+
+/** The read, or a {@link GitDidNotAnswer} at the limit, and then what it started is ended. */
+export function withinGitLimit<T>(run: (limit: GitLimit) => Promise<T>, tree: ProcessTree = systemProcessTree): Promise<T> {
+    const children: ChildProcess[] = [];
+    let over = false;
+    const limit: GitLimit = {
+        git: (args, options, callback) => {
+            if (over) { callback(new GitDidNotAnswer(), '', ''); return null; }
+            const child = execFile(resolveProgram('git'), [...args], { windowsHide: true, ...options }, callback);
+            children.push(child);
+            return child;
+        },
+    };
     return new Promise<T>((resolve, reject) => {
-        const timer = setTimeout(() => { reject(new GitDidNotAnswer()); stop.abort(); }, GIT_READ_LIMIT.ms);
-        run(stop.signal).then(
+        const timer = setTimeout(() => {
+            over = true;
+            reject(new GitDidNotAnswer());
+            void endGitTrees(children, tree).catch((error: unknown) => console.error(`[git] what a read started could not be ended: ${error instanceof Error ? error.message : String(error)}`));
+        }, GIT_READ_LIMIT.ms);
+        run(limit).then(
             (value) => { clearTimeout(timer); resolve(value); },
             (error: unknown) => { clearTimeout(timer); reject(error); },
         );
@@ -173,8 +216,8 @@ export function gitShowHead(root: string, rel: string): Promise<string | null> {
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((signal) => new Promise<string | null>((resolve) => {
-        execFile(resolveProgram('git'), ['show', `HEAD:./${name}`], { cwd, signal, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
+    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((limit) => new Promise<string | null>((resolve) => {
+        limit.git(['show', `HEAD:./${name}`], { cwd, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
     }))));
 }
 
@@ -187,12 +230,12 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
     const parts = rel.split('/');
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
-    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((signal) => new Promise<GitFileState | null>((resolve) => {
-        execFile(resolveProgram('git'), ['status', '--porcelain=v1', '--', name], { cwd, signal, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(cwd).then((may) => (!may ? null : withinGitLimit((limit) => new Promise<GitFileState | null>((resolve) => {
+        limit.git(['status', '--porcelain=v1', '--', name], { cwd }, (error, stdout) => {
             if (error) { resolve(null); return; }
             const line = String(stdout).split('\n').find((l) => l.length > 0);
             if (line !== undefined) { resolve(line.startsWith('??') ? 'untracked' : 'modified'); return; }
-            execFile(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', name], { cwd, signal, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
+            limit.git(['ls-files', '--error-unmatch', '--', name], { cwd }, (e2) => resolve(e2 ? null : 'committed'));
         });
     }))));
 }
@@ -203,8 +246,8 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
  * "nothing to show" is the honest answer there.
  */
 export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]> {
-    return gitMayRun(path).then((may) => (!may ? [] : withinGitLimit((signal) => new Promise<GitCommit[]>((resolve) => {
-        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x00%s%x00%an%x00%ct%x00'], { cwd: path, signal, windowsHide: true }, (error, stdout) => {
+    return gitMayRun(path).then((may) => (!may ? [] : withinGitLimit((limit) => new Promise<GitCommit[]>((resolve) => {
+        limit.git(['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x00%s%x00%an%x00%ct%x00'], { cwd: path }, (error, stdout) => {
             if (error) { resolve([]); return; }
             // NUL between fields: a commit's text cannot hold one, so a subject cannot shift the fields after it.
             const fields = String(stdout).split('\0');
@@ -224,11 +267,11 @@ export type GitTreeState = 'modified' | 'added' | 'deleted' | 'untracked';
  * workspace's prefix and anything outside it is dropped. Not a repository: an empty map, "nothing to show".
  */
 export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState>> {
-    return gitMayRun(root).then((may) => (!may ? {} : withinGitLimit((signal) => new Promise((resolve) => {
-        execFile(resolveProgram('git'), ['rev-parse', '--show-prefix'], { cwd: root, signal, windowsHide: true }, (error, prefixOut) => {
+    return gitMayRun(root).then((may) => (!may ? {} : withinGitLimit((limit) => new Promise((resolve) => {
+        limit.git(['rev-parse', '--show-prefix'], { cwd: root }, (error, prefixOut) => {
             if (error) { resolve({}); return; }
             const prefix = String(prefixOut).trim();
-            execFile(resolveProgram('git'), ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, signal, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
+            limit.git(['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
                 if (e2) { resolve({}); return; }
                 const out: Record<string, GitTreeState> = {};
                 const fields = String(stdout).split('\0');

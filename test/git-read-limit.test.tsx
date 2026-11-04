@@ -1,10 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { analyseFolder } from '../src/main/envelope-fs.js';
 import { GIT_READ_LIMIT, GitDidNotAnswer, gitFileStatus, gitLogSince, gitShowHead, gitTreeStatus } from '../src/main/git-ports.js';
 import { repoDiff, repoStatus } from '../src/main/repo-git.js';
 import { GitReadProblem } from '../src/renderer/components/GitReadProblem.js';
@@ -51,6 +52,23 @@ describe('the limit', () => {
         expect(await gitTreeStatus(plain)).toEqual({});
         expect(await gitLogSince(plain, 0)).toEqual([]);
     });
+});
+
+// A pipe for a config file: every git in this repository waits on it for ever. Git cannot check one out, so this is a way to make a read hang, and Windows has none: the limit under it is the one the rows below prove there.
+describe.skipIf(process.platform === 'win32')("the wizard's read of a folder has the limit too", () => {
+    let config: string;
+    beforeEach(() => {
+        config = join(repo, '.git', 'config');
+        rmSync(config);
+        execFileSync('mkfifo', [config]);
+        GIT_READ_LIMIT.ms = 500;
+    });
+    // Whatever is still waiting on the pipe sees its end.
+    afterEach(() => { closeSync(openSync(config, constants.O_RDWR | constants.O_NONBLOCK)); });
+
+    it('it fails in words, which the wizard shows, and does not wait for ever', async () => {
+        await expect(analyseFolder(repo)).rejects.toThrow(/did not answer/);
+    }, 15_000);
 });
 
 describe('past it, what the read started is ended', () => {

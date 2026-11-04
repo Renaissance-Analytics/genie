@@ -1258,14 +1258,17 @@ export class SessionHost {
         return this.#running.get(agentId)?.launchedUntrusted ?? null;
     }
 
-    /** Skeleton. */
-    holdForNextWork(_agentId: AgentId, _text: string): boolean {
+    /** A word held for the next turn this run opens (`AgentSession.holdForNextWork`); `false` = no session to hold it. */
+    holdForNextWork(agentId: AgentId, text: string): boolean {
+        const entry = this.#running.get(agentId);
+        if (!entry || !entry.session.running) return false;
+        entry.session.holdForNextWork(text);
         return true;
     }
 
-    /** Skeleton. */
-    withdrawHeld(_agentId: AgentId): boolean {
-        return false;
+    /** True = it was still held, and now it is not. */
+    withdrawHeld(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.withdrawHeld() ?? false;
     }
 
     /** A restart now would cut nothing (`AgentSession.quiet`); `false` when the agent has no session. */
