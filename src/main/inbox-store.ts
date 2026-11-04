@@ -3,7 +3,8 @@ import { constants as fsConstants } from 'node:fs';
 import { copyFile, mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { appSenderId, isAppSender, readAppSender, type AppMessageMeta } from '../core/app-inbox.js';
-import { ATTACHMENT_LIMITS, HUMAN, attachmentRefusal, isExecutableName, type Participant } from '../core/inbox.js';
+import { ATTACHMENT_LIMITS, HUMAN, attachmentRefusal, isExecutableName, pausedAgentReply, type InboxSessionProbe, type Participant } from '../core/inbox.js';
+import { asAgentId } from '../core/identity.js';
 import { sequenceV1Mail, type V1InboxPlan } from '../core/v1-inbox.js';
 import { runtimeDir } from './paths.js';
 import { readJson, writeJsonAtomic } from './store.js';
@@ -56,6 +57,8 @@ export interface InboxMessage {
     readonly sentAt: string;
     /** When the recipient's acknowledged receive returned it. `null` = unread. */
     readonly readAt: string | null;
+    /** Genie-generated status, not an agent-authored reply or a grant of conversation-opening permission. */
+    readonly automaticReply?: { readonly kind: 'paused'; readonly inReplyTo: string };
     /**
      * An APP sent it (genie#1345, core/app-inbox.ts): the site, process or script key, as Genie decided from its
      * credential, and what it reported beside the text. Absent on every message a person or an agent sent — and only
@@ -154,17 +157,19 @@ export class InboxStore {
     readonly #sendListeners = new Set<(to: Participant, message: InboxMessage) => void>();
     readonly #readListeners = new Set<(reader: Participant, ids?: readonly string[]) => void>();
     readonly #now: () => string;
+    readonly #sessionOf: InboxSessionProbe;
 
-    private constructor(dir: string, mail: MailFile, now: () => string) {
+    private constructor(dir: string, mail: MailFile, now: () => string, sessionOf: InboxSessionProbe) {
         this.#dir = dir;
         this.#mail = mail;
         this.#now = now;
+        this.#sessionOf = sessionOf;
     }
 
-    static async open(userData: string, now: () => string = () => new Date().toISOString()): Promise<InboxStore> {
+    static async open(userData: string, now: () => string = () => new Date().toISOString(), sessionOf: InboxSessionProbe = () => null): Promise<InboxStore> {
         const dir = join(runtimeDir(userData), 'inbox');
         const mail = await readJson<MailFile>(join(dir, 'mail.json'), { messages: [], cursors: {} });
-        return new InboxStore(dir, mail, now);
+        return new InboxStore(dir, mail, now, sessionOf);
     }
 
     get mailFile(): string {
@@ -238,12 +243,12 @@ export class InboxStore {
         return gone;
     }
 
-    /** Whether `from` has ever sent `to` a message — read from the durable mail, so it survives a restart. What makes a reply allowed. */
+    /** Whether `from` authored mail to `to`; generated status is not consent to open a conversation. Durable across restarts. */
     hasWritten(from: Participant, to: Participant): boolean {
-        return this.#mail.messages.some((m) => m.from === from && m.to === to);
+        return this.#mail.messages.some((m) => m.from === from && m.to === to && m.automaticReply === undefined);
     }
 
-    async send(input: SendInput): Promise<InboxMessage> {
+    async send(input: SendInput): Promise<InboxMessage & { readonly pauseNotice?: string }> {
         // AN APP'S IDENTITY, BOTH WAYS (genie#1345): only the app door sends as an app — with the facts of the very app
         // its `from` names — and nothing sends app facts under anyone else's `from`. An app attaches nothing: attachments
         // are PATHS this store reads, which would let an app make Genie read any file. Nobody writes TO an app.
@@ -259,7 +264,6 @@ export class InboxStore {
         // message is not delivered, no blob lands, and the caller is told which path.
         const attachments = await this.#stageAttachments(input.from, input.attachments ?? [], input.workspaceRoot, input.files ?? []);
         const seq = Math.max(this.#mail.lastSeq ?? 0, this.#mail.messages.at(-1)?.seq ?? 0) + 1;
-        this.#mail.lastSeq = seq;
         const message: InboxMessage = {
             seq,
             id: `msg_${randomUUID()}`,
@@ -271,14 +275,34 @@ export class InboxStore {
             readAt: null,
             ...(input.app ? { app: input.app } : {}),
         };
-        this.#mail.messages.push(message);
+        const arrivals: InboxMessage[] = [message];
+        const fromAgent = asAgentId(input.from);
+        const toAgent = asAgentId(input.to);
+        let pauseNotice: string | null = null;
+        if (fromAgent && toAgent && fromAgent !== toAgent) {
+            try { pauseNotice = pausedAgentReply(this.#sessionOf(toAgent)); } catch {
+                // Unknown availability must not refuse ordinary mail or invent a pause.
+            }
+        }
+        if (pauseNotice !== null) {
+            arrivals.push({
+                seq: seq + 1, id: `msg_${randomUUID()}`, from: input.to, to: input.from,
+                text: pauseNotice, attachments: [], sentAt: message.sentAt, readAt: null,
+                automaticReply: { kind: 'paused', inReplyTo: message.id },
+            });
+        }
+        // One durable write before either arrival is announced. No recursive send: two paused agents cannot loop.
+        this.#mail.lastSeq = arrivals.at(-1)!.seq;
+        this.#mail.messages.push(...arrivals);
         await this.#flush();
 
-        for (const w of [...this.#waiters]) {
-            if (w.participant === input.to) w.wake();
+        for (const arrival of arrivals) {
+            for (const w of [...this.#waiters]) {
+                if (w.participant === arrival.to) w.wake();
+            }
+            for (const l of this.#sendListeners) l(arrival.to, arrival);
         }
-        for (const l of this.#sendListeners) l(input.to, message);
-        return message;
+        return pauseNotice === null ? message : { ...message, pauseNotice };
     }
 
     async receive(input: ReceiveInput): Promise<ReceivePage> {

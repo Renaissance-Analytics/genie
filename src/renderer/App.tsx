@@ -1878,7 +1878,12 @@ function DesktopApp({ bridge }: AppProps) {
             sitePanels={resolvedBridge?.sitePanels}
             activity={resolvedBridge?.activity}
             tynnBoard={tynnBoardHost}
-            readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => (r.ok ? r.commits : [])) : undefined}
+            readCommits={resolvedBridge ? (workspaceId, since) => resolvedBridge.workspaces.commitsSince(workspaceId, since).then((r) => {
+                if (r.ok) return r.commits;
+                // A workspace with nothing to read is an empty list. Git not answering is a failure the view shows.
+                if (r.gitDidNotAnswer) throw new Error(r.reason);
+                return [];
+            }) : undefined}
             filesWorkspaceId={filesWorkspaceId}
             onToggleFilesPin={toggleFilesPin}
             filesPopped={filesPopped}

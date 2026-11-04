@@ -1,7 +1,7 @@
 import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rename, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
+import { lstat, mkdir, stat, readdir as readdirP, readFile as readFileP, rename, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
@@ -23,7 +23,7 @@ import { runV1InboxImport } from './v1-inbox.js';
 import { runV1ServicesAdoption } from './v1-services.js';
 import { runV1FlowImport } from './v1-flows.js';
 import { ensureFlowToolKinds, questionWaiter, type FlowToolCall } from './flow-tools.js';
-import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type Resolution } from '../core/inbox.js';
+import { HUMAN, agentAddress, resolveAddress as resolveOnRoster, type InboxSessionProbe, type Resolution } from '../core/inbox.js';
 import type { AgentRecord } from '../core/identity.js';
 import type { McpServer } from '@particle-academy/prism-acp';
 import { OS_WORKSPACE } from '../core/os-agent.js';
@@ -71,13 +71,17 @@ import { RemoteHost, type HostApi } from './remote-host.js';
 import { loopbackAnswers, loopbackPortFree } from './port-probe.js';
 import { ServiceDriver, dockerRunnerOver, type DockerEventsPort, type DockerRunner } from './service-driver.js';
 import { ServiceRegistry } from './service-registry.js';
-import { DotEnvSync, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
+import { DotEnvSync, envFileSites, gitIgnoredOver, type DotEnvSyncPorts } from './dotenv-sync.js';
+import { fileIsTracked, folderGitConfig, setGitReadPolicy, trustAwarePolicy } from './git-read-policy.js';
+import { writeGenieInstructions } from './genie-instructions.js';
+import { WorkspaceTrust } from './workspace-trust-host.js';
 import { SettingsStore } from './settings-store.js';
 import { SiteManager, type PhpCgiResolution } from './site-manager.js';
 import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sites-host.js';
 import { readJson, writeJsonAtomic } from './store.js';
 import type { PtyPort } from './terminal-host.js';
 import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
+import { TRUST_PASS_MS, TrustWatch, watchOneFolder } from './trust-watch.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -92,6 +96,8 @@ import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
 
 export interface ComposeInput {
     readonly userData: string;
+    /** Read-only live pause state for AgentInbox's automatic replies; no session is started by this probe. */
+    readonly inboxSession?: InboxSessionProbe;
     readonly pty: PtyPort;
     /**
      * The supervisor's pty engine (sites, queue workers, the front door), when it is not `pty`: in Electron, the spawn
@@ -208,6 +214,12 @@ export interface ComposeInput {
     readonly mcpVerification?: () => Verification | null;
     /** Every tool Genie's MCP serves, with what it does — what every agent gets (Settings lists it). */
     readonly mcpTools?: () => readonly { name: string; description: string }[];
+    /** A workspace's trust verdict moved. */
+    readonly onTrustVerdict?: (workspaceId: string) => void;
+    /** The slow pass over what a verdict reads. Absent = `TRUST_PASS_MS`. */
+    readonly trustWatchEveryMs?: number;
+    /** False = no folder watchers, the slow pass alone. Absent = watch. */
+    readonly trustWatchFolders?: boolean;
     /**
      * The live agent roster — the same one the agents' own inbox tool resolves against. Late-bound: the registry
      * exists after composition. Addresses, names, uncollected mail and reminders all derive from it; absent = none.
@@ -280,6 +292,14 @@ export interface ComposedServices {
     readonly sites: SiteManager;
     /** The workspaces' declared sites over the manager: loaded at boot, started by v1's rule, created/removed into project.json. */
     readonly envelopeSites: EnvelopeSites;
+    /** What each workspace's own files say would run, and whether the person has said yes to it. */
+    readonly workspaceTrust: WorkspaceTrust;
+    /** Genie's own files for an agent whose workspace is not trusted, or `null`. */
+    untrustedFilesFor(record: { readonly workspaceId: string }): Promise<import('./session-host.js').GenieInstructionFiles | null>;
+    /** The workspaces read and not trusted, with what would run: the person's trust step. */
+    trustSteps(): readonly { readonly workspaceId: string; readonly changed: boolean; readonly list: import('../core/workspace-trust.js').TrustList }[];
+    /** The verdict as last read, without reading: for a shell call. A workspace not read yet is not trusted. */
+    untrustedNow(record: { readonly workspaceId: string }): boolean;
     /** Service engines per workspace (and the shared ones), on the Docker driver. */
     readonly engines: ServiceRegistry;
     /**
@@ -689,7 +709,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     const settings = await SettingsStore.open(input.userData, iso);
     await settings.carryOverFromV1(input.v1Settings());
 
-    const inbox = await InboxStore.open(input.userData, iso);
+    const inbox = await InboxStore.open(input.userData, iso, input.inboxSession);
     const attention = await AttentionStore.open(input.userData, inbox, iso);
     const knowledge = KnowledgeStore.open(input.userData, iso);
     // Genie 1's memories, once (knowledge-store.ts records it). Not gated on ~/.genie/v1-import.json: installs that
@@ -939,13 +959,59 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     // first snapshot lists them. A workspace added, hibernated or woken later is synced as it happens.
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     await envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] the workspaces' sites could not be loaded: ${error instanceof Error ? error.message : String(error)}`));
+    // One verdict for each workspace. Until a workspace has been read it is not trusted, so git reads there check its config first.
+    const trustFs = nodeEnvelopeFs();
+    const workspaceTrust = new WorkspaceTrust({
+        readText: trustFs.readText,
+        gitConfig: folderGitConfig,
+        isTracked: fileIsTracked,
+        workspaces: workspacesNow,
+        record: () => envelopeSites.trustRecord(),
+        recordWorkspace: (id, hash) => envelopeSites.recordWorkspace(id, hash),
+        approveSites: (id) => envelopeSites.approveSites(id),
+        verdictMoved: (id) => input.onTrustVerdict?.(id),
+    });
+    setGitReadPolicy(trustAwarePolicy((path) => workspaceTrust.isTrustedPath(path)));
+    // One pass at a time, and a quit waits for the one in flight: it reads through git in the workspace's folder and writes the record.
+    let trustPass: Promise<unknown> = Promise.resolve();
+    let trustClosed = false;
+    const refreshTrust = () => {
+        if (trustClosed) return;
+        trustPass = trustPass.then(() => Promise.all(workspacesNow().map((w) => workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)))));
+    };
+    refreshTrust();
+    // A pull while an agent runs: nobody asks for the verdict, so what it reads is watched (trust-watch.ts).
+    const trustWatch = new TrustWatch({
+        workspaces: workspacesNow,
+        readText: trustFs.readText,
+        fingerprint: async (path) => {
+            const info = await stat(path).catch(() => null);
+            return info ? `${info.mtimeMs}:${info.size}` : null;
+        },
+        watchFolder: (folder, changed) => (input.trustWatchFolders === false ? null : watchOneFolder(folder, changed)),
+        refresh: (id) => {
+            if (trustClosed) return;
+            trustPass = trustPass.then(() => workspaceTrust.refresh(id).catch((error: unknown) => console.error(`[trust] ${id} could not be read: ${error instanceof Error ? error.message : String(error)}`)));
+        },
+        settleMs: 500,
+    });
+    const watchPass = () => { trustWatch.pass().catch((error: unknown) => console.error(`[trust] ${error instanceof Error ? error.message : String(error)}`)); };
+    watchPass();
+    const trustWatchTimer = setInterval(watchPass, input.trustWatchEveryMs ?? TRUST_PASS_MS);
+    trustWatchTimer.unref();
+    /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
+    const mayWriteInto = async (folder: string): Promise<boolean> => {
+        const workspace = workspacesNow().find((w) => w.path === folder);
+        if (!workspace) return true;
+        return (await workspaceTrust.refresh(workspace.id))?.trusted !== false;
+    };
     // Only now does the hosts file follow the sites: the boot's declare-and-start burst is ONE sync of the whole
     // configured set, never a write of a half-loaded list (which would drop names, then prompt again to add them).
     frontDoorCtl.beginHosts();
     // Each site repo's `.env` follows the workspace's engines: after the sites are known, and on every engine or site change.
     const envFiles = new DotEnvSync({
         envFor: (workspaceId) => engines.envFor(workspaceId),
-        sites: () => sites.list(),
+        sites: () => envFileSites(sites.list()),
         fs: nodeEnvelopeFs(),
         gitIgnored: input.gitIgnored ?? gitIgnoredOver(execFileRunner),
         // The name each workspace was registered with (Settings → General "Env file name"); none recorded is `.env`.
@@ -957,7 +1023,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     engines.onChange(syncEnvFiles);
     sites.onChange(syncEnvFiles);
     const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
-        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`));
+        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(() => { refreshTrust(); watchPass(); });
     }) ?? (() => {});
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
@@ -1083,6 +1149,14 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             now,
             asleep,
             ports: (flow) => ({
+                escapesPromptValues: (address) => {
+                    const found = resolveOnRoster(address, roster(), input.workspaceSlugs?.());
+                    if (found.kind !== 'one') return false;
+                    const agent = roster().find((r) => r.id === found.id);
+                    if (agent?.provider !== 'codex') return false;
+                    const workspace = workspacesNow().find((w) => w.id === agent.workspaceId);
+                    return workspace !== undefined && workspaceTrust.view(workspace.id)?.trusted !== true;
+                },
                 promptAgent: agentPrompter({
                     sessions,
                     resolve: (text) => resolveOnRoster(text, roster(), input.workspaceSlugs?.()),
@@ -1145,6 +1219,24 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         supervisor,
         sites,
         envelopeSites,
+        workspaceTrust,
+        untrustedFilesFor: async (record) => {
+            const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
+            // Not in a workspace: the built-in Genie agent, in a folder of Genie's own.
+            if (!workspace) return null;
+            const view = await workspaceTrust.refresh(workspace.id);
+            if (view === null || view.trusted) return null;
+            return writeGenieInstructions(join(runtimeDir(input.userData), 'untrusted-agent'), input.mcpTools?.() ?? []);
+        },
+        trustSteps: () => workspacesNow().flatMap((workspace) => {
+            const view = workspaceTrust.view(workspace.id);
+            return view === null || view.trusted ? [] : [{ workspaceId: workspace.id, changed: view.changed, list: view.list }];
+        }),
+        untrustedNow(record) {
+            const workspace = workspacesNow().find((w) => w.id === record.workspaceId);
+            if (!workspace) return false;
+            return workspaceTrust.view(workspace.id)?.trusted !== true;
+        },
         engines,
         engineReconcile,
         envFiles,
@@ -1271,6 +1363,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         pluginsDir,
         pluginsRefresh: async () => { plugins = await openPlugins(); },
         syncConfig: async (workspacePath, source = 'start') => withConfig(workspacePath, async () => {
+            // Nothing of Genie's goes into a folder the person has not trusted, its token above all.
+            if (!(await mayWriteInto(workspacePath))) return [];
             const endpoint = input.mcpEndpoint?.() ?? null;
             if (!endpoint) {
                 const reason = 'Genie has no MCP endpoint yet (the server is not listening); nothing to write into the workspace';
@@ -1300,6 +1394,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
             return results;
         }),
         syncAgentDocs: async (workspacePath, source = 'start') => {
+            if (!(await mayWriteInto(workspacePath))) return;
             const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const on = settings.snapshot().mcp_sync_agents !== false;
             // One node fs for every step; each write and removal is reported to the health record Settings reads.
@@ -1334,6 +1429,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         setFlowToolCaller: (call) => { flowToolCall = call; handFlowTools(call); },
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
+            setGitReadPolicy(null);
             down ??= (async () => {
                 approvals.cancelAll('Genie is shutting down');
                 stopWatchingWorkspaces();
@@ -1351,6 +1447,10 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 for (const p of supervisor.list()) supervisor.stop(p.id);
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
                 await envFiles.close();
+                trustClosed = true;
+                clearInterval(trustWatchTimer);
+                trustWatch.stop();
+                await trustPass;
                 await new Promise<void>((r) => frontDoor.close(r));
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
                 // soon, and a quit does not wait on an agent — bounded, then the run is left unrecorded.

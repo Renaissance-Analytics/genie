@@ -48,6 +48,7 @@ import { OS_WORKSPACE, Registry } from './registry.js';
 import { readFile, realpath, rm } from 'node:fs/promises';
 import { sessionHostPort } from './agent-ops-host-port.js';
 import { GENIE_MANAGED_MCP, MCP_RECOVERY_ATTEMPTS, McpRecovery, missingServers, type McpServerReport } from '../core/mcp-missing.js';
+import { TrustVerdicts } from './trust-verdict.js';
 import { deleteAgent, diagnose, listModels, previewDelete, restartAgent, setAccessScope, setAutoApprove, setBudget, setManageTabs, setDrivePages, setIssueWatch, setMode, setModel, setPermissions, SettingApplier, switchDriver, type AgentOpsPorts } from './agent-ops-host.js';
 import { ProviderModelCache } from '../core/provider-models.js';
 import { issueWatchPrefsFor, type WatchedReposView } from '../core/issue-watch.js';
@@ -1070,6 +1071,12 @@ function agentFromRenderer(raw: unknown): AgentRecord | null {
 }
 
 let services: ComposedServices | null = null;
+/** Settles when the services are composed: an agent's launch asks them about its workspace first. */
+let servicesComposed: (value: ComposedServices) => void = () => {};
+const composedServices = new Promise<ComposedServices>((resolve) => { servicesComposed = resolve; });
+/** The same, for what must answer at once. Until then nothing is trusted. */
+let composedNow: ComposedServices | null = null;
+let trustVerdicts: TrustVerdicts | null = null;
 // Genie's own MCP server (§6.9) and what its boot probe said (§6.4 "native transport verified at boot").
 let mcp: GenieMcpServer | null = null;
 let mcpVerified: Verification | null = null;
@@ -1239,6 +1246,9 @@ async function boot(): Promise<void> {
     }
     host = new SessionHost({
         userData: genieHome(),
+        untrustedFilesFor: async (record) => (await composedServices).untrustedFilesFor(record),
+        untrustedNow: (record) => composedNow?.untrustedNow(record) ?? true,
+        markGenieWords: (id) => { void registry?.markGenieWords(id); },
         // What is read per call, not at start: a Claude agent's tool setting (genie#1188).
         currentRecord: (id) => registry?.find(id) ?? null,
         lifecycle: {
@@ -1702,6 +1712,22 @@ async function boot(): Promise<void> {
     });
     loginHost = logins;
     restartForMcp = (id) => restartAgent(agentOps, id, 'graceful').then(() => {}).finally(() => registry?.touch());
+    trustVerdicts = new TrustVerdicts({
+        agentsOf: (workspaceId) => (registry?.agentsOf(workspaceId) ?? []).map((a) => a.id),
+        untrustedNow: (id) => { const record = registry?.find(id); return record ? (composedNow?.untrustedNow(record) ?? true) : false; },
+        launchedUntrusted: (id) => host?.launchedUntrusted(id) ?? null,
+        quiet: (id) => host?.quiet(id) ?? false,
+        inTurn: (id) => host?.inTurn(id) ?? false,
+        workWaiting: (id) => host?.workWaiting(id) ?? false,
+        releaseWork: (id) => { host?.releaseWork(id); },
+        runOf: (id) => host?.runOf(id) ?? null,
+        hold: (id, text) => host?.holdForNextWork(id, text) ?? false,
+        withdraw: (id) => host?.withdrawHeld(id) ?? false,
+        notice: (id, text) => { host?.notice(id, text); },
+        // Quitting ends it anyway, and the next launch reads the verdict.
+        restart: (id) => (quit.quitting ? Promise.resolve({ ok: true as const }) : restartAgent(agentOps, id, 'graceful').finally(() => registry?.touch())),
+    });
+    host.subscribe((id) => trustVerdicts?.check(id));
     // TRY AGAIN, for a login whose account the provider paused (core/account-pause.ts): every agent it stopped comes back.
     retryPausedAccount = (provider) => {
         for (const id of host?.pausedAgents(provider) ?? []) {
@@ -2380,7 +2406,9 @@ async function boot(): Promise<void> {
     /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
     const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
     const composed = await composeServices({
+        onTrustVerdict: (workspaceId) => { trustVerdicts?.changed(workspaceId); requestFeaturePush(); },
         userData: genieHome(),
+        inboxSession: (id) => host?.probe(id) ?? null,
         pty: ptyPort,
         // Supervised processes (sites, workers, the front door) are created in the spawn host, never on main (genie#1397);
         // main's own engine takes them only if the spawn host cannot start.
@@ -2584,6 +2612,8 @@ async function boot(): Promise<void> {
         }),
     });
     services = composed;
+    composedNow = composed;
+    servicesComposed(composed);
     // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change
     // used to build its own snapshot concurrently, and they landed out of order.
     const featurePush = new LatestPush<FeatureData>({

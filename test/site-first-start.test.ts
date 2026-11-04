@@ -22,7 +22,7 @@ const manifestOf = (sites: Record<string, unknown>) => JSON.stringify({ name: 'A
 /** What survives a launch: the files, and the record on this machine. Each `launch()` is a new Genie over them. */
 function machine(files: Record<string, string>, over: { record?: unknown; recordUnreadable?: boolean; missing?: string[] } = {}) {
     const fs = new Map(Object.entries(files));
-    const state = { record: over.record ?? null, saves: 0, stops: [] as string[], missing: new Set(over.missing ?? []), saveFails: false };
+    const state = { record: over.record ?? null, saves: 0, stops: [] as string[], missing: new Set(over.missing ?? []), saveFails: false, saveGate: null as Promise<void> | null };
     const launch = () => {
         const opened: string[] = [];
         const logs: string[] = [];
@@ -41,7 +41,7 @@ function machine(files: Record<string, string>, over: { record?: unknown; record
             runState: { load: async () => state.stops, save: async (s) => { state.stops = [...s]; } },
             trust: {
                 load: async () => { if (over.recordUnreadable && state.saves === 0) throw new Error('not valid JSON'); return state.record === null ? null : JSON.parse(JSON.stringify(state.record)); },
-                save: async (book) => { if (state.saveFails) throw new Error('EROFS: read-only file system'); state.record = JSON.parse(JSON.stringify(book)); state.saves += 1; },
+                save: async (book) => { if (state.saveGate) await state.saveGate; if (state.saveFails) throw new Error('EROFS: read-only file system'); state.record = JSON.parse(JSON.stringify(book)); state.saves += 1; },
             },
             envFor: () => ({}),
             log: (l) => logs.push(l),
@@ -62,6 +62,38 @@ const settled = async (files: Record<string, string>) => {
     await m.launch().envelope.sync(noWorkspaces);
     return m;
 };
+
+describe('a workspace yes, while it is being saved', () => {
+    it('reads as not yet to anyone asking, so a read in that moment cannot keep a yes the save then refuses', async () => {
+        const m = await settled(webFiles());
+        const g = m.launch();
+        await g.envelope.sync([acme]);
+        let finish: () => void = () => {};
+        m.state.saveGate = new Promise((r) => { finish = r; });
+        m.state.saveFails = true;
+        const saving = g.envelope.recordWorkspace(acme.id, 'the-hash');
+        await Promise.resolve();
+        expect(g.envelope.trustRecord().workspaces[acme.id]).toBeUndefined();
+        finish();
+        await expect(saving).rejects.toThrow(/EROFS/);
+        expect(g.envelope.trustRecord().workspaces[acme.id]).toBeUndefined();
+    });
+
+    it('CONTROL: saved, it reads as said, and a save made meanwhile did not lose it', async () => {
+        const m = await settled(webFiles());
+        const g = m.launch();
+        await g.envelope.sync([acme]);
+        let finish: () => void = () => {};
+        m.state.saveGate = new Promise((r) => { finish = r; });
+        const saving = g.envelope.recordWorkspace(acme.id, 'the-hash');
+        await Promise.resolve();
+        expect(g.envelope.trustRecord().workspaces[acme.id]).toBeUndefined();
+        finish();
+        await saving;
+        expect(g.envelope.trustRecord().workspaces[acme.id]).toBe('the-hash');
+        expect((m.state.record as { workspaces: Record<string, string> }).workspaces[acme.id]).toBe('the-hash');
+    });
+});
 
 describe('a site first seen on this machine', () => {
     it('is listed, runs nothing, and its row says exactly what Start would run', async () => {

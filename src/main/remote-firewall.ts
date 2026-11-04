@@ -2,7 +2,7 @@
  * GENIE 1'S FIREWALL RULE, PORTED (v1 main/mobile/firewall.ts; Tynn #820). Unchanged but for the rule's name (below).
  */
 import { spawn } from 'node:child_process';
-import { resolveProgram } from '../core/program-lookup.js';
+import { resolveProgram, systemProgram } from '../core/program-lookup.js';
 
 /**
  * Windows Firewall rule management for the Mobile server port.
@@ -120,7 +120,7 @@ export async function firewallRuleExists(
  *  script, so the embedded quotes never cross a shell boundary unescaped. */
 function netshCmdline(args: string[]): string {
     return [
-        'netsh',
+        `& '${systemProgram('netsh').replace(/'/g, "''")}'`,
         ...args.map((a) => (a.startsWith('name=') ? `name="${FIREWALL_RULE_NAME}"` : a)),
     ].join(' ');
 }
@@ -150,7 +150,7 @@ export function buildInnerFirewallScript(port: number): string {
  */
 export function buildElevationCommand(encodedCommand: string): string {
     return (
-        `try { $p = Start-Process -FilePath 'powershell.exe' -ArgumentList ` +
+        `try { $p = Start-Process -FilePath '${systemProgram('powershell').replace(/'/g, "''")}' -ArgumentList ` +
         `'-NoProfile','-NonInteractive','-WindowStyle','Hidden','-EncodedCommand','${encodedCommand}' ` +
         `-Verb RunAs -Wait -PassThru; exit $p.ExitCode } catch { exit ${UAC_CANCELLED_EXIT} }`
     );

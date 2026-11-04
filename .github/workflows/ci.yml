@@ -251,6 +251,10 @@ jobs:
           timeout 300 node scripts/smoke-cdp.mjs
           timeout 300 node scripts/layout-sweep.mjs
 
+      # THE TRUST STEP, AS A PERSON SEES IT. It starts the app itself, on a home and a port of its own.
+      - name: the trust step in the real app
+        run: timeout 300 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' node scripts/trust-step-cdp.mjs
+
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
@@ -420,6 +424,13 @@ jobs:
           # taskkill sets $LASTEXITCODE, and the step's result is the last exit code: every failure above has
           # already thrown, so reaching here means the step passed.
           exit 0
+
+      # THE TRUST STEP, AS A PERSON SEES IT, as on Linux above.
+      - name: the trust step in the real app
+        shell: pwsh
+        run: |
+          node scripts/trust-step-cdp.mjs
+          if ($LASTEXITCODE -ne 0) { throw "trust-step-cdp failed (exit $LASTEXITCODE)" }
 
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397), as on Linux above.
       - name: the spawn host started in the real app
