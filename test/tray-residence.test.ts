@@ -119,6 +119,28 @@ describe('wireLoginItem', () => {
         expect(set).toHaveLength(4);
     });
 
+    it('a host left running: the entry goes on at once with the setting off, and off again when the mark clears (live, no restart)', async () => {
+        const store = await SettingsStore.open(dir);
+        const { port, set } = fakePort();
+        let mark = false;
+        let changed: (value: boolean) => void = () => {};
+        await wireLoginItem(store, port, WIN, { now: () => mark, onChange: (listener) => { changed = listener; } });
+        expect(set.at(-1)).toEqual({ openAtLogin: false, path: WIN.execPath, args: [] });
+        mark = true;
+        changed(true);
+        expect(set.at(-1)).toEqual({ openAtLogin: true, path: WIN.execPath, args: ['--hidden'] });
+        mark = false;
+        changed(false);
+        expect(set.at(-1)).toEqual({ openAtLogin: false, path: WIN.execPath, args: [] });
+    });
+
+    it('a mark already set at boot keeps the entry: a reboot does not lose it', async () => {
+        const store = await SettingsStore.open(dir);
+        const { port, set } = fakePort();
+        await wireLoginItem(store, port, WIN, { now: () => true, onChange: () => {} });
+        expect(set).toEqual([{ openAtLogin: true, path: WIN.execPath, args: ['--hidden'] }]);
+    });
+
     it('CONTROL: an unrelated setting changes nothing at the OS', async () => {
         const store = await SettingsStore.open(dir);
         const { port, set } = fakePort();
