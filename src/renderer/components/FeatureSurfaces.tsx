@@ -473,6 +473,15 @@ export function SiteRow({ site: s, editing, onAction, pending = null, refusal = 
                     {editing ? null : control('edit', 'Edit', 'pencil', { kind: 'hosting.editSite', siteId: s.id })}
                 </span>
             )}
+            {/* It has not run on this machine: exactly what Start runs, whole, before anyone presses it. */}
+            {s.firstStart ? (
+                <span data-site-first-start className="basis-full text-sm text-[var(--fg-3)]">
+                    <span {...(s.firstStart.changed ? { 'data-site-first-start-changed': '' } : {})} className={s.firstStart.changed ? 'text-[var(--warning)]' : undefined}>
+                        {s.firstStart.changed ? 'Changed since it last ran here. Start runs' : 'Not run on this machine yet. Start runs'}
+                    </span>{' '}
+                    <code className="break-all font-mono text-[var(--fg-1)]">{s.firstStart.runs}</code> in <code className="break-all font-mono">{s.firstStart.folder}</code>
+                </span>
+            ) : null}
             {editing ? (
                 <div data-site-edit={s.id} className="basis-full">
                     <AddSiteForm

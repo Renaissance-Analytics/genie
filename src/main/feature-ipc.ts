@@ -715,7 +715,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'hosting.updateSite': {
             // The same call an agent's `sites update` makes (hosting-actions.ts): the Add form's validation, one envelope write.
-            const r = await updateSite(services, { siteId: action.siteId, form: action.form });
+            const r = await updateSite(services, { siteId: action.siteId, form: action.form, person: true });
             if (r.kind === 'problems') {
                 const open = state.siteEditing ?? { siteId: action.siteId, host: services.sites.get(action.siteId)?.host ?? action.siteId, defaults: action.form, problems: [], ...(await phpChoices(services, ports)) };
                 next.siteEditing = { ...open, defaults: action.form, problems: r.problems };
@@ -726,7 +726,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         }
         case 'hosting.restartSite':
             // The same call an agent's `sites restart` makes: stopped and started again, and a remembered Stop lifted.
-            await restartSite(services, action.siteId);
+            await restartSite(services, action.siteId, { person: true });
             break;
         case 'hosting.openSite': {
             // The same call an agent's `sites open` makes: checked against the front door's routes, then shown in Genie's browser.
@@ -807,7 +807,7 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             break;
         case 'hosting.startSite':
             // The person's Start: serves a listed site that is not running, and lifts a remembered Stop.
-            await startSite(services, action.siteId);
+            await startSite(services, action.siteId, { person: true });
             break;
         case 'hosting.stopSite':
             // The person's Stop, remembered on this machine: the next launch leaves it down.

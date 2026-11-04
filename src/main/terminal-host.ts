@@ -44,6 +44,8 @@ export interface PtySpawnOptions {
     command?: string | undefined;
     /** Run `command` through the platform's shell (core/shell-launch.ts) rather than split into argv. */
     shell?: boolean | undefined;
+    /** A person's own terminal, not Genie's or an agent's: it finds programs as Windows does for anyone (core/program-lookup.ts). */
+    personal?: boolean | undefined;
     cols?: number | undefined;
     rows?: number | undefined;
     /**
@@ -120,6 +122,8 @@ export interface TerminalOptions {
     env?: Readonly<Record<string, string>> | undefined;
     /** Run `command` through the platform's shell (an agent's `manageTerminals create`). */
     shell?: boolean | undefined;
+    /** A person's own terminal, not Genie's or an agent's: it finds programs as Windows does for anyone (core/program-lookup.ts). */
+    personal?: boolean | undefined;
     /**
      * Counted against the workspace's terminal limit (core/shell-limits.ts) — every shell a person or an agent opens.
      * `false` for Genie's own system terminals: a Take Over of an agent, a provider login, the OS scratch shell.
@@ -260,6 +264,7 @@ export class TerminalHost {
             cwd: options.cwd,
             command: options.command,
             ...(options.shell ? { shell: true } : {}),
+            ...(options.personal ? { personal: true } : {}),
             ...(options.cols === undefined ? {} : { cols: options.cols }),
             ...(options.rows === undefined ? {} : { rows: options.rows }),
             ...(options.env === undefined ? {} : { env: options.env }),

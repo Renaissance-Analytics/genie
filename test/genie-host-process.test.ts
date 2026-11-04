@@ -11,6 +11,9 @@ import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SpawnHostClient } from '../src/main/spawn-host-client.js';
 import type { FilesHubEvent } from '../src/main/files-watch-hub.js';
 
+// By its whole address: on Windows a process entry moves to the home folder first (process-start.ts), where a bare 'tsx' does not resolve for what the host starts.
+const TSX = import.meta.resolve('tsx');
+
 /**
  * THE HOST IS ITS OWN PROCESS, AND AN AGENT OUTLIVES ITS WINDOW (the host split, phase 1).
  *
@@ -79,7 +82,7 @@ beforeAll(async () => {
     // The workspace its agents run in, as the host's registry knows it: the host prepares an agent, and refuses a workspace it has never heard of.
     await mkdir(join(home, 'runtime'), { recursive: true });
     await writeFile(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'ws', path: workspace }]));
-    hostProcess = spawn(process.execPath, ['--import', 'tsx', 'src/main/genie-host.ts'], {
+    hostProcess = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], {
         // The spawn host's real entry, as TypeScript (the host forks it with its own --import tsx).
         env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'test-build', GENIE2_CODEX_BINARY: STUB, GENIE_HOST_IDLE_MS: '600000', GENIE_SPAWN_HOST_ENTRY: resolve('src/main/spawn-host.ts') },
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -106,7 +109,7 @@ describe('genie-host as its own process', () => {
     });
 
     it('a second host for the same user finds the endpoint taken and exits, leaving the first serving', async () => {
-        const second = spawn(process.execPath, ['--import', 'tsx', 'src/main/genie-host.ts'], { env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'other' }, stdio: 'ignore' });
+        const second = spawn(process.execPath, ['--import', TSX, 'src/main/genie-host.ts'], { env: { ...process.env, GENIE_HOME: home, GENIE_HOST_BUILD: 'other' }, stdio: 'ignore' });
         const code = await new Promise<number | null>((r) => second.once('exit', r));
         expect(code).toBe(0);
         expect(parseHostRecord(await readText(join(home, 'runtime', 'host.json')))?.pid).toBe(hostProcess.pid);

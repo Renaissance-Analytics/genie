@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { redactSecrets } from '../core/github.js';
 import { commitIdentityConfig } from '../core/add-workspace.js';
 import { isLocalPathLike } from '../core/envelope-plan.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE GIT PORTS (§6.1): what the workspace ops call for `git init` and `git clone`. One place, so the
@@ -12,14 +13,14 @@ import { isLocalPathLike } from '../core/envelope-plan.js';
 
 export function gitInit(path: string): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-        execFile('git', ['init'], { cwd: path, windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
+        execFile(resolveProgram('git'), ['init'], { cwd: path, windowsHide: true }, (error, _stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve()));
     });
 }
 
 /** One git command in a folder; rejects with git's own words. */
 function git(cwd: string, args: readonly string[]): Promise<string> {
     return new Promise<string>((resolve, reject) => {
-        execFile('git', [...args], { cwd, windowsHide: true }, (error, stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve(String(stdout))));
+        execFile(resolveProgram('git'), [...args], { cwd, windowsHide: true }, (error, stdout, stderr) => (error ? reject(new Error(String(stderr ?? error.message).trim() || error.message)) : resolve(String(stdout))));
     });
 }
 
@@ -55,7 +56,7 @@ function gitWithAuth(cwd: string | undefined, args: readonly string[], auth?: Gi
     const env: NodeJS.ProcessEnv | undefined = auth && auth.config.length > 0 ? { ...process.env, ...gitConfigEnv(auth.config) } : undefined;
     const scrub = (text: string) => redactSecrets(text, auth?.secrets ?? []);
     return new Promise<string>((resolve, reject) => {
-        execFile('git', [...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }, (error, stdout, stderr) =>
+        execFile(resolveProgram('git'), [...args], { windowsHide: true, maxBuffer: 64 * 1024 * 1024, ...(cwd ? { cwd } : {}), ...(env ? { env } : {}) }, (error, stdout, stderr) =>
             (error ? reject(new Error(scrub(String(stderr ?? error.message).trim() || error.message))) : resolve(String(stdout))));
     });
 }
@@ -148,7 +149,7 @@ export function gitShowHead(root: string, rel: string): Promise<string | null> {
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
     return new Promise<string | null>((resolve) => {
-        execFile('git', ['show', `HEAD:./${name}`], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
+        execFile(resolveProgram('git'), ['show', `HEAD:./${name}`], { cwd, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : String(stdout)));
     });
 }
 
@@ -162,11 +163,11 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
     const name = parts.pop() ?? rel;
     const cwd = join(root, ...parts);
     return new Promise<GitFileState | null>((resolve) => {
-        execFile('git', ['status', '--porcelain=v1', '--', name], { cwd, windowsHide: true }, (error, stdout) => {
+        execFile(resolveProgram('git'), ['status', '--porcelain=v1', '--', name], { cwd, windowsHide: true }, (error, stdout) => {
             if (error) { resolve(null); return; }
             const line = String(stdout).split('\n').find((l) => l.length > 0);
             if (line !== undefined) { resolve(line.startsWith('??') ? 'untracked' : 'modified'); return; }
-            execFile('git', ['ls-files', '--error-unmatch', '--', name], { cwd, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
+            execFile(resolveProgram('git'), ['ls-files', '--error-unmatch', '--', name], { cwd, windowsHide: true }, (e2) => resolve(e2 ? null : 'committed'));
         });
     });
 }
@@ -178,7 +179,7 @@ export function gitFileStatus(root: string, rel: string): Promise<GitFileState |
  */
 export function gitLogSince(path: string, sinceMs: number): Promise<GitCommit[]> {
     return new Promise<GitCommit[]>((resolve) => {
-        execFile('git', ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x1f%s%x1f%an%x1f%ct'], { cwd: path, windowsHide: true }, (error, stdout) => {
+        execFile(resolveProgram('git'), ['log', `--since=${new Date(sinceMs).toISOString()}`, '--format=%h%x1f%s%x1f%an%x1f%ct'], { cwd: path, windowsHide: true }, (error, stdout) => {
             if (error) { resolve([]); return; }
             resolve(String(stdout).split('\n').filter((line) => line.length > 0).map((line) => {
                 const [sha, subject, author, ct] = line.split('\x1f');
@@ -198,10 +199,10 @@ export type GitTreeState = 'modified' | 'added' | 'deleted' | 'untracked';
  */
 export function gitTreeStatus(root: string): Promise<Record<string, GitTreeState>> {
     return new Promise((resolve) => {
-        execFile('git', ['rev-parse', '--show-prefix'], { cwd: root, windowsHide: true }, (error, prefixOut) => {
+        execFile(resolveProgram('git'), ['rev-parse', '--show-prefix'], { cwd: root, windowsHide: true }, (error, prefixOut) => {
             if (error) { resolve({}); return; }
             const prefix = String(prefixOut).trim();
-            execFile('git', ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
+            execFile(resolveProgram('git'), ['status', '--porcelain=v1', '-z', '--untracked-files=all', '--', '.'], { cwd: root, windowsHide: true, maxBuffer: 32 * 1024 * 1024 }, (e2, stdout) => {
                 if (e2) { resolve({}); return; }
                 const out: Record<string, GitTreeState> = {};
                 const fields = String(stdout).split('\0');

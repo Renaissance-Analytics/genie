@@ -2,6 +2,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs';
 import { promisify } from 'node:util';
 import type { RunningProcess } from './upgrade.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * Every process the OS can name WITH ITS EXECUTABLE PATH — what §7.2's teardown scans.
@@ -28,7 +29,7 @@ export function listProcesses(): readonly RunningProcess[] {
 export async function listProcessesAsync(): Promise<readonly RunningProcess[]> {
     try {
         if (process.platform !== 'win32') return posix();
-        const { stdout } = await promisify(execFile)('powershell', ['-NoProfile', '-Command', WIN32_LISTING], { encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+        const { stdout } = await promisify(execFile)(resolveProgram('powershell'), ['-NoProfile', '-Command', WIN32_LISTING], { encoding: 'utf8', timeout: 30_000, maxBuffer: 64 * 1024 * 1024, windowsHide: true });
         return parseWin32Listing(stdout);
     } catch {
         return [];
@@ -38,7 +39,7 @@ export async function listProcessesAsync(): Promise<readonly RunningProcess[]> {
 /** `killProcess` without holding the event loop: one pid, never a tree. */
 export async function killProcessAsync(pid: number): Promise<boolean> {
     try {
-        if (process.platform === 'win32') await promisify(execFile)('taskkill', ['/PID', String(pid), '/F'], { timeout: 10_000, windowsHide: true });
+        if (process.platform === 'win32') await promisify(execFile)(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { timeout: 10_000, windowsHide: true });
         else process.kill(pid, 'SIGKILL');
         return true;
     } catch {
@@ -53,7 +54,7 @@ export async function killProcessAsync(pid: number): Promise<boolean> {
 export function killProcess(pid: number): boolean {
     try {
         if (process.platform === 'win32') {
-            execFileSync('taskkill', ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 10_000 });
+            execFileSync(resolveProgram('taskkill'), ['/PID', String(pid), '/F'], { stdio: 'ignore', timeout: 10_000 });
         } else {
             process.kill(pid, 'SIGKILL');
         }
@@ -69,7 +70,7 @@ const WIN32_LISTING =
     'Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath } | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress';
 
 function win32(): RunningProcess[] {
-    const out = execFileSync('powershell', ['-NoProfile', '-Command', WIN32_LISTING], {
+    const out = execFileSync(resolveProgram('powershell'), ['-NoProfile', '-Command', WIN32_LISTING], {
         encoding: 'utf8',
         timeout: 30_000,
         maxBuffer: 64 * 1024 * 1024,

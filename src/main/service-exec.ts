@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { shellLaunch } from '../core/shell-launch.js';
+import { verbatimShellLaunch } from '../core/shell-launch.js';
 import { describeProcesses, stillRunning, subtreeOf, systemProcessTree, unionOf, type ProcessInfo, type ProcessTree } from '../core/process-tree.js';
 import type { ServiceExec } from './mcp-tools-hosting.js';
 
@@ -33,7 +33,7 @@ export function makeServiceExec(tree: ProcessTree): ServiceExec {
                 resolve({ exitCode: null, output: '', timedOut: false, aborted: true });
                 return;
             }
-            const launch = shellLaunch(process.platform, () => ({ command: process.env.SHELL || '/bin/sh', args: [] }), command);
+            const launch = verbatimShellLaunch(process.platform, () => ({ command: process.env.SHELL || '/bin/sh', args: [] }), command);
             let output = '';
             let written = 0;
             let timedOut = false;
@@ -45,7 +45,7 @@ export function makeServiceExec(tree: ProcessTree): ServiceExec {
             };
             let child: ReturnType<typeof spawn>;
             try {
-                child = spawn(launch.command, launch.args, { cwd, env: { ...process.env, ...env }, windowsHide: true, windowsVerbatimArguments: process.platform === 'win32' });
+                child = spawn(launch.command, launch.args, { cwd, env: { ...process.env, ...env }, windowsHide: true, windowsVerbatimArguments: launch.windowsVerbatimArguments });
             } catch (error) {
                 resolve({ exitCode: null, output: `could not start the command: ${error instanceof Error ? error.message : String(error)}`, timedOut: false });
                 return;
