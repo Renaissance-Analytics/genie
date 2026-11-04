@@ -10,7 +10,7 @@
  * file turns those answers into a status, a plan, and an outcome.
  */
 
-import type { LookupPorts } from './program-lookup.js';
+import { findBatchFile, type LookupPorts } from './program-lookup.js';
 import { phpAdvisoryText } from './php-advisories.js';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
@@ -82,8 +82,12 @@ export function vcRuntimeFiles(systemRoot: string): string[] {
  */
 const WINDOWS_SHIMS: ReadonlySet<string> = new Set(['npm', 'npx', 'composer', 'claude', 'codex']);
 
-export function platformArgv(binary: string, args: readonly string[], platform: Platform, _lookup?: LookupPorts): [string, string[]] {
-    if (platform === 'win32' && WINDOWS_SHIMS.has(binary)) return ['cmd.exe', ['/d', '/s', '/c', binary, ...args]];
+export function platformArgv(binary: string, args: readonly string[], platform: Platform, lookup: LookupPorts = { platform, env: process.env }): [string, string[]] {
+    if (platform === 'win32' && WINDOWS_SHIMS.has(binary)) {
+        // cmd's own search would look in its working folder first. `call` first, because /s strips a line's outer quotes when it starts with one.
+        const whole = findBatchFile(binary, lookup);
+        return ['cmd.exe', ['/d', '/s', '/c', ...(whole ? ['call', whole] : [binary]), ...args]];
+    }
     return [binary, [...args]];
 }
 
