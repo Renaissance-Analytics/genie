@@ -1698,6 +1698,9 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
             await services.syncAgentDocs(action.workspacePath, 'you');
             next.lastSync = { workspaceId: action.workspaceId, results: await services.syncConfig(action.workspacePath, 'you') };
             break;
+        case 'workspace.trust':
+            // Skeleton.
+            break;
         case 'browser.navigate': {
             const nav = classifyNavigation(action.url, services.routes());
             if (nav.kind === 'refused') throw new Error(nav.reason);

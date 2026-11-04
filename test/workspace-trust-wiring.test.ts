@@ -9,6 +9,7 @@ import { SessionHost, type DriverFor } from '../src/main/session-host.js';
 import { TRUST_PASS_MS } from '../src/main/trust-watch.js';
 import type { ComposedServices, composeServices } from '../src/main/compose.js';
 import { envFileSites } from '../src/main/dotenv-sync.js';
+import { featureSnapshot, handleFeatureAction, type FeatureState } from '../src/main/feature-ipc.js';
 import { gitMayRun } from '../src/main/git-read-policy.js';
 import { gitTreeStatus } from '../src/main/git-ports.js';
 import type { SiteInfo } from '../src/main/site-manager.js';
@@ -186,4 +187,42 @@ describe('a real pull moves the verdict, and the gate holds', () => {
         writeFileSync(join(clone, '.claude', 'settings.json'), SETTINGS('edited by hand'));
         await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false }); }, { timeout: 15_000, interval: 100 });
     }, 40_000);
+});
+
+describe('the trust step, through the real composition', () => {
+    const state = (): FeatureState => ({ toolStatuses: null, knowledgeQuery: '' });
+    const stepOf = async () => (await featureSnapshot(services, state())).trust?.find((row) => row.workspaceId === 'acme');
+    beforeEach(async () => {
+        workspaces = [{ id: 'acme', path: repo }];
+        // With an endpoint, so Genie has files to write once it may.
+        services = await composed.compose({
+            userData: join(dir, 'home'), pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, workspaces: () => workspaces,
+            mcpEndpoint: () => ({ url: 'http://127.0.0.1:43127/mcp', token: 'abc' }), mcpTools: () => [{ name: 'imDone', description: 'x' }],
+        } as Parameters<typeof composeServices>[0]);
+        await services.workspaceTrust.refresh('acme');
+    });
+
+    it('not trusted: the snapshot has the step and what would run', async () => {
+        const row = await stepOf();
+        expect(row).toMatchObject({ workspaceId: 'acme', changed: false });
+        expect(row?.list.gitKeys.map((e) => e.key)).toEqual(['core.fsmonitor']);
+    });
+
+    it("the person's yes: trusted, the step gone, and git and Genie's files are allowed from then", async () => {
+        await handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'acme', workspacePath: repo }, state());
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: true });
+        expect(await stepOf()).toBeUndefined();
+        expect(services.untrustedNow({ workspaceId: 'acme' })).toBe(false);
+        expect(existsSync(join(repo, '.mcp.json'))).toBe(true);
+    });
+
+    it('CONTROL: without it, none of that happened', async () => {
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: false });
+        expect(services.untrustedNow({ workspaceId: 'acme' })).toBe(true);
+        expect(existsSync(join(repo, '.mcp.json'))).toBe(false);
+    });
+
+    it('a workspace that is not there: refused, in words', async () => {
+        await expect(handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'gone', workspacePath: repo }, state())).rejects.toThrow(/gone/);
+    });
 });
