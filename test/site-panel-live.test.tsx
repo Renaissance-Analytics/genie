@@ -11,7 +11,7 @@ import { SitePanel } from '../src/renderer/components/SitePanel.js';
 
 const noop = () => {};
 const render = (host: string | null, live = true) => renderToStaticMarkup(
-    <SitePanel host={host} onPick={noop} {...(live ? { live: { panelKey: 'ws1:tab-1:0', onBounds: noop, onHide: noop, onReload: noop, onOpenInWindow: noop } } : {})} />,
+    <SitePanel host={host} onPick={noop} {...(live ? { live: { panelKey: 'ws1:tab-1:0', onBounds: noop, onHide: noop, onReload: noop, onBack: noop, onForward: noop, onState: () => noop, onOpenInWindow: noop } } : {})} />,
 );
 
 describe('a site panel with a site', () => {

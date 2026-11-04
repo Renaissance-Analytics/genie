@@ -943,6 +943,9 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 onBounds: (key: string, host: string, bounds: { x: number; y: number; width: number; height: number }) => { void siteWebviewLayerFor(sitePanels).show(key, host, bounds); },
                                 onHide: (key: string) => { siteWebviewLayerFor(sitePanels).hide(key); },
                                 onReload: (key: string) => { siteWebviewLayerFor(sitePanels).reload(key); },
+                                onBack: (key: string) => { siteWebviewLayerFor(sitePanels).back(key); },
+                                onForward: (key: string) => { siteWebviewLayerFor(sitePanels).forward(key); },
+                                onState: (key: string, listener: (state: { canGoBack: boolean; canGoForward: boolean; loading: boolean }) => void) => siteWebviewLayerFor(sitePanels).onState(key, listener),
                                 onOpenInWindow: (host: string) => { void sitePanels.openWindow(host); },
                             } : undefined;
                             return <SitePanel host={p.ref} live={live} onPick={(host) => { if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
