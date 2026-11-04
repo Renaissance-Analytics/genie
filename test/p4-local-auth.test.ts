@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Baton, PairingPins } from '../src/core/remote.js';
 import * as protocol from '../src/core/remote-protocol.js';
-import type { PreAuth, RemoteCapability, ServerConnection, WireMessage } from '../src/core/remote-protocol.js';
+import type { PreAuth, ServerConnection, WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost, type HostApi } from '../src/main/remote-host.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
@@ -121,7 +121,7 @@ describe('P4 local capability policy, with a test-only capability assignment', (
         const p = connect(proof, kind.startsWith('phone') ? 'mobile' : undefined);
         const token = devices.pair('paired owner').token;
         expect(await p.hello(relay ? { kind: 'relay' } : { kind: 'token', token })).toMatchObject({ kind: 'welcome' });
-        vi.spyOn(protocol, 'capabilityOf').mockReturnValue('local' as RemoteCapability);
+        vi.spyOn(protocol, 'capabilityOf').mockReturnValue('local');
         expect(await p.call('workspaces.settings', 'work')).toMatchObject({ kind: 'result', ok: false, reason: expect.any(String) });
         expect(invoke).not.toHaveBeenCalled();
     });

@@ -55,7 +55,7 @@ function port(contents: FakeContents, frame = contents.mainFrame): LocalFramePor
 
 function open(contents: FakeContents, frame = contents.mainFrame) {
     const transport = localTransport(port(contents, frame));
-    const client = connectRemote(transport, { kind: 'local' } as unknown as protocol.AuthRequest, 'this window');
+    const client = connectRemote(transport, { kind: 'local' }, 'this window');
     clients.push(client);
     const frames = () => frame.sent.filter((f) => f.action === 'frame').map((f) => JSON.parse(f.text) as protocol.WireMessage);
     return { client, transport, frames, frame };
@@ -135,7 +135,7 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         const contents = new FakeContents();
         door.admit(contents.asPort());
         const opened = await connected(contents);
-        vi.spyOn(protocol, 'capabilityOf').mockReturnValue('local' as protocol.RemoteCapability);
+        vi.spyOn(protocol, 'capabilityOf').mockReturnValue('local');
         invoke.mockResolvedValue(null);
         expect(await opened.client.bridge.workspaces.settings('work')).toBeNull();
         expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work']);

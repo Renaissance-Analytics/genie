@@ -5,7 +5,8 @@
  * `event` pushed host → client. Parsed defensively: a bad frame is a refusal with a reason, never a
  * throw. ONE table says what every bridge method is — a READ (never gated on the baton), a WRITE
  * (gated on the baton), an UPGRADE (gated on ownership of the host), or HOST-ONLY (a window or a
- * picker on the host, refused remotely with where to do it). Everything else derives from it.
+ * picker on the host, refused remotely with where to do it), or LOCAL (only the admitted window door).
+ * Everything else derives from it.
  */
 
 export const REMOTE_METHODS = [
@@ -111,7 +112,7 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
-export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only';
+export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
 const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     snapshot: 'read',
@@ -234,14 +235,18 @@ export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'a
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
     | { kind: 'token'; token: string; label?: string }
+    /** Only the local window door may supply the corresponding transport proof. Never a device credential. */
+    | { kind: 'local'; label?: string }
     /** Already authenticated by the TRANSPORT (the Tynn relay checked a grant and its key, Tynn #838): refused on any
      *  connection that carries no {@link PreAuth}, so a tailnet socket cannot claim it. */
     | { kind: 'relay'; label?: string }
     /** Only between a desktop window and its own host, which writes the token in (main/device-link-service.ts). Never reaches another machine. */
     | { kind: 'saved'; label?: string };
 
-/** Who a transport already proved a connection to be (the Tynn relay's grant, main/relay-grant.ts). */
+/** Who the admitting transport proved a connection to be: a relay grant or this host's own window door. */
 export interface PreAuth {
+    /** Omitted by existing relay transports. Only the local window door issues `local`. */
+    readonly kind?: 'relay' | 'local';
     readonly label: string;
     readonly isOwner: boolean;
     /** The one workspace a guest may reach; `null` = the whole host. */
@@ -301,8 +306,8 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             const okAuth =
                 (auth.kind === 'pin' && typeof auth.code === 'string') ||
                 (auth.kind === 'token' && typeof auth.token === 'string') ||
-                auth.kind === 'relay';
-            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token} or relay' };
+                auth.kind === 'relay' || auth.kind === 'local';
+            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, relay or local' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
             return { ok: true, message: raw as unknown as Frame<M> };
@@ -360,7 +365,7 @@ export interface ClientTransport {
 
 export interface ServerConnection extends ClientTransport {
     readonly remoteAddress: string;
-    /** Set by a transport that authenticated the connection itself (the Tynn relay); a `relay` hello takes it. */
+    /** Set by the admitting transport. A local proof accepts only `local`; a relay proof accepts only `relay`. */
     readonly preAuth?: PreAuth;
 }
 
