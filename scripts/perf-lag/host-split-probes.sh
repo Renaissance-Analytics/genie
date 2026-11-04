@@ -181,7 +181,7 @@ probe "tray-says-what-runs" src/main/tray.ts \
     test/tray.test.ts "WHAT it runs"
 
 probe "armed-flow-keeps-the-tray" src/core/tray-only.ts \
-    "    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks;" "    return a.agents + a.terminals + a.processes + a.services + a.scheduledTasks;" \
+    "    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks + a.browser;" "    return a.agents + a.terminals + a.processes + a.services + a.scheduledTasks + a.browser;" \
     test/tray-only.test.ts "and nothing running: stays"
 
 probe "scheduled-task-keeps-the-host" src/core/host-idle.ts \
