@@ -3,6 +3,8 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { platformArgv } from '../src/core/toolchain.js';
+import { execInProcess } from '../src/main/spawn-exec.js';
 import { hardenProcess, notFoundWords, resolveProgram, findBatchFile } from '../src/core/program-lookup.js';
 import { open as openEngine } from '@particle-academy/fancy-pty';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
@@ -382,6 +384,25 @@ pty.onExit(end);`;
             await arrived();
             await new Promise((r) => setTimeout(r, 200));
             expect(readFileSync(mark, 'utf8').trim()).toBe('run dev');
+        } finally {
+            process.env.PATH = was;
+        }
+    });
+
+    it('the toolchain: a shim with a space in its path really runs, gets its arguments and reports its exit code; a planted one in the working folder does not', async () => {
+        const tools = join(folder, 'tools with a space');
+        mkdirSync(tools);
+        const answer = join(folder, 'answer.txt');
+        writeFileSync(join(tools, 'npm.cmd'), `@echo %1 %2> "${answer}"\r\n@exit /b 7\r\n`);
+        writeFileSync(join(folder, 'npm.cmd'), `@echo ran> "${mark}"\r\n`);
+        const was = process.env.PATH;
+        process.env.PATH = `${tools};${was}`;
+        try {
+            const [binary, args] = platformArgv('npm', ['run', 'dev'], 'win32');
+            const result = await execInProcess(binary, args, { cwd: folder });
+            expect(readFileSync(answer, 'utf8').trim()).toBe('run dev');
+            expect(result.exitCode).toBe(7);
+            expect(ran()).toBe(false);
         } finally {
             process.env.PATH = was;
         }

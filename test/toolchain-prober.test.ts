@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { platformArgv } from '../src/core/toolchain.js';
 import { latestIndex, probeTools, runUpdate, shouldCheckUpdates, type CommandRunner } from '../src/main/toolchain-prober.js';
 
 /**
@@ -13,6 +14,9 @@ const runner = (table: Record<string, { stdout: string; exitCode: number } | 'EN
     if (hit === undefined || hit === 'ENOENT') throw Object.assign(new Error(`spawn ${binary} ENOENT`), { code: 'ENOENT' });
     return hit;
 };
+
+beforeEach(() => { vi.stubEnv('PATH', ''); });
+afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('probing', () => {
     it('reports every managed tool: installed version from its banner, latest from the index, and the honest tone', async () => {
@@ -162,5 +166,23 @@ describe('the "latest" lookup (latestIndex) — npm is npm.cmd on Windows', () =
     it('a runner that throws (npm absent) is the honest null — never a crash', async () => {
         const run: CommandRunner = async () => { throw Object.assign(new Error('spawn cmd.exe ENOENT'), { code: 'ENOENT' }); };
         expect(await latestIndex({ run, fetchJson: noFetch, platform: 'win32' })('claude-code')).toBeNull();
+    });
+});
+
+describe('a shim on Windows goes by its whole path', () => {
+    const machine = (files: string[], path = 'C:\\Program Files\\nodejs') => ({ platform: 'win32' as const, env: { PATH: path }, isFile: (p: string) => files.includes(p.toLowerCase()) });
+    const NPM = 'c:\\program files\\nodejs\\npm.cmd';
+
+    it('found on an absolute PATH entry: through call, which keeps /s from stripping the quotes a space in its path needs', () => {
+        expect(platformArgv('npm', ['--version'], 'win32', machine([NPM]))).toEqual(['cmd.exe', ['/d', '/s', '/c', 'call', 'C:\\Program Files\\nodejs\\npm.cmd', '--version']]);
+    });
+
+    it('not found: the name, so cmd answers not found as it does today', () => {
+        expect(platformArgv('npm', ['--version'], 'win32', machine([]))).toEqual(['cmd.exe', ['/d', '/s', '/c', 'npm', '--version']]);
+    });
+
+    it('CONTROL: not a shim, and not Windows, unchanged', () => {
+        expect(platformArgv('git', ['--version'], 'win32', machine([NPM]))).toEqual(['git', ['--version']]);
+        expect(platformArgv('npm', ['--version'], 'linux', machine([NPM]))).toEqual(['npm', ['--version']]);
     });
 });

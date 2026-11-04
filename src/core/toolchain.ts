@@ -10,6 +10,7 @@
  * file turns those answers into a status, a plan, and an outcome.
  */
 
+import type { LookupPorts } from './program-lookup.js';
 import { phpAdvisoryText } from './php-advisories.js';
 
 export type Platform = 'win32' | 'darwin' | 'linux';
@@ -81,7 +82,7 @@ export function vcRuntimeFiles(systemRoot: string): string[] {
  */
 const WINDOWS_SHIMS: ReadonlySet<string> = new Set(['npm', 'npx', 'composer', 'claude', 'codex']);
 
-export function platformArgv(binary: string, args: readonly string[], platform: Platform): [string, string[]] {
+export function platformArgv(binary: string, args: readonly string[], platform: Platform, _lookup?: LookupPorts): [string, string[]] {
     if (platform === 'win32' && WINDOWS_SHIMS.has(binary)) return ['cmd.exe', ['/d', '/s', '/c', binary, ...args]];
     return [binary, [...args]];
 }
