@@ -439,6 +439,16 @@ describe("Genie's words, once in a thread", () => {
         expect(t.fakes[0]!.prompts[1]).toBe('more');
     });
 
+    it('Codex has no file route: its first work carries them, even on a new thread, once', async () => {
+        const t = launch({ threadId: null, provider: 'codex' } as Partial<AgentRecord>);
+        t.host.start(t.record(), dir);
+        await flush();
+        expect(t.marks).toEqual([]);
+        await work(t, 'work');
+        expect(t.fakes[0]!.prompts).toEqual(['genie words\n\nwork']);
+        expect(t.marks).toEqual([t.record().id]);
+    });
+
     it('that thread on its next launch: not twice', async () => {
         const t = launch({ threadId: 'thread-1', genieWordsInThread: true });
         t.host.start(t.record(), dir);

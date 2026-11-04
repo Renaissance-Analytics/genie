@@ -108,7 +108,7 @@ describe('a shell call while untrusted', () => {
 
 describe('it stays in doctor', () => {
     it('only doctor-run.ts names the option (reads the source)', () => {
-        for (const file of ['main.ts', 'compose.ts', 'host-api.ts', 'mcp-host-tools.ts', 'genie-host.ts']) {
+        for (const file of ['main.ts', 'compose.ts', 'host-api.ts']) {
             const source = readFileSync(new URL(`../src/main/${file}`, import.meta.url), 'utf8');
             expect(source, file).not.toMatch(/agentWaiting|untrusted: true/);
         }

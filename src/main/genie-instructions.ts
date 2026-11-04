@@ -27,5 +27,5 @@ export async function writeGenieInstructions(home: string, tools: readonly { nam
     await put(promptFile, promptText);
     await put(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: 'genie-own', version: '1.0.0', description: "Genie's own skills" }, null, 2));
     for (const skill of GENIE_SKILLS) await put(join(pluginDir, 'skills', skill.name, 'SKILL.md'), skillFile(skill));
-    return { promptFile, pluginDir, promptText };
+    return { promptFile, pluginDir, promptText, codexPromptText: [sharedProtocol(tools), providerProtocol('codex'), NOTE].join('\n\n') };
 }

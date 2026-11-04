@@ -355,7 +355,7 @@ export const realListModels: ListProviderModels = (provider) =>
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
 /** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
-export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string }
+export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string; readonly codexPromptText?: string }
 
 /**
  * A CLAUDE AGENT IN AN UNTRUSTED WORKSPACE: the person's own settings and no project's, Genie's own MCP servers and no folder's, and Genie's words from files of its own. Measured against a stand-in API (CLI 2.1.317), through a fresh launch and
@@ -371,9 +371,14 @@ export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { s
     };
 }
 
-/** Skeleton. */
-export function codexTrustOptions(_launch: { readonly binaryArgs?: readonly string[] }, _untrusted: GenieInstructionFiles | null): { binaryArgs?: readonly string[] } {
-    return {};
+/**
+ * A CODEX AGENT IN AN UNTRUSTED WORKSPACE (measured, CLI 0.166.0, app-server mode, against a stand-in API). Marking a folder untrusted
+ * stops neither its AGENTS.md nor its skills: these two settings do, a skill added during the session included. They stop the person's
+ * own skills too, and a skill named in a message still loads. On each agent's own app-server, so a trusted agent never gets them.
+ */
+export function codexTrustOptions(launch: { readonly binaryArgs?: readonly string[] }, untrusted: GenieInstructionFiles | null): { binaryArgs?: readonly string[] } {
+    if (untrusted === null) return {};
+    return { binaryArgs: [...(launch.binaryArgs ?? []), '-c', 'project_doc_max_bytes=0', '-c', 'skills.include_instructions=false'] };
 }
 
 /** A Codex agent set to run unasked does not, in an untrusted workspace: Codex keeps its own approvals and sandbox. */
@@ -395,7 +400,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
             return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(launch, extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
 
         default:
             return null;
@@ -827,9 +832,9 @@ export class SessionHost {
                 current.mcp = prepared.map((server) => server.name);
                 current.launchedUntrusted = untrusted !== null;
                 // A prompt file does not reach a resumed thread (measured): one that began without Genie's words is given them with its next work, once.
-                if (untrusted && record.provider === 'claude') {
-                    if (record.threadId === null) this.#markGenieWords?.(record.id);
-                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(untrusted.promptText, () => this.#markGenieWords?.(record.id));
+                if (untrusted) {
+                    if (record.provider === 'claude' && record.threadId === null) this.#markGenieWords?.(record.id);
+                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(record.provider === 'codex' ? untrusted.codexPromptText ?? untrusted.promptText : untrusted.promptText, () => this.#markGenieWords?.(record.id));
                 }
                 this.#emit(record.id);
             }

@@ -44,7 +44,7 @@ export function TrustStepBody({ step, phase, onTrust }: { step: TrustStepView; p
             {servers.length > 0 ? <Group label="Servers">{servers.map((server) => <li key={`${server.file}\n${server.name}`}><span className="text-[var(--fg-3)]">{server.file} · {server.name}</span> <Code>{server.command}</Code></li>)}</Group> : null}
             {gitKeys.length > 0 ? <Group label="Git settings">{gitKeys.map((entry) => <li key={`${entry.key}\n${entry.value}`}><Code>{entry.key}</Code> <Code>{entry.value}</Code></li>)}</Group> : null}
             {approvals.length > 0 ? <Group label="Commands already approved here">{approvals.map((approval) => <li key={approval}><Code>{approval}</Code></li>)}</Group> : null}
-            <p data-trust-agents-note className="text-xs text-[var(--fg-3)]">Until then, agents here can't read its instructions or their personas.</p>
+            <p data-trust-agents-note className="text-xs text-[var(--fg-3)]">Until then, agents here don't load its instructions or their personas.</p>
             {phase.kind === 'failed' ? (
                 <div role="alert" className="flex items-center gap-2 text-[var(--danger)]">
                     <span>{phase.reason}</span>
