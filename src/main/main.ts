@@ -172,6 +172,8 @@ import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
+import { BrowserPagesReplica } from './browser-pages-replica.js';
+import type { BrowserPage } from './browser-service.js';
 import { genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
@@ -1265,6 +1267,8 @@ function openLocalBrowser(url: string | undefined, activation: Activation): Prom
     }
     return Promise.resolve(genieBrowserWindow?.open(url, activation) ?? { ok: false as const, error: 'Genie’s browser is not ready yet' });
 }
+/** The Genie browser process's pages, for the `pages` tool. */
+const browserPages = new BrowserPagesReplica((pageId, method, args) => agentEngineLink?.client.browserCall('pageCall', [pageId, method, args]) ?? Promise.reject(new Error('no host')));
 /** What a browser needs, said whenever it changes and whenever the link comes back. Set once the services are composed. */
 let publishBrowserFacts: () => void = () => {};
 
@@ -1472,7 +1476,13 @@ async function boot(): Promise<void> {
     {
         agentEngineLink = await connectAgentEngine({
             // WHAT THE OS SAYS ABOUT PROXIES, handed to the host each time this window links to it (host-https-fetch.ts).
-            onLinked: (client) => { handProxyAnswers = () => reportProxies(client, lifecycleLog); void handProxyAnswers(); publishBrowserFacts(); },
+            onLinked: (client) => {
+                handProxyAnswers = () => reportProxies(client, lifecycleLog);
+                void handProxyAnswers();
+                publishBrowserFacts();
+                client.onBrowserEvent((event) => { if (event.kind === 'pages') browserPages.apply(event.pages); });
+                void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
+            },
             callbacks: engineCallbacks,
             launch: {
                 runtimeDir: runtimeDir(genieHome()),
@@ -3319,7 +3329,7 @@ async function boot(): Promise<void> {
                 sites: (workspaceId) => composed.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host),
             },
             // pages (browser rebuild step 7): the Genie browser's tabs and the live site panels, each drivable.
-            pages: { open: () => drivablePages() },
+            pages: { open: () => [...drivablePages(), ...browserPages.list()] },
             userActive: () => powerMonitor.getSystemIdleTime() < 120,
             glow: (terminalId) => { broadcast('genie:glow', terminalId); return true; },
             // A sound row of its own (Tynn #766 C2a): the window plays genie:action by its kind.

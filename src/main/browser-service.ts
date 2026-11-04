@@ -13,6 +13,14 @@ export interface BrowserFacts {
     readonly launch: { readonly file: string; readonly args: readonly string[] };
 }
 
+/** A page in the browser's process, as the `pages` tool needs to read it. */
+export interface BrowserPage {
+    readonly id: string;
+    readonly url: string;
+    readonly title: string;
+    readonly revision: number;
+}
+
 export type BrowserActivation = 'user-gesture' | 'background';
 
 export type BrowserEvent =
@@ -21,12 +29,16 @@ export type BrowserEvent =
     | { readonly kind: 'door'; readonly up: boolean }
     /** `url` null: the browser with its first site. */
     | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation }
+    | { readonly kind: 'pages'; readonly pages: readonly BrowserPage[] }
+    /** A call into a page, for the browser to run and answer with `pageReply`. */
+    | { readonly kind: 'pageCall'; readonly requestId: string; readonly pageId: string; readonly method: string; readonly args: readonly unknown[] }
     /** The host is ending on purpose, and the browser ends with it: an installer needs the binary free. */
     | { readonly kind: 'quit' };
 
 const HELD_LIMIT = 20;
 /** A browser started and not linked by then is started again. */
 const START_PATIENCE_MS = 20_000;
+const PAGE_CALL_LIMIT_MS = 30_000;
 
 function isFacts(value: unknown): value is BrowserFacts {
     if (typeof value !== 'object' || value === null) return false;
@@ -47,6 +59,9 @@ export class BrowserService {
     #publisher: string | null = null;
     #browser: string | null = null;
     #held: Array<Extract<BrowserEvent, { kind: 'open' }>> = [];
+    #pages: readonly BrowserPage[] = [];
+    readonly #calls = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+    #nextCall = 1;
 
     constructor(ports: BrowserServicePorts = {}) {
         this.#ports = ports;
@@ -103,6 +118,34 @@ export class BrowserService {
                 for (const event of held) this.#emit(event);
                 return { facts: this.#facts, doorUp: this.#publisher !== null };
             }
+            case 'pages': {
+                if (from !== this.#browser) throw new Error('only the linked browser says what its pages are');
+                this.#pages = Array.isArray(args[0]) ? args[0] as BrowserPage[] : [];
+                this.#emit({ kind: 'pages', pages: this.#pages });
+                return null;
+            }
+            case 'pagesNow':
+                return this.#pages;
+            case 'pageCall': {
+                if (this.#browser === null) throw new Error('the Genie browser is not running');
+                const requestId = String(this.#nextCall++);
+                return new Promise((resolve, reject) => {
+                    const timer = setTimeout(() => { this.#calls.delete(requestId); reject(new Error('the Genie browser did not answer')); }, PAGE_CALL_LIMIT_MS);
+                    timer.unref?.();
+                    this.#calls.set(requestId, { resolve, reject, timer });
+                    this.#emit({ kind: 'pageCall', requestId, pageId: String(args[0]), method: String(args[1]), args: Array.isArray(args[2]) ? args[2] : [] });
+                });
+            }
+            case 'pageReply': {
+                if (from !== this.#browser) throw new Error('only the linked browser answers a page call');
+                const call = this.#calls.get(String(args[0]));
+                if (!call) return null;
+                this.#calls.delete(String(args[0]));
+                clearTimeout(call.timer);
+                if (args[1] === true) call.resolve(args[2]);
+                else call.reject(new Error(typeof args[2] === 'string' ? args[2] : 'the page call failed'));
+                return null;
+            }
             default:
                 throw new Error(`the browser service has no ${method}`);
         }
@@ -115,7 +158,13 @@ export class BrowserService {
 
     /** A connection went. Only the browser's own going means there is no browser. */
     dropped(connection: string): void {
-        if (this.#browser === connection) this.#browser = null;
+        if (this.#browser === connection) {
+            this.#browser = null;
+            for (const call of this.#calls.values()) { clearTimeout(call.timer); call.reject(new Error('the Genie browser went away')); }
+            this.#calls.clear();
+            this.#pages = [];
+            this.#emit({ kind: 'pages', pages: [] });
+        }
         if (this.#publisher === connection) {
             this.#publisher = null;
             this.#emit({ kind: 'door', up: false });

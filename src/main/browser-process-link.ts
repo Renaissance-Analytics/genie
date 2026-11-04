@@ -19,6 +19,10 @@ export interface BrowserLinkPorts {
     facts(facts: BrowserFacts): void;
     door(up: boolean): void;
     open(url: string | null, activation: BrowserActivation): void;
+    /** A call into a page, from the `pages` tool. */
+    pageCall?(event: Extract<BrowserEvent, { kind: 'pageCall' }>, client: BrowserLinkClient): void;
+    /** Linked: the current pages are said again. */
+    linked?(client: BrowserLinkClient): void;
     quit(): void;
     log(line: string): void;
 }
@@ -42,6 +46,8 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
         if (event.kind === 'facts') onFacts(event.facts);
         else if (event.kind === 'door') ports.door(event.up);
         else if (event.kind === 'quit') ports.quit();
+        else if (event.kind === 'pages') return;
+        else if (event.kind === 'pageCall') { if (client) ports.pageCall?.(event, client); }
         else if (known) ports.open(event.url, event.activation);
         else held.push({ url: event.url, activation: event.activation });
     };
@@ -61,6 +67,7 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
             const answer = await found.browserCall('register', []) as { facts: BrowserFacts | null; doorUp: boolean };
             if (answer.facts !== null) onFacts(answer.facts);
             ports.door(answer.doorUp);
+            ports.linked?.(found);
             firstLink();
             return;
         }

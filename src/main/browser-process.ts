@@ -5,6 +5,7 @@ import type { BrowserFacts } from './browser-service.js';
 import { runBrowserLink, type BrowserLinkClient } from './browser-process-link.js';
 import { linkToRunningHost } from './engine-launch.js';
 import { genieBrowserWindows, rerouteGenieBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { drivablePages, onPagesChanged } from './page-navigation-electron.js';
 import { genieHome, runtimeDir } from './paths.js';
 import { SessionEngineClient } from './session-engine-client.js';
 
@@ -47,7 +48,23 @@ export async function runBrowserProcess(): Promise<void> {
         }
     };
 
+    let linkedClient: BrowserLinkClient | null = null;
+    const sayPages = (): void => {
+        const pages = drivablePages().map((p) => ({ id: p.id, url: p.url, title: p.title, revision: p.revision() }));
+        void linkedClient?.browserCall('pages', [pages]).catch(() => {});
+    };
+    onPagesChanged(sayPages);
+
     runBrowserLink({
+        linked: (client) => { linkedClient = client; sayPages(); },
+        pageCall: (event, client) => {
+            const page = drivablePages().find((p) => p.id === event.pageId);
+            const answer = page ? page.transport.call(event.method, [...event.args]) : Promise.reject(new Error('that page is gone'));
+            void answer.then(
+                (value) => client.browserCall('pageReply', [event.requestId, true, value]),
+                (error: unknown) => client.browserCall('pageReply', [event.requestId, false, error instanceof Error ? error.message : String(error)]),
+            ).catch(() => {});
+        },
         connect: async (onLost) => {
             const found = await linkToRunningHost({ runtimeDir: runtimeDir(genieHome()) });
             if (found === null) return null;
