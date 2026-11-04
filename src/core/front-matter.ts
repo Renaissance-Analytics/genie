@@ -28,7 +28,7 @@
  *      `complex` and left to the drawer's raw-YAML mode.
  */
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 
 /** A file's front-matter block, its body, and the bytes needed to rebuild it. */
 export interface ParsedFrontMatter {

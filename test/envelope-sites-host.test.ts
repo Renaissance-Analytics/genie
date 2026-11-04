@@ -38,6 +38,7 @@ function harness(files: Record<string, string>, over: { failWrite?: boolean; sto
             load: async () => { if (over.stops instanceof Error) throw over.stops; return over.stops ?? []; },
             save: async (s) => { saved.push([...s]); },
         },
+        trust: { load: async () => null, save: async () => {} },
         envFor: () => ({}),
         log: (l) => logs.push(l),
     };

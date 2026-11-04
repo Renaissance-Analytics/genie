@@ -83,6 +83,17 @@ export interface SiteInfo {
     readonly problem: string | null;
     /** Present only while `starting`: which part of the start it is in. */
     readonly step?: SiteStep;
+    /**
+     * Present while it has not run on this machine: what a Start would run, and where. It stays down, and only the person
+     * lifts this (envelope-sites-host.ts). `changed`: it did run here, and what it runs has changed since.
+     */
+    readonly firstStart?: SiteFirstStart;
+}
+
+export interface SiteFirstStart {
+    readonly runs: string;
+    readonly folder: string;
+    readonly changed: boolean;
 }
 
 export interface UnservableSiteInput {
@@ -164,6 +175,7 @@ interface SiteRecord {
     problem: string | null;
     /** The env its processes were last started with (canonical JSON) — what an engine change is compared against. */
     startedEnv?: string;
+    firstStart?: SiteFirstStart;
     /** A running PHP site's worker: what an engine change restarts ALONE, on the same port (Tynn #756). */
     phpWorker?: { readonly command: string; readonly fcgiPorts: readonly number[] };
     /**
@@ -249,6 +261,21 @@ export class SiteManager {
         return this.#info(record);
     }
 
+    /** Mark a known site as waiting for the person's first start here, or (`null`) lift that. */
+    setFirstStart(id: string, firstStart: SiteFirstStart | null): void {
+        const record = this.#sites.get(id);
+        if (!record) return;
+        if (firstStart === null) delete record.firstStart;
+        else record.firstStart = firstStart;
+        this.#changed();
+    }
+
+    #refuseFirstStart(record: SiteRecord): void {
+        if (record.firstStart === undefined) return;
+        const why = record.firstStart.changed ? 'what it runs has changed since it last ran on this machine' : 'it has not run on this machine yet';
+        throw new Error(`${record.host} was not started: ${why}, so the person starts it from Hosting. It would run: ${record.firstStart.runs}`);
+    }
+
     /**
      * Start a known site that is not running. Throws the reason when it cannot — an unservable site, no
      * bundled Caddy — and keeps that reason on the site (`problem`), so the listing says why it is down.
@@ -258,6 +285,7 @@ export class SiteManager {
         if (!record) throw new Error(`no site ${id}`);
         // Its reason stays the problem shown; the refusal names it.
         if (record.unservable) throw new Error(`${record.host} cannot be served by Genie 2: ${record.unservable.reason}`);
+        this.#refuseFirstStart(record);
         const info = this.#info(record);
         if (info.state === 'running' || info.state === 'starting' || info.state === 'restarting' || info.state === 'external') return info;
         try {
@@ -284,6 +312,7 @@ export class SiteManager {
         const record = this.#sites.get(id);
         if (!record) throw new Error(`no site ${id}`);
         if (record.unservable) throw new Error(`${record.host} cannot be served by Genie 2: ${record.unservable.reason}`);
+        this.#refuseFirstStart(record);
         if (record.input?.hostPort !== undefined) throw new Error(`${record.host} is a server you run yourself on port ${record.input.hostPort}; Genie has no process of its own to restart for it`);
         // A SECOND CLICK JOINS THE FIRST (genie#1393): a start still in its first answer window IS the restart just asked
         // for, and starting again would throw the half-booted one away. Past that window (slow), Retry is a deliberate
@@ -661,6 +690,7 @@ export class SiteManager {
             host: record.host,
             workspaceId: this.#workspaceOf(record),
             repoPath: record.input?.repoPath ?? record.unservable!.repoPath,
+            ...(record.firstStart ? { firstStart: record.firstStart } : {}),
             serve: record.input?.serve ?? null,
             port: record.port,
             state,
