@@ -57,6 +57,25 @@ describe('linking', () => {
     });
 });
 
+describe('the order on linking (batch SS: a store opened by a held open asked for cookies with no link yet)', () => {
+    it('the link is handed on before anything held is opened', async () => {
+        const c = fakeClient({ facts: FACTS, doorUp: true });
+        const order: string[] = [];
+        const { ports } = setup([c]);
+        ports.linked = vi.fn(() => { order.push('linked'); });
+        ports.open = vi.fn(() => { order.push('open'); });
+        ports.facts = vi.fn(() => { order.push('facts'); });
+        (c.client.browserCall as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+            c.emit({ kind: 'open', url: 'https://a.gen/', activation: 'background' });
+            return { facts: FACTS, doorUp: true };
+        });
+        const link = runBrowserLink(ports as never);
+        await link.linked;
+        expect(order).toEqual(['linked', 'facts', 'open']);
+        link.stop();
+    });
+});
+
 describe('what the host says', () => {
     it('opens a site once the facts are known, in order; before that it holds them', async () => {
         const c = fakeClient({ facts: null, doorUp: false });
