@@ -19,6 +19,7 @@ let host: RemoteHost;
 let baton: Baton;
 let admit: (connection: ServerConnection) => void;
 let invoke: ReturnType<typeof vi.fn<HostApi['invoke']>>;
+let listening = 0;
 const clients: Array<ReturnType<typeof peer>> = [];
 
 function peer(preAuth?: PreAuth, profile?: 'mobile') {
@@ -52,8 +53,9 @@ beforeEach(async () => {
     devices = await DeviceStore.open(dir, { now: Date.now, random: () => `fixture-token-${++tokenSeq}` });
     baton = new Baton();
     invoke = vi.fn(async (_method, args) => ({ args }));
+    listening = 0;
     host = new RemoteHost({
-        api: { invoke, onEvent: () => () => {}, workspaceOfAgent: () => 'work' },
+        api: { invoke, onEvent: () => { listening++; return () => { listening--; }; }, workspaceOfAgent: () => 'work' },
         hostName: 'local-contract-host', baton, pins: new PairingPins({ now: Date.now }), devices,
         confirm: allowEveryPairing,
         transport: { onConnection: (listener) => { admit = listener; return () => {}; } },
@@ -150,4 +152,24 @@ describe('P4 local capability policy, with a test-only capability assignment', (
         expect(await other.call('workspaces.settings', 'work')).toMatchObject({ kind: 'result', ok: true });
         expect(await p.call('workspaces.setSetting', 'work', 'theme', null)).toMatchObject({ kind: 'result', ok: true });
     });
+});
+
+it('a pending agent watch finishing after close does not restart the API subscription', async () => {
+    const p = connect();
+    await p.hello({ kind: 'token', token: devices.pair('watch owner').token });
+    expect(listening).toBe(1);
+    let finish: (value: unknown) => void = () => {};
+    invoke.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = p.call('agent.watch', 'agent_a', {});
+    await settled();
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('agentDetail', ['agent_a']);
+    p.close();
+    await settled();
+    expect(listening).toBe(0);
+    expect(host.connections()).toEqual([]);
+    finish({ rows: [], agentId: 'agent_a' });
+    await pending;
+    await settled();
+    expect(listening).toBe(0);
+    expect(host.connections()).toEqual([]);
 });
