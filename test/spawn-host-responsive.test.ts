@@ -126,7 +126,8 @@ const WITNESS = `
 const SAMPLER = `
     const { appendFileSync, readFileSync } = require('node:fs');
     const { execFileSync } = require('node:child_process');
-    const [pid, file, pin] = process.argv.slice(1);
+    const [pid, file, pin, poke] = process.argv.slice(1);
+    let nextPoke = 0;
     const read = (path) => { try { return readFileSync(path, 'utf8'); } catch { return ''; } };
     const fields = (id) => { const text = read('/proc/' + id + '/stat'); return text.slice(text.lastIndexOf(')') + 2).split(' '); };
     const pinned = new Set();
@@ -140,6 +141,7 @@ const SAMPLER = `
         if (now > limit) process.exit(0);
         if (now < next) continue;
         next = now + 20;
+        if (poke === '1' && now >= nextPoke) { nextPoke = now + 200; try { process.kill(Number(pid), 'SIGUSR2'); } catch { /* it has gone */ } }
         const main = fields(pid);
         if (main.length < 40) process.exit(0);
         const kids = read('/proc/' + pid + '/task/' + pid + '/children').trim().split(' ').filter(Boolean).filter((id) => id !== String(process.pid));
@@ -176,8 +178,13 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
     const file = join(dir, 'gaps.txt');
     const began = Date.now();
     const samplerFile = join(dir, 'sampler.txt');
+    // GAUGE_POKE: a signal every 200 ms. An event loop asleep past its timer wakes to it and runs the timer, so the gap ends.
+    // A main held in a synchronous call or a spin does not run its timers, so the gap stays. The CONTROL row is the proof of the second.
+    const poke = process.env.GAUGE_POKE === '1' && process.env.GAUGE_SAMPLER === '1' && process.platform === 'linux';
+    const onPoke = () => {};
+    if (poke) process.on('SIGUSR2', onPoke);
     const sampler = process.env.GAUGE_SAMPLER === '1' && process.platform === 'linux'
-        ? spawn(process.execPath, ['-e', SAMPLER, '--', String(process.pid), samplerFile, process.env.GAUGE_PIN === '1' ? '1' : '0'], { stdio: 'ignore' })
+        ? spawn(process.execPath, ['-e', SAMPLER, '--', String(process.pid), samplerFile, process.env.GAUGE_PIN === '1' ? '1' : '0', poke ? '1' : '0'], { stdio: 'ignore' })
         : null;
     const samplerStopped = sampler ? new Promise<void>((r) => { sampler.once('exit', () => r()); sampler.once('error', () => r()); }) : Promise.resolve();
     const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: 'ignore', windowsHide: true });
@@ -249,6 +256,7 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         sampler?.kill();
         await stopped;
         await samplerStopped;
+        if (poke) process.off('SIGUSR2', onPoke);
         rmSync(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
     }
 }
