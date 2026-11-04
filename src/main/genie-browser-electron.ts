@@ -1,5 +1,7 @@
 import { BrowserWindow, WebContentsView, ipcMain, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { browserStorePath, type BrowserStoreSide } from '../core/browser-store.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
 import { initialGenUrl, isSecureBrowserUrl, normalizeNavUrl } from '../core/genie-browser.js';
 import { browserWindowOptions, overlayColorsOk, TITLE_BAR_HEIGHT } from '../core/window.js';
@@ -80,6 +82,24 @@ export function genieBrowserSession(options: { frontDoorPort: number; caPem: str
     const routed = routeSession(ses, options.frontDoorPort, log);
     sharedSession = { ses, routed };
     return sharedSession;
+}
+
+/**
+ * A WORKSPACE'S STORE (the host split, P2b; the owner: "keep cookies in .genie/browser/{workspace}"): its logins at a chosen
+ * path under Genie's home, never a repository, with the same rules as the browser's session. One per process: two cannot
+ * share one (measured on Electron 45.2.2). Made once per path.
+ */
+const workspaceStores = new Map<string, { ses: Session; routed: Promise<void> }>();
+export function workspaceBrowserSession(options: { genieHome: string; workspaceId: string; side: BrowserStoreSide; frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): { ses: Session; routed: Promise<void> } {
+    const path = browserStorePath(options.genieHome, options.workspaceId, options.side);
+    const found = workspaceStores.get(path);
+    if (found) return found;
+    mkdirSync(join(options.genieHome, 'browser'), { recursive: true, mode: 0o700 });
+    const ses = session.fromPath(browserStorePath(options.genieHome, options.workspaceId, options.side));
+    guardSession(ses, () => options.caPem);
+    const store = { ses, routed: routeSession(ses, options.frontDoorPort, options.log ?? ((line: string) => console.log(line))) };
+    workspaceStores.set(path, store);
+    return store;
 }
 
 /**

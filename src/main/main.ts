@@ -966,6 +966,8 @@ function createWindow(show: boolean, search?: string): BrowserWindow {
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
+            // A site panel is a <webview> (P2b): the main window alone, every one decided by main (site-webview-guard.ts).
+            webviewTag: !search,
         },
     });
     // Links open in the browser (http(s) only), never in a Genie window (Tynn #763, main/external-links.ts).
@@ -3992,12 +3994,9 @@ async function boot(): Promise<void> {
     // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
     const browserTrust = composed.browserTrust();
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
-    // LIVE SITE PANELS (beta.35 item 36, step 5): each workspace tab's site panel is a page in the browser's session, placed
-    // over its box in the MAIN window — whichever window that is now (P1b: it can be closed and built again).
-    livePanels = sitePanels({ window: () => window, frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
-    composed.settings.onChange((key, value, workspaceId) => {
-        if (key === 'workspace_tabs' && workspaceId && typeof value === 'string') livePanels?.retainIn(workspaceId, sitePanelKeys(workspaceId, parseTabs(value)));
-    });
+    // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
+    // in the store of the site's own workspace.
+    livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? null, openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
     mainWindowDeps = { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
     mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
