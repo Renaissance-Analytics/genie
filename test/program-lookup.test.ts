@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hardenProcess, notFoundWords, resolveProgram, systemProgram } from '../src/core/program-lookup.js';
+import { findBatchFile, hardenProcess, notFoundWords, resolveProgram, systemProgram } from '../src/core/program-lookup.js';
 import { open as openEngine } from '@particle-academy/fancy-pty';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from '../src/main/fancy-term-port.js';
@@ -104,9 +104,10 @@ describe('resolveProgram, on any OS, with a fake machine', () => {
 
 describe('the words for a name that would not start', () => {
     const on = (files: string[], path: string) => ({ platform: 'win32' as const, env: { PATH: path, SystemRoot: 'C:\\Windows' }, isFile: (p: string) => files.includes(p.toLowerCase()) });
-    it('a batch file on PATH, asked for by name or with its extension', () => {
-        expect(notFoundWords('npm', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toMatch(/^"npm" is on this machine as C:\\node\\npm\.cmd, a batch file/);
-        expect(notFoundWords('npm.cmd', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toMatch(/^"npm\.cmd" is on this machine as C:\\node\\npm\.cmd, a batch file/);
+    it('a batch file on PATH is found now, by name or with its extension', () => {
+        expect(findBatchFile('npm', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toBe('C:\\node\\npm.cmd');
+        expect(findBatchFile('npm.cmd', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toBe('C:\\node\\npm.cmd');
+        expect(findBatchFile('npm', on([], 'C:\\node'))).toBeNull();
     });
     it('nothing: says not found, and a batch file only in a relative PATH entry does not count', () => {
         expect(notFoundWords('npm', on(['node\\npm.cmd'], 'node'))).toBe('"npm" was not found on this machine\'s PATH, so nothing was started.');
@@ -398,17 +399,29 @@ pty.onExit(end);`;
     }, 40_000);
 
     /** Through the real port and the real engine: what a person would read, and whether anything ran. */
-    const openedThroughThePort = (command: string, cwd: string) => {
+    const openedThroughThePort = (command: string, cwd: string, until: (() => Promise<void>) | null = null) => {
         const settings = { get: (key: string) => (key === 'track_cwd' ? 'off' : key === 'detached_terminals' ? 'off' : undefined) };
         configureInProcessBackend({ settings, snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false } } as never);
         const port = fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
-        try { const opened = port.open({ cwd, command }); port.kill(opened.id); return ''; } catch (error) { return (error as Error).message; }
+        try { const opened = port.open({ cwd, command }); if (until === null) port.kill(opened.id); else void until().finally(() => port.kill(opened.id)); return ''; } catch (error) { return (error as Error).message; }
     };
 
-    it('the real message: npm is on this machine as a batch file, and it says that, and no path that is not there', () => {
-        const words = openedThroughThePort('npm run dev', folder);
-        expect(words).toMatch(/"npm" is on this machine as .*npm\.cmd, a batch file/i);
-        expect(words).not.toMatch(/System32/i);
+    it('a batch file on PATH really starts through the engine, from a folder with a space in its name, and gets its arguments', async () => {
+        const tools = join(folder, 'tools with a space');
+        mkdirSync(tools);
+        // Not this folder's own: it stands for npm's folder under Program Files.
+        writeFileSync(join(tools, 'batchtool.cmd'), `@echo %1 %2> "${mark}"\r\n`);
+        const was = process.env.PATH;
+        process.env.PATH = `${tools};${was}`;
+        try {
+            const arrived = async () => { for (let i = 0; i < 100 && !ran(); i += 1) await new Promise((r) => setTimeout(r, 100)); };
+            expect(openedThroughThePort('batchtool run dev', tmpdir(), arrived)).toBe('');
+            await arrived();
+            await new Promise((r) => setTimeout(r, 200));
+            expect(readFileSync(mark, 'utf8').trim()).toBe('run dev');
+        } finally {
+            process.env.PATH = was;
+        }
     });
 
     it('a batch file and a program of that name in the working folder: not run, and not mentioned as if they were found', async () => {
