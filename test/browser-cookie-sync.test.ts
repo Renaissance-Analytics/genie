@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { BrowserService, type BrowserEvent, type SyncedCookie } from '../src/main/browser-service.js';
 import { CookieSync, cookieToSet } from '../src/core/cookie-sync.js';
+import { BrowserCookieBridge } from '../src/main/browser-cookie-bridge.js';
 
 /**
  * A SITE'S LOGIN, IN THE PANEL AND THE BROWSER (the host split, P2b; the owner: "Logins: sync cookies"). Two processes can't
@@ -112,6 +113,19 @@ describe('cookieToSet', () => {
         const { expirationDate, ...session } = cookie();
         void expirationDate;
         expect(cookieToSet(session)).not.toHaveProperty('expirationDate');
+    });
+});
+
+describe('a side linking again', () => {
+    it('asks again for every store it has: one opened before the link asked into nothing', async () => {
+        const calls: unknown[] = [];
+        const bridge = new BrowserCookieBridge({ call: async (m, a) => { calls.push([m, ...a]); return null; }, me: () => 'me', openStore: () => { throw new Error('unused'); } });
+        const ses = { cookies: { get: async () => [] } } as never;
+        bridge.attach('ws-a', ses);
+        bridge.attach('ws-b', ses);
+        calls.length = 0;
+        bridge.relinked();
+        expect(calls).toEqual([['cookiesWanted', 'ws-a'], ['cookiesWanted', 'ws-b']]);
     });
 });
 
