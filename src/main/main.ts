@@ -172,9 +172,10 @@ import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
 import { electronBrowserView } from './electron-browser-view.js';
+import { BrowserCookieBridge } from './browser-cookie-bridge.js';
 import { BrowserPagesReplica } from './browser-pages-replica.js';
 import type { BrowserPage } from './browser-service.js';
-import { genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { genieBrowserWindows, watchWorkspaceStores, workspaceBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
@@ -1269,6 +1270,10 @@ function openLocalBrowser(url: string | undefined, activation: Activation): Prom
 }
 /** The Genie browser process's pages, for the `pages` tool. */
 const browserPages = new BrowserPagesReplica((pageId, method, args) => agentEngineLink?.client.browserCall('pageCall', [pageId, method, args]) ?? Promise.reject(new Error('no host')));
+/** This window's side of each workspace's cookie sync. Set once the services are composed. */
+let cookieBridge: BrowserCookieBridge | null = null;
+/** This window's connection to the host, as the browser service calls it. */
+let browserConnection: string | null = null;
 /** What a browser needs, said whenever it changes and whenever the link comes back. Set once the services are composed. */
 let publishBrowserFacts: () => void = () => {};
 
@@ -1480,8 +1485,10 @@ async function boot(): Promise<void> {
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
+                void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
                 client.onBrowserEvent((event) => {
                     if (event.kind === 'pages') browserPages.apply(event.pages);
+                    if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookieBridge?.onEvent(event);
                     if (event.kind === 'poppedBack' && window && !window.isDestroyed()) window.webContents.send('site-panel:popped-back', event.panelKey);
                 });
                 void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
@@ -4091,6 +4098,12 @@ async function boot(): Promise<void> {
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
     // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
+    cookieBridge = new BrowserCookieBridge({
+        call: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : Promise.resolve(null)),
+        me: () => browserConnection,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieHome(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem }).ses,
+    });
+    watchWorkspaceStores(cookieBridge);
     publishBrowserFacts = () => {
         if (agentEngineLink?.live !== true) return;
         const facts = {

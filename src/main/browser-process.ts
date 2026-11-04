@@ -2,9 +2,10 @@ import { app } from 'electron';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BrowserFacts } from './browser-service.js';
+import { BrowserCookieBridge } from './browser-cookie-bridge.js';
 import { runBrowserLink, type BrowserLinkClient } from './browser-process-link.js';
 import { linkToRunningHost } from './engine-launch.js';
-import { genieBrowserWindows, rerouteGenieBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { genieBrowserWindows, rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { drivablePages, onPagesChanged } from './page-navigation-electron.js';
 import { genieHome, runtimeDir } from './paths.js';
 import { SessionEngineClient } from './session-engine-client.js';
@@ -43,7 +44,17 @@ export async function runBrowserProcess(): Promise<void> {
     // Started and given nothing to open: not a process left behind.
     setTimeout(() => { if (!opened) app.quit(); }, NO_WINDOW_LIMIT_MS).unref?.();
 
+    let connection: string | null = null;
+    let door: { frontDoorPort: number; caPem: string | null } = { frontDoorPort: 0, caPem: null };
+    const cookies = new BrowserCookieBridge({
+        call: (method, args) => linkedClient?.browserCall(method, args) ?? Promise.resolve(null),
+        me: () => connection,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieHome(), workspaceId, side: 'browser', ...door, log }).ses,
+    });
+    watchWorkspaceStores(cookies);
+
     const onFacts = (facts: BrowserFacts): void => {
+        door = { frontDoorPort: facts.frontDoorPort, caPem: facts.caPem };
         hosts = facts.hosts;
         workspaceOf = facts.workspaceOf;
         if (windows === null) {
@@ -75,6 +86,7 @@ export async function runBrowserProcess(): Promise<void> {
             const client = new SessionEngineClient({ onDisconnected: () => onLost(), log });
             const connected = await client.connect(found.transport, found.token);
             if (!connected.ok) { found.transport.close(); return null; }
+            connection = String(await client.browserCall('whoami', []));
             const link: BrowserLinkClient = {
                 browserCall: (method, args) => client.browserCall(method, args),
                 onBrowserEvent: (listener) => client.onBrowserEvent(listener),
@@ -93,6 +105,7 @@ export async function runBrowserProcess(): Promise<void> {
         openSingle: (panelKey, url) => { opened = true; windows?.openSingle(panelKey, url); },
         closeSingle: (panelKey) => { windows?.closeSingle(panelKey); },
         quit: () => { app.quit(); },
+        other: (event) => { if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookies.onEvent(event); },
         log,
     });
 }

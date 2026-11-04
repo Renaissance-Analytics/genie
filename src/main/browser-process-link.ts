@@ -23,6 +23,8 @@ export interface BrowserLinkPorts {
     closeSingle?(panelKey: string): void;
     /** A call into a page, from the `pages` tool. */
     pageCall?(event: Extract<BrowserEvent, { kind: 'pageCall' }>, client: BrowserLinkClient): void;
+    /** Anything else the host says, for a side that watches it (the cookie sync). */
+    other?(event: BrowserEvent): void;
     /** Linked: the current pages are said again. */
     linked?(client: BrowserLinkClient): void;
     quit(): void;
@@ -49,6 +51,7 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
         else if (event.kind === 'door') ports.door(event.up);
         else if (event.kind === 'quit') ports.quit();
         else if (event.kind === 'pages' || event.kind === 'poppedBack') return;
+        else if (event.kind === 'cookies' || event.kind === 'cookiesWanted') ports.other?.(event);
         else if (event.kind === 'closeSingle') ports.closeSingle?.(event.panelKey);
         else if (event.kind === 'openSingle') { if (known) ports.openSingle?.(event.panelKey, event.url); else held.push(() => ports.openSingle?.(event.panelKey, event.url)); }
         else if (event.kind === 'pageCall') { if (client) ports.pageCall?.(event, client); }
