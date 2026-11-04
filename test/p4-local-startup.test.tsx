@@ -1,4 +1,5 @@
 import { renderToStaticMarkup } from 'react-dom/server';
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalFramePort } from '../src/core/local-frame.js';
 import { pageBridge, type GenieBridge, type PreloadBridge } from '../src/renderer/bridge.js';
@@ -56,6 +57,14 @@ function fixture(refusals: number, reason = 'Genie is still starting') {
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe('the local page connection retries only a bounded starting refusal', () => {
+    it('main attaches the door after the late-bound services are assigned, so composition cannot welcome a call too early', () => {
+        const main = readFileSync(new URL('../src/main/main.ts', import.meta.url), 'utf8');
+        const ready = main.indexOf('services = composed;');
+        const attach = main.indexOf('remoteHub.add(localDoor);');
+        expect(ready).toBeGreaterThan(0);
+        expect(attach).toBeGreaterThan(0);
+        expect(attach).toBeGreaterThan(ready);
+    });
     it('refused twice then welcomed: queues the moved read, preserves bridge identity and all unmoved calls', async () => {
         vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
         const f = fixture(2);

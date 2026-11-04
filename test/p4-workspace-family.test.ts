@@ -96,11 +96,11 @@ const rows: FamilyCall[] = [
     { name: 'removeRepo', channel: 'genie:workspace-repo-remove', args: ['work', 'app'], result: { ok: false, reason: 'the host repo cannot be removed' }, call: (ws) => ws.removeRepo('work', 'app') },
     { name: 'removeRepoLock', channel: 'genie:workspace-repo-unlock', args: ['work', 'docs'], result: { ok: false, reason: 'the lock is still recent' }, call: (ws) => ws.removeRepoLock('work', 'docs') },
     { name: 'locateRepo', channel: 'genie:workspace-repo-locate', args: ['work', 'docs', '/estate/docs'], result: { ok: true, path: '/estate/docs' }, call: (ws) => ws.locateRepo!('work', 'docs', '/estate/docs') },
-    { name: 'commitsSince', channel: 'genie:workspace-commits-since', args: ['work', 1700000000123], result: { ok: true, repos: [{ name: 'app', commits: [{ hash: 'abc123', subject: 'docs' }] }] }, call: (ws) => ws.commitsSince!('work', 1700000000123) },
+    { name: 'commitsSince', channel: 'genie:workspace-commits-since', args: ['work', 1700000000123], result: { ok: true, commits: [{ repo: 'app', sha: 'abc123', subject: 'docs', author: 'Fixture', at: 1700000000456 }] }, call: (ws) => ws.commitsSince!('work', 1700000000123) },
     { name: 'settings', channel: 'genie:workspace-settings', args: ['work'], result: { ok: true, values: { workspace_tabs: '{"tabs":[]}' }, overridden: [] }, call: (ws) => ws.settings('work') },
     { name: 'setSetting', channel: 'genie:workspace-setting-set', args: ['work', 'workspace_tabs', '{"tabs":["docs"]}'], result: { ok: true }, call: (ws) => ws.setSetting('work', 'workspace_tabs', '{"tabs":["docs"]}') },
     { name: 'resetSetting', channel: 'genie:workspace-setting-reset', args: ['work', 'workspace_tabs'], result: { ok: true }, call: (ws) => ws.resetSetting('work', 'workspace_tabs') },
-    { name: 'setGoverns', channel: 'genie:workspace-set-governs', args: ['work', ['child_b', 'child_a']], result: { ok: true }, call: (ws) => ws.setGoverns('work', ['child_b', 'child_a']) },
+    { name: 'setGoverns', channel: 'genie:workspace-set-governs', args: ['work', ['child_b', 'child_a']], result: { ok: true, governs: ['child_b', 'child_a'] }, call: (ws) => ws.setGoverns('work', ['child_b', 'child_a']) },
     { name: 'setDefaultAgent', channel: 'genie:workspace-set-default-agent', args: ['work', null], result: { ok: true, defaultAgent: null }, call: (ws) => ws.setDefaultAgent('work', null) },
     { name: 'setColor', channel: 'genie:workspace-set-color', args: ['work', '#7c3aed'], result: { ok: true }, call: (ws) => ws.setColor!('work', '#7c3aed') },
 ];
