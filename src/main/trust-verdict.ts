@@ -15,8 +15,8 @@ import type { AgentId } from '../core/identity.js';
  */
 
 export const NOW_TRUSTED = 'This workspace is trusted now. Read its instructions and your persona before you carry on.';
-export const UNTRUSTED_AT_TURN_END = 'This workspace is no longer trusted. This agent restarts when its turn ends.';
-export const UNTRUSTED_AT_NEXT_WORK = 'This workspace is no longer trusted. This agent restarts before its next work.';
+export const UNTRUSTED_AT_TURN_END = 'This workspace is no longer trusted. This agent restarts when its turn ends and keeps its conversation.';
+export const UNTRUSTED_AT_NEXT_WORK = 'This workspace is no longer trusted. This agent restarts before its next work and keeps its conversation.';
 export const TRUSTED_AGAIN = 'This workspace is trusted again. No restart.';
 
 export interface TrustVerdictPorts {

@@ -138,7 +138,8 @@ describe("Genie's own words, on this machine", () => {
         const home = join(dir, 'genie');
         const first = await writeGenieInstructions(home, [{ name: 'one', description: 'x' }]);
         const second = await writeGenieInstructions(home, [{ name: 'two', description: 'x' }]);
-        expect(second).toEqual(first);
+        expect([second.promptFile, second.pluginDir]).toEqual([first.promptFile, first.pluginDir]);
+        expect(second.promptText).toContain('`two`');
         expect(readFileSync(second.promptFile, 'utf8')).toContain('`two`');
         expect(readFileSync(second.promptFile, 'utf8')).not.toContain('`one`');
     });

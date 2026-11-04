@@ -446,6 +446,7 @@ export class SessionHost {
     readonly #mcpServersFor: ((record: AgentRecord) => readonly McpServer[]) | undefined;
     readonly #untrustedFilesFor: ((record: AgentRecord) => Promise<GenieInstructionFiles | null>) | undefined;
     readonly #untrustedNow: ((record: AgentRecord) => boolean) | undefined;
+    readonly #markGenieWords: ((agentId: AgentId) => void) | undefined;
     readonly #prepareMcpServers: ((record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>) | undefined;
     readonly #onTurnNumbered: ((agentId: AgentId, n: number) => void) | undefined;
     readonly #onPlan: ((agentId: AgentId, steps: readonly { content: string; status: string }[]) => void) | undefined;
@@ -529,7 +530,7 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
-        /** Skeleton. */
+        /** Genie's own words are in this agent's thread now (`AgentRecord.genieWordsInThread`). */
         markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
         untrustedNow?: (record: AgentRecord) => boolean;
@@ -590,6 +591,7 @@ export class SessionHost {
         this.#mcpServersFor = options.mcpServersFor;
         this.#untrustedFilesFor = options.untrustedFilesFor;
         this.#untrustedNow = options.untrustedNow;
+        this.#markGenieWords = options.markGenieWords;
         this.#prepareMcpServers = options.prepareMcpServers;
         this.#onTurnNumbered = options.onTurnNumbered;
         this.#onPlan = options.onPlan;
@@ -819,6 +821,11 @@ export class SessionHost {
             if (current) {
                 current.mcp = prepared.map((server) => server.name);
                 current.launchedUntrusted = untrusted !== null;
+                // A prompt file does not reach a resumed thread (measured): one that began without Genie's words is given them with its next work, once.
+                if (untrusted && record.provider === 'claude') {
+                    if (record.threadId === null) this.#markGenieWords?.(record.id);
+                    else if ((this.#currentRecord?.(record.id) ?? record).genieWordsInThread !== true) current.session.holdForNextWork(untrusted.promptText, () => this.#markGenieWords?.(record.id));
+                }
                 this.#emit(record.id);
             }
             return factory;

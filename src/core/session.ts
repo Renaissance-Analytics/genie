@@ -1253,10 +1253,12 @@ export class AgentSession {
 
     /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
     #heldForNextWork: string | null = null;
+    #heldSent: (() => void) | null = null;
 
     /** It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held. */
-    holdForNextWork(text: string): void {
+    holdForNextWork(text: string, sent: (() => void) | null = null): void {
         this.#heldForNextWork = text;
+        this.#heldSent = sent;
     }
 
     /** Work is held (`mayTakeWork`, a limit, a start). */
@@ -1274,6 +1276,7 @@ export class AgentSession {
     withdrawHeld(): boolean {
         const was = this.#heldForNextWork !== null;
         this.#heldForNextWork = null;
+        this.#heldSent = null;
         return was;
     }
 
@@ -1288,7 +1291,12 @@ export class AgentSession {
         const held = this.#inTurn ? null : this.#heldForNextWork;
         const handed = held === null ? text : `${held}\n\n${text}`;
         this.#driver.prompt(sent ? (held === null ? sent.content : [{ type: 'text', text: held }, ...sent.content]) : handed);
-        if (held !== null) this.#heldForNextWork = null;
+        if (held !== null) {
+            const sentNow = this.#heldSent;
+            this.#heldForNextWork = null;
+            this.#heldSent = null;
+            sentNow?.();
+        }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
         if (this.#inTurn) this.#queued.push(by);
