@@ -374,11 +374,11 @@ export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { s
 /**
  * A CODEX AGENT IN AN UNTRUSTED WORKSPACE (measured, CLI 0.166.0, app-server mode, against a stand-in API). Marking a folder untrusted
  * stops neither its AGENTS.md nor its skills: these two settings do, a skill added during the session included. They stop the person's
- * own skills too, and a skill named in a message still loads. On each agent's own app-server, so a trusted agent never gets them.
+ * own skills too, and a skill named in a message still loads. Per thread, through prism-acp's option, on every launch of it.
  */
-export function codexTrustOptions(untrusted: GenieInstructionFiles | null): { binaryArgs?: readonly string[] } {
+export function codexTrustOptions(untrusted: GenieInstructionFiles | null): { config?: { readonly project_doc_max_bytes: 0; readonly 'skills.include_instructions': false } } {
     if (untrusted === null) return {};
-    return { binaryArgs: ['-c', 'project_doc_max_bytes=0', '-c', 'skills.include_instructions=false'] };
+    return { config: { project_doc_max_bytes: 0, 'skills.include_instructions': false } };
 }
 
 /** A Codex agent set to run unasked does not, in an untrusted workspace: Codex keeps its own approvals and sandbox. */
