@@ -43,6 +43,13 @@ describe('CookieSync', () => {
         expect(sent).toHaveLength(1);
     });
 
+    it('a logout (the site sets it again, already expired) is a remove: no insert follows it', () => {
+        // Batch SS on omarchy-test: `sid=; Max-Age=0` in the panel left the browser signed in. Chromium reports it as expired-overwrite.
+        const { sync, sent } = side();
+        sync.changed(cookie(), 'expired-overwrite', true);
+        expect(sent).toEqual([{ op: 'remove', cookie: cookie() }]);
+    });
+
     it('an overwrite’s removal half says nothing: its insert follows, and a remove would race it', () => {
         const { sync, sent } = side();
         sync.changed(cookie(), 'overwrite', true);
