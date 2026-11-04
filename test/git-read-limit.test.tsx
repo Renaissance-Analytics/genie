@@ -28,7 +28,7 @@ beforeEach(() => {
 });
 afterEach(() => {
     GIT_READ_LIMIT.ms = savedLimit;
-    rmSync(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 200 });
+    rmSync(root, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 });
 });
 
 describe('the limit', () => {
@@ -54,7 +54,7 @@ describe('the limit', () => {
 describe('past it', () => {
     beforeEach(() => {
         const hook = join(root, 'never.sh');
-        writeFileSync(hook, '#!/bin/sh\nsleep 30\n');
+        writeFileSync(hook, '#!/bin/sh\nsleep 4\n');
         chmodSync(hook, 0o755);
         git('config', 'core.fsmonitor', hook.replace(/\\/g, '/'));
         GIT_READ_LIMIT.ms = 500;
