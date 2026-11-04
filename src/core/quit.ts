@@ -27,10 +27,10 @@ export function quitPlan(input: {
     liveTerminals: number;
     detachedTerminals: boolean;
     /** Set while a live genie-host runs the agents and can outlive this window; absent or null = this process is the host. */
-    host?: { readonly keptProcesses: number } | null;
+    host?: { readonly keptProcesses: number; readonly armedFlows: number; readonly scheduledTasks: number } | null;
 }): QuitPlan {
     const agents = input.runningAgents.length;
-    if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses);
+    if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses, input.host.armedFlows, input.host.scheduledTasks);
     const terminalsEnd = input.detachedTerminals ? 0 : input.liveTerminals;
     if (agents === 0 && terminalsEnd === 0) return { confirm: false };
 
@@ -51,10 +51,11 @@ export function quitPlan(input: {
     return { confirm: true, defaultChoice: 'cancel', title: 'Quit Genie?', message, buttons: ['Cancel', 'Quit'] };
 }
 
-/** The host keeps the agents, every terminal (the detached setting is moot: the host owns them) and the kept processes. */
-function hostPlan(runningAgents: readonly string[], terminals: number, processes: number): QuitPlan {
+/** The host keeps the agents, every terminal (the detached setting is moot: the host owns them), the kept processes, and what waits on its clock. */
+function hostPlan(runningAgents: readonly string[], terminals: number, processes: number, flows: number, tasks: number): QuitPlan {
     const agents = runningAgents.length;
-    if (agents + terminals + processes === 0) return { confirm: false };
+    const total = agents + terminals + processes + flows + tasks;
+    if (total === 0) return { confirm: false };
     const parts: string[] = [];
     const ends: string[] = [];
     if (agents > 0) {
@@ -69,7 +70,15 @@ function hostPlan(runningAgents: readonly string[], terminals: number, processes
         parts.push(`${processes} kept ${plural(processes, 'process is', 'processes are')} running`);
         ends.push(processes === 1 ? 'stops it' : 'stops the processes');
     }
-    const one = agents + terminals + processes === 1;
+    if (flows > 0) {
+        parts.push(`${flows} ${plural(flows, 'flow is', 'flows are')} armed`);
+        ends.push(flows === 1 ? 'stops it firing' : 'stops the flows firing');
+    }
+    if (tasks > 0) {
+        parts.push(`${tasks} ${plural(tasks, 'task is', 'tasks are')} scheduled`);
+        ends.push(tasks === 1 ? 'stops it firing' : 'stops the tasks firing');
+    }
+    const one = total === 1;
     const message = `${listed(parts)}. Just close the UI and ${one ? 'it keeps' : 'they keep'} running, and Genie stays in the tray. Shut down everything ${listed(ends)}.`;
     return { confirm: true, defaultChoice: 'cancel', title: 'Quit Genie?', message, buttons: ['Cancel', 'Just close the UI', 'Shut down everything'] };
 }

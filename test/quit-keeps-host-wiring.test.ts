@@ -94,6 +94,14 @@ describe('main.ts', () => {
         expect(watch).toMatch(/if \(step\.exit\) \{[\s\S]*?requestQuit\('shut-down'\);/);
     });
 
+    it('the tray and the quit count what waits on the host\u2019s clock, from the host\u2019s own replicas', () => {
+        const src = main();
+        const now = block(src, 'function onTheClockNow(', '\n}\n');
+        expect(now).toMatch(/onTheClock\(agentEngineLink\.client\.flows\(\)\.list\(\), agentEngineLink\.client\.processBook\(\)\.kept\(\)\)/);
+        expect(block(src, 'function hostActivityNow(', '\n}\n')).toMatch(/\.\.\.onTheClockNow\(\)/);
+        expect(block(src, "app.on('before-quit'")).toMatch(/\{ keptProcesses: kept, \.\.\.onTheClockNow\(\) \}/);
+    });
+
     it('a quit with an answer chosen up front (the tray, Restart, the tray-only exit) chooses it, then quits', () => {
         const request = block(main(), 'function requestQuit', '\n}\n');
         expect(request).toMatch(/if \(answer\) quit\.choose\(answer\);\s*\n\s*app\.quit\(\);/);

@@ -9,13 +9,15 @@ import { terminalBusy, trayConfirm, trayConfirmed, type Stopping } from '../src/
  * the OS ending the session, the upgrade, and the quit dialog's own "Shut down everything" (answered already).
  */
 
-const none: Stopping = { agents: [], terminals: [], processes: [], services: [], sites: [] };
+const none: Stopping = { agents: [], terminals: [], processes: [], services: [], sites: [], flows: [], scheduled: [] };
 const busy: Stopping = {
     agents: ['atlas', 'bolt'],
     terminals: [{ name: 'tynn · terminal 1', busy: true }, { name: 'tynn · terminal 2', busy: false }],
     processes: ['queue:work'],
     services: ['postgres 17'],
     sites: ['moic.gen'],
+    flows: [],
+    scheduled: [],
 };
 
 describe('trayConfirm', () => {
@@ -27,6 +29,10 @@ describe('trayConfirm', () => {
             defaultId: 0,
             cancelId: 0,
         });
+    });
+
+    it('names the flows and scheduled tasks that stop firing: the tray stays for them, so it says so', () => {
+        expect(trayConfirm('shut-down', { ...none, flows: ['nightly triage'], scheduled: ['backup', 'digest'] }).message).toBe('This stops:\n• 1 armed flow: nightly triage\n• 2 scheduled tasks: backup, digest');
     });
 
     it('Restart: the same list, and what comes back — the agents do, terminals do not', () => {

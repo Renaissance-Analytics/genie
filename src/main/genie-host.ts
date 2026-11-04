@@ -26,6 +26,8 @@ import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
 import { spawnBrowserProcess } from './engine-launch.js';
+import { hostIdleStep } from '../core/host-idle.js';
+import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
 import { FlowStore } from './flow-store.js';
@@ -101,8 +103,8 @@ import { repoStatus } from './repo-git.js';
  *  - `host.token` — the token a window says in `hello` (0600; a new one per start);
  *  - `host.sock`  — the endpoint (not Windows, where it is a per-user named pipe).
  *
- * It exits when told to (`engine.shutdown`, SIGTERM), or once nothing has run and no window has been connected for
- * `GENIE_HOST_IDLE_MS` (10 minutes). Whether it should stay up longer is the owner's decision O1 in the plan.
+ * It exits when told to (`engine.shutdown`, SIGTERM), or once it has held nothing (core/host-idle.ts) and no window has been
+ * connected for `GENIE_HOST_IDLE_MS` (10 minutes).
  */
 
 const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : genieHome();
@@ -611,8 +613,9 @@ async function main(): Promise<void> {
 
     // IDLE EXIT: nothing running and no window for IDLE_MS. While an agent runs, the host stays — that is the point.
     setInterval(() => {
-        if (host.count > 0 || engine.clients > 0 || (relay?.live() ?? 0) > 0) { lastBusy = Date.now(); return; }
-        if (Date.now() - lastBusy >= IDLE_MS) void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with no agent and no window`);
+        const step = hostIdleStep({ agents: host.count, windows: engine.clients, ptys: relay?.live() ?? 0, ...onTheClock(hostFlows.list(), hostBook.kept()) }, lastBusy, Date.now(), IDLE_MS);
+        lastBusy = step.lastBusy;
+        if (step.exit) void shutdown(`idle ${Math.round(IDLE_MS / 1000)} s with nothing held and no window`);
     }, Math.min(30_000, Math.max(1_000, Math.floor(IDLE_MS / 4)))).unref?.();
     // Kept alive by the server; the interval above is unref'd so it never holds a host that is otherwise done.
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityTotal, activityWords, trayOnlyStep, trayProbeEnabled, TRAY_ONLY_GRACE_MS, type HostActivity } from '../src/core/tray-only.js';
+import { activityTotal, activityWords, onTheClock, trayOnlyStep, trayProbeEnabled, TRAY_ONLY_GRACE_MS, type HostActivity } from '../src/core/tray-only.js';
 
 /**
  * TRAY-ONLY GENIE (P1b; the owner, 2026-11-02: "as long as any genie services are running, that tray should be there so
@@ -9,18 +9,35 @@ import { activityTotal, activityWords, trayOnlyStep, trayProbeEnabled, TRAY_ONLY
  * Genie between two lives — and then shuts everything down and exits.
  */
 
-const none: HostActivity = { agents: 0, terminals: 0, processes: 0, services: 0 };
+const none: HostActivity = { agents: 0, terminals: 0, processes: 0, services: 0, armedFlows: 0, scheduledTasks: 0 };
 
 describe('the host’s activity, in words and in total', () => {
     it('counts every kind, and words only the kinds that run', () => {
-        expect(activityTotal({ agents: 3, terminals: 2, processes: 1, services: 1 })).toBe(7);
-        expect(activityWords({ agents: 3, terminals: 2, processes: 1, services: 1 })).toBe('3 agents, 2 terminals, 1 process, 1 service');
+        expect(activityTotal({ ...none, agents: 3, terminals: 2, processes: 1, services: 1 })).toBe(7);
+        expect(activityWords({ ...none, agents: 3, terminals: 2, processes: 1, services: 1 })).toBe('3 agents, 2 terminals, 1 process, 1 service');
         expect(activityWords({ ...none, agents: 1 })).toBe('1 agent');
         expect(activityWords(none)).toBe('');
     });
 });
 
+describe('what waits on the host\u2019s clock', () => {
+    it('words and totals an armed flow and a scheduled task with the rest', () => {
+        expect(activityTotal({ ...none, armedFlows: 2, scheduledTasks: 1 })).toBe(3);
+        expect(activityWords({ ...none, agents: 1, armedFlows: 2, scheduledTasks: 1 })).toBe('1 agent, 2 armed flows, 1 scheduled task');
+    });
+
+    it('onTheClock counts armed flows, and scheduled tasks still wanted; a paused task or a plain kept process is not on the clock', () => {
+        const flows = [{ armed: true }, { armed: false }, { armed: true }];
+        const kept = [{ wanted: true, schedule: { cron: '0 3 * * *' } }, { wanted: false, schedule: { cron: '0 4 * * *' } }, { wanted: true }];
+        expect(onTheClock(flows, kept)).toEqual({ armedFlows: 2, scheduledTasks: 1 });
+    });
+});
+
 describe('trayOnlyStep', () => {
+    it.each<[string, Partial<HostActivity>]>([['an armed flow', { armedFlows: 1 }], ['a scheduled task', { scheduledTasks: 1 }]])('tray-only with %s and nothing running: stays, or it would never fire', (_name, waiting) => {
+        expect(trayOnlyStep({ uiOpen: false, activity: { ...none, ...waiting } }, 0, 10 * TRAY_ONLY_GRACE_MS)).toEqual({ quietSince: null, exit: false });
+    });
+
     it('a window open: stay, and the quiet clock is not running', () => {
         expect(trayOnlyStep({ uiOpen: true, activity: none }, 0, 10 * TRAY_ONLY_GRACE_MS)).toEqual({ quietSince: null, exit: false });
     });
