@@ -25,6 +25,8 @@ app.setPath('userData', join(genieHome(), 'browser', '.process'));
 const debugPort = process.argv.find((a) => a.startsWith('--genie-browser-debug-port='))?.split('=')[1];
 if (debugPort) app.commandLine.appendSwitch('remote-debugging-port', debugPort);
 const NO_WINDOW_LIMIT_MS = 60_000;
+/** A route that is no workspace's site (a service's dashboard). */
+const SHARED_STORE = '_shared';
 
 export async function runBrowserProcess(): Promise<void> {
     if (!app.requestSingleInstanceLock()) { app.exit(0); return; }
@@ -36,14 +38,16 @@ export async function runBrowserProcess(): Promise<void> {
     let windows: GenieBrowserWindows | null = null;
     let linkedClient: BrowserLinkClient | null = null;
     let hosts: readonly string[] = [];
+    let workspaceOf: Readonly<Record<string, string>> = {};
     let opened = false;
     // Started and given nothing to open: not a process left behind.
     setTimeout(() => { if (!opened) app.quit(); }, NO_WINDOW_LIMIT_MS).unref?.();
 
     const onFacts = (facts: BrowserFacts): void => {
         hosts = facts.hosts;
+        workspaceOf = facts.workspaceOf;
         if (windows === null) {
-            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => hosts, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
+            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => hosts, genieHome: genieHome(), workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
         } else {
             rerouteGenieBrowserSession({ frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, log });
         }

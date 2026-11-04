@@ -159,7 +159,7 @@ describe('the Electron half, from source', () => {
         expect(win).toMatch(/guardSession\(ses, \(\) => remotes\.get\(key\)\?\.ca\(\) \?\? null\)/);
         expect(win).toMatch(/if \(remote && live\.port !== remote\.port\(\)\) \{\s*live\.port = remote\.port\(\);\s*live\.routed = routeSession\(live\.ses, remote\.port\(\), log\);/);
         // CONTROL: this machine's session keeps Genie's own CA and front door.
-        expect(win).toMatch(/guardSession\(ses, \(\) => options\.caPem\)/);
+        expect(win).toMatch(/guardSession\(ses, \(\) => sharedCa\)/);
         expect(win).toMatch(/routeSession\(ses, options\.frontDoorPort, log\)/);
         // One place each rule is written: every session goes through it (this machine's, a remote's, a workspace's store).
         expect(count(win, /setCertificateVerifyProc\(/g)).toBe(1);

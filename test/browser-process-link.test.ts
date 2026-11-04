@@ -8,7 +8,7 @@ import { runBrowserLink, type BrowserLinkClient } from '../src/main/browser-proc
  * on purpose ends it, because an installer needs the binary free.
  */
 
-const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
+const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' }, launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
 
 function fakeClient(answer: { facts: BrowserFacts | null; doorUp: boolean }) {
     let listener: (event: BrowserEvent) => void = () => {};

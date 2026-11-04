@@ -40,6 +40,9 @@ export interface GenieBrowserWindowOptions {
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
     readonly log?: (line: string) => void;
+    /** With these, this machine's tabs use the workspace stores of `side: 'browser'`. */
+    readonly genieHome?: string;
+    readonly workspaceOf?: (host: string) => string;
     /** A site's own window was closed, or asked to go back to its panel. */
     readonly onSingleClosed?: (panelKey: string) => void;
     /** Where each bring-up is recorded for main's focus log (genie#1235). */
@@ -90,9 +93,11 @@ export function genieBrowserSession(options: { frontDoorPort: number; caPem: str
 
 /** The window came back with a new front door (its port is per launch): the browser's process follows it. */
 export function rerouteGenieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): void {
-    if (!sharedSession) return;
+    if (!sharedSession) { sharedCa = options.caPem; const log = options.log ?? ((line: string) => console.log(line)); for (const store of workspaceStores.values()) store.routed = routeSession(store.ses, options.frontDoorPort, log); return; }
     sharedCa = options.caPem;
-    sharedSession.routed = routeSession(sharedSession.ses, options.frontDoorPort, options.log ?? ((line: string) => console.log(line)));
+    const log = options.log ?? ((line: string) => console.log(line));
+    sharedSession.routed = routeSession(sharedSession.ses, options.frontDoorPort, log);
+    for (const store of workspaceStores.values()) store.routed = routeSession(store.ses, options.frontDoorPort, log);
 }
 
 /**
@@ -107,7 +112,8 @@ export function workspaceBrowserSession(options: { genieHome: string; workspaceI
     if (found) return found;
     mkdirSync(join(options.genieHome, 'browser'), { recursive: true, mode: 0o700 });
     const ses = session.fromPath(browserStorePath(options.genieHome, options.workspaceId, options.side));
-    guardSession(ses, () => options.caPem);
+    sharedCa = options.caPem;
+    guardSession(ses, () => sharedCa);
     const store = { ses, routed: routeSession(ses, options.frontDoorPort, options.log ?? ((line: string) => console.log(line))) };
     workspaceStores.set(path, store);
     return store;
@@ -211,7 +217,14 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             },
         };
     };
-    const sessionFor = (key: string): { ses: Session; routed: () => Promise<void> } => {
+    const hostOfUrl = (url: string): string => { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } };
+    /** Which store a local tab on this address uses; null when this window keeps one session (the no-host path). */
+    const storeOf = (url: string): string | null => (options.workspaceOf ? options.workspaceOf(hostOfUrl(url)) : null);
+    const sessionFor = (key: string, url: string): { ses: Session; routed: () => Promise<void> } => {
+        if ((key === LOCAL || key.startsWith(SINGLE)) && options.workspaceOf && options.genieHome) {
+            const store = workspaceBrowserSession({ genieHome: options.genieHome, workspaceId: options.workspaceOf(hostOfUrl(url)), side: 'browser', frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
+            return { ses: store.ses, routed: () => store.routed };
+        }
         if (key !== LOCAL && !key.startsWith(SINGLE)) return remoteSession(key);
         const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
         void routed;
@@ -219,8 +232,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     };
     const hostsOf = (key: string): readonly string[] => (key === LOCAL || key.startsWith(SINGLE) ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 
-    const createView = (window: BrowserWindow, key: string, tabId: string, events: TabViewEvents): TabViewPort => {
-        const { ses, routed: routing } = sessionFor(key);
+    const createView = (window: BrowserWindow, key: string, tabId: string, events: TabViewEvents, url: string): TabViewPort => {
+        const { ses, routed: routing } = sessionFor(key, url);
         const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: false } });
         const wc = view.webContents;
         // Agents may drive it (browser rebuild step 7): fancy's navigation script, in an isolated world, on every load.
@@ -239,8 +252,13 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             return { action: 'deny' };
         });
         // A link off the Genie sites: the machine's browser (http(s) only), never this window.
-        wc.on('will-navigate', (event, url) => {
-            if ('url' in normalizeNavUrl(url, new Set(hostsOf(key)))) return;
+        wc.on('will-navigate', (event, next) => {
+            const url = next;
+            if ('url' in normalizeNavUrl(url, new Set(hostsOf(key)))) {
+                // Another workspace's site: its own tab, with its own login. This view keeps its session for life.
+                if ((key === LOCAL || key.startsWith(SINGLE)) && storeOf(url) !== storeOf(wc.getURL())) { event.preventDefault(); events.openWindow(url); }
+                return;
+            }
             event.preventDefault();
             if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {});
         });
@@ -277,7 +295,8 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         const b = new GenieBrowser({
             enabledHosts: () => hostsOf(key),
             newTabId: () => `tab-${++seq}`,
-            createView: (id, events) => createView(window, key, id, events),
+            createView: (id, events, url) => createView(window, key, id, events, url),
+            ...(key === LOCAL || key.startsWith(SINGLE) ? { storeOf } : {}),
             push: (snapshot) => { if (!window.isDestroyed()) window.webContents.send('browser-window:state', snapshot); },
         });
         // The chrome is Genie's page: it never navigates; a link in it opens in the machine's browser.
