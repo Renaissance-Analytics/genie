@@ -358,8 +358,17 @@ export class EnvelopeSites {
     /** The list a workspace's verdict is against. Throws when it can't be kept: the person is told, and it stays as it was. */
     async recordWorkspace(workspaceId: string, hash: string): Promise<void> {
         if (this.#trust === null) throw new Error('the record of what runs here has not been read yet');
-        this.#trust.workspaces[workspaceId] = hash;
-        await this.#ports.trust.save(this.#trust);
+        const book = this.#trust;
+        const before = book.workspaces[workspaceId];
+        book.workspaces[workspaceId] = hash;
+        try {
+            await this.#ports.trust.save(book);
+        } catch (error) {
+            // Not saved, so not said yes to: the next read of the verdict must not find it here.
+            if (before === undefined) delete book.workspaces[workspaceId];
+            else book.workspaces[workspaceId] = before;
+            throw error;
+        }
     }
 
     /** The person trusted the workspace: nothing of it waits for a first start now, and what the usual rule starts, starts. */

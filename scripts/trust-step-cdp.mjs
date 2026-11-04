@@ -128,7 +128,7 @@ let cdp = null;
 try {
     cdp = await Cdp.connect();
     await cdp.evaluate('document.readyState');
-    check(await waitFor(cdp, `Boolean(document.querySelector('[data-surface]'))`, 60_000), '0. the app is up, on a home of its own');
+    check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '0. the app is up, on a home of its own');
 
     console.log(`  add: ${String(await add(cdp, acme)).slice(0, 160)}`);
     console.log(`  add: ${String(await add(cdp, other)).slice(0, 160)}`);
@@ -144,7 +144,8 @@ try {
 
     // A YES THAT CANNOT BE SAVED: something is in the way of the record.
     rmSync(record, { force: true });
-    mkdirSync(join(record, 'in-the-way'), { recursive: true });
+    mkdirSync(record, { recursive: true });
+    writeFileSync(join(record, 'in-the-way'), 'x');
     await cdp.evaluate(`document.querySelector('[data-action="trust-workspace"]').click(); true`);
     check(await waitFor(cdp, `Boolean(${stepFor(acmeId)}?.querySelector('[role="alert"]'))`), '6. a yes that cannot be saved says why');
     check(await cdp.evaluate(`Boolean(document.querySelector('[data-action="trust-workspace-retry"]'))`), '7. and offers Retry');
@@ -170,7 +171,7 @@ try {
 
     app = launch();
     cdp = await Cdp.connect();
-    check(await waitFor(cdp, `Boolean(document.querySelector('[data-surface]'))`, 60_000), '13. relaunched');
+    check(await waitFor(cdp, `Boolean(document.querySelector('[data-route]'))`, 60_000), '13. relaunched');
     await open(cdp, otherId);
     check(await waitFor(cdp, `Boolean(${stepFor(otherId)})`), '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
     await open(cdp, acmeId);
