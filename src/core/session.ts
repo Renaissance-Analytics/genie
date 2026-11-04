@@ -301,6 +301,11 @@ export interface AgentSessionOptions {
      */
     permissionDecision?: (request: PermissionRequestLike) => 'allow' | 'deny' | 'ask';
     /**
+     * Whether this run may be handed work now, asked at each hand-over. False = it waits, as it does on a limit, and a run
+     * that ends leaves it owed, so the next one gets it. Absent = always.
+     */
+    mayTakeWork?: () => boolean;
+    /**
      * The provider has identified its own conversation, once.
      *
      * Fired when `cliSessionId` first becomes known — the value a later resume is keyed on, and
@@ -556,6 +561,16 @@ export class AgentSession {
         }
         this.#flushAfterTurn();
         this.#changed();
+    }
+
+    /**
+     * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
+     * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
+     * For a restart Genie chooses by itself; the person's own Restart does not ask.
+     */
+    get quiet(): boolean {
+        // What waits in `#afterTurn` here is held for the next run, and a run that ends leaves it owed.
+        return this.promptable && !this.#held && this.#coolingCancel === null;
     }
 
     get turnState(): TurnState {
@@ -837,7 +852,7 @@ export class AgentSession {
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held) return;
+        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
@@ -1231,9 +1246,38 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
-        if (this.#held || this.#starting) return this.#queuePrompt(text, by, sent, context);
+        if (this.#held || this.#starting || this.#options.mayTakeWork?.() === false) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
         return null;
+    }
+
+    /** A word from Genie held for the next turn this session opens (`holdForNextWork`); `null` = none. */
+    #heldForNextWork: string | null = null;
+    #heldSent: (() => void) | null = null;
+
+    /** It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held. */
+    holdForNextWork(text: string, sent: (() => void) | null = null): void {
+        this.#heldForNextWork = text;
+        this.#heldSent = sent;
+    }
+
+    /** Work is held (`mayTakeWork`, a limit, a start). */
+    get workWaiting(): boolean {
+        return this.#afterTurn.length > 0;
+    }
+
+    /** `mayTakeWork` says yes again: what it held goes now, or when the turn ends. */
+    releaseWork(): void {
+        this.#flushAfterTurn();
+        this.#changed();
+    }
+
+    /** True = it was still held, and now it is not. */
+    withdrawHeld(): boolean {
+        const was = this.#heldForNextWork !== null;
+        this.#heldForNextWork = null;
+        this.#heldSent = null;
+        return was;
     }
 
     /** Hand a prompt to the provider and open (or queue) its turn; `record` writes its message row too. */
@@ -1243,7 +1287,16 @@ export class AgentSession {
         // and leaves the session as it was — it used to leave a turn marker and your message for a turn that never ran,
         // "in a turn" with nothing running (Working, and a clock that never moved), and the next prompt reused the number.
         // The hand-off is synchronous, so the marker below still lands before the provider's first frame.
-        this.#driver.prompt(sent ? sent.content : text);
+        // Not into a running turn: a prompt folded there is not the next work, and the turn is not told mid-way.
+        const held = this.#inTurn ? null : this.#heldForNextWork;
+        const handed = held === null ? text : `${held}\n\n${text}`;
+        this.#driver.prompt(sent ? (held === null ? sent.content : [{ type: 'text', text: held }, ...sent.content]) : handed);
+        if (held !== null) {
+            const sentNow = this.#heldSent;
+            this.#heldForNextWork = null;
+            this.#heldSent = null;
+            sentNow?.();
+        }
         // The marker lands BEFORE the provider's first frame, so every row that follows is inside this turn — unless a
         // turn is running, when this prompt waits for its own (see `#queued`).
         if (this.#inTurn) this.#queued.push(by);
@@ -1256,9 +1309,11 @@ export class AgentSession {
         }
         // YOUR MESSAGE, recorded as it is sent. Claude does not echo a prompt back, so waiting for the wire's
         // `user_message_chunk` left the owner's own words out of the thread. A peer's prompt is that peer's message.
+        // What Genie put ahead of it is shown as Genie's, not as part of the person's words.
+        if (held !== null) void this.#emitRow(promptRow(held, 'genie', null, {}));
         if (record) void this.#emitRow(promptRow(text, by, sent, context));
         // A provider that DOES echo it is not recorded twice (see `#handle`).
-        this.#echo = text;
+        this.#echo = handed;
         this.#echoSeen = '';
         this.#turnState = 'working';
         // A new turn during Cooling goes straight to Working, and its timer goes with it.

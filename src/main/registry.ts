@@ -493,7 +493,8 @@ export class Registry {
     async clearThread(agentId: AgentId): Promise<AgentRecord | null> {
         const existing = this.#agents.find((a) => a.id === agentId);
         if (!existing) return null;
-        const cleared: AgentRecord = { ...existing, threadId: null };
+        const { genieWordsInThread: _words, ...rest } = existing;
+        const cleared: AgentRecord = { ...rest, threadId: null };
         this.#agents = this.#agents.map((a) => (a.id === agentId ? cleared : a));
         await this.#store.writeAgents(this.#agents);
         this.#changed(cleared.id);
@@ -525,6 +526,11 @@ export class Registry {
     }
 
     /** What a Claude agent may do: all tools, ask before shell commands, or edits only (shell refused). Read when its session starts. */
+    /** Genie's own words are in this agent's thread now. */
+    async markGenieWords(agentId: AgentId): Promise<AgentRecord | null> {
+        return this.#update(agentId, (a) => ({ ...a, genieWordsInThread: true }));
+    }
+
     async setPermissions(agentId: AgentId, permissions: AgentPermissions): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, permissions }));
     }
