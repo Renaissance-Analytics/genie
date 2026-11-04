@@ -179,9 +179,11 @@ describe('GitHub lists that roll', () => {
     it('a row from before Tynn kept createdAt is judged by when it last moved; with no time at all it is told, once', () => {
         const feed = new IssueWatchFeed();
         feed.apply(entry([], 0, [i1535]));
-        expect(kinds(feed.apply(entry([], 0, [i1535, gh('issue', 1100, null, '2026-10-20T00:00:00Z')])))).toEqual([]);
-        expect(kinds(feed.apply(entry([], 0, [i1535, gh('issue', 1101, null, null)])))).toEqual(['issue.new #1101']);
-        expect(kinds(feed.apply(entry([], 0, [i1535, gh('issue', 1101, null, null)])))).toEqual([]);
+        const noCreated = gh('issue', 1100, null, '2026-10-20T00:00:00Z');
+        const noTime = gh('issue', 1101, null, null);
+        expect(kinds(feed.apply(entry([], 0, [i1535, noCreated])))).toEqual([]);
+        expect(kinds(feed.apply(entry([], 0, [i1535, noCreated, noTime])))).toEqual(['issue.new #1101']);
+        expect(kinds(feed.apply(entry([], 0, [i1535, noCreated, noTime])))).toEqual([]);
     });
 
     it('each source has its own baseline: GitHub moving later rules out no Tynn report', () => {
