@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { PROGRAM_LOOKUP_VARIABLE, findProgram, notFoundWords, type LookupPorts } from '../core/program-lookup.js';
+import { PROGRAM_LOOKUP_VARIABLE, findBatchFile, findProgram, notFoundWords, unsafeBatchArgument, type LookupPorts } from '../core/program-lookup.js';
 import { shellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import { join } from 'node:path';
@@ -102,8 +102,10 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
 
             // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
             const lookup = options.lookup ?? { platform: options.platform ?? process.platform, env: process.env };
-            const program = findProgram(command, lookup);
+            const program = findProgram(command, lookup) ?? findBatchFile(command, lookup);
             if (program === null) throw new Error(notFoundWords(command, lookup));
+            const unsafe = unsafeBatchArgument(program, args);
+            if (unsafe !== null) throw new Error(`${command} is a batch file, and Windows would read part of its argument "${unsafe}" as a command. Nothing was started.`);
 
             const created = backend.create({
                 id,

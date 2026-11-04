@@ -77,19 +77,26 @@ export function findProgram(name: string, ports: LookupPorts = { platform: proce
     return onPath(/\.(exe|com)$/i.test(name) ? [name] : [`${name}.com`, `${name}.exe`], ports);
 }
 
-/** Skeleton. */
-export function findBatchFile(_name: string, _ports: LookupPorts = { platform: process.platform, env: process.env }): string | null {
-    return null;
+/** The whole path of a batch file by this name, in an absolute PATH entry only, or `null`. Windows only. Not for a shell's line: the engine starts it as it starts a program. */
+export function findBatchFile(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string | null {
+    if (ports.platform !== 'win32' || /[\\/]/.test(name)) return null;
+    return onPath(/\.(cmd|bat)$/i.test(name) ? [name] : [`${name}.cmd`, `${name}.bat`], ports);
+}
+
+/**
+ * Windows always runs a batch file through cmd, so an argument can be a command to it however it's quoted. The argument
+ * that can't go to one, or `null`. fancy-pty 0.5.0 refuses the same set.
+ */
+export function unsafeBatchArgument(program: string, args: readonly string[]): string | null {
+    if (!/\.(cmd|bat)$/i.test(program)) return null;
+    return args.find((arg) => /[&|<>^%"!\r\n]/.test(arg)) ?? null;
 }
 
 export function resolveProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
     return findProgram(name, ports) ?? win32.join(systemRoot(ports.env), 'System32', `${name.replace(/\.(exe|com)$/i, '')}.exe`);
 }
 
-/** Why a name can't be started, in words: what was asked for, and the batch file of that name on PATH if there is one. Names no path that isn't there. */
-export function notFoundWords(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
-    const batch = onPath(/\.(cmd|bat)$/i.test(name) ? [name] : [`${name}.cmd`, `${name}.bat`], ports);
-    return batch
-        ? `"${name}" is on this machine as ${batch}, a batch file, and Genie cannot start a batch file here directly yet. Nothing was started.`
-        : `"${name}" was not found on this machine's PATH, so nothing was started.`;
+/** Why a name can't be started, in words. Names no path that isn't there. */
+export function notFoundWords(name: string, _ports: LookupPorts = { platform: process.platform, env: process.env }): string {
+    return `"${name}" was not found on this machine's PATH, so nothing was started.`;
 }

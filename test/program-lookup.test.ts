@@ -369,10 +369,20 @@ pty.onExit(end);`;
         try { const opened = port.open({ cwd, command }); port.kill(opened.id); return ''; } catch (error) { return (error as Error).message; }
     };
 
-    it('the real message: npm is on this machine as a batch file, and it says that, and no path that is not there', () => {
-        const words = openedThroughThePort('npm run dev', folder);
-        expect(words).toMatch(/"npm" is on this machine as .*npm\.cmd, a batch file/i);
-        expect(words).not.toMatch(/System32/i);
+    it('a batch file on PATH really starts through the engine, from a folder with a space in its name, and gets its arguments', async () => {
+        const tools = join(folder, 'tools with a space');
+        mkdirSync(tools);
+        // Not this folder's own: it stands for npm's folder under Program Files.
+        writeFileSync(join(tools, 'batchtool.cmd'), `@echo %1 %2> "${mark}"\r\n`);
+        const was = process.env.PATH;
+        process.env.PATH = `${tools};${was}`;
+        try {
+            expect(openedThroughThePort('batchtool run dev', tmpdir())).toBe('');
+            for (let i = 0; i < 50 && !ran(); i += 1) await new Promise((r) => setTimeout(r, 100));
+            expect(readFileSync(mark, 'utf8').trim()).toBe('run dev');
+        } finally {
+            process.env.PATH = was;
+        }
     });
 
     it('a batch file and a program of that name in the working folder: not run, and not mentioned as if they were found', async () => {
