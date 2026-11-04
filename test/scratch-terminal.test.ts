@@ -36,7 +36,7 @@ describe('opening one', () => {
         });
         expect(result).toEqual({ ok: true, terminalId: 'pty_7' });
         // Genie's own scratch terminal is not counted against a workspace's terminal limit (core/shell-limits.ts).
-        expect(opened).toEqual([{ workspaceId: OS_WORKSPACE, cwd: '/home/example', limited: false }]);
+        expect(opened).toEqual([{ workspaceId: OS_WORKSPACE, cwd: '/home/example', limited: false, personal: true }]);
         expect(windows).toEqual(['genie://takeover/pty_7']);
     });
 

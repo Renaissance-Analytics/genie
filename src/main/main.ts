@@ -209,6 +209,7 @@ import { WorkspaceColors } from './workspace-color-host.js';
 import { nodeEnvelopeFs } from './envelope-sites-host.js';
 import { nestGoverned } from '../core/rail-view.js';
 import { issueWatchPanelView, issueWatchSoundKinds, PANEL_RECENT, tynnProjectIdOf, type IssueWatchPanelView, type IssueWatchSummary, type IwEntry, type IwEvent } from '../core/issue-watch.js';
+import { resolveProgram } from '../core/program-lookup.js';
 
 /**
  * THE MAIN PROCESS.
@@ -1811,7 +1812,7 @@ async function boot(): Promise<void> {
             // GENIE_MCP_URL / GENIE_MCP_TOKEN (§6.9); the pty port adds GENIE_TERMINAL_ID itself. The SAME function gives an
             // agent's `manageTerminals create` its env (the `terminalEnv` part below).
             const env = terminalEnvFor(services, workspace.id, mcpEnv());
-            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, ...(Object.keys(env).length > 0 ? { env } : {}) });
+            return terminals.open({ workspaceId: workspace.id, cwd, command, cols, rows, personal: true, ...(Object.keys(env).length > 0 ? { env } : {}) });
         } catch (error: unknown) {
             // The engine's own words, on the main process's stderr, where a VM run's
             // installed-err.log catches them. The first fancy-pty failure on the installed app
@@ -2311,7 +2312,7 @@ async function boot(): Promise<void> {
     const processPorts = (): FeaturePorts => ({ onEngineStatusesLate: () => requestFeaturePush(), tailscale: tailscalePort, ...(remoteAccessNow ? { remoteAccess: remoteAccessNow } : {}), ...(process.platform === 'win32' ? { allowFirewall: () => ensureFirewallRule(REMOTE_PORT) } : {}), ...(processBook ? { processes: processBook } : {}), ...(processScheduler ? { processScheduler } : {}), ...(tynnAccount ? { tynnAccount } : {}), ...(githubAccount ? { githubAccount } : {}), ...(keyring ? { keyring } : {}), tynnWorkstation: () => (tynnWorkstationNow?.registered ? { ...tynnWorkstationNow, relay: relayStatusNow } : tynnWorkstationNow), issueWatch: () => issueWatchPanels(), issueWatchRefresh: (workspaceId: string) => issueWatchRefreshFor(workspaceId), issueWatchSetRepo: (workspaceId: string, owner: string, repo: string, change: { enabled?: boolean; includeUpstream?: boolean }) => issueWatchSetRepoFor(workspaceId, owner, repo, change), whatsNew: (shown) => whatsNewFor(app.getVersion(), String(composed.settings.get('whats_new_seen_version') ?? ''), RELEASE_NOTES, shown), appVersion: () => app.getVersion() });
     // THE HOST'S SOCKET (§6.8): fancy-ws on the Tailscale IPv4 only; with no Tailscale nothing listens and Settings says why.
     const remoteSocket = remoteListener({
-        tailscale: () => execFileText('tailscale', ['status', '--json']),
+        tailscale: () => execFileText(resolveProgram('tailscale'), ['status', '--json']),
         port: REMOTE_PORT,
         attach: attachWebSocketServer,
         // The phone's page (§6.8): the built renderer, from the same directory the window loads it from — and, named after
@@ -2326,7 +2327,7 @@ async function boot(): Promise<void> {
             const keyFile = join(dir, 'key.pem');
             try {
                 await mkdir(dir, { recursive: true });
-                await execFileText('tailscale', ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
+                await execFileText(resolveProgram('tailscale'), ['cert', '--cert-file', certFile, '--key-file', keyFile, dnsName], { timeoutMs: 60_000 });
                 // The private key, the user's only (best effort; on Windows the per-user profile is the guard) — as Genie 1.
                 await chmod(keyFile, 0o600).catch(() => {});
                 return { cert: await readFileText(certFile, 'utf8'), key: await readFileText(keyFile, 'utf8') };
