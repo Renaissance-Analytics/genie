@@ -28,8 +28,9 @@ describe('SingleSiteBar', () => {
     it('back and forward follow what the page can do', () => {
         const html = render();
         const tag = (action: string) => new RegExp(`<button[^>]*data-site-action="${action}"[^>]*>`).exec(html)?.[0] ?? '';
-        expect(tag('forward')).toMatch(/\sdisabled/);
-        expect(tag('back')).not.toMatch(/\sdisabled/);
+        // The attribute, not a `disabled:` class.
+        expect(tag('forward')).toMatch(/\sdisabled(=|\s|>)/);
+        expect(tag('back')).not.toMatch(/\sdisabled(=|\s|>)/);
     });
 
     it('while it loads, it shows so', () => {
