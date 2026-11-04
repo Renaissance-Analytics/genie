@@ -77,6 +77,11 @@ export function findProgram(name: string, ports: LookupPorts = { platform: proce
     return onPath(/\.(exe|com)$/i.test(name) ? [name] : [`${name}.com`, `${name}.exe`], ports);
 }
 
+/** Skeleton. */
+export function findBatchFile(_name: string, _ports: LookupPorts = { platform: process.platform, env: process.env }): string | null {
+    return null;
+}
+
 export function resolveProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string {
     return findProgram(name, ports) ?? win32.join(systemRoot(ports.env), 'System32', `${name.replace(/\.(exe|com)$/i, '')}.exe`);
 }

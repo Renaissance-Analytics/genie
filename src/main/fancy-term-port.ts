@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { PROGRAM_LOOKUP_VARIABLE, findProgram, notFoundWords } from '../core/program-lookup.js';
+import { PROGRAM_LOOKUP_VARIABLE, findProgram, notFoundWords, type LookupPorts } from '../core/program-lookup.js';
 import { shellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import { join } from 'node:path';
@@ -64,6 +64,8 @@ export interface FancyTermPortOptions {
     defaultShell: () => { command: string; args: string[] };
     /** Which shell runs a `shell: true` command line (core/shell-launch.ts). Defaults to this process's platform. */
     platform?: NodeJS.Platform;
+    /** Where a program is looked for. Defaults to this machine's. */
+    lookup?: LookupPorts;
 }
 
 export function fancyTermPort(backend: HostBackend, options: FancyTermPortOptions): PtyPort {
@@ -99,7 +101,7 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
                 : options.defaultShell();
 
             // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
-            const lookup = { platform: options.platform ?? process.platform, env: process.env };
+            const lookup = options.lookup ?? { platform: options.platform ?? process.platform, env: process.env };
             const program = findProgram(command, lookup);
             if (program === null) throw new Error(notFoundWords(command, lookup));
 

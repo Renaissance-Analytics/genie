@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hardenProcess, notFoundWords, resolveProgram } from '../src/core/program-lookup.js';
+import { hardenProcess, notFoundWords, resolveProgram, findBatchFile } from '../src/core/program-lookup.js';
 import { open as openEngine } from '@particle-academy/fancy-pty';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from '../src/main/fancy-term-port.js';
@@ -104,9 +104,10 @@ describe('resolveProgram, on any OS, with a fake machine', () => {
 
 describe('the words for a name that would not start', () => {
     const on = (files: string[], path: string) => ({ platform: 'win32' as const, env: { PATH: path, SystemRoot: 'C:\\Windows' }, isFile: (p: string) => files.includes(p.toLowerCase()) });
-    it('a batch file on PATH, asked for by name or with its extension', () => {
-        expect(notFoundWords('npm', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toMatch(/^"npm" is on this machine as C:\\node\\npm\.cmd, a batch file/);
-        expect(notFoundWords('npm.cmd', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toMatch(/^"npm\.cmd" is on this machine as C:\\node\\npm\.cmd, a batch file/);
+    it('a batch file on PATH is found now, by name or with its extension', () => {
+        expect(findBatchFile('npm', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toBe('C:\\node\\npm.cmd');
+        expect(findBatchFile('npm.cmd', on(['c:\\node\\npm.cmd'], 'C:\\node'))).toBe('C:\\node\\npm.cmd');
+        expect(findBatchFile('npm', on([], 'C:\\node'))).toBeNull();
     });
     it('nothing: says not found, and a batch file only in a relative PATH entry does not count', () => {
         expect(notFoundWords('npm', on(['node\\npm.cmd'], 'node'))).toBe('"npm" was not found on this machine\'s PATH, so nothing was started.');
