@@ -48,6 +48,12 @@ const flush = async (): Promise<void> => {
     }
 };
 
+/** A restart reads the thread from disk before it hands over what is owed: real time, which `flush` does not wait out. Bounded, and the row's own assertion says what did not come. */
+const flushUntil = async (arrived: () => boolean): Promise<void> => {
+    const end = performance.now() + 5000;
+    while (!arrived() && performance.now() < end) await flush();
+};
+
 interface Fake { events: DriverEvents; prompts: string[] }
 
 function rig(startUntrusted: boolean, options: { launchGate?: Promise<void>; restartAnswer?: { ok: false; reason: string } } = {}) {
@@ -158,6 +164,7 @@ describe('gone untrusted, in a turn: a restart when it has ended, and no work re
         await flush();
         expect(t.restarts).toEqual([t.record.id]);
         expect(t.launches).toEqual([null, FILES]);
+        await flushUntil(() => t.fakes[1]!.prompts.length > 0);
         expect(t.fakes[0]!.prompts).toEqual(['go']);
         expect(t.fakes[1]!.prompts).toEqual(['and this']);
         expect(t.notices).toEqual([UNTRUSTED_AT_TURN_END]);
@@ -232,6 +239,7 @@ describe('gone untrusted, idle: it stays as it is until work arrives, and that w
         send(t);
         await flush();
         expect(t.restarts).toEqual([t.record.id]);
+        await flushUntil(() => t.fakes[1]!.prompts.length > 0);
         expect(t.fakes[0]!.prompts).toEqual([]);
         expect(t.fakes[1]!.prompts).toEqual(['work']);
         expect(t.launches).toEqual([null, FILES]);
