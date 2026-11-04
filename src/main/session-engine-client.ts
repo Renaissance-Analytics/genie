@@ -40,6 +40,7 @@ import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js'
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
+import type { BrowserEvent } from './browser-service.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
 import type { ForwardedToolCall } from './mcp-host-tools.js';
@@ -140,6 +141,7 @@ export class SessionEngineClient {
     #supervisor: SupervisorReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
+    readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
     #tynn: TynnAccountReplica | null = null;
     #github: GithubAccountReplica | null = null;
     #keyring: KeyringReplica | null = null;
@@ -307,6 +309,9 @@ export class SessionEngineClient {
                 return;
             case 'terminals.event':
                 this.terminals().apply(payload as TerminalsEvent);
+                return;
+            case 'browser.event':
+                for (const listener of [...this.#browserListeners]) listener(payload as BrowserEvent);
                 return;
             case 'flows.event':
                 this.flows().apply(payload as FlowsEvent);
@@ -570,6 +575,18 @@ export class SessionEngineClient {
     }
 
     /** genie-host's flows, as this window reads, edits, arms and runs them (P3.3d). */
+    /** Between the window and the Genie browser's process (P2b: browser-service.ts). */
+    async browserCall(method: string, args: readonly unknown[]): Promise<unknown> {
+        const reply = await this.call('engine.browser', [method, [...args]]);
+        if (!reply.ok) throw new Error(reply.reason);
+        return reply.value;
+    }
+
+    onBrowserEvent(listener: (event: BrowserEvent) => void): () => void {
+        this.#browserListeners.add(listener);
+        return () => { this.#browserListeners.delete(listener); };
+    }
+
     flows(): FlowsReplica {
         this.#flows ??= new FlowsReplica(async (method, args) => {
             const reply = await this.call('engine.flows', [method, [...args]]);
