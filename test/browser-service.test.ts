@@ -7,10 +7,10 @@ import { BrowserService, type BrowserEvent, type BrowserFacts } from '../src/mai
  * browser needs and what to open; the host holds it until a browser is linked. The front door is the window's until P5.
  */
 
-const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'] };
+const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
 
-function setup() {
-    const service = new BrowserService();
+function setup(ports: ConstructorParameters<typeof BrowserService>[0] = {}) {
+    const service = new BrowserService(ports);
     const events: BrowserEvent[] = [];
     service.onEvent((event) => events.push(event));
     return { service, events };
@@ -60,6 +60,76 @@ describe('opening a site', () => {
     it('an address that is not text is refused', async () => {
         const { service } = setup();
         await expect(service.call('open', [42, 'background'], 'window')).rejects.toThrow(/address/);
+    });
+});
+
+describe('starting a browser', () => {
+    const counted = () => {
+        let now = 0;
+        const started: unknown[] = [];
+        return { started, ports: { startBrowser: (launch: unknown) => { started.push(launch); }, now: () => now }, advance: (ms: number) => { now += ms; } };
+    };
+
+    it('an open with no browser starts one, as the window said to', async () => {
+        const c = counted();
+        const { service } = setup(c.ports);
+        await service.call('publish', [FACTS], 'window');
+        await service.call('open', ['https://moic.gen/', 'background'], 'window');
+        expect(c.started).toEqual([FACTS.launch]);
+    });
+
+    it('one held open before the window has said how: started when it says', async () => {
+        const c = counted();
+        const { service } = setup(c.ports);
+        await service.call('open', ['https://moic.gen/', 'background'], 'window');
+        expect(c.started).toEqual([]);
+        await service.call('publish', [FACTS], 'window');
+        expect(c.started).toEqual([FACTS.launch]);
+    });
+
+    it('CONTROL: publishing with nothing to open starts nothing', async () => {
+        const c = counted();
+        const { service } = setup(c.ports);
+        await service.call('publish', [FACTS], 'window');
+        expect(c.started).toEqual([]);
+    });
+
+    it('not twice while one is on its way; again if it never linked', async () => {
+        const c = counted();
+        const { service } = setup(c.ports);
+        await service.call('publish', [FACTS], 'window');
+        await service.call('open', ['https://a.gen/', 'background'], 'window');
+        await service.call('open', ['https://b.gen/', 'background'], 'window');
+        expect(c.started).toHaveLength(1);
+        c.advance(30_000);
+        await service.call('open', ['https://c.gen/', 'background'], 'window');
+        expect(c.started).toHaveLength(2);
+    });
+
+    it('a browser linked: nothing started', async () => {
+        const c = counted();
+        const { service } = setup(c.ports);
+        await service.call('publish', [FACTS], 'window');
+        await service.call('register', [], 'browser');
+        await service.call('open', ['https://a.gen/', 'background'], 'window');
+        expect(c.started).toEqual([]);
+    });
+});
+
+describe('opening with no address', () => {
+    it('is the browser with its first site: null, not a refusal', async () => {
+        const { service, events } = setup();
+        await service.call('register', [], 'browser');
+        await service.call('open', [null, 'user-gesture'], 'window');
+        expect(events.at(-1)).toEqual({ kind: 'open', url: null, activation: 'user-gesture' });
+    });
+});
+
+describe('the host ending', () => {
+    it('says so, for the browser to end too', () => {
+        const { service, events } = setup();
+        service.quit();
+        expect(events.at(-1)).toEqual({ kind: 'quit' });
     });
 });
 
