@@ -162,6 +162,20 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
     };
 }
 
+export interface SeenTabs {
+    readonly workspaceId: string;
+    readonly raw: unknown;
+}
+
+/**
+ * Whether a workspace's tabs really changed, so a panel gone from them may close. Workspace mounts again before its settings
+ * arrive, and "no tabs yet" must not close every page (batch SS on omarchy-test). A panel removed while its Workspace wasn't
+ * mounted stays hidden until the next change: a cost of nothing.
+ */
+export function tabsChanged(before: SeenTabs | null, now: SeenTabs): boolean {
+    return before !== null && typeof now.raw === 'string' && before.workspaceId === now.workspaceId && before.raw !== now.raw;
+}
+
 const layers = new WeakMap<object, SiteWebviewLayer>();
 
 /** One layer per bridge: a Workspace mounting again finds the pages it left. */

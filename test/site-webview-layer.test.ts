@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { siteWebviewLayer } from '../src/renderer/site-webview-layer.js';
+import { siteWebviewLayer, tabsChanged } from '../src/renderer/site-webview-layer.js';
 
 /**
  * THE LAYER THE PANELS' PAGES LIVE IN. Measured on Electron 45.2.2: moving a <webview> in the DOM reloads it, with
@@ -156,6 +156,18 @@ describe('its history and loading', () => {
         leave();
         views()[1]!.emit('did-stop-loading');
         expect(heard).toHaveLength(1);
+describe('tabsChanged: when a panel may be closed for leaving its tabs', () => {
+    // Batch SS on omarchy-test: Workspace mounts again before its settings arrive, so "no tabs yet" closed every page.
+    it('a change in the same workspace', () => {
+        expect(tabsChanged({ workspaceId: 'a', raw: '1' }, { workspaceId: 'a', raw: '2' })).toBe(true);
+    });
+    it.each([
+        ['mounting, nothing seen yet', null, { workspaceId: 'a', raw: '1' }],
+        ['the settings not here yet', { workspaceId: 'a', raw: '1' }, { workspaceId: 'a', raw: undefined }],
+        ['nothing changed', { workspaceId: 'a', raw: '1' }, { workspaceId: 'a', raw: '1' }],
+        ['another workspace, whose settings may not have arrived', { workspaceId: 'a', raw: '1' }, { workspaceId: 'b', raw: '1' }],
+    ])('not %s', (_name, before, now) => {
+        expect(tabsChanged(before, now)).toBe(false);
     });
 });
 
