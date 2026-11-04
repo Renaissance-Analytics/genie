@@ -332,6 +332,10 @@ describe('main never waits on a spawn (genie#1397)', () => {
         expect(worst, `main's gap ${lastReading.gap} ms, subtracted ${lastReading.stalled} ms`).toBeLessThan(HELD_BAR_MS);
     }, 30_000);
 
+    it.skipIf(process.platform === 'win32')('a run that throws while the witness is stopped still ends: it says the error, it does not hang', async () => {
+        await expect(heartbeatDuring(async () => { throw new Error('the run failed'); }, { stopTheWitness: true })).rejects.toThrow('the run failed');
+    }, 30_000);
+
     it('the gauge begins only once its witness has really beaten', async () => {
         await onMainDuring({});
         expect(lastReading.witnessReady).toBe(true);
