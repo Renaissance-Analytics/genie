@@ -36,7 +36,8 @@ async function until(what, ms, read) {
     return null;
 }
 const processes = () => (spawnSync('ps', ['-eo', 'pid=,args='], { encoding: 'utf8' }).stdout ?? '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const i = l.indexOf(' '); return { pid: Number(l.slice(0, i)), args: l.slice(i + 1) }; });
-const mains = (marker) => processes().filter((p) => p.args.includes(marker) && !p.args.includes('--type=') && /electron/.test(p.args.split(' ')[0]));
+// By whole argument: the window carries --genie-browser-debug-port too.
+const mains = (marker) => processes().filter((p) => { const words = p.args.split(' '); return words.includes(marker) && !p.args.includes('--type=') && /electron/.test(words[0]); });
 
 class Cdp {
     #socket; #next = 1; #pending = new Map();
@@ -103,7 +104,7 @@ try {
         return null;
     });
 
-    check(mains('--genie-browser ').length === 0 && mains('--genie-browser').length === 0, 'CONTROL no browser process before anything asks for one');
+    check(mains('--genie-browser').length === 0, 'CONTROL no browser process before anything asks for one');
     await cdp.evaluate(`window.genie.browserWindow.open(${JSON.stringify(HOST)}).then((r) => JSON.stringify(r))`).then((r) => console.log(`  open: ${r}`));
     const up = await until('the browser process', 40_000, () => { const m = mains('--genie-browser'); return m.length > 0 ? m[0] : null; });
     check(up !== null, 'asked from the window, a browser process starts', up ? `pid ${up.pid}` : '');
