@@ -36,7 +36,7 @@ declare global {
     interface Window { genieBrowser?: BrowserBridge }
 }
 
-const EMPTY: BrowserSnapshot = { tabs: [], active: null, presetId: 'fit', presets: [], sites: [] };
+const EMPTY: BrowserSnapshot = { notice: null, tabs: [], active: null, presetId: 'fit', presets: [], sites: [] };
 
 function Browser({ bridge }: { bridge: BrowserBridge }) {
     const [snapshot, setSnapshot] = useState<BrowserSnapshot>(EMPTY);

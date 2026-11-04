@@ -44,6 +44,8 @@ export interface TabViewEvents {
 
 /** What the chrome draws from. */
 export interface BrowserSnapshot extends BrowserState {
+    /** One line on what this browser cannot do now; null when nothing is wrong. */
+    readonly notice: string | null;
     readonly presetId: string;
     readonly presets: ReadonlyArray<{ readonly id: string; readonly label: string }>;
     /** The Genie sites this window can open — the chrome's row of chips and its empty state. */
@@ -73,6 +75,7 @@ function hostOf(url: string): string | null {
 const ABORTED = -3;
 
 export class GenieBrowser {
+    #notice: string | null = null;
     readonly #ports: GenieBrowserPorts;
     readonly #views = new Map<string, TabViewPort>();
     #state: BrowserState = EMPTY_BROWSER;
@@ -172,8 +175,14 @@ export class GenieBrowser {
         this.#layout();
     }
 
+    setNotice(notice: string | null): void {
+        if (notice === this.#notice) return;
+        this.#notice = notice;
+        this.#ports.push(this.snapshot());
+    }
+
     snapshot(): BrowserSnapshot {
-        return { ...this.#state, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
+        return { ...this.#state, notice: this.#notice, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
     }
 
     #openTab(url: string, background = false): void {

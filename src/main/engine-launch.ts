@@ -87,6 +87,39 @@ export function spawnHostProcess(ports: Pick<EngineLaunchPorts, 'execPath' | 'ho
     }
 }
 
+/**
+ * Link to the host that is running, or to nothing: never start one, never replace one. For a client that isn't the window
+ * (the Genie browser's process): another build's host is the window's to replace, whichever client asks.
+ */
+export async function linkToRunningHost(ports: Pick<EngineLaunchPorts, 'runtimeDir' | 'alive' | 'readFile' | 'connectTo'>): Promise<EngineLink | null> {
+    const read = ports.readFile ?? readOrNull;
+    const record = parseHostRecord(read(join(ports.runtimeDir, 'host.json')));
+    if (record === null || record.protocol !== ENGINE_PROTOCOL || !(ports.alive ?? pidAlive)(record.pid)) return null;
+    const token = read(join(ports.runtimeDir, 'host.token'));
+    if (token === null) return null;
+    try {
+        return { transport: await (ports.connectTo ?? connectSocket)(record.endpoint), token: token.trim(), record, how: 'adopted' };
+    } catch {
+        return null;
+    }
+}
+
+/** The Genie browser's process, detached: it must outlive the window, and is no child of the host's to end. A real Electron, so not as Node. */
+export function spawnBrowserProcess(launch: { readonly file: string; readonly args: readonly string[] }, ports: Pick<EngineLaunchPorts, 'logsDir' | 'env'>): number | null {
+    mkdirSync(ports.logsDir, { recursive: true });
+    const out = openSync(join(ports.logsDir, 'genie-browser.log'), 'a');
+    const env = { ...ports.env };
+    delete env['ELECTRON_RUN_AS_NODE'];
+    try {
+        const child = spawnChild(launch.file, [...launch.args], { detached: true, windowsHide: false, stdio: ['ignore', out, out], env });
+        child.on('error', () => {});
+        child.unref();
+        return child.pid ?? null;
+    } finally {
+        closeSync(out);
+    }
+}
+
 export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> {
     const alive = ports.alive ?? pidAlive;
     const read = ports.readFile ?? readOrNull;

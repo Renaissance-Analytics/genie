@@ -25,6 +25,7 @@ import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
+import { spawnBrowserProcess } from './engine-launch.js';
 import { ProcessScheduler } from './process-scheduler.js';
 import { ProcessBookReplica, ProcessesService } from './processes-host.js';
 import { FlowStore } from './flow-store.js';
@@ -279,6 +280,7 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
+    const browserService = new BrowserService({ startBrowser: (launch) => { spawnBrowserProcess(launch, { logsDir: join(home, 'logs'), env: process.env }); } });
     const engine = new SessionEngineServer({
         token,
         build,
@@ -299,7 +301,7 @@ async function main(): Promise<void> {
         supervisor: supervisorService,
         processes: processesService,
         flows: flowsService,
-        browser: new BrowserService(),
+        browser: browserService,
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
@@ -584,6 +586,7 @@ async function main(): Promise<void> {
         shuttingDown = true;
         say(`shutting down: ${why}`);
         lifecycleLog(`host shutdown pid=${process.pid} reason=${why}`);
+        browserService.quit();
         const bound = new Promise<void>((r) => setTimeout(r, 10_000).unref());
         // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
         // host nobody wants.
