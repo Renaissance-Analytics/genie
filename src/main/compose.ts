@@ -81,7 +81,7 @@ import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sit
 import { readJson, writeJsonAtomic } from './store.js';
 import type { PtyPort } from './terminal-host.js';
 import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
-import { TrustWatch, watchOneFolder } from './trust-watch.js';
+import { TRUST_PASS_MS, TrustWatch, watchOneFolder } from './trust-watch.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -214,7 +214,7 @@ export interface ComposeInput {
     readonly mcpTools?: () => readonly { name: string; description: string }[];
     /** A workspace's trust verdict moved. */
     readonly onTrustVerdict?: (workspaceId: string) => void;
-    /** The slow pass over what a verdict reads. Absent = a minute. */
+    /** The slow pass over what a verdict reads. Absent = `TRUST_PASS_MS`. */
     readonly trustWatchEveryMs?: number;
     /** False = no folder watchers, the slow pass alone. Absent = watch. */
     readonly trustWatchFolders?: boolean;
@@ -993,7 +993,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     });
     const watchPass = () => { trustWatch.pass().catch((error: unknown) => console.error(`[trust] ${error instanceof Error ? error.message : String(error)}`)); };
     watchPass();
-    const trustWatchTimer = setInterval(watchPass, input.trustWatchEveryMs ?? 60_000);
+    const trustWatchTimer = setInterval(watchPass, input.trustWatchEveryMs ?? TRUST_PASS_MS);
     trustWatchTimer.unref();
     /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
     const mayWriteInto = async (folder: string): Promise<boolean> => {

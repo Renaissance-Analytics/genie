@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { agentRecord, mintAgentId } from '../src/core/identity.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
+import { TRUST_PASS_MS } from '../src/main/trust-watch.js';
 import type { ComposedServices, composeServices } from '../src/main/compose.js';
 import { envFileSites } from '../src/main/dotenv-sync.js';
 import { gitMayRun } from '../src/main/git-read-policy.js';
@@ -139,7 +140,7 @@ describe('a real pull moves the verdict, and the gate holds', () => {
         await services.workspaceTrust.trust('pulled');
     });
 
-    it('with only the watchers to notice it: untrusted without anyone asking, and no work reaches the run launched before it', async () => {
+    it('noticed by itself: untrusted without anyone asking, and no work reaches the run launched before it', async () => {
         const prompts: string[] = [];
         const noTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
         const driverFor: DriverFor = () => () => ({ start: () => {}, prompt: (content: unknown) => { prompts.push(String(content)); }, kill: () => {}, cancel: () => {}, cliSessionId: null, ready: Promise.resolve() }) as never;
@@ -157,8 +158,8 @@ describe('a real pull moves the verdict, and the gate holds', () => {
         run(origin, 'commit', '-q', '-m', 'a new hook');
         run(clone, 'pull', '-q');
 
-        // Long of a watcher, far short of the slow pass, which this composition sets too long to help.
-        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false, changed: true }); }, { timeout: 15_000, interval: 100 });
+        // Elsewhere, long of a watcher and far short of the slow pass. Windows has the slow pass alone (trust-watch.ts).
+        await vi.waitFor(() => { expect(services.workspaceTrust.view('pulled')).toMatchObject({ trusted: false, changed: true }); }, { timeout: process.platform === 'win32' ? TRUST_PASS_MS * 2 : 15_000, interval: 100 });
         expect(services.untrustedNow(record)).toBe(true);
         host.prompt(record.id, 'after', 'you');
         await new Promise((r) => setTimeout(r, 200));

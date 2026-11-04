@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TrustWatch } from '../src/main/trust-watch.js';
 
@@ -9,7 +9,7 @@ import { TrustWatch } from '../src/main/trust-watch.js';
  * Files are a map; the real watcher and a real pull are in workspace-trust-wiring.test.ts.
  */
 
-const W = join('/ws', 'acme');
+const W = resolve('/ws', 'acme');
 const R = join(W, 'repos', 'one');
 
 function rig(start: Record<string, string> = {}, options: { unwatchable?: boolean } = {}) {

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, watch as watchFolderForReal, writeFileSync } from 'node:fs';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,8 +8,8 @@ import { TrustWatch, watchOneFolder } from '../src/main/trust-watch.js';
 
 /**
  * A FOLDER A PERSON CAN'T RENAME BECAUSE GENIE IS WATCHING IT IS A BUG. With the real watchers on a workspace, its parent
- * can be renamed, and the workspace moved and deleted. What each attempt answered is in the assertion, so a red here is
- * the measurement. Windows is where a hold shows; the other systems run the same rows.
+ * can be renamed, and the workspace moved and deleted. What each attempt answered is in the assertion. Measured on a
+ * Windows runner: with a watcher there, renaming either is EPERM (deleting is not stopped). So Windows does not watch them.
  */
 
 let root: string;
@@ -41,7 +41,7 @@ beforeEach(async () => {
         settleMs: 50,
     });
     await watch.pass();
-    expect(watch.watching.length).toBe(3);
+    expect(watch.watching.length).toBe(process.platform === 'win32' ? 0 : 3);
 });
 afterEach(async () => {
     watch.stop();
@@ -61,6 +61,15 @@ describe('with the watchers on', () => {
         expect(attempt(() => rmSync(workspace, { recursive: true, force: true }))).toBe('ok');
         expect(existsSync(workspace)).toBe(false);
         expect(attempt(() => mkdirSync(workspace))).toBe('ok');
+    });
+
+    it.runIf(process.platform === 'win32')('CONTROL: why Windows has no watchers. One on the workspace holds its parent', () => {
+        const watcher = watchFolderForReal(workspace, () => {});
+        try {
+            expect(attempt(() => renameSync(parent, join(root, 'moved')))).not.toBe('ok');
+        } finally {
+            watcher.close();
+        }
     });
 
     it.runIf(process.platform === 'win32')('CONTROL: what these rows can see. A process with its folder there does hold the parent', async () => {

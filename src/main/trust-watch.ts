@@ -8,7 +8,7 @@ import { listRepos } from '../core/repo-registry.js';
  * Small on purpose, because a workstation may hold many workspaces. It watches only the few folders those files are in,
  * each alone and not its tree, and reads each file's size and time, nothing more. The verdict is read again only when one
  * of them really changed, so a busy folder costs a few readings. It runs no git: reading the verdict is `refresh`'s, which
- * keeps its own rules. A slow pass covers what a watcher misses, or a folder that cannot be watched.
+ * keeps its own rules. A slow pass covers what a watcher misses, or a folder that is not watched: on Windows, every one.
  *
  * A config file's own includes are not followed here: a change to an included file is seen at the next launch's read.
  */
@@ -34,8 +34,16 @@ interface Watched {
     again: boolean;
 }
 
-/** One folder, not its subfolders, keeping nothing alive. The stop, or `null` when it cannot be watched: the slow pass covers it. */
-export function watchOneFolder(folder: string, changed: () => void): (() => void) | null {
+/**
+ * ON WINDOWS NOTHING INSIDE A WORKSPACE IS WATCHED: a folder watcher there stops a person renaming that folder or anything
+ * above it (measured on a Windows runner: EPERM, for the workspace and its parent; deleting it was not stopped). So Windows
+ * has the slow pass alone, and a shorter one, since a reading of a few files holds nothing.
+ */
+export const TRUST_PASS_MS = process.platform === 'win32' ? 15_000 : 60_000;
+
+/** One folder, not its subfolders, keeping nothing alive. The stop, or `null` when it is not watched: the slow pass covers it. */
+export function watchOneFolder(folder: string, changed: () => void, platform: NodeJS.Platform = process.platform): (() => void) | null {
+    if (platform === 'win32') return null;
     try {
         const watcher = watch(folder, { persistent: false }, () => changed());
         watcher.on('error', () => { watcher.close(); });
