@@ -167,4 +167,30 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         expect(await bridge.workspaces.githubRepos!()).toEqual({ status: 'failed', message: 'This Genie window has no local protocol connection.' });
         expect(oldInvoke).not.toHaveBeenCalled();
     });
+    // These early returns are frozen from the native handlers at b7512ebf. No operation
+    // was called there: migration must not turn malformed/null input into a disk action.
+    it.each([
+        { name: 'previewAdd', args: [''], result: { ok: false, reason: 'no folder picked' } },
+        { name: 'previewAdd', args: [null], result: { ok: false, reason: 'no folder picked' } },
+        { name: 'confirmAdd', args: [null], result: { ok: false, reason: 'confirmAdd names a folder' } },
+        { name: 'create', args: [null, '/estate', { kind: 'none' }, 'project-1'], result: { ok: false, reason: 'give the workspace a name and a folder' } },
+        { name: 'previewAddFromGit', args: ['https://example.test/app.git', ''], result: { ok: false, reason: 'give a git URL and a parent folder' } },
+        { name: 'confirmAddFromGit', args: [null, '/estate'], result: { ok: false, reason: 'give a git URL and a parent folder' } },
+        { name: 'readSource', args: [''], result: { ok: false, reason: 'no folder picked' } },
+        { name: 'readSource', args: [null], result: { ok: false, reason: 'no folder picked' } },
+        { name: 'stageFromGit', args: ['   '], result: { ok: false, reason: 'give a git URL' } },
+        { name: 'registerExisting', args: [''], result: { ok: false, reason: 'no folder picked' } },
+        { name: 'discardStaged', args: [null], result: { ok: true } },
+        { name: 'importedAgents', args: [null], result: { ok: false, reason: 'name a workspace' } },
+        { name: 'adoptAgent', args: ['sample', ''], result: { ok: false, reason: 'name a workspace and an agent' } },
+        { name: 'previewAddFromTynn', args: ['', '/estate'], result: { ok: false, reason: 'choose a Tynn project and a parent folder' } },
+        { name: 'confirmAddFromTynn', args: [null, 'project-1'], result: { ok: false, reason: 'give a parent folder and a Tynn project' } },
+    ] satisfies Array<{ name: WizardKey; args: unknown[]; result: unknown }>)('$name preserves the old native guard for $args', async (invalid) => {
+        const deps = protocolContractDeps(dir), operation = vi.fn(async () => ({ ok: true, called: true }));
+        Object.assign(deps.workspaceOps, { [invalid.name]: operation });
+        const source = serve(deps), client = await source.connect();
+        const row = { ...rows.find((r) => r.name === invalid.name)!, args: invalid.args };
+        expect(await call(client.bridge.workspaces, row)).toEqual(invalid.result);
+        expect(operation).not.toHaveBeenCalled();
+    });
 });
