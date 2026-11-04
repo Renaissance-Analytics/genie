@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { LocalFramePort } from '../src/core/local-frame.js';
-import { pageBridge, type GenieBridge, type PreloadBridge } from '../src/renderer/bridge.js';
+import { NO_FILES, pageBridge, type GenieBridge, type PreloadBridge } from '../src/renderer/bridge.js';
 import { App } from '../src/renderer/App.js';
 
 // The controller is part of the proposed page composition; no product scaffold precedes this red.
@@ -135,6 +135,7 @@ describe('the local page connection retries only a bounded starting refusal', ()
         vi.stubGlobal('window', undefined);
         const bridge = {
             workspaces: {},
+            files: NO_FILES,
             localProtocol: { state: () => ({ phase: 'failed', reason: 'Genie is still starting', revision: 0 }), onState: () => () => {}, retry: vi.fn() },
         } as unknown as GenieBridge;
         const html = renderToStaticMarkup(<App bridge={bridge} />);
