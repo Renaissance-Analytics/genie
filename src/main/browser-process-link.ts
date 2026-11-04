@@ -72,9 +72,10 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
             client = found;
             found.onBrowserEvent(onEvent);
             const answer = await found.browserCall('register', []) as { facts: BrowserFacts | null; doorUp: boolean };
+            // Linked first: what a held open starts (a store asking for its cookies) needs the link.
+            ports.linked?.(found);
             if (answer.facts !== null) onFacts(answer.facts);
             ports.door(answer.doorUp);
-            ports.linked?.(found);
             firstLink();
             return;
         }

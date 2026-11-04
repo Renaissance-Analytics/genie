@@ -35,6 +35,11 @@ export class BrowserCookieBridge {
         void this.#ports.call('cookiesWanted', [workspaceId]).catch(() => {});
     }
 
+    /** Linked again (or for the first time): every store asks once more, as one opened unlinked asked into nothing. */
+    relinked(): void {
+        for (const workspaceId of this.#syncs.keys()) void this.#ports.call('cookiesWanted', [workspaceId]).catch(() => {});
+    }
+
     /** The store's own `changed` event. */
     changed(workspaceId: string, cookie: SyncedCookie, cause: string, removed: boolean): void {
         this.#syncs.get(workspaceId)?.sync.changed(cookie, cause, removed);

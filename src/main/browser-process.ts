@@ -71,7 +71,7 @@ export async function runBrowserProcess(): Promise<void> {
     onPagesChanged(sayPages);
 
     runBrowserLink({
-        linked: (client) => { linkedClient = client; sayPages(); },
+        linked: (client) => { linkedClient = client; sayPages(); cookies.relinked(); },
         pageCall: (event, client) => {
             const page = drivablePages().find((p) => p.id === event.pageId);
             const answer = page ? page.transport.call(event.method, [...event.args]) : Promise.reject(new Error('that page is gone'));

@@ -1486,6 +1486,7 @@ async function boot(): Promise<void> {
                 void handProxyAnswers();
                 publishBrowserFacts();
                 void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
+                cookieBridge?.relinked();
                 client.onBrowserEvent((event) => {
                     if (event.kind === 'pages') browserPages.apply(event.pages);
                     if (event.kind === 'cookies' || event.kind === 'cookiesWanted') cookieBridge?.onEvent(event);
