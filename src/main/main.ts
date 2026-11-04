@@ -2520,37 +2520,6 @@ async function boot(): Promise<void> {
         },
         registry: { workspace: (id) => registry?.workspace(id) ?? null },
     };
-    ipcMain.handle('genie:workspace-repo-unlock', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoLockOf(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
-    ipcMain.handle('genie:workspace-repos', (_event, raw: unknown) => (typeof raw === 'string' ? listReposOf(repoOps, raw) : { ok: false, reason: 'name a workspace' }));
-    // The commits in the workspace's repos since a moment (an observed agent's index): git's own account.
-    ipcMain.handle('genie:workspace-commits-since', (_event, raw: unknown, since: unknown) => (typeof raw === 'string' && typeof since === 'number' ? commitsSinceIn(repoOps, raw, since) : { ok: false, reason: 'name a workspace and a moment' }));
-    // "Locate repo" on a Dashboard group fault: a real folder the user picks, inside the envelope; the manifest's path moves.
-    // The folder is picked in the window over the host's disk (Tynn #835); the manifest's path moves.
-    ipcMain.handle('genie:workspace-repo-locate', (_event, raw: unknown, slug: unknown, path: unknown) =>
-        (typeof raw === 'string' && typeof slug === 'string' && typeof path === 'string' && path !== '' ? relocateRepoIn(repoOps, raw, slug, path) : { ok: false, reason: 'name a workspace, a repo and its folder' }));
-    ipcMain.handle('genie:workspace-repo-add', (_event, raw: unknown, input: unknown) => {
-        const i = (typeof input === 'object' && input !== null ? input : {}) as { name?: unknown; path?: unknown };
-        return typeof raw === 'string' ? addRepoTo(repoOps, raw, { name: String(i.name ?? ''), path: String(i.path ?? '') }) : { ok: false, reason: 'name a workspace' };
-    });
-    ipcMain.handle('genie:workspace-repo-remove', (_event, raw: unknown, slug: unknown) => (typeof raw === 'string' && typeof slug === 'string' ? removeRepoFrom(repoOps, raw, slug) : { ok: false, reason: 'name a workspace and a repo' }));
-    // WORKSPACE SETTINGS (§6.1): the workspace-scoped keys with THIS workspace's effective values and its overrides.
-    ipcMain.handle('genie:workspace-settings', (_event, raw: unknown) =>
-        (typeof raw === 'string' && services ? { ok: true, values: services.settings.snapshotFor(raw), overridden: Object.keys(services.settings.workspaceValues(raw)) } : { ok: false, reason: 'name a workspace' }));
-    ipcMain.handle('genie:workspace-setting-set', async (_event, raw: unknown, key: unknown, value: unknown) => {
-        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
-        try { await services.settings.setFor(raw, key, value); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-    });
-    ipcMain.handle('genie:workspace-setting-reset', async (_event, raw: unknown, key: unknown) => {
-        if (typeof raw !== 'string' || typeof key !== 'string' || !services) return { ok: false, reason: 'name a workspace and a setting' };
-        try { await services.settings.resetFor(raw, key); return { ok: true }; } catch (error) { return { ok: false, reason: error instanceof Error ? error.message : String(error) }; }
-    });
-    // OPS PROJECTS (§6.1): which workspaces this one governs.
-    ipcMain.handle('genie:workspace-set-governs', (_event, raw: unknown, children: unknown) =>
-        (typeof raw === 'string' && registry ? registry.setGoverns(raw, Array.isArray(children) ? children.filter((c): c is string => typeof c === 'string') : []) : { ok: false, reason: 'name a workspace' }));
-    // THE DEFAULT AGENT (Genie 1's): one of the workspace's own agents, or null.
-    ipcMain.handle('genie:workspace-set-color', (_event, raw: unknown, color: unknown) => setWorkspaceColor(raw, color));
-    ipcMain.handle('genie:workspace-set-default-agent', (_event, raw: unknown, agentId: unknown) =>
-        (typeof raw === 'string' && registry ? registry.setDefaultAgent(raw, typeof agentId === 'string' && agentId !== '' ? agentId : null) : { ok: false, reason: 'name a workspace' }));
     // The folder is picked IN THE WINDOW (Tynn #835: a FileBrowser over the host's disk) — no native dialog.
     ipcMain.handle('genie:workspace-preview-add', async (_event, path: unknown) =>
         (typeof path === 'string' && path !== '' ? previewAddWorkspace(workspaceOps, path) : { ok: false, reason: 'no folder picked' }));
@@ -2713,7 +2682,6 @@ async function boot(): Promise<void> {
     });
     remoteSocketNow = remoteSocket;
     const remoteHub = transportHub(remoteSocket.transport);
-    remoteHub.add(localDoor);
     // Genie's Caddy RUNS from a per-user copy under ~/.genie, refreshed when the bundled binary's hash changes — never
     // from the install dir, which an NSIS update replaces under a running front door (Genie 1's genie#265).
     const bundledCaddy = caddyBinPath(process.resourcesPath, process.platform);
@@ -2871,10 +2839,8 @@ async function boot(): Promise<void> {
             return session ? { running: false, startedAt: session.startedAt } : null;
         },
         /*
-         * What a remote connection may perform here (§6.8): the same parts the IPC handlers use,
-         * behind one invoke. Late-bound through `services`/`featurePorts`, which exist by the time
-         * any remote call arrives. The SOCKET is not wired yet — fancy-ws awaits its first npm publish
-         * — so nothing listens and Settings → Workstation says devices cannot connect yet.
+         * The common API for remote connections and migrated local families (§6.8, P4).
+         * Late-bound through `services`/`featurePorts`; the local door attaches after composition.
          */
         remoteApi: buildHostApi({
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
@@ -2954,6 +2920,7 @@ async function boot(): Promise<void> {
                 settings: (id) => ({ ok: true as const, values: services!.settings.snapshotFor(id), overridden: Object.keys(services!.settings.workspaceValues(id)) }),
                 setSetting: async (id, key, value) => { try { await services!.settings.setFor(id, key, value); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
                 resetSetting: async (id, key) => { try { await services!.settings.resetFor(id, key); return { ok: true as const }; } catch (error) { return { ok: false as const, reason: error instanceof Error ? error.message : String(error) }; } },
+                onSettingsChanged: (listener) => services!.settings.onChange((_key, _value, id) => { if (id) listener(id); }),
                 setGoverns: (id, children) => registry!.setGoverns(id, children),
                 setDefaultAgent: (id, agentId) => registry!.setDefaultAgent(id, agentId),
                 setColor: (id, color) => setWorkspaceColor(id, color),
@@ -2992,6 +2959,8 @@ async function boot(): Promise<void> {
         }),
     });
     services = composed;
+    // Local calls and event subscriptions use late-bound services. Until now the door answers "Genie is still starting".
+    remoteHub.add(localDoor);
     // ONE snapshot build at a time, the latest state always delivered last (core/latest-push.ts, genie#1393): every change
     // used to build its own snapshot concurrently, and they landed out of order.
     const featurePush = new LatestPush<FeatureData>({
@@ -3006,11 +2975,6 @@ async function boot(): Promise<void> {
     requestFeaturePush = pushFeatures;
     composed.flows.onChange(pushFeatures);
     composed.settings.onChange(pushFeatures);
-    // A WORKSPACE setting changed — the tabs an agent made with workspaceTabs (beta.35 item 36): every window reloads that
-    // workspace's settings, so the tab shows at once.
-    composed.settings.onChange((_key, _value, workspaceId) => {
-        if (workspaceId) broadcast('genie:workspace-settings-changed', workspaceId);
-    });
     composed.supervisor.onChange(pushFeatures);
     composed.onFrontDoorChange(pushFeatures);
     // Who is connected and which devices are paired redraw as they change; "Pair this device?" appears at once, and a

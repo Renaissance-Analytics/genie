@@ -8,12 +8,14 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
+const noLocalState = () => null;
+const noLocalSubscription = () => () => {};
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
 import type { Headroom } from '../core/headroom.js';
 import { mailSignals, type MailSignal } from '../core/mail-signals.js';
@@ -23,7 +25,7 @@ import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute,
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
-import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
+import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
@@ -842,6 +844,9 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
+    const local = resolvedBridge?.localProtocol;
+    const localState = useSyncExternalStore(local?.onState ?? noLocalSubscription, local?.state ?? noLocalState, local?.state ?? noLocalState);
+    const localRevision = localState?.revision ?? 0;
     /**
      * The Tynn tab's host, ONE object per bridge (genie#1295 B4). Built inline it was a new object on every render of this
      * window, and the tab keys its read and its live subscription on it: every render re-read the whole board and signed
@@ -1063,7 +1068,7 @@ function DesktopApp({ bridge }: AppProps) {
             return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
         })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
         return () => { live = false; };
-    }, [resolvedBridge, faultKey, faultsTick]);
+    }, [resolvedBridge, faultKey, faultsTick, localRevision]);
     const locateRepo = (workspaceId: string, slug: string) => {
         // Opens in the envelope: the repo's folder is inside it (Tynn #835).
         const envelope = snapshot.workspaces?.find((w) => w.id === workspaceId)?.path;
@@ -1092,7 +1097,7 @@ function DesktopApp({ bridge }: AppProps) {
         setRepos(null);
         setWsSettings(null);
         if (resolvedBridge && workspaceId) { reloadRepos(resolvedBridge, workspaceId); reloadWsSettings(resolvedBridge, workspaceId); }
-    }, [resolvedBridge, workspaceId]);
+    }, [resolvedBridge, workspaceId, localRevision]);
     // A workspace setting changed in main — the tabs an agent made (beta.35 item 36): the workspace on screen reloads its
     // settings at once. Pushed, never polled; a window driving another machine has no push and reloads as before.
     useEffect(() => {
@@ -1762,6 +1767,12 @@ function DesktopApp({ bridge }: AppProps) {
         <HostPathPickerContext.Provider value={pickHostPath}>
         <PluginEditorsContext.Provider value={pluginEditors}>
         <PanelHostContext.Provider value={panelHost}>
+        {localState?.phase === 'failed' ? (
+            <div role="alert" className="fixed bottom-4 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-3 text-sm text-[var(--fg-1)] shadow-lg">
+                <span>{localState.reason}</span>
+                <Button size="xs" type="button" className="rounded border border-[var(--border-1)] px-3 py-1 hover:bg-[var(--bg-2)]" onClick={() => local?.retry()}>Retry</Button>
+            </div>
+        ) : null}
         <Shell
             pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}

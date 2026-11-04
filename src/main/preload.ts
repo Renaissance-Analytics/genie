@@ -151,7 +151,6 @@ const bridge: PreloadBridge = {
         hibernate: (workspaceId) => ipcRenderer.invoke('genie:workspace-hibernate', workspaceId) as never,
         wake: (workspaceId) => ipcRenderer.invoke('genie:workspace-wake', workspaceId) as never,
         remove: (workspaceId) => ipcRenderer.invoke('genie:workspace-remove', workspaceId) as never,
-        listRepos: (workspaceId) => ipcRenderer.invoke('genie:workspace-repos', workspaceId) as never,
         tynnBoard: (workspaceId, scope) => ipcRenderer.invoke('genie:workspace-tynn-board', workspaceId, scope) as never,
         tynnBoardAction: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-tynn-board-action', workspaceId, input) as never,
         tynnBoardChanges: (workspaceId, scope, cursor, ids) => ipcRenderer.invoke('genie:workspace-tynn-board-changes', workspaceId, scope, cursor, [...ids]) as never,
@@ -171,22 +170,6 @@ const bridge: PreloadBridge = {
                 if (watchId !== null) void ipcRenderer.invoke('genie:workspace-tynn-board-unwatch', watchId);
             };
         },
-        addRepo: (workspaceId, input) => ipcRenderer.invoke('genie:workspace-repo-add', workspaceId, input) as never,
-        removeRepo: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-remove', workspaceId, slug) as never,
-        locateRepo: (workspaceId, slug, path) => ipcRenderer.invoke('genie:workspace-repo-locate', workspaceId, slug, path) as never,
-        commitsSince: (workspaceId, since) => ipcRenderer.invoke('genie:workspace-commits-since', workspaceId, since) as never,
-        removeRepoLock: (workspaceId, slug) => ipcRenderer.invoke('genie:workspace-repo-unlock', workspaceId, slug) as never,
-        settings: (workspaceId) => ipcRenderer.invoke('genie:workspace-settings', workspaceId) as never,
-        setSetting: (workspaceId, key, value) => ipcRenderer.invoke('genie:workspace-setting-set', workspaceId, key, value) as never,
-        resetSetting: (workspaceId, key) => ipcRenderer.invoke('genie:workspace-setting-reset', workspaceId, key) as never,
-        onSettingsChanged: (listener) => {
-            const handler = (_e: unknown, workspaceId: string) => listener(workspaceId);
-            ipcRenderer.on('genie:workspace-settings-changed', handler);
-            return () => { ipcRenderer.removeListener('genie:workspace-settings-changed', handler); };
-        },
-        setGoverns: (workspaceId, childIds) => ipcRenderer.invoke('genie:workspace-set-governs', workspaceId, [...childIds]) as never,
-        setDefaultAgent: (workspaceId, agentId) => ipcRenderer.invoke('genie:workspace-set-default-agent', workspaceId, agentId) as never,
-        setColor: (workspaceId, color) => ipcRenderer.invoke('genie:workspace-set-color', workspaceId, color) as never,
     },
 
     agents: {

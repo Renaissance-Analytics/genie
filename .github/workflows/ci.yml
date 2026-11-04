@@ -300,6 +300,48 @@ jobs:
           timeout 300 node scripts/smoke-cdp.mjs
           timeout 300 node scripts/layout-sweep.mjs
 
+      - name: native local door, including an admission break control
+        id: local-door
+        continue-on-error: true
+        run: |
+          set +e
+          timeout 300 node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
+          probe=$?
+          cat local-door-break.log
+          if [ "$probe" -ne 1 ] || ! grep -q 'FAIL 1:' local-door-break.log || ! grep -q 'actual refusal:.*not an admitted' local-door-break.log; then
+            echo 'code=1' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          timeout 300 node scripts/local-door-cdp.mjs > local-door.log 2>&1
+          code=$?
+          cat local-door.log
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+
+      - name: record the native door result without treating unavailable rows as passed
+        if: always()
+        run: |
+          code='${{ steps.local-door.outputs.code }}'
+          if [ "$code" = 2 ]; then
+            echo '::warning::Native local door coverage is INCOMPLETE; see UNMEASURED rows in local-door.log.'
+            echo 'Native local door: **INCOMPLETE (exit 2)**. Unavailable rows remain a coordinator VM/review gate.' >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$code" != 0 ]; then
+            echo 'Native local door: **FAILED**.' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          else
+            echo 'Native local door: **all rows measured and passed**; admission break control failed as expected.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-door-linux
+          path: |
+            local-door*.log
+            smoke-out/local-door*
+          if-no-files-found: warn
+          retention-days: 7
+
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
@@ -469,6 +511,49 @@ jobs:
           # taskkill sets $LASTEXITCODE, and the step's result is the last exit code: every failure above has
           # already thrown, so reaching here means the step passed.
           exit 0
+
+      - name: native local door, including an admission break control
+        id: local-door
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          node scripts/local-door-cdp.mjs --break-admission *> local-door-break.log
+          $probe = $LASTEXITCODE
+          Get-Content local-door-break.log
+          if ($probe -ne 1 -or -not (Select-String -Path local-door-break.log -Pattern 'FAIL 1:' -Quiet) -or -not (Select-String -Path local-door-break.log -Pattern 'actual refusal:.*not an admitted' -Quiet)) {
+            'code=1' >> $env:GITHUB_OUTPUT
+            exit 1
+          }
+          node scripts/local-door-cdp.mjs *> local-door.log
+          $code = $LASTEXITCODE
+          Get-Content local-door.log
+          "code=$code" >> $env:GITHUB_OUTPUT
+          exit $code
+
+      - name: record the native door result without treating unavailable rows as passed
+        if: always()
+        shell: pwsh
+        run: |
+          $code = '${{ steps.local-door.outputs.code }}'
+          if ($code -eq '2') {
+            Write-Output '::warning::Native local door coverage is INCOMPLETE; see UNMEASURED rows in local-door.log.'
+            'Native local door: **INCOMPLETE (exit 2)**. Unavailable rows remain a coordinator VM/review gate.' >> $env:GITHUB_STEP_SUMMARY
+          } elseif ($code -ne '0') {
+            'Native local door: **FAILED**.' >> $env:GITHUB_STEP_SUMMARY
+            exit 1
+          } else {
+            'Native local door: **all rows measured and passed**; admission break control failed as expected.' >> $env:GITHUB_STEP_SUMMARY
+          }
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: local-door-windows
+          path: |
+            local-door*.log
+            smoke-out/local-door*
+          if-no-files-found: warn
+          retention-days: 7
 
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397), as on Linux above.
       - name: the spawn host started in the real app

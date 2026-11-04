@@ -130,8 +130,9 @@ export interface HostApiDeps {
         /** Optional for the same reason: a host without it answers with a refusal. */
         commitsSince?(workspaceId: string, sinceMs: number): Promise<unknown>;
         settings(workspaceId: string): Promise<unknown> | unknown;
-        setSetting(workspaceId: string, key: string, value: boolean | string): Promise<unknown>;
+        setSetting(workspaceId: string, key: string, value: unknown): Promise<unknown>;
         resetSetting(workspaceId: string, key: string): Promise<unknown>;
+        onSettingsChanged?(listener: (workspaceId: string) => void): () => void;
         setGoverns(workspaceId: string, childIds: readonly string[]): Promise<unknown>;
         setDefaultAgent(workspaceId: string, agentId: string | null): Promise<unknown>;
         /** A workspace's colour (genie#1300). Optional: a host without it refuses. */
@@ -361,7 +362,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'workspaces.settings':
                 return deps.workspaceOps.settings(str(args[0]));
             case 'workspaces.setSetting':
-                return deps.workspaceOps.setSetting(str(args[0]), str(args[1]), typeof args[2] === 'boolean' ? args[2] : str(args[2]));
+                return deps.workspaceOps.setSetting(str(args[0]), str(args[1]), args[2]);
             case 'workspaces.resetSetting':
                 return deps.workspaceOps.resetSetting(str(args[0]), str(args[1]));
             case 'workspaces.setGoverns':
@@ -470,6 +471,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.features.onChange((data) => listener('features', data)),
                 deps.updates?.onChange((state) => listener('updates', state)) ?? (() => {}),
                 deps.activity?.subscribe((feed) => listener('activity', feed)) ?? (() => {}),
+                deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };
         },

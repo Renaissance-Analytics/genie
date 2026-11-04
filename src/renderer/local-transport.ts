@@ -1,7 +1,7 @@
 import type { LocalFramePort } from '../core/local-frame.js';
 import type { ClientTransport } from '../core/remote-protocol.js';
 
-/** A window's ClientTransport over the one preload frame pair. No bridge method uses it until its family moves. */
+/** A window's ClientTransport over the one preload frame pair. */
 export function localTransport(port: LocalFramePort): ClientTransport {
     const handle = globalThis.crypto.randomUUID();
     const messages = new Set<(text: string) => void>();
