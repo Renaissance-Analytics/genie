@@ -301,6 +301,11 @@ export interface AgentSessionOptions {
      */
     permissionDecision?: (request: PermissionRequestLike) => 'allow' | 'deny' | 'ask';
     /**
+     * Whether this run may be handed work now, asked at each hand-over. False = it waits, as it does on a limit, and a run
+     * that ends leaves it owed, so the next one gets it. Absent = always.
+     */
+    mayTakeWork?: () => boolean;
+    /**
      * The provider has identified its own conversation, once.
      *
      * Fired when `cliSessionId` first becomes known — the value a later resume is keyed on, and
@@ -559,12 +564,13 @@ export class AgentSession {
     }
 
     /**
-     * QUIET: a restart now would cut nothing. Promptable, no prompt waiting, not on a limit, and past the Cooling wait, because
+     * QUIET: a restart now would cut nothing. Promptable, not on a limit, and past the Cooling wait, because
      * Claude can still open a turn of its own for a prompt it took mid-turn just after the last one ended (`#queued`).
      * For a restart Genie chooses by itself; the person's own Restart does not ask.
      */
     get quiet(): boolean {
-        return this.promptable && !this.#held && this.#afterTurn.length === 0 && this.#coolingCancel === null;
+        // What waits in `#afterTurn` here is held for the next run, and a run that ends leaves it owed.
+        return this.promptable && !this.#held && this.#coolingCancel === null;
     }
 
     get turnState(): TurnState {
@@ -846,7 +852,7 @@ export class AgentSession {
 
     /** Drain until the provider refuses another input. Codex runs one per turn; Claude accepts queued input itself. */
     #flushAfterTurn(): void {
-        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held) return;
+        if (this.#afterTurn.length === 0 || !this.running || this.#starting || this.#approval !== null || this.#inTurn || this.#held || this.#options.mayTakeWork?.() === false) return;
         while (this.#afterTurn.length > 0 && this.running && this.#approval === null && !this.#held) {
             const next = this.#afterTurn[0]!;
             try {
@@ -1240,7 +1246,7 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
-        if (this.#held || this.#starting) return this.#queuePrompt(text, by, sent, context);
+        if (this.#held || this.#starting || this.#options.mayTakeWork?.() === false) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
         return null;
     }
@@ -1251,6 +1257,17 @@ export class AgentSession {
     /** It goes ahead of the next prompt that opens a turn, and starts none of its own. Replaces one already held. */
     holdForNextWork(text: string): void {
         this.#heldForNextWork = text;
+    }
+
+    /** Work is held (`mayTakeWork`, a limit, a start). */
+    get workWaiting(): boolean {
+        return this.#afterTurn.length > 0;
+    }
+
+    /** `mayTakeWork` says yes again: what it held goes now, or when the turn ends. */
+    releaseWork(): void {
+        this.#flushAfterTurn();
+        this.#changed();
     }
 
     /** True = it was still held, and now it is not. */

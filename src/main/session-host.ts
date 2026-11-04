@@ -910,6 +910,8 @@ export class SessionHost {
             onMcpServers: (reports) => this.#onMcpServers?.(record.id, reports),
             // A Claude agent's tool setting, read when each shell call asks — so a change needs no restart (genie#1188).
             ...(record.provider === 'claude' ? { permissionDecision: () => permissionDecisionFor((this.#currentRecord?.(record.id) ?? record).permissions, { untrusted: this.#untrustedNow?.(record) ?? this.#running.get(record.id)?.launchedUntrusted === true }) } : {}),
+            // THE ONE PLACE THAT DECIDES IT: a run launched in a trusted workspace takes no work once it no longer is. It goes to the next run.
+            mayTakeWork: () => !(this.#running.get(record.id)?.launchedUntrusted === false && this.#untrustedNow?.(record) === true),
             onLimitBreach: (reason) => this.#limitBreach(record.provider, reason),
             /*
              * A change the UI renders — a parked approval, an answered one, a turn ending.
@@ -1271,13 +1273,15 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.withdrawHeld() ?? false;
     }
 
-    /** Skeleton. */
-    workWaiting(_agentId: AgentId): boolean {
-        return false;
+    /** Work this run is holding (`AgentSession.workWaiting`); `false` when the agent has no session. */
+    workWaiting(agentId: AgentId): boolean {
+        return this.#running.get(agentId)?.session.workWaiting ?? false;
     }
 
-    /** Skeleton. */
-    releaseWork(_agentId: AgentId): void {}
+    /** This run may take work again. */
+    releaseWork(agentId: AgentId): void {
+        this.#running.get(agentId)?.session.releaseWork();
+    }
 
     /** A restart now would cut nothing (`AgentSession.quiet`); `false` when the agent has no session. */
     quiet(agentId: AgentId): boolean {

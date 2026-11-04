@@ -6,15 +6,16 @@ import type { AgentId } from '../core/identity.js';
  *
  * - Launched untrusted, trusted now: one message, held for the next real work, so it reads what it could not. It starts
  *   no turn of its own: trusting a workspace spends nothing. Withdrawn if the verdict moves back first. Once per run.
- * - Launched trusted, untrusted now: a restart, only once a restart would cut nothing (`AgentSession.quiet`), with a line
- *   in the chat. Trusted again before that: no restart, and the chat is told.
+ * - Launched trusted, untrusted now: no work reaches this session any more (the session host's `mayTakeWork`). It restarts
+ *   once that would cut nothing (`AgentSession.quiet`): in a turn, when the turn has ended; idle, not until work arrives,
+ *   so a workspace that changes costs an idle agent nothing until someone needs it. A line in the chat says which.
+ *   Trusted again before that: no restart, the chat is told, and what waited goes to this session.
  *
  * Compared rather than triggered, so a change that lands while a launch is being prepared is still seen when it comes up.
  */
 
 export const NOW_TRUSTED = 'This workspace is trusted now. Read its instructions and your persona before you carry on.';
 export const UNTRUSTED_AT_TURN_END = 'This workspace is no longer trusted. This agent restarts when its turn ends.';
-export const UNTRUSTED_NOW = 'This workspace is no longer trusted, so this agent restarted.';
 export const UNTRUSTED_AT_NEXT_WORK = 'This workspace is no longer trusted. This agent restarts before its next work.';
 export const TRUSTED_AGAIN = 'This workspace is trusted again. No restart.';
 
@@ -39,7 +40,7 @@ export interface TrustVerdictPorts {
     restart(agentId: AgentId): Promise<{ ok: true } | { ok: false; reason: string | null }>;
 }
 
-interface ThisRun { run: number; told: boolean; announced: boolean; restarting: boolean; refused: boolean }
+interface ThisRun { run: number; told: boolean; announced: boolean; sawTurn: boolean; restarting: boolean; refused: boolean }
 
 export class TrustVerdicts {
     readonly #ports: TrustVerdictPorts;
@@ -66,7 +67,7 @@ export class TrustVerdicts {
     #thisRun(agentId: AgentId, run: number): ThisRun {
         const known = this.#runs.get(agentId);
         if (known?.run === run) return known;
-        const fresh: ThisRun = { run, told: false, announced: false, restarting: false, refused: false };
+        const fresh: ThisRun = { run, told: false, announced: false, sawTurn: false, restarting: false, refused: false };
         this.#runs.set(agentId, fresh);
         return fresh;
     }
@@ -87,23 +88,22 @@ export class TrustVerdicts {
         if (!untrusted) {
             if (state.announced && !state.restarting) {
                 state.announced = false;
+                state.sawTurn = false;
                 ports.notice(agentId, TRUSTED_AGAIN);
+                ports.releaseWork(agentId);
             }
             return;
         }
         if (state.restarting || state.refused) return;
-        if (!ports.quiet(agentId)) {
-            if (!state.announced) {
-                state.announced = true;
-                ports.notice(agentId, UNTRUSTED_AT_TURN_END);
-            }
-            return;
-        }
-        state.restarting = true;
+        const inTurn = ports.inTurn(agentId);
         if (!state.announced) {
             state.announced = true;
-            ports.notice(agentId, UNTRUSTED_NOW);
+            ports.notice(agentId, inTurn ? UNTRUSTED_AT_TURN_END : UNTRUSTED_AT_NEXT_WORK);
         }
+        if (inTurn) state.sawTurn = true;
+        // Idle: nothing yet needs another run, and a restart would spend something for nobody.
+        if (!ports.quiet(agentId) || (!state.sawTurn && !ports.workWaiting(agentId))) return;
+        state.restarting = true;
         void ports.restart(agentId).then(
             (result) => { if (!result.ok) this.#refused(agentId, state, result.reason ?? 'no reason was given'); },
             (error: unknown) => { this.#refused(agentId, state, error instanceof Error ? error.message : String(error)); },
