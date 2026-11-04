@@ -7,6 +7,7 @@ import { IPC_INVENTORY } from '../src/core/ipc-inventory.js';
 import { FEATURE_CHANNELS } from '../src/renderer/bridge.js';
 
 const bindings: Readonly<Record<string, unknown>> = { CLIPBOARD_WRITE_CHANNEL, FEATURE_CHANNELS };
+const registrationKinds = new Set(['handle', 'on', 'once', 'handleOnce']);
 
 function channels(source: string, file: string): string[] {
     // Strings stay whole and comments disappear: a mention of a channel is not a registration.
@@ -15,7 +16,8 @@ function channels(source: string, file: string): string[] {
         .map((match) => match[0]).filter((token) => !token.startsWith('//') && !token.startsWith('/*'));
     const found: string[] = [];
     for (let i = 0; i < tokens.length - 4; i++) {
-        if (tokens[i] !== 'ipcMain' || tokens[i + 1] !== '.' || tokens[i + 2] !== 'handle' || tokens[i + 3] !== '(') continue;
+        const kind = tokens[i + 2];
+        if (tokens[i] !== 'ipcMain' || tokens[i + 1] !== '.' || kind === undefined || !registrationKinds.has(kind) || tokens[i + 3] !== '(') continue;
         const expression: string[] = [];
         let end = i + 4;
         while (end < tokens.length && tokens[end] !== ',' && tokens[end] !== ')') expression.push(tokens[end++]!);
@@ -71,6 +73,12 @@ describe('P4 IPC inventory', () => {
     it('CONTROL: notices an added registration and a removed registration', () => {
         expect(differences(['new:channel'], [])).toEqual({ unlisted: ['new:channel'], stale: [] });
         expect(differences([], ['old:channel'])).toEqual({ unlisted: [], stale: ['old:channel'] });
+    });
+
+    it.each(['handle', 'on', 'once', 'handleOnce'])('CONTROL: an ipcMain.%s call cannot go unlisted', (kind) => {
+        const found = channels(`ipcMain.${kind}('control:channel', () => {});`, 'control.ts');
+        expect(found).toEqual(['control:channel']);
+        expect(differences(found, [])).toEqual({ unlisted: ['control:channel'], stale: [] });
     });
 
     it('CONTROL: scans calls, not comments, and resolves the real channel constants', () => {
