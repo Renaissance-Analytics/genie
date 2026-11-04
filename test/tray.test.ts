@@ -67,7 +67,7 @@ describe('tray', () => {
 
     it('the tooltip says the host is running and WHAT it runs; without a host it is unchanged', async () => {
         const { trayTooltip } = await import('../src/main/tray.js');
-        const none = { agents: 0, terminals: 0, processes: 0, services: 0, armedFlows: 0, scheduledTasks: 0 };
+        const none = { agents: 0, terminals: 0, processes: 0, services: 0, armedFlows: 0, scheduledTasks: 0, browser: 0 };
         expect(trayTooltip([], [], [], false, 0, none)).toBe('Genie — host running');
         expect(trayTooltip([], [], [], false, 0, { ...none, agents: 1 })).toBe('Genie — host running: 1 agent');
         expect(trayTooltip([], [], [], false, 2, { ...none, agents: 3, terminals: 2, processes: 1, services: 1 })).toBe('Genie — 2 waiting on you; host running: 3 agents, 2 terminals, 1 process, 1 service');

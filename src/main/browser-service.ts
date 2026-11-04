@@ -43,6 +43,7 @@ export type BrowserEvent =
     /** One workspace's cookie, between its two stores. Relayed, never kept. */
     | { readonly kind: 'cookies'; readonly from: string; readonly workspaceId: string; readonly message: CookieMessage }
     | { readonly kind: 'cookiesWanted'; readonly from: string; readonly workspaceId: string }
+    | { readonly kind: 'browserUp'; readonly up: boolean }
     /** A call into a page, for the browser to run and answer with `pageReply`. */
     | { readonly kind: 'pageCall'; readonly requestId: string; readonly pageId: string; readonly method: string; readonly args: readonly unknown[] }
     /** The host is ending on purpose, and the browser ends with it: an installer needs the binary free. */
@@ -125,6 +126,7 @@ export class BrowserService {
                 return { browserUp: true };
             }
             case 'register': {
+                if (this.#browser === null) this.#emit({ kind: 'browserUp', up: true });
                 this.#browser = from;
                 this.#startedAt = null;
                 const held = this.#held;
@@ -137,6 +139,8 @@ export class BrowserService {
                 this.#emit({ kind: 'cookies', from, workspaceId: String(args[0]), message: args[1] });
                 return null;
             }
+            case 'browserUp':
+                return this.#browser !== null;
             case 'whoami':
                 return from;
             case 'cookiesWanted':
@@ -208,6 +212,7 @@ export class BrowserService {
     dropped(connection: string): void {
         if (this.#browser === connection) {
             this.#browser = null;
+            this.#emit({ kind: 'browserUp', up: false });
             for (const call of this.#calls.values()) { clearTimeout(call.timer); call.reject(new Error('the Genie browser went away')); }
             this.#calls.clear();
             this.#pages = [];

@@ -50,7 +50,7 @@ export function runBrowserLink(ports: BrowserLinkPorts): { readonly linked: Prom
         if (event.kind === 'facts') onFacts(event.facts);
         else if (event.kind === 'door') ports.door(event.up);
         else if (event.kind === 'quit') ports.quit();
-        else if (event.kind === 'pages' || event.kind === 'poppedBack') return;
+        else if (event.kind === 'pages' || event.kind === 'poppedBack' || event.kind === 'browserUp') return;
         else if (event.kind === 'cookies' || event.kind === 'cookiesWanted') ports.other?.(event);
         else if (event.kind === 'closeSingle') ports.closeSingle?.(event.panelKey);
         else if (event.kind === 'openSingle') { if (known) ports.openSingle?.(event.panelKey, event.url); else held.push(() => ports.openSingle?.(event.panelKey, event.url)); }
