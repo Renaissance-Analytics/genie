@@ -147,7 +147,13 @@ try {
     mkdirSync(record, { recursive: true });
     writeFileSync(join(record, 'in-the-way'), 'x');
     await cdp.evaluate(`document.querySelector('[data-action="trust-workspace"]').click(); true`);
-    check(await waitFor(cdp, `Boolean(${stepFor(acmeId)}?.querySelector('[role="alert"]'))`), '6. a yes that cannot be saved says why');
+    const refused = await waitFor(cdp, `Boolean(${stepFor(acmeId)}?.querySelector('[role="alert"]'))`, 30_000);
+    if (!refused) {
+        // What the page and main say, on the way to a failure: the first thing wanted when this row goes red.
+        const seen = await cdp.evaluate(`window.genie.features.snapshot().then((data) => JSON.stringify({ step: Boolean(${stepFor(acmeId)}), busy: Boolean(document.querySelector('[data-trust-busy]')), route: document.querySelector('[data-route]')?.textContent ?? null, steps: (data.trust ?? []).map((row) => row.workspaceId) }))`);
+        console.log(`  at the failure: ${seen}; the record there now: ${existsSync(record) ? (readdirSync(record, { withFileTypes: false }).join(',') || 'an empty folder') : 'nothing'}`);
+    }
+    check(refused, '6. a yes that cannot be saved says why');
     check(await cdp.evaluate(`Boolean(document.querySelector('[data-action="trust-workspace-retry"]'))`), '7. and offers Retry');
     check(await cdp.evaluate(`Boolean(${stepFor(acmeId)})`), '8. and the workspace is still not trusted');
 
