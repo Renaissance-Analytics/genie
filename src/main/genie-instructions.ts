@@ -29,3 +29,8 @@ export async function writeGenieInstructions(home: string, tools: readonly { nam
     for (const skill of GENIE_SKILLS) await put(join(pluginDir, 'skills', skill.name, 'SKILL.md'), skillFile(skill));
     return { promptFile, pluginDir, promptText };
 }
+
+/** Skeleton. */
+export async function codexFolderSkills(_cwd: string): Promise<string[]> {
+    return ['skeleton'];
+}

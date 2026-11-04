@@ -355,7 +355,7 @@ export const realListModels: ListProviderModels = (provider) =>
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
 /** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
-export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string }
+export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string; readonly folderSkills?: readonly string[] }
 
 /**
  * A CLAUDE AGENT IN AN UNTRUSTED WORKSPACE: the person's own settings and no project's, Genie's own MCP servers and no folder's, and Genie's words from files of its own. Measured against a stand-in API (CLI 2.1.317), through a fresh launch and
@@ -369,6 +369,11 @@ export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { s
         appendSystemPromptFile: untrusted.promptFile,
         pluginDirs: [untrusted.pluginDir],
     };
+}
+
+/** Skeleton. */
+export function codexTrustOptions(_launch: { readonly binaryArgs?: readonly string[] }, _untrusted: GenieInstructionFiles | null): { binaryArgs?: readonly string[] } {
+    return {};
 }
 
 /** A Codex agent set to run unasked does not, in an untrusted workspace: Codex keeps its own approvals and sandbox. */
