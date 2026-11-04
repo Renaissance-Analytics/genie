@@ -95,3 +95,34 @@ describe('templating', () => {
         expect(p.calls[0]).toEqual(['prompt', 'claude:atlas', 'a=1 b= c=x']);
     });
 });
+
+/**
+ * WHERE A FOLDER'S NAMES COULD REACH A CODEX AGENT'S TURN (measured, CLI 0.166.0, app-server mode, stand-in API): with skills off, a
+ * $name in a message still loads that skill, and $ name doesn't. A tool's output doesn't count, so mail and file reads don't. What a
+ * file trigger hands a flow is the one value from a folder that lands in a turn's text.
+ */
+describe('a flow prompting an agent that must not load a folder skill', () => {
+    const run = async (template: string, inputs: Record<string, unknown>, escaping: boolean) => {
+        const prompts: string[] = [];
+        const ports = { promptAgent: async (_a: string, text: string) => { prompts.push(text); return 'ok'; }, runCommand: async () => ({ exitCode: 0, output: '' }), addKnowledge: async () => ({ id: 'k' }), escapesPromptValues: () => escaping } as never;
+        const executor = genieExecutors(ports)['genie/agent_prompt']!;
+        await executor({ node: { data: { config: { agent: 'codex:atlas', prompt: template } } }, inputs, abort: (reason: string) => { throw new Error(reason); } } as never);
+        return prompts[0];
+    };
+
+    it('a value handed in: its $name is spaced apart', async () => {
+        expect(await run('Look at {{in.path}}', { in: { path: 'notes/$my-skill.txt' } }, true)).toBe('Look at notes/$ my-skill.txt');
+    });
+
+    it("what the person wrote in the flow stays as written: it's theirs", async () => {
+        expect(await run('Use $their-skill on {{in.path}}', { in: { path: 'a.txt' } }, true)).toBe('Use $their-skill on a.txt');
+    });
+
+    it('a $ with no name after it is left', async () => {
+        expect(await run('{{in.cost}}', { in: { cost: '5$ and $' } }, true)).toBe('5$ and $');
+    });
+
+    it('CONTROL: an agent this does not apply to gets the value as it is', async () => {
+        expect(await run('Look at {{in.path}}', { in: { path: 'notes/$my-skill.txt' } }, false)).toBe('Look at notes/$my-skill.txt');
+    });
+});

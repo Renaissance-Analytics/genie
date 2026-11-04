@@ -26,7 +26,6 @@ const KNOWN: Readonly<Record<string, string>> = {
     'src/main/private-credentials.ts': "agents' private credential helper: the agent engine (#1387 P1/P3)",
     'src/main/leftover-sweep.ts': 'boot-time leftover provider sweep (asynchronous listing since #1390)',
     'src/main/process-list.ts': 'the OS process table, read off the loop since #1390',
-    'src/main/envelope-fs.ts': 'git reads for a workspace envelope (files host, #1387 P2)',
     'src/main/git-ports.ts': 'repo panel git calls (files host, #1387 P2)',
     'src/main/repo-git.ts': 'repo panel git calls (files host, #1387 P2)',
     'src/main/service-exec.ts': "a person's or an agent's `services exec` command, streamed (#1387 P5)",
