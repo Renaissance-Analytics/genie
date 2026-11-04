@@ -25,7 +25,7 @@ import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute,
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
-import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
+import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
@@ -1770,7 +1770,7 @@ function DesktopApp({ bridge }: AppProps) {
         {localState?.phase === 'failed' ? (
             <div role="alert" className="fixed bottom-4 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-3 text-sm text-[var(--fg-1)] shadow-lg">
                 <span>{localState.reason}</span>
-                <button type="button" className="rounded border border-[var(--border-1)] px-3 py-1 hover:bg-[var(--bg-2)]" onClick={() => local?.retry()}>Retry</button>
+                <Button size="xs" type="button" className="rounded border border-[var(--border-1)] px-3 py-1 hover:bg-[var(--bg-2)]" onClick={() => local?.retry()}>Retry</Button>
             </div>
         ) : null}
         <Shell

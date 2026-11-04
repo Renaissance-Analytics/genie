@@ -73,9 +73,12 @@ describe('the wiring', () => {
 
     it('a workspace setting changed in main reaches the windows (the tabs an agent made show at once)', () => {
         const main = src('src/main/main.ts');
-        expect(main).toMatch(/settings\.onChange\(\(_key, _value, workspaceId\) => \{\s*if \(workspaceId\) broadcast\('genie:workspace-settings-changed', workspaceId\);/);
+        expect(main).toMatch(/onSettingsChanged: \(listener\) => services!\.settings\.onChange\(\(_key, _value, id\) => \{ if \(id\) listener\(id\); \}\)/);
+        expect(src('src/main/host-api.ts')).toContain("deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id))");
         const preload = src('src/main/preload.ts');
-        expect(preload).toMatch(/onSettingsChanged: \(listener\) =>/);
+        expect(preload).not.toContain('genie:workspace-settings-changed');
+        expect(main).not.toContain('genie:workspace-settings-changed');
+        expect(src('src/renderer/remote-bridge.ts')).toMatch(/auth\.kind === 'local' \? \{ onSettingsChanged:/);
         const app = src('src/renderer/App.tsx');
         expect(app).toMatch(/onSettingsChanged\?\.\(\(changed\) => \{ if \(changed === workspaceId\) reloadWsSettings\(resolvedBridge, workspaceId\); \}\)/);
     });

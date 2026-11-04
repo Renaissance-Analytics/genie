@@ -139,8 +139,9 @@ describe('the local page connection retries only a bounded starting refusal', ()
             localProtocol: { state: () => ({ phase: 'failed', reason: 'Genie is still starting', revision: 0 }), onState: () => () => {}, retry: vi.fn() },
         } as unknown as GenieBridge;
         const html = renderToStaticMarkup(<App bridge={bridge} />);
-        expect(html).toContain('Genie is still starting');
-        expect(html).toMatch(/<button[^>]*>Retry<\/button>/);
+        const alert = html.match(/<div role="alert"[^>]*>([\s\S]*?)<\/div>/)?.[1];
+        expect(alert).toContain('Genie is still starting');
+        expect(alert).toMatch(/<button\b[^>]*>[\s\S]*?Retry[\s\S]*?<\/button>/);
         expect(html).toContain('Dashboard');
     });
 });
