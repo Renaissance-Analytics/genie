@@ -223,6 +223,52 @@ describe('door connection ownership and cleanup', () => {
         await settled();
         expect(snapshots).toEqual([{ workspaces: null }]);
     });
+
+    it('old connection frames and close messages leave a replacement connection alive', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        await connected(contents);
+        const oldId = contents.mainFrame.sent.find((f) => f.action === 'frame')!.connection;
+        const replacement = await connected(contents);
+        port(contents).send('frame', oldId, JSON.stringify({ kind: 'call', id: 99, method: 'workspaces.settings', args: ['work'] }));
+        port(contents).send('close', oldId, '');
+        await settled();
+        expect(invoke).not.toHaveBeenCalled();
+        expect(replacement.client.state().connected).toBe(true);
+        expect(host.connections()).toHaveLength(1);
+    });
+
+    it('an in-flight result from before reload never reaches the new frame or connection', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const first = await connected(contents);
+        let finish: (value: unknown) => void = () => {};
+        invoke.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+        first.transport.send(JSON.stringify({ kind: 'call', id: 700, method: 'workspaces.settings', args: ['work'] }));
+        await settled();
+        expect(invoke).toHaveBeenCalledOnce();
+        contents.emit('did-start-navigation', { isMainFrame: true, isSameDocument: false });
+        contents.mainFrame = new FakeFrame();
+        const second = await connected(contents);
+        finish({ old: true });
+        await settled();
+        expect(second.frames().some((f) => f.kind === 'result' && f.id === 700)).toBe(false);
+        expect(first.frames().some((f) => f.kind === 'result' && f.id === 700)).toBe(false);
+        expect(second.client.state().connected).toBe(true);
+    });
+
+    it('client close notifies once and unsubscribes the frame listener', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const opened = await connected(contents);
+        let closed = 0;
+        opened.transport.onClose(() => { closed++; });
+        opened.client.close();
+        opened.client.close();
+        await settled();
+        expect(closed).toBe(1);
+        expect(contents.mainFrame.listeners.size).toBe(0);
+    });
 });
 
 function exactFrame(shell: { kind: string; id: number; method?: string; args?: unknown[]; ok?: boolean; value?: string }, bytes: number): string {
@@ -233,6 +279,19 @@ function exactFrame(shell: { kind: string; id: number; method?: string; args?: u
 }
 
 describe('the local door retains a 1 MiB UTF-8 protocol frame cap in both directions', () => {
+    it('accepts only string port arguments, with a visible refusal and cleanup', async () => {
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const opened = await connected(contents);
+        const id = contents.mainFrame.sent.find((f) => f.action === 'frame')!.connection;
+        ipc.emit(LOCAL_FRAME_CHANNELS.toHost, { sender: contents, senderFrame: contents.mainFrame }, 'frame', id, { not: 'text' });
+        await settled();
+        expect(invoke).not.toHaveBeenCalled();
+        expect(opened.frames()).toContainEqual({ kind: 'refused', reason: expect.stringMatching(/string|text/i) });
+        expect(host.connections()).toEqual([]);
+        expect(eventListeners.size).toBe(0);
+    });
+
     it.each([0, 1])('inbound cap + %s bytes: forwards only the frame within the cap', async (extra) => {
         const contents = new FakeContents();
         door.admit(contents.asPort());
