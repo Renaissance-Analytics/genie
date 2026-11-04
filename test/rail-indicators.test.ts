@@ -6,7 +6,7 @@ import { processTone, processTitle, siteTone, siteTitle, workingAgents } from '.
  * that lets me know what workspaces have working agents. We used to have the agent pulse … the new one should be based
  * on ACP activity, NOT terminals. We do need our bg process and sites indicators as well.")
  *
- * - The PULSE: an agent of this workspace is mid-turn — its session's turn state (core/roster.ts `working`), never
+ * - The PULSE: an agent of this workspace is working — by its session (core/roster.ts, `shownState`), never
  *   terminal output.
  * - PROCESSES: Genie 1's `wsProcStatus` — none / idle / running / crashed.
  * - SITES: Genie 1's `railSitesTone` — no site: nothing; else running / starting / failed / idle.
@@ -17,7 +17,7 @@ const proc = (id: string, workspaceId: string, state: string) => ({ id, workspac
 const site = (id: string, workspaceId: string, state: string) => ({ id, workspaceId, state });
 
 describe('the pulse: working agents, from their sessions', () => {
-    it('counts this workspace’s agents that are mid-turn — not idle, waiting or broken ones, not another workspace’s (COUNTED)', () => {
+    it('counts this workspace’s agents that are working — not idle, waiting or broken ones, not another workspace’s (COUNTED)', () => {
         const rows = [agent('a', 'tynn', 'working'), agent('b', 'tynn', 'working'), agent('c', 'tynn', 'idle'), agent('d', 'tynn', 'waiting'), agent('e', 'fancy', 'working')];
         expect(workingAgents(rows, 'tynn')).toBe(2);
         expect(workingAgents(rows, 'fancy')).toBe(1);

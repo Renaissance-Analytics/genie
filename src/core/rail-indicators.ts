@@ -3,21 +3,23 @@
  * that lets me know what workspaces have working agents. We used to have the agent pulse … the new one should be based
  * on ACP activity, NOT terminals. We do need our bg process and sites indicators as well.") — pure.
  *
- * - The PULSE: how many of the workspace's agents are mid-turn, by their sessions' turn state (core/roster.ts gives a
- *   row `working` only while its session is running and its turn is working). Never terminal output.
+ * - The PULSE: how many of the workspace's agents are working, by their sessions (core/roster.ts): in a turn, Cooling, or
+ *   with background work still running (`shownState`, genie#1528). Never terminal output. Display only: nothing gates on it.
  * - PROCESSES: Genie 1's `wsProcStatus` (v1 Chooser.tsx) — none / idle / running / crashed.
  * - SITES: Genie 1's `railSitesTone` (v1 lib/dev-server.ts) — no site: nothing; else running / starting / failed / idle.
  */
+
+import { shownState, type Fidelity } from './dashboard-view.js';
 
 export type ProcessTone = 'none' | 'idle' | 'running' | 'crashed';
 export type SiteTone = 'running' | 'starting' | 'failed' | 'idle';
 
 type Of = { readonly workspaceId: string; readonly state: string };
 
-export function workingAgents(rows: readonly Of[], workspaceId: string): number {
+export function workingAgents(rows: ReadonlyArray<Of & { readonly fidelity?: Fidelity | undefined; readonly background?: number | null | undefined }>, workspaceId: string): number {
     // Cooling (the 15 s after a turn that replied) counts as Working, as everywhere the board counts: a pulse that went out
     // and came back between two turns would be the same jump the Cooling state removes from the board.
-    return rows.filter((r) => r.workspaceId === workspaceId && (r.state === 'working' || r.state === 'cooling')).length;
+    return rows.filter((r) => { const shown = shownState(r); return r.workspaceId === workspaceId && (shown === 'working' || shown === 'cooling'); }).length;
 }
 
 export function processTone(processes: readonly Of[], workspaceId: string): ProcessTone {

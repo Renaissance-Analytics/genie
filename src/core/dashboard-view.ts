@@ -141,12 +141,30 @@ export function rankOf(row: Pick<AgentRow, 'state' | 'fidelity' | 'background'>)
     return row.state === 'cooling' ? 'working' : row.state;
 }
 
+/** What the background rule reads. The state is a string for the tab strip's roster, and a row with no fidelity is not declared. */
+interface BackgroundFacts<S extends string = string> {
+    readonly state: S;
+    readonly fidelity?: Fidelity | undefined;
+    readonly background?: number | null | undefined;
+}
+
 /**
  * ITS TURN ENDED, ITS WORK DID NOT (the owner, 2026-10-21): background shells and tasks are still running. Only a declared
- * agent: an observed one is seen as bytes, and a remote one as presence.
+ * agent: an observed one is seen as bytes, and a remote one as presence. A waiting or broken row stays what it is.
+ *
+ * THE ONE RULE: the word (`statusOf`), the groups, counts and order (`rankOf`), the dots and the rail's pulse (`shownState`)
+ * all come from here.
  */
-function workingInBackground(row: Pick<AgentRow, 'state' | 'fidelity' | 'background'>): boolean {
-    return row.state === 'idle' && row.fidelity === 'declared' && (row.background ?? 0) > 0;
+function workingInBackground(row: BackgroundFacts): boolean {
+    return (row.state === 'idle' || row.state === 'cooling') && row.fidelity === 'declared' && (row.background ?? 0) > 0;
+}
+
+/**
+ * THE STATE A ROW'S DOT SHOWS: its own, except background work, which is Working. Unlike `rankOf`, Cooling keeps its own
+ * colour. Display only: anything deciding behaviour reads the session, and `row.state` is unchanged.
+ */
+export function shownState<S extends string>(row: BackgroundFacts<S>): S | 'working' {
+    return workingInBackground(row) ? 'working' : row.state;
 }
 
 export interface StatusCell {
@@ -181,6 +199,8 @@ export function statusOf(row: AgentRow): StatusCell {
     // WAITING ON THE CLAUDE DESIGN LOGIN (#1081): only once its turn is over — a refused tool does not end the turn, and an
     // agent still working reads Working. The Agent view, the chat and the tray offer `Log in to Claude Design`.
     if (row.designLogin && (row.state === 'idle' || row.state === 'cooling')) return { word: 'Login needed', detail: 'Claude Design', tone: 'warn' };
+    // The stronger fact than Cooling or Idle: its work is still running.
+    if (workingInBackground(row)) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
     switch (row.state) {
         case 'waiting':
             return { word: 'Waiting on you', detail: row.ask, tone: 'warn' };
@@ -189,11 +209,8 @@ export function statusOf(row: AgentRow): StatusCell {
         case 'working':
             return { word: row.fidelity === 'observed' ? 'Active' : 'Working', detail: row.duration, tone: 'ok' };
         case 'cooling':
-            // Background work still running is the stronger fact (below): it reads Working, as it does once Idle.
-            if ((row.background ?? 0) > 0) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: 'Cooling', detail: null, tone: 'cool' };
         default:
-            if (workingInBackground(row)) return { word: 'Working', detail: `${row.background} in the background`, tone: 'ok' };
             return { word: row.fidelity === 'observed' ? 'Quiet' : 'Idle', detail: row.duration, tone: 'muted' };
     }
 }
