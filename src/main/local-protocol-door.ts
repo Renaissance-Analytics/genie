@@ -28,6 +28,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc): LocalProtocolDoor {
     const listeners = new Set<(connection: ServerConnection) => void>();
     let disposed = false;
     const capReason = 'a local protocol frame exceeds 1 MiB; this window’s protocol connection was closed';
+    const startingReason = 'Genie is still starting';
 
     const reply = (frame: WebFrameMain, action: LocalFrameReply, handle: string, text: string): boolean => {
         try { frame.send(LOCAL_FRAME_CHANNELS.toWindow, action, handle, text); return true; }
@@ -40,6 +41,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc): LocalProtocolDoor {
 
     const open = (entry: AdmittedWindow, frame: WebFrameMain, handle: string) => {
         entry.connection?.end('this window opened a replacement protocol connection');
+        if (listeners.size === 0) return reject(frame, handle, startingReason);
         const messages = new Set<(text: string) => void>();
         const closes = new Set<() => void>();
         let closed = false;
@@ -73,6 +75,7 @@ export function localProtocolDoor(ipcMain: LocalDoorIpc): LocalProtocolDoor {
             close: () => current.end('the local protocol connection closed'),
         };
         for (const listener of listeners) listener(connection);
+        if (messages.size === 0) current.end(startingReason, true);
     };
 
     const receive = (event: IpcMainEvent, ...args: unknown[]): void => {
