@@ -75,6 +75,6 @@ describe('the Electron half (read from source)', () => {
 
     it('the renderer keeps its panels in step with the tabs, from the layer', () => {
         const workspace = strip('src/renderer/components/Workspace.tsx');
-        expect(workspace).toMatch(/\.retainIn\(workspace\.id, sitePanelKeys\(workspace\.id, /);
+        expect(workspace).toMatch(/tabsChanged\(seenTabs\.current, now\)\) siteWebviewLayerFor\(sitePanels\)\.retainIn\(workspace\.id, sitePanelKeys\(workspace\.id, /);
     });
 });
