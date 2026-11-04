@@ -136,9 +136,9 @@ describe('all eighteen add-workspace wizard calls use the one protocol', () => {
         expect(main).toContain("ipcMain.handle('genie:workspace-hibernate'");
         expect(preload).toContain("ipcRenderer.invoke('genie:workspace-hibernate'");
         expect(inventory).toContain("['genie:workspace-hibernate', 'protocol:workspaces.hibernate']");
-        expect(main).not.toContain(`ipcMain.handle('${row.channel}'`);
-        expect(preload).not.toContain(`ipcRenderer.invoke('${row.channel}'`);
-        expect(inventory).not.toContain(`['${row.channel}',`);
+        expect(main.includes(`ipcMain.handle('${row.channel}'`)).toBe(false);
+        expect(preload.includes(`ipcRenderer.invoke('${row.channel}'`)).toBe(false);
+        expect(inventory.includes(`['${row.channel}',`)).toBe(false);
     });
     it.each(rows)('$name preserves a null API result', async (row) => {
         const deps = protocolContractDeps(dir); Object.assign(deps.workspaceOps, { [row.name]: vi.fn(async () => null) });

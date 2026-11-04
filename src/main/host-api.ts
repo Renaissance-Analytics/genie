@@ -283,28 +283,36 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
             case 'agents.diagnose':
                 return deps.agentOps.diagnose(str(args[0]));
             case 'workspaces.previewAdd':
+                // Preserve the retired native wizard's early refusals before any coercion or disk operation.
+                if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
                 if (!deps.workspaceOps.previewAdd) throw new Error('this host cannot preview adding a folder');
-                return deps.workspaceOps.previewAdd(str(args[0]));
+                return deps.workspaceOps.previewAdd(args[0]);
             case 'workspaces.previewAddFromGit':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'give a git URL and a parent folder' };
                 if (!deps.workspaceOps.previewAddFromGit) throw new Error('this host cannot preview a clone');
-                return deps.workspaceOps.previewAddFromGit(str(args[0]), str(args[1]));
+                return deps.workspaceOps.previewAddFromGit(args[0], args[1]);
             case 'workspaces.confirmAddFromGit':
-                return deps.workspaceOps.confirmAddFromGit(str(args[0]), str(args[1]));
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'give a git URL and a parent folder' };
+                return deps.workspaceOps.confirmAddFromGit(args[0], args[1]);
             case 'workspaces.readSource':
+                if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
                 if (!deps.workspaceOps.readSource) throw new Error('this host cannot read a folder to set it up');
-                return deps.workspaceOps.readSource(str(args[0]));
+                return deps.workspaceOps.readSource(args[0]);
             case 'workspaces.stageFromGit':
+                if (typeof args[0] !== 'string' || args[0].trim() === '') return { ok: false, reason: 'give a git URL' };
                 if (!deps.workspaceOps.stageFromGit) throw new Error('this host cannot import from git');
-                return deps.workspaceOps.stageFromGit(str(args[0]));
+                return deps.workspaceOps.stageFromGit(args[0]);
             case 'workspaces.registerExisting':
+                if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };
                 if (!deps.workspaceOps.registerExisting) throw new Error('this host cannot add an existing workspace');
-                return deps.workspaceOps.registerExisting(str(args[0]));
+                return deps.workspaceOps.registerExisting(args[0]);
             case 'workspaces.buildEnvelope':
                 if (!deps.workspaceOps.buildEnvelope) throw new Error('this host cannot build a workspace');
                 return deps.workspaceOps.buildEnvelope(args[0], args[1]);
             case 'workspaces.discardStaged':
+                if (typeof args[0] !== 'string') return { ok: true };
                 if (!deps.workspaceOps.discardStaged) throw new Error('this host cannot discard an import');
-                return deps.workspaceOps.discardStaged(str(args[0]));
+                return deps.workspaceOps.discardStaged(args[0]);
             case 'workspaces.githubRepos':
                 if (!deps.workspaceOps.githubRepos) throw new Error('this host cannot list GitHub repositories');
                 return deps.workspaceOps.githubRepos();
@@ -318,23 +326,29 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 if (!deps.workspaceOps.createTynnProject) throw new Error('this host cannot create Tynn projects');
                 return deps.workspaceOps.createTynnProject(args[0]);
             case 'workspaces.importedAgents':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'name a workspace' };
                 if (!deps.workspaceOps.importedAgents) throw new Error('this host cannot read a workspace’s agent files');
-                return deps.workspaceOps.importedAgents(str(args[0]));
+                return deps.workspaceOps.importedAgents(args[0]);
             case 'workspaces.adoptAgent':
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'name a workspace and an agent' };
                 if (!deps.workspaceOps.adoptAgent) throw new Error('this host cannot adopt agents');
-                return deps.workspaceOps.adoptAgent(str(args[0]), str(args[1]));
+                return deps.workspaceOps.adoptAgent(args[0], args[1]);
             case 'workspaces.tynnProjects':
                 if (!deps.workspaceOps.tynnProjects) throw new Error('this host cannot list Tynn projects');
                 return deps.workspaceOps.tynnProjects();
             case 'workspaces.previewAddFromTynn':
+                if (typeof args[0] !== 'string' || args[0] === '' || typeof args[1] !== 'string' || args[1] === '') return { ok: false, reason: 'choose a Tynn project and a parent folder' };
                 if (!deps.workspaceOps.previewAddFromTynn) throw new Error('this host cannot preview a Tynn envelope');
-                return deps.workspaceOps.previewAddFromTynn(str(args[0]), str(args[1]));
+                return deps.workspaceOps.previewAddFromTynn(args[0], args[1]);
             case 'workspaces.confirmAddFromTynn':
-                return deps.workspaceOps.confirmAddFromTynn(str(args[0]), str(args[1]));
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'give a parent folder and a Tynn project' };
+                return deps.workspaceOps.confirmAddFromTynn(args[0], args[1]);
             case 'workspaces.create':
-                return deps.workspaceOps.create(str(args[0]), str(args[1]), args[2], typeof args[3] === 'string' && args[3] !== '' ? args[3] : undefined);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'give the workspace a name and a folder' };
+                return deps.workspaceOps.create(args[0], args[1], args[2], typeof args[3] === 'string' && args[3] !== '' ? args[3] : undefined);
             case 'workspaces.confirmAdd':
-                return deps.workspaceOps.confirmAdd(str(args[0]));
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'confirmAdd names a folder' };
+                return deps.workspaceOps.confirmAdd(args[0]);
             case 'workspaces.hibernate':
                 return deps.workspaceOps.hibernate(str(args[0]));
             case 'workspaces.wake':
