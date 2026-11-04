@@ -53,7 +53,9 @@ class Cdp {
     close() { this.#socket.close(); }
 }
 
-const home = mkdtempSync(join(tmpdir(), 'site-panel-home-'));
+// A home of its own: the window process reads ~/.genie by the OS's home, not GENIE_HOME.
+const user = mkdtempSync(join(tmpdir(), 'site-panel-user-'));
+const home = join(user, '.genie');
 const data = mkdtempSync(join(tmpdir(), 'site-panel-data-'));
 const ws = mkdtempSync(join(tmpdir(), 'site-panel-ws-'));
 const WORKSPACE = 'sitepanelws';
@@ -68,7 +70,7 @@ writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WO
 
 const log = openSync(join(tmpdir(), 'site-panel-electron.log'), 'a');
 const launcher = process.platform === 'linux' ? ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox']] : ['npx', ['electron', '.']];
-const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, GENIE_HOME: home }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
+const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, HOME: user, USERPROFILE: user, GENIE_HOME: home }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
 const end = (code) => {
     try { if (process.platform !== 'win32') process.kill(-app.pid, 'SIGKILL'); else app.kill(); } catch { /* gone */ }
     if (code !== 0) { try { console.log(readFileSync(join(tmpdir(), 'site-panel-electron.log'), 'utf8').slice(-3000)); } catch { /* none */ } }
