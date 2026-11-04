@@ -69,6 +69,18 @@ async function connected(contents: FakeContents) {
     return opened;
 }
 
+function attachHost(transport: protocol.ServerTransport) {
+    return new RemoteHost({
+        api: {
+            invoke,
+            onEvent: (listener) => { eventListeners.add(listener); return () => { eventListeners.delete(listener); }; },
+            workspaceOfAgent: () => 'work',
+        },
+        hostName: 'door-contract-host', baton, devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
+        transport,
+    });
+}
+
 beforeEach(async () => {
     ipc = new EventEmitter();
     door = localProtocolDoor(ipc);
@@ -78,15 +90,7 @@ beforeEach(async () => {
     baton = new Baton();
     eventListeners = new Set();
     invoke = vi.fn(async () => ({ seen: true }));
-    host = new RemoteHost({
-        api: {
-            invoke,
-            onEvent: (listener) => { eventListeners.add(listener); return () => { eventListeners.delete(listener); }; },
-            workspaceOfAgent: () => 'work',
-        },
-        hostName: 'door-contract-host', baton, devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
-        transport: door,
-    });
+    host = attachHost(door);
 });
 
 afterEach(async () => {
@@ -150,6 +154,38 @@ describe('the P4 door admits only explicitly registered main-preload windows and
         await settled();
         expect(opened.client.state().lastRefusal).toMatch(/already|hello/i);
         expect(host.connections()).toHaveLength(1);
+    });
+});
+
+describe('the door answers while Genie is still starting', () => {
+    it.each(['no listener', 'hub before host', 'listener without a message handler'])('%s refuses; a real host then connects as the positive control', async (phase) => {
+        door.dispose();
+        door = localProtocolDoor(ipc);
+        let transport: protocol.ServerTransport = door;
+        let closes = 0;
+        if (phase === 'hub before host') {
+            const hub = protocol.transportHub({ onConnection: () => () => {} });
+            hub.add(door);
+            transport = hub;
+        } else if (phase === 'listener without a message handler') {
+            door.onConnection((connection) => { connection.onClose(() => { closes++; }); });
+        }
+        const contents = new FakeContents();
+        door.admit(contents.asPort());
+        const early = open(contents);
+        await settled();
+        expect(early.frames()).toContainEqual({ kind: 'refused', reason: 'Genie is still starting' });
+        expect(await early.client.ready).toEqual({ ok: false, reason: 'Genie is still starting' });
+        expect(early.client.state().connected).toBe(false);
+        expect(eventListeners.size).toBe(0);
+        if (phase === 'listener without a message handler') expect(closes).toBe(1);
+
+        host = attachHost(transport);
+        const ready = await connected(contents);
+        expect(await ready.client.bridge.workspaces.settings('work')).toEqual({ seen: true });
+        expect(invoke).toHaveBeenCalledExactlyOnceWith('workspaces.settings', ['work']);
+        expect(host.connections()).toHaveLength(1);
+        expect(eventListeners.size).toBe(1);
     });
 });
 
