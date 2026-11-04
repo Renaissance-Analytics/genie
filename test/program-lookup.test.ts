@@ -362,11 +362,11 @@ pty.onExit(end);`;
     }, 40_000);
 
     /** Through the real port and the real engine: what a person would read, and whether anything ran. */
-    const openedThroughThePort = (command: string, cwd: string) => {
+    const openedThroughThePort = (command: string, cwd: string, until: (() => Promise<void>) | null = null) => {
         const settings = { get: (key: string) => (key === 'track_cwd' ? 'off' : key === 'detached_terminals' ? 'off' : undefined) };
         configureInProcessBackend({ settings, snapshots: { writeSnapshot: () => null, readSnapshot: () => null, deleteSnapshot: () => {}, encrypting: () => false } } as never);
         const port = fancyTermPort(inProcessBackend(), { defaultShell: () => resolveDefaultShell(settings) });
-        try { const opened = port.open({ cwd, command }); port.kill(opened.id); return ''; } catch (error) { return (error as Error).message; }
+        try { const opened = port.open({ cwd, command }); if (until === null) port.kill(opened.id); else void until().finally(() => port.kill(opened.id)); return ''; } catch (error) { return (error as Error).message; }
     };
 
     it('a batch file on PATH really starts through the engine, from a folder with a space in its name, and gets its arguments', async () => {
@@ -377,8 +377,10 @@ pty.onExit(end);`;
         const was = process.env.PATH;
         process.env.PATH = `${tools};${was}`;
         try {
-            expect(openedThroughThePort('batchtool run dev', tmpdir())).toBe('');
-            for (let i = 0; i < 50 && !ran(); i += 1) await new Promise((r) => setTimeout(r, 100));
+            const arrived = async () => { for (let i = 0; i < 100 && !ran(); i += 1) await new Promise((r) => setTimeout(r, 100)); };
+            expect(openedThroughThePort('batchtool run dev', tmpdir(), arrived)).toBe('');
+            await arrived();
+            await new Promise((r) => setTimeout(r, 200));
             expect(readFileSync(mark, 'utf8').trim()).toBe('run dev');
         } finally {
             process.env.PATH = was;
