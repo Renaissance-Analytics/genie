@@ -17,6 +17,10 @@ export interface SitePanelLive {
     /** Its site is out in its own window. */
     readonly popped?: boolean;
     readonly onPopBack?: (panelKey: string) => void;
+    /** Why this panel shows no page. */
+    readonly refused?: { readonly error: string; readonly locked?: boolean };
+    readonly onRefused?: (panelKey: string, listener: (why: { readonly error: string; readonly locked?: boolean } | null) => void) => () => void;
+    readonly onRestart?: () => void;
     /** Whether it is out, as that changes. Answers the leaving function. */
     readonly onPopped?: (panelKey: string, listener: (out: boolean) => void) => () => void;
 }
@@ -83,6 +87,8 @@ function LiveSite({ host, live }: { host: string; live: SitePanelLive }) {
     // Off screen (the tab changed, the panel unmounted): the page is hidden and kept.
     useEffect(() => () => calls.current.onHide(panelKey), [panelKey]);
     const [state, setState] = useState<SiteState>(NO_SITE_STATE);
+    const [why, setWhy] = useState(live.refused ?? null);
+    useEffect(() => calls.current.onRefused?.(panelKey, setWhy), [panelKey]);
     useEffect(() => calls.current.onState(panelKey, setState), [panelKey]);
     return (
         <div data-site-panel={panelKey} className="flex min-h-0 min-w-0 flex-1 flex-col">
@@ -95,6 +101,12 @@ function LiveSite({ host, live }: { host: string; live: SitePanelLive }) {
                 onReload={() => live.onReload(panelKey)}
                 onPop={() => live.onOpenInWindow(host)}
             />
+            {why ? (
+                <div data-site-refused="" className="flex shrink-0 items-center gap-2 border-b border-[var(--border-1)] px-2 py-1 text-[11px] text-[var(--fg-2)]">
+                    {why.error}
+                    {why.locked ? <Button size="xs" type="button" data-site-action="restart" onClick={live.onRestart}>Restart</Button> : null}
+                </div>
+            ) : null}
             {/* The live page sits over this box, in the layer (renderer/site-webview-layer.ts). */}
             <div ref={box} data-site-panel-box="" className="min-h-0 flex-1" />
         </div>

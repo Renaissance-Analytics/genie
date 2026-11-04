@@ -8,7 +8,9 @@ import type { SiteState } from './components/SingleSiteBar.js';
  * new element, because main decides at attach and the renderer never changes where a page points.
  */
 
-export type Prepared = { readonly ok: true } | { readonly ok: false; readonly error: string };
+export type Prepared = { readonly ok: true } | { readonly ok: false; readonly error: string; readonly locked?: boolean };
+/** Why a panel shows no page. */
+export type Refused = { readonly error: string; readonly locked?: boolean };
 
 interface LayerDocument {
     readonly body: { appendChild(child: never): unknown };
@@ -40,6 +42,8 @@ export interface SiteWebviewLayer {
     /** Its site is out in its own window, or back: out, its page closes, and a show makes none. */
     setPopped(panelKey: string, out: boolean): void;
     isPopped(panelKey: string): boolean;
+    /** Why this panel shows no page, or null once it does. Answers the leaving function. */
+    onRefused(panelKey: string, listener: (why: Refused | null) => void): () => void;
     onPopped(panelKey: string, listener: (out: boolean) => void): () => void;
 }
 
@@ -60,6 +64,8 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
 
     const listeners = new Map<string, Set<(state: SiteState) => void>>();
     const popped = new Set<string>();
+    const refusedListeners = new Map<string, Set<(why: Refused | null) => void>>();
+    const refused = (panelKey: string, why: Refused | null): void => { for (const listener of [...(refusedListeners.get(panelKey) ?? [])]) listener(why); };
     const poppedListeners = new Map<string, Set<(out: boolean) => void>>();
     const pages = new Map<string, { back(): void; forward(): void }>();
     const safely = (fn: (() => void) | undefined): void => { try { fn?.(); } catch { /* Electron throws until the page's dom-ready */ } };
@@ -116,9 +122,11 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
             if (!prepared.ok) {
                 allowed.delete(host.toLowerCase());
                 views.remove(panelKey);
+                refused(panelKey, prepared.locked ? { error: prepared.error, locked: true } : { error: prepared.error });
                 return prepared;
             }
             allowed.add(host.toLowerCase());
+            refused(panelKey, null);
             return views.show(panelKey, host, bounds);
         },
         hide(panelKey) { ticket(panelKey); views.hide(panelKey); },
@@ -139,6 +147,12 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
             for (const listener of [...(poppedListeners.get(panelKey) ?? [])]) listener(out);
         },
         isPopped(panelKey) { return popped.has(panelKey); },
+        onRefused(panelKey, listener) {
+            const set = refusedListeners.get(panelKey) ?? new Set();
+            refusedListeners.set(panelKey, set);
+            set.add(listener);
+            return () => { set.delete(listener); };
+        },
         onPopped(panelKey, listener) {
             const set = poppedListeners.get(panelKey) ?? new Set();
             poppedListeners.set(panelKey, set);

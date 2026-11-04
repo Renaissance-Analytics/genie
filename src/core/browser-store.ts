@@ -11,6 +11,13 @@ import { isGenHost } from './browser-origins.js';
 
 export type BrowserStoreSide = 'window' | 'browser';
 
+/**
+ * Measured on omarchy-test: with the cookie fuse on, a launch with no keyring that opens a store destroys what is in it, for
+ * good, and availability doesn't update in a running process. So nothing opens a store without the key, and a restart is
+ * the way out.
+ */
+export const STORE_LOCKED = 'Genie sites need your keyring, which isn’t available. Their logins are safe. Unlock it, then restart.';
+
 const WORKSPACE_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
 export function browserStorePath(genieHome: string, workspaceId: string, side: BrowserStoreSide): string {

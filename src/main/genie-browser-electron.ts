@@ -1,7 +1,7 @@
-import { BrowserWindow, WebContentsView, ipcMain, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
+import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { browserStorePath, type BrowserStoreSide } from '../core/browser-store.js';
+import { STORE_LOCKED, browserStorePath, type BrowserStoreSide } from '../core/browser-store.js';
 import type { SyncedCookie } from '../core/cookie-sync.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
 import { initialGenUrl, isSecureBrowserUrl, normalizeNavUrl } from '../core/genie-browser.js';
@@ -120,6 +120,7 @@ export function workspaceBrowserSession(options: { genieHome: string; workspaceI
     const path = browserStorePath(options.genieHome, options.workspaceId, options.side);
     const found = workspaceStores.get(path);
     if (found) return found;
+    if (!safeStorage.isEncryptionAvailable()) throw new Error(STORE_LOCKED);
     mkdirSync(join(options.genieHome, 'browser'), { recursive: true, mode: 0o700 });
     const ses = session.fromPath(browserStorePath(options.genieHome, options.workspaceId, options.side));
     sharedCa = options.caPem;
@@ -155,8 +156,8 @@ export interface GenieBrowserWindows {
     /** A panel's site alone in its own window (the owner: "a single site ux"), with the browser's store. */
     openSingle(panelKey: string, url: string): void;
     closeSingle(panelKey: string): void;
-    /** One line for this machine's window, shown now and in any made later. */
-    setNotice(notice: string | null): void;
+    /** One line for this machine's window, shown now and in any made later. `restart`: with the way out beside it. */
+    setNotice(notice: string | null, restart?: boolean): void;
 }
 
 const NOT_OURS = { ok: false as const, error: 'this is not the Genie browser window' };
@@ -188,6 +189,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     ipcMain.handle('browser-window:back', (event) => brain(event)?.back());
     ipcMain.handle('browser-window:forward', (event) => brain(event)?.forward());
     ipcMain.handle('browser-window:reload', (event) => brain(event)?.reload());
+    ipcMain.handle('browser-window:restart', () => { app.relaunch(); app.exit(0); });
     ipcMain.handle('browser-window:pop-back', (event) => {
         const key = [...windows].find(([, w]) => w.win.webContents === event.sender)?.[0];
         if (key?.startsWith(SINGLE)) windows.get(key)?.win.close();
@@ -328,17 +330,19 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     };
 
     let notice: string | null = null;
+    let noticeRestart = false;
     return {
-        setNotice(next) {
+        setNotice(next, restart = false) {
             notice = next;
-            for (const [key, entry] of windows) if ((key === LOCAL || key.startsWith(SINGLE)) && !entry.win.isDestroyed()) entry.browser.setNotice(next);
+            noticeRestart = restart;
+            for (const [key, entry] of windows) if ((key === LOCAL || key.startsWith(SINGLE)) && !entry.win.isDestroyed()) entry.browser.setNotice(next, restart);
         },
         openSingle(panelKey, url) {
             const key = `${SINGLE}${panelKey}`;
             let entry = windows.get(key);
             if (!entry || entry.win.isDestroyed()) {
                 const m = make(key, 'Genie browser', 'user-gesture');
-                m.brain.setNotice(notice);
+                m.brain.setNotice(notice, noticeRestart);
                 entry = { win: m.window, browser: m.brain };
                 windows.set(key, entry);
             } else {
@@ -358,7 +362,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
             const fresh = !entry || entry.win.isDestroyed();
             if (fresh) {
                 const m = make(key, remote ? `Genie browser — ${remote.title}` : 'Genie browser', activation);
-                if (key === LOCAL) m.brain.setNotice(notice);
+                if (key === LOCAL) m.brain.setNotice(notice, noticeRestart);
                 entry = { win: m.window, browser: m.brain };
                 windows.set(key, entry);
             } else {

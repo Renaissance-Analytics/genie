@@ -44,7 +44,8 @@ export class BrowserCookieBridge {
         if (event.kind !== 'cookies' && event.kind !== 'cookiesWanted') return;
         if (event.from === this.#ports.me()) return;
         if (event.kind === 'cookies') {
-            if (!this.#syncs.has(event.workspaceId)) this.#ports.openStore(event.workspaceId);
+            // No store without the key (core/browser-store.ts): dropped, and the store's own side still has it.
+            if (!this.#syncs.has(event.workspaceId)) { try { this.#ports.openStore(event.workspaceId); } catch { return; } }
             void this.#syncs.get(event.workspaceId)?.sync.receive(event.message);
             return;
         }

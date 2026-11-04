@@ -278,6 +278,7 @@ const bridge: PreloadBridge = {
     sitePanels: {
         prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
         openWindow: (host) => ipcRenderer.invoke('site-panel:open-window', host) as Promise<void>,
+        restart: () => ipcRenderer.invoke('site-panel:restart') as Promise<void>,
         popOut: (panelKey, host) => ipcRenderer.invoke('site-panel:pop-out', panelKey, host) as Promise<void>,
         popBack: (panelKey) => ipcRenderer.invoke('site-panel:pop-back', panelKey) as Promise<void>,
         popped: () => ipcRenderer.invoke('site-panel:popped') as Promise<never>,

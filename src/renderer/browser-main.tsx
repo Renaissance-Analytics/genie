@@ -28,6 +28,7 @@ interface BrowserBridge {
     reload(): Promise<void>;
     setPreset(id: string): Promise<void>;
     popBack(): Promise<void>;
+    restart(): Promise<void>;
     setBounds(bounds: { x: number; y: number; width: number; height: number }): Promise<void>;
     /** The native window buttons are drawn over the title row (Windows, Linux): their colours follow the theme. */
     readonly overlay: boolean;
@@ -83,6 +84,7 @@ function Browser({ bridge }: { bridge: BrowserBridge }) {
             onForward={() => void bridge.forward()}
             onReload={() => void bridge.reload()}
             onPreset={(id) => void bridge.setPreset(id)}
+            onRestart={() => void bridge.restart()}
         />
     );
 }

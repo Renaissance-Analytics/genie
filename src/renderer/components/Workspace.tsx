@@ -953,6 +953,8 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 },
                                 popped: siteWebviewLayerFor(sitePanels).isPopped(panelKey(workspace.id, tab.id, at)),
                                 onPopBack: (key: string) => { void sitePanels.popBack(key); },
+                                onRefused: (key: string, listener: (why: { readonly error: string; readonly locked?: boolean } | null) => void) => siteWebviewLayerFor(sitePanels).onRefused(key, listener),
+                                onRestart: () => { void sitePanels.restart(); },
                                 onPopped: (key: string, listener: (out: boolean) => void) => siteWebviewLayerFor(sitePanels).onPopped(key, listener),
                             } : undefined;
                             return <SitePanel host={p.ref} live={live} onPick={(host) => { if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;

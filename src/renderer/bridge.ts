@@ -153,7 +153,8 @@ export interface GenieBridge {
     activity?: ActivityBridge;
     sitePanels?: {
         /** May this site load, with its store routed? The page itself is a <webview> the window holds (site-webview-layer.ts). */
-        prepare(host: string): Promise<{ ok: true } | { ok: false; error: string }>;
+        prepare(host: string): Promise<{ ok: true } | { ok: false; error: string; locked?: boolean }>;
+        restart(): Promise<void>;
         openWindow(host: string): Promise<void>;
         popOut(panelKey: string, host: string): Promise<void>;
         popBack(panelKey: string): Promise<void>;
