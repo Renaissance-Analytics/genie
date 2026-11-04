@@ -77,7 +77,7 @@ describe('a pass', () => {
     it("a repo the manifest lists: its files count too, a submodule's git config where its .git file points", async () => {
         const gitdir = join(W, '.git', 'modules', 'one');
         const t = rig({
-            [join(W, 'project.json')]: JSON.stringify({ repos: [{ name: 'one', path: 'repos/one' }] }),
+            [join(W, 'project.json')]: JSON.stringify({ repos: [{ name: 'one', slug: 'one', path: 'repos/one' }] }),
             [join(R, '.claude', 'settings.json')]: 'one',
             [join(R, '.git')]: 'gitdir: ../../.git/modules/one\n',
             [join(gitdir, 'config')]: 'one',

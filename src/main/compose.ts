@@ -1,7 +1,7 @@
 import { phpWorkerEnvWithTrust } from './php-trust-host.js';
 import { randomBytes } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, readdir as readdirP, readFile as readFileP, rename, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
+import { lstat, mkdir, stat, readdir as readdirP, readFile as readFileP, rename, rmdir, unlink as unlinkP, writeFile as writeFileP } from 'node:fs/promises';
 import { hostname } from 'node:os';
 import { dirname, join } from 'node:path';
 import { deckItemsFrom, type AskerState } from '../core/deck-sources.js';
@@ -81,6 +81,7 @@ import { EnvelopeSites, nodeEnvelopeFs, type WorkspaceRef } from './envelope-sit
 import { readJson, writeJsonAtomic } from './store.js';
 import type { PtyPort } from './terminal-host.js';
 import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
+import { TrustWatch, watchOneFolder } from './trust-watch.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -213,9 +214,9 @@ export interface ComposeInput {
     readonly mcpTools?: () => readonly { name: string; description: string }[];
     /** A workspace's trust verdict moved. */
     readonly onTrustVerdict?: (workspaceId: string) => void;
-    /** Skeleton. */
+    /** The slow pass over what a verdict reads. Absent = a minute. */
     readonly trustWatchEveryMs?: number;
-    /** Skeleton. */
+    /** False = no folder watchers, the slow pass alone. Absent = watch. */
     readonly trustWatchFolders?: boolean;
     /**
      * The live agent roster — the same one the agents' own inbox tool resolves against. Late-bound: the registry
@@ -975,6 +976,25 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
         trustPass = trustPass.then(() => Promise.all(workspacesNow().map((w) => workspaceTrust.refresh(w.id).catch((error: unknown) => console.error(`[trust] ${w.id} could not be read: ${error instanceof Error ? error.message : String(error)}`)))));
     };
     refreshTrust();
+    // A pull while an agent runs: nobody asks for the verdict, so what it reads is watched (trust-watch.ts).
+    const trustWatch = new TrustWatch({
+        workspaces: workspacesNow,
+        readText: trustFs.readText,
+        fingerprint: async (path) => {
+            const info = await stat(path).catch(() => null);
+            return info ? `${info.mtimeMs}:${info.size}` : null;
+        },
+        watchFolder: (folder, changed) => (input.trustWatchFolders === false ? null : watchOneFolder(folder, changed)),
+        refresh: (id) => {
+            if (trustClosed) return;
+            trustPass = trustPass.then(() => workspaceTrust.refresh(id).catch((error: unknown) => console.error(`[trust] ${id} could not be read: ${error instanceof Error ? error.message : String(error)}`)));
+        },
+        settleMs: 500,
+    });
+    const watchPass = () => { trustWatch.pass().catch((error: unknown) => console.error(`[trust] ${error instanceof Error ? error.message : String(error)}`)); };
+    watchPass();
+    const trustWatchTimer = setInterval(watchPass, input.trustWatchEveryMs ?? 60_000);
+    trustWatchTimer.unref();
     /** A registered workspace's folder takes Genie's files once trusted. A folder that is no workspace is not this rule's. */
     const mayWriteInto = async (folder: string): Promise<boolean> => {
         const workspace = workspacesNow().find((w) => w.path === folder);
@@ -999,7 +1019,7 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
     engines.onChange(syncEnvFiles);
     sites.onChange(syncEnvFiles);
     const stopWatchingWorkspaces = input.onWorkspacesChange?.(() => {
-        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(refreshTrust);
+        envelopeSites.sync(workspacesNow()).catch((error: unknown) => console.error(`[sites] ${error instanceof Error ? error.message : String(error)}`)).finally(() => { refreshTrust(); watchPass(); });
     }) ?? (() => {});
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
     // Who each agent is, for the Deck's names and the reminder/uncollected-mail counts: from the roster, now.
@@ -1412,6 +1432,8 @@ export async function composeServices(input: ComposeInput): Promise<ComposedServ
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
                 await envFiles.close();
                 trustClosed = true;
+                clearInterval(trustWatchTimer);
+                trustWatch.stop();
                 await trustPass;
                 await new Promise<void>((r) => frontDoor.close(r));
                 // A run's command was just stopped above (it records as failed); a run waiting on an agent's turn may not end
