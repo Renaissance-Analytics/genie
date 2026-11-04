@@ -376,9 +376,9 @@ export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { s
  * stops neither its AGENTS.md nor its skills: these two settings do, a skill added during the session included. They stop the person's
  * own skills too, and a skill named in a message still loads. On each agent's own app-server, so a trusted agent never gets them.
  */
-export function codexTrustOptions(launch: { readonly binaryArgs?: readonly string[] }, untrusted: GenieInstructionFiles | null): { binaryArgs?: readonly string[] } {
+export function codexTrustOptions(untrusted: GenieInstructionFiles | null): { binaryArgs?: readonly string[] } {
     if (untrusted === null) return {};
-    return { binaryArgs: [...(launch.binaryArgs ?? []), '-c', 'project_doc_max_bytes=0', '-c', 'skills.include_instructions=false'] };
+    return { binaryArgs: ['-c', 'project_doc_max_bytes=0', '-c', 'skills.include_instructions=false'] };
 }
 
 /** A Codex agent set to run unasked does not, in an untrusted workspace: Codex keeps its own approvals and sandbox. */
@@ -400,7 +400,7 @@ export const realDriverFor: DriverFor = (record, cwd, resumeSessionId, extras) =
             return (options) => new ClaudeDriver({ ...claudeOptionsFor(record, cwd, resumeSessionId), ...launch, ...claudeTrustOptions(extras?.untrusted ?? null), ...mcp, ...inheritedPolicy }, driverEvents(options.events));
 
         case 'codex':
-            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(launch, extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
+            return (options) => new CodexDriver({ ...codexOptionsFor(codexRecordFor(record, extras?.untrusted ?? null), cwd, resumeSessionId, extras?.mcpServers ?? []), ...launch, ...codexTrustOptions(extras?.untrusted ?? null), ...inheritedPolicy }, driverEvents(options.events));
 
         default:
             return null;
