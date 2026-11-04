@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { readFileSync as read } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -31,6 +31,7 @@ function install(platform: NodeJS.Platform = 'linux'): HostRuntimeInput {
     write(join(unpacked, 'node_modules', '@napi-rs', 'keyring', 'index.js'), 'keyring');
     write(join(unpacked, 'node_modules', '@napi-rs', 'keyring-linux-x64-gnu', 'k.node'), 'native');
     write(join(unpacked, 'node_modules', '@particle-academy', 'fancy-pty', 'bin', 'helper'), 'helper');
+    chmodSync(join(unpacked, 'node_modules', '@particle-academy', 'fancy-pty', 'bin', 'helper'), 0o755);
     return { packaged: true, platform, execPath: exe, electronVersion: '45.2.2', appRoot: app, unpackedRoot: unpacked, hostHash: 'abc123', genieHome: join(root, 'home'), log: () => {} };
 }
 
