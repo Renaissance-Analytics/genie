@@ -58,7 +58,7 @@ async function until(label, fn, ms = 20_000) {
     }
     throw new Error(`${label}: no positive result in ${ms}ms${last ? ` (${last})` : ''}`);
 }
-const alive = (pid) => { try { if (!Number.isInteger(pid) || pid <= 0) return false; process.kill(pid, 0); return true; } catch { return false; } };
+const alive = (pid) => { try { if (!Number.isInteger(pid) || pid <= 0) return false; process.kill(pid, 0); return true; } catch (error) { return error.code === 'EPERM'; } };
 const readJson = (file) => { try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; } };
 
 class Cdp {
@@ -251,6 +251,9 @@ try {
     demand(manifest, 'private workspace seed manifest exists');
     writeFileSync(join(workspace, 'project.json'), JSON.stringify({ ...manifest, name: 'Local door', sites: { doorpanelaaaaaaaa: { repo: '', name: 'doorpanel', genName: 'doorpanel.gen', kind: 'http', runMode: 'host', hostPort: server.address().port, enabled: true } } }));
     writeFileSync(join(root, '.genie', 'runtime', 'workspaces.json'), JSON.stringify([{ id: 'tynn', path: workspace }]));
+    // Use the normal preference in this private fixture, so row9 measures actual tailnet availability.
+    const settingsFile = join(root, '.genie', 'runtime', 'settings.json');
+    writeFileSync(settingsFile, JSON.stringify({ ...readJson(settingsFile), remote_access: true }));
     // Ticker ownership is checked; a concurrent harness is not overwritten.
     let marker; try { marker = Number(readFileSync(TICKER, 'utf8').trim()); } catch { /* absent */ }
     demand(!alive(marker), 'another live harness owns the provider ticker');
@@ -317,11 +320,15 @@ try {
     });
 
     await row(4, 'actual panel and subframe API absence + real receiver identity refusals', async () => {
+        const step = async (label, run) => {
+            log(`  4 ${label}`);
+            try { return await run(); } catch (error) { throw new Error(`${label}: ${error.message}`); }
+        };
         const site = await until('declared fixture site', async () => (await main.evaluate('window.genie.features.snapshot()')).hosting?.sites?.find((s) => s.host === 'doorpanel.gen'), 30_000);
-        await main.evaluate(`window.genie.features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`);
+        await step('start declared fixture site', () => main.evaluate(`window.genie.features.act({kind:'hosting.startSite',siteId:${JSON.stringify(site.id)}})`));
         const before = await inspector.evaluate(`process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').webContents.getAllWebContents().map((w) => w.id)`);
         const tabs = { tabs: [{ id: 'door-tab', name: 'Door panel', layout: 'single', cells: [{ kind: 'site', ref: 'doorpanel.gen' }] }] };
-        const r = await call(main, 'workspaces.setSetting', ['tynn', 'workspace_tabs', JSON.stringify(tabs)]);
+        const r = await step('write the real site tab', () => call(main, 'workspaces.setSetting', ['tynn', 'workspace_tabs', JSON.stringify(tabs)]));
         demand(r.ok && r.value?.ok, 'real settings write builds the site tab');
         await main.evaluate(`location.hash='#genie://workspace/tynn?view=tab:door-tab'; true`);
         await until('real site panel box', () => main.evaluate('!!document.querySelector("[data-site-panel-box]")'), 30_000);
@@ -334,17 +341,38 @@ try {
                 return candidates.length === 1 ? candidates[0].id : null;
             })()`);
         }, 30_000);
+        let lastPanelState;
+        await step('panel document readiness', () => until('loaded fixture panel', async () => {
+            const state = await inspector.evaluate(`(() => {
+                const w = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').webContents.fromId(${panelId});
+                return { url:w.getURL(), loading:w.isLoading(), mainLoading:w.isLoadingMainFrame() };
+            })()`);
+            const summary = JSON.stringify(state);
+            if (summary !== lastPanelState) log(`  4 panel state: ${summary}`);
+            lastPanelState = summary;
+            return !state.loading && new URL(state.url || 'about:blank').hostname === 'doorpanel.gen';
+        }, 20_000));
         await main.evaluate(`(() => { const frame = document.createElement('iframe'); frame.id='door-child-control'; document.body.appendChild(frame); return true; })()`);
+        await until('blank child document ready', () => main.evaluate(`document.querySelector('#door-child-control')?.contentDocument?.readyState === 'complete'`));
         await until('native child frame', () => inspector.evaluate(`(() => {
             const wc = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').webContents.fromId(${mainId});
             return wc.mainFrame.framesInSubtree.some((f) => f !== wc.mainFrame);
         })()`));
-        const measured = await inspector.evaluate(`(async () => {
+        const expression = '({port:typeof window.genieLocalProtocol,ipc:typeof window.ipcRenderer,node:typeof require,body:document.body?.textContent})';
+        const absence = {};
+        for (const kind of ['panel', 'subframe']) absence[kind] = await step(`${kind} native API evaluation`, () => inspector.evaluate(`(async () => {
+            const { webContents } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
+            const wc = webContents.fromId(${kind === 'panel' ? panelId : mainId});
+            const frame = ${kind === 'panel' ? 'wc.mainFrame' : 'wc.mainFrame.framesInSubtree.find(f=>f!==wc.mainFrame)'};
+            let timer;
+            try { return await Promise.race([frame.executeJavaScript(${JSON.stringify(expression)}), new Promise((_,reject)=>{ timer=setTimeout(()=>reject(new Error('native frame evaluation deadline; url='+frame.url)),5_000); })]); }
+            finally { clearTimeout(timer); }
+        })()`));
+        demand(absence.panel.body?.includes('door control'), 'panel loaded the actual fixture document');
+        const measured = await step('actual receiver calls with native child identities', () => inspector.evaluate(`(() => {
             const { webContents } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
             const main = webContents.fromId(${mainId}), panel = webContents.fromId(${panelId});
             const child = main.mainFrame.framesInSubtree.find((f) => f !== main.mainFrame);
-            const expression = '({port:typeof window.genieLocalProtocol,ipc:typeof window.ipcRenderer,node:typeof require})';
-            const absence = { panel: await panel.mainFrame.executeJavaScript(expression), subframe: await child.executeJavaScript(expression) };
             const reject = (sender, frame, handle) => {
                 const replies = [], original = frame.send;
                 const observed = function(channel, action, id, text) { if (channel === 'genie:local-frame-back' && id === handle) replies.push({action, text}); return original.call(this, channel, action, id, text); };
@@ -354,13 +382,13 @@ try {
                 finally { frame.send = original; }
                 return replies.map((r) => ({action:r.action, ...(r.action === 'frame' ? JSON.parse(r.text) : {reason:r.text})}));
             };
-            return { absence, panel: reject(panel,panel.mainFrame,'panel_identity_probe'), subframe: reject(main,child,'subframe_identity_probe') };
-        })()`);
+            return { panel: reject(panel,panel.mainFrame,'panel_identity_probe'), subframe: reject(main,child,'subframe_identity_probe') };
+        })()`));
         for (const [kind, expected] of [['panel', /not an admitted/], ['subframe', /top.level/]]) {
-            demand(measured.absence[kind].port === 'undefined' && measured.absence[kind].ipc === 'undefined' && measured.absence[kind].node === 'undefined', `${kind} has no native preload IPC/Node API`);
+            demand(absence[kind].port === 'undefined' && absence[kind].ipc === 'undefined' && absence[kind].node === 'undefined', `${kind} has no native preload IPC/Node API`);
             demand(measured[kind].some((f) => f.kind === 'refused' && expected.test(f.reason)) && measured[kind].some((f) => f.action === 'closed'), `${kind} actual receiver must refuse and close`);
         }
-        log(`  4 native API absence: ${JSON.stringify(measured.absence)}`);
+        log(`  4 native API absence: ${JSON.stringify(absence)}`);
         return `receiver checks (not child-originated IPC): ${measured.panel.find((f) => f.kind === 'refused').reason}; ${measured.subframe.find((f) => f.kind === 'refused').reason}`;
     });
 
@@ -433,9 +461,15 @@ try {
     });
 
     await row(9, 'local write under a real paired remote baton and lock, when tailnet is available', async () => {
-        const feature = await main.evaluate('window.genie.features.snapshot()');
-        const url = feature.remote?.url;
-        if (!url) throw new Unmeasured(feature.remote?.unavailable ?? 'no advertised tailnet endpoint');
+        let access;
+        try {
+            access = await until('real tailnet availability', async () => {
+                const state = await main.evaluate('window.genie.features.snapshot().then(d=>d.remote)');
+                return state?.url || (state?.unavailable && !['not started', 'stopped'].includes(state.unavailable)) ? state : null;
+            }, 75_000);
+        } catch { throw new Unmeasured('the enabled fixture tailnet listener did not settle within 75s'); }
+        const url = access.url;
+        if (!url) throw new Unmeasured(access.unavailable ?? 'no advertised tailnet endpoint');
         const label = `door-native-${process.pid}`;
         const issued = await main.evaluate(`window.genie.features.act({kind:'remote.issuePin'})`);
         demand(issued.remote?.pin?.code, 'native pairing PIN issued (not printed)');
