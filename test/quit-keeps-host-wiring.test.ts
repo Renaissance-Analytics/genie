@@ -77,8 +77,9 @@ describe('main.ts', () => {
         expect(block(src, "app.on('before-quit'")).not.toMatch(/confirmTray/);
         expect(block(src, 'function watchTrayOnly(', '\n}\n')).not.toMatch(/confirmTray/);
         expect(block(src, 'function restartGenie(', '\n}\n')).not.toMatch(/confirmTray/);
-        // confirmTray is called from the two tray choices only.
-        expect(src.match(/confirmTray\(/g) ?? []).toHaveLength(3); // its definition and the two tray handlers
+        // confirmTray is called from the two tray choices, and a site panel's Restart: the same stop, asked the same way.
+        expect(src.match(/confirmTray\(/g) ?? []).toHaveLength(4); // its definition, the two tray handlers, the panel's
+        expect(src).toMatch(/restart: \(\) => \{ if \(confirmTray\('restart'\)\) restartGenie\(\); \}/);
     });
 
     it('Restart: recorded, everything shut down, and Genie started again in the tray (`--hidden`)', () => {
