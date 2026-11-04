@@ -1,5 +1,6 @@
+import './process-start.js';
 import './close-inherited-fds.js';
-// ^ FIRST (bug A, VM job 76): the window's sockets — its DevTools port among them — never live on in this host or below it.
+// ^ FIRST but for the line above, which opens nothing (bug A, VM job 76): the window's sockets — its DevTools port among them — never live on in this host or below it.
 import { randomBytes, randomUUID, createHash } from 'node:crypto';
 import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { connect, createServer, type Server } from 'node:net';
