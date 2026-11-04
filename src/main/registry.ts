@@ -525,6 +525,11 @@ export class Registry {
     }
 
     /** What a Claude agent may do: all tools, ask before shell commands, or edits only (shell refused). Read when its session starts. */
+    /** Skeleton. */
+    async markGenieWords(_agentId: AgentId): Promise<AgentRecord | null> {
+        return null;
+    }
+
     async setPermissions(agentId: AgentId, permissions: AgentPermissions): Promise<AgentRecord | null> {
         return this.#update(agentId, (a) => ({ ...a, permissions }));
     }

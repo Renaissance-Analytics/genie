@@ -17,7 +17,7 @@ import { WorkspaceTrust } from '../src/main/workspace-trust-host.js';
  */
 
 const noProcessTree: ProcessTree = { snapshot: () => [], killTree: (pids) => ({ killed: pids.length, refused: false }) };
-const FILES: GenieInstructionFiles = { promptFile: '/genie/prompt.md', pluginDir: '/genie/plugin' };
+const FILES: GenieInstructionFiles = { promptFile: '/genie/prompt.md', pluginDir: '/genie/plugin', promptText: 'genie words' };
 const shellAsk: PermissionRequestLike = {
     toolCall: { title: 'git status', name: 'Bash', rawInput: { command: 'git status' } },
     options: [
@@ -399,6 +399,79 @@ describe('gone trusted: one message, ahead of the next real work', () => {
         expect(t.held).toEqual([]);
         expect(t.notices).toEqual([]);
         expect(t.last().prompts).toEqual(['work']);
+    });
+});
+
+describe("Genie's words, once in a thread", () => {
+    function launch(start: Partial<AgentRecord>, verdict: { untrusted: boolean } = { untrusted: true }) {
+        let record: AgentRecord = { ...agentRecord({ id: mintAgentId(), workspaceId: 'acme', provider: 'claude', name: 'atlas' }), ...start };
+        const fakes: Fake[] = [];
+        const driverFor: DriverFor = () => (o) => {
+            const fake: Fake = { events: o.events, prompts: [] };
+            fakes.push(fake);
+            return { start: () => {}, prompt: (content: unknown) => { fake.prompts.push(String(content)); }, kill: () => {}, cancel: () => {}, cliSessionId: null };
+        };
+        const marks: string[] = [];
+        const host = new SessionHost({
+            userData: dir, driverFor, processTree: noProcessTree, stopGraceMs: 0,
+            untrustedFilesFor: async () => (verdict.untrusted ? FILES : null),
+            untrustedNow: () => verdict.untrusted,
+            currentRecord: () => record,
+            markGenieWords: (id) => { marks.push(id); record = { ...record, genieWordsInThread: true }; },
+        });
+        stopAll = async () => { host.stopAll(); await host.settled(); };
+        return { host, record: () => record, fakes, marks };
+    }
+    const work = async (t: ReturnType<typeof launch>, text: string) => { t.host.prompt(t.record().id, text, 'you'); await flush(); };
+
+    it('a thread that began trusted, resumed into untrusted: the file does not reach it, so they go ahead of the next work, once', async () => {
+        const t = launch({ threadId: 'thread-1' });
+        t.host.start(t.record(), dir);
+        await flush();
+        expect(t.fakes[0]!.prompts).toEqual([]);
+        expect(t.marks).toEqual([]);
+        await work(t, 'work');
+        expect(t.fakes[0]!.prompts).toEqual([`genie words\n\nwork`]);
+        expect(t.marks).toEqual([t.record().id]);
+        t.fakes[0]!.events.onTurnEnd?.({ stopReason: 'end_turn', isError: false, raw: null });
+        await flush();
+        await work(t, 'more');
+        expect(t.fakes[0]!.prompts[1]).toBe('more');
+    });
+
+    it('that thread on its next launch: not twice', async () => {
+        const t = launch({ threadId: 'thread-1', genieWordsInThread: true });
+        t.host.start(t.record(), dir);
+        await flush();
+        await work(t, 'work');
+        expect(t.fakes[0]!.prompts).toEqual(['work']);
+    });
+
+    it('a thread that began untrusted has them by file: none by message, and it is marked', async () => {
+        const t = launch({ threadId: null });
+        t.host.start(t.record(), dir);
+        await flush();
+        expect(t.marks).toEqual([t.record().id]);
+        await work(t, 'work');
+        expect(t.fakes[0]!.prompts).toEqual(['work']);
+    });
+
+    it('held and the run ended before any work: not marked, so the next launch holds them again', async () => {
+        const t = launch({ threadId: 'thread-1' });
+        t.host.start(t.record(), dir);
+        await flush();
+        t.host.stop(t.record().id, { graceful: false });
+        await t.host.ended(t.record().id);
+        expect(t.marks).toEqual([]);
+    });
+
+    it('CONTROL: trusted, none, and nothing is marked', async () => {
+        const t = launch({ threadId: 'thread-1' }, { untrusted: false });
+        t.host.start(t.record(), dir);
+        await flush();
+        await work(t, 'work');
+        expect(t.fakes[0]!.prompts).toEqual(['work']);
+        expect(t.marks).toEqual([]);
     });
 });
 

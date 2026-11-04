@@ -355,7 +355,7 @@ export const realListModels: ListProviderModels = (provider) =>
 export const LIMIT_REREAD_MS = 15 * 60_000;
 
 /** Genie's own instructions and skills, on this machine, for an agent whose workspace is not trusted. */
-export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string }
+export interface GenieInstructionFiles { readonly promptFile: string; readonly pluginDir: string; readonly promptText: string }
 
 /**
  * A CLAUDE AGENT IN AN UNTRUSTED WORKSPACE: the person's own settings and no project's, Genie's own MCP servers and no folder's, and Genie's words from files of its own. Measured against a stand-in API (CLI 2.1.317), through a fresh launch and
@@ -529,6 +529,8 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** Skeleton. */
+        markGenieWords?: (agentId: AgentId) => void;
         /** The workspace's verdict as last read, for what is decided per call: a shell call's answer. Absent = what the launch read. */
         untrustedNow?: (record: AgentRecord) => boolean;
         /** Private session credentials, prepared before constructing or starting either provider. */

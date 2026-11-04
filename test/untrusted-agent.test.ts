@@ -18,7 +18,7 @@ import { composeTracker } from './support/compose-tracker.js';
  *
  * What the CLI does with these flags is not tested here: that was measured against a stand-in API (provider-repo-config.mjs, genie-instructions-route.mjs in the envelope) and by prism against real CLIs. A real signed-in run is still to come.
  */
-const FILES: GenieInstructionFiles = { promptFile: join('/genie', 'prompt.md'), pluginDir: join('/genie', 'plugin') };
+const FILES: GenieInstructionFiles = { promptFile: join('/genie', 'prompt.md'), pluginDir: join('/genie', 'plugin'), promptText: 'genie words' };
 
 let dir: string;
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'untrusted-agent-')); });
