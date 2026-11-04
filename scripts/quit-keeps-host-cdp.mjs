@@ -513,6 +513,12 @@ try {
     const controlFailures = failures.slice(failuresBeforeRun);
     if (controlFailures.length) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
 
+    // A TERMINAL, with "Keep terminals through a quit" ON (genie#1508: from reading, that setting decides nothing with a host).
+    step('9t', 'the setting on, and a terminal open');
+    await a.cdp.evaluate(`window.genie.features.act({ kind: 'settings.set', key: 'detached_terminals', value: true }).then(() => true)`, 15_000);
+    const terminal = await a.cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(workspaceId)}, {}).then((t) => ({ id: t.id, pid: t.pid }))`, 30_000);
+    check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
+
     // -------------------------------------------------------------------------------- "Just close the UI": the tray stays
     // The logs are read from HERE on: an older line must not answer for this run.
     let lifecycleAt = readOr(LIFECYCLE).length;
@@ -560,6 +566,10 @@ try {
         check(gap === null, `23. ${ag.name}: every tick streamed while no window was open is in the ledger, in order`, gap === null ? `${ag.before.max + 1}..${after.max}` : `tick ${gap} missing`);
     }
 
+    step('23t', 'the terminal after the reopen');
+    const terminalsAfter = await b.cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(workspaceId)}).then((l) => l.map((t) => ({ id: t.id, pid: t.pid })))`, 15_000);
+    check(alive(terminal.pid) && terminalsAfter.some((t) => t.id === terminal.id && t.pid === terminal.pid), '23t. "Just close the UI" keeps the terminal: the same id and pid after the reopen', JSON.stringify(terminalsAfter));
+
     // -------------------------------------------------------------------------------- tray-only again, then a SECOND LAUNCH
     step('24', 'Just close the UI from the tray, then launch Genie again: the window comes back in the same process (≤ 60 s)');
     check(await trayClick(b.inspector, 'Just close the UI', 0) === 'ok', '24a. the tray\'s Just close the UI was clicked');
@@ -602,6 +612,10 @@ try {
         const gone = await until(() => !alive(ag.pid), 30_000);
         check(gone === true, `28. and ${ag.name}'s provider (the same gauge reading it dead now)`, `pid ${ag.pid}`);
     }
+    // What the setting is measured by: on, and a real quit. Alive here would mean it keeps them; ended means it decides nothing.
+    step('28t', `waiting for the terminal's pid ${terminal.pid} to end, the setting on (≤ 30 s)`);
+    const terminalGone = await until(() => !alive(terminal.pid), 30_000);
+    check(terminalGone === true, '28t. "Shut down everything" ends the terminal even with "Keep terminals through a quit" on (genie#1508)', `pid ${terminal.pid}`);
     shutDownProven = hostGone === true;
 } catch (error) {
     if (cannot === null) check(false, `the run stopped in step ${current}`, String(error?.message ?? error));
