@@ -70,8 +70,9 @@ export class CookieSync {
     /** The store's own `changed` event. */
     changed(cookie: SyncedCookie, cause: string, removed: boolean): void {
         if (!isGenCookie(cookie)) return;
-        // Its insert follows; a remove here would race it on the other side.
-        if (removed && (cause === 'overwrite' || cause === 'expired-overwrite')) return;
+        // Its insert follows; a remove here would race it on the other side. Not `expired-overwrite`: set again already
+        // expired, which is how a site logs out, has no insert after it.
+        if (removed && cause === 'overwrite') return;
         const k = key(cookie);
         const told = this.#told.get(k);
         if (told !== undefined) {
