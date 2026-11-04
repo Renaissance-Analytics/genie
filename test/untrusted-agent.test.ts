@@ -39,12 +39,12 @@ describe('the launch', () => {
     });
 
     it('what the provider library really puts on the command line for them, and the paths it requires', () => {
-        const absolute = { promptFile: resolve('/genie/prompt.md'), pluginDir: resolve('/genie/plugin') };
+        const absolute = { promptFile: resolve('/genie/prompt.md'), pluginDir: resolve('/genie/plugin'), promptText: 'x' };
         const args = claudeArgs({ cwd: absolute.pluginDir, ...claudeTrustOptions(absolute) });
         expect(args.slice(args.indexOf('--append-system-prompt-file'), args.indexOf('--append-system-prompt-file') + 2)).toEqual(['--append-system-prompt-file', absolute.promptFile]);
         expect(args.slice(args.indexOf('--plugin-dir'), args.indexOf('--plugin-dir') + 2)).toEqual(['--plugin-dir', absolute.pluginDir]);
         expect(args).toEqual(expect.arrayContaining(['--strict-mcp-config', '--setting-sources', 'user']));
-        expect(() => claudeArgs({ cwd: absolute.pluginDir, ...claudeTrustOptions({ promptFile: 'relative/prompt.md', pluginDir: absolute.pluginDir }) })).toThrow(/appendSystemPromptFile/);
+        expect(() => claudeArgs({ cwd: absolute.pluginDir, ...claudeTrustOptions({ promptFile: 'relative/prompt.md', pluginDir: absolute.pluginDir, promptText: 'x' }) })).toThrow(/appendSystemPromptFile/);
     });
 
     it('no flags of its own through binaryArgs: a provider configured as a script keeps exactly its own', () => {
