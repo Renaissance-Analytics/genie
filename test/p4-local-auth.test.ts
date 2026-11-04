@@ -173,3 +173,21 @@ it('a pending agent watch finishing after close does not restart the API subscri
     expect(listening).toBe(0);
     expect(host.connections()).toEqual([]);
 });
+
+it.each([false, true])('a completed watch consumes its ledger only while its connection is live (closed: %s)', async (closed) => {
+    const p = connect();
+    await p.hello({ kind: 'token', token: devices.pair('watch state owner').token });
+    let finish: (value: unknown) => void = () => {};
+    invoke.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = p.call('agent.watch', 'agent_a', {});
+    await settled();
+    expect(invoke).toHaveBeenCalledExactlyOnceWith('agentDetail', ['agent_a']);
+    if (closed) { p.close(); await settled(); }
+    let ledgerReads = 0;
+    finish({ agentId: 'agent_a', get rows() { ledgerReads++; return []; } });
+    await pending;
+    await settled();
+    // Building and recording a window consumes the rows. The live row proves the same getter observes that work.
+    expect(ledgerReads).toBe(closed ? 0 : 1);
+    expect(host.connections()).toHaveLength(closed ? 0 : 1);
+});
