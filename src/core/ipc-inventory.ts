@@ -29,6 +29,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['browser-window:bounds', 'later:P2b browser process'],
     ['browser-window:overlay-colors', 'later:P2b browser process'],
     ['browser-window:pop-back', 'later:P2b browser process'],
+    ['browser-window:restart', 'later:P2b browser process'],
 
     ['genie:chat-drafts-load', 'protocol:chatDrafts.load'],
     ['genie:chat-drafts-save', 'protocol:chatDrafts.save'],
@@ -189,5 +190,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['site-panel:pop-out', 'later:P2b browser process'],
     ['site-panel:pop-back', 'later:P2b browser process'],
     ['site-panel:popped', 'later:P2b browser process'],
+    ['site-panel:restart', 'later:P2b browser process'],
     ['site-panel:open-window', 'later:P2b site panels'],
 ];
