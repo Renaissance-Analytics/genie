@@ -102,21 +102,28 @@ interface GaugeForcing {
  * The witness: a process of its own that SPINS on the clock, and writes each gap over 20 ms as `<end> <gap>`. It writes `ready` first. A witness that sleeps between beats reads false stops: on omarchy-test a plain C sleeper woke hundreds of ms late, up to 1.9 s,
  * on an idle guest, while a spinner beside it saw no gap at all. So a gap here means this process or its CPU really stopped, which is what the gauge subtracts. It costs a CPU for the gauge's few seconds. It ends if the test's process goes, and in any case within a limit.
  */
+const BEAT_MS = 25;
 const WITNESS = `
+    const BEAT = ${BEAT_MS};
     const { appendFileSync } = require('node:fs');
     const file = process.argv[1];
     const parent = process.ppid;
     appendFileSync(file, 'ready ' + Date.now() + '\\n');
     let last = Date.now();
+    let sent = 0;
     const limit = last + 120000;
-    for (let turn = 0; ; turn += 1) {
+    let turn = 0;
+    const beat = () => {
         const now = Date.now();
         const gap = now - last;
         last = now;
         if (gap > 20) appendFileSync(file, now + ' ' + gap + '\\n');
         if (now > limit) process.exit(0);
-        if (turn % 4096 === 0 && process.ppid !== parent) process.exit(0);
-    }
+        if (turn++ % 4096 === 0 && process.ppid !== parent) process.exit(0);
+        if (now - sent >= BEAT) { sent = now; process.send(now); }
+        setImmediate(beat);
+    };
+    beat();
 `;
 
 const witnessGaps = (file: string): Array<[number, number]> => {
@@ -133,7 +140,7 @@ const witnessGaps = (file: string): Array<[number, number]> => {
 async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcing = {}): Promise<number> {
     const dir = mkdtempSync(join(tmpdir(), 'gauge-witness-'));
     const file = join(dir, 'gaps.txt');
-    const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: 'ignore', windowsHide: true });
+    const witness = spawn(process.execPath, ['-e', WITNESS, '--', file], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], windowsHide: true });
     const stopped = new Promise<void>((r) => { witness.once('exit', () => r()); witness.once('error', () => r()); });
     // Another thread of this process, stopped on request: what the old in-process witness read as the whole process stopping.
     const stall = new Int32Array(new SharedArrayBuffer(4));
@@ -164,16 +171,32 @@ async function heartbeatDuring(run: () => Promise<unknown>, forcing: GaugeForcin
         };
         const mine: Array<[number, number]> = [];
         let last = Date.now();
-        const timer = setInterval(() => { const now = Date.now(); const gap = now - last - 10; last = now; if (gap > 20) mine.push([now, gap]); }, 10);
+        // MAIN'S HEARTBEAT IS A MESSAGE, NOT A TIMER: its gaps are between arrivals. A timer on a test VM can wait seconds with main doing nothing (measured: a plain setInterval, nothing else running, ~2 s), which reads as a hold. A message ends main's wait whatever its timers are doing; a main really held cannot take one.
+        const beats = new Set<() => void>();
+        const onBeat = () => {
+            const now = Date.now();
+            const gap = now - last - BEAT_MS;
+            last = now;
+            if (gap > 20) mine.push([now, gap]);
+            for (const wake of beats) wake();
+        };
+        witness.on('message', onBeat);
+        // Not a timer either: until the witness has beaten this many more times, or has gone.
+        const moreBeats = (count: number) => new Promise<void>((done) => {
+            let left = count;
+            const wake = () => { left -= 1; if (left <= 0) { beats.delete(wake); done(); } };
+            beats.add(wake);
+            void stopped.then(done);
+        });
         try {
             if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGSTOP');
             await run();
             if (forcing.stopTheWitness) process.kill(witness.pid!, 'SIGCONT');
-            // Long enough for a witness that just woke to write the gap it woke to.
-            await new Promise((r) => setTimeout(r, forcing.stopTheWitness ? 300 : 60));
+            // Long enough for a held main's queued beat to be read, and for a witness that just woke to write the gap it woke to.
+            await moreBeats(forcing.stopTheWitness ? 12 : 3);
         } finally {
             processStalled = () => 0;
-            clearInterval(timer);
+            witness.off('message', onBeat);
         }
         const theirs = witnessGaps(file);
         let worst = 0;
