@@ -62,6 +62,24 @@ describe('elevationPlan', () => {
     });
 });
 
+describe('the program an elevated step runs', () => {
+    it('a system program named bare goes by its whole path, once and in a batch', () => {
+        expect(elevationPlan('win32', { command: 'certutil', args: ['-addstore'] }).args[3]).toContain("-FilePath 'C:\\Windows\\System32\\certutil.exe'");
+        const encoded = /-EncodedCommand','([^']+)'/.exec(elevationBatchPlan('win32', [{ command: 'certutil', args: [] }]).args[3]!)?.[1] ?? '';
+        expect(Buffer.from(encoded, 'base64').toString('utf16le')).toContain("& 'C:\\Windows\\System32\\certutil.exe'");
+    });
+
+    it('a bare name that is not a system program is refused before any prompt', () => {
+        expect(() => elevationPlan('win32', { command: 'caddy', args: [] })).toThrow(/caddy/);
+        expect(() => elevationBatchPlan('win32', [{ command: 'caddy', args: [] }])).toThrow(/caddy/);
+    });
+
+    it('CONTROL: a whole path stays as given; other systems are untouched', () => {
+        expect(elevationPlan('win32', { command: 'C:\\Tools\\caddy.exe', args: [] }).args[3]).toContain("-FilePath 'C:\\Tools\\caddy.exe'");
+        expect(elevationPlan('linux', { command: 'cp', args: [] }).args).toEqual(['cp']);
+    });
+});
+
 describe('the hosts-file write step', () => {
     it('copies the prepared file over the hosts file — Copy-Item on Windows, cp elsewhere', () => {
         expect(hostsWriteStep('win32', 'C:\\Users\\me\\.genie\\runtime\\hosts.next', 'C:\\Windows\\System32\\drivers\\etc\\hosts')).toEqual({
@@ -107,11 +125,11 @@ describe('ONE prompt for a batch (genie#604): elevationBatchPlan', () => {
         expect(plan.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command']);
         // COUNTED: one RunAs — one prompt — for two steps.
         expect(plan.args[3]!.match(/-Verb RunAs/g) ?? []).toHaveLength(1);
-        expect(plan.args[3]).toMatch(/^\$ErrorActionPreference='Stop'; \$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'powershell' -ArgumentList @\('-NoProfile','-NonInteractive','-EncodedCommand','[A-Za-z0-9+/=]+'\); if \(\$null -eq \$p\) \{ exit 1 \}; exit \$p\.ExitCode$/);
+        expect(plan.args[3]).toMatch(/^\$ErrorActionPreference='Stop'; \$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1\\.0\\\\powershell\\.exe' -ArgumentList @\('-NoProfile','-NonInteractive','-EncodedCommand','[A-Za-z0-9+/=]+'\); if \(\$null -eq \$p\) \{ exit 1 \}; exit \$p\.ExitCode$/);
         expect(decoded(plan).split('\n')).toEqual([
-            `& 'certutil' '-addstore' '-f' 'Root' 'C:\\Users\\Jo Example\\.genie\\runtime\\gen-ca\\ca.crt'`,
+            `& 'C:\\Windows\\System32\\certutil.exe' '-addstore' '-f' 'Root' 'C:\\Users\\Jo Example\\.genie\\runtime\\gen-ca\\ca.crt'`,
             'if ($LASTEXITCODE -ne 0) { exit 90 }',
-            `& 'powershell' '-NoProfile' '-NonInteractive' '-Command' 'Copy-Item -LiteralPath ''C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next'' -Destination ''C:\\Windows\\System32\\drivers\\etc\\hosts'' -Force'`,
+            `& 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' '-NoProfile' '-NonInteractive' '-Command' 'Copy-Item -LiteralPath ''C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next'' -Destination ''C:\\Windows\\System32\\drivers\\etc\\hosts'' -Force'`,
             'if ($LASTEXITCODE -ne 0) { exit 91 }',
             'exit 0',
         ]);

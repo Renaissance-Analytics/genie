@@ -68,6 +68,11 @@ function onPath(files: readonly string[], ports: LookupPorts): string | null {
 }
 
 /** The whole path of what this name would start with no shell, or `null` when nothing would. Windows only; elsewhere the name, as the OS's own search is already this. */
+/** Skeleton. */
+export function systemProgram(name: string, _env: NodeJS.ProcessEnv = process.env): string {
+    return name;
+}
+
 export function findProgram(name: string, ports: LookupPorts = { platform: process.platform, env: process.env }): string | null {
     if (ports.platform !== 'win32') return name;
     if (/[\\/]/.test(name) || WHOLE.test(name)) return name;

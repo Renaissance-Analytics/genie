@@ -153,6 +153,10 @@ describe('buildInnerFirewallScript (elevated delete-then-add)', () => {
 });
 
 describe('buildElevationCommand (single UAC prompt)', () => {
+    it('the elevated PowerShell goes by its whole path', () => {
+        expect(buildElevationCommand('QkFTRTY0')).toMatch(/-FilePath '[A-Za-z]:\\[^']*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe'/);
+    });
+
     it('elevates one hidden powershell with the encoded script + maps a decline', () => {
         const cmd = buildElevationCommand('QkFTRTY0');
         expect(cmd).toContain('Start-Process');
