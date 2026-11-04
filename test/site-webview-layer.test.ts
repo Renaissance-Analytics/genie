@@ -156,6 +156,9 @@ describe('its history and loading', () => {
         leave();
         views()[1]!.emit('did-stop-loading');
         expect(heard).toHaveLength(1);
+    });
+});
+
 describe('tabsChanged: when a panel may be closed for leaving its tabs', () => {
     // Batch SS on omarchy-test: Workspace mounts again before its settings arrive, so "no tabs yet" closed every page.
     it('a change in the same workspace', () => {
