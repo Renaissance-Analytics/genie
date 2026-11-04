@@ -78,7 +78,7 @@ class Cdp {
         if (!page) throw new Error(`no window on the debugger port: ${last}`);
         const c = new Cdp();
         c.#ws = new WebSocket(page.webSocketDebuggerUrl);
-        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (r) { c.#pending.delete(f.id); r(f); } });
+        c.#ws.addEventListener('message', (ev) => { const f = JSON.parse(ev.data); const r = c.#pending.get(f.id); if (typeof r === 'function') { c.#pending.delete(f.id); r(f); } });
         await new Promise((res, rej) => {
             c.#ws.addEventListener('open', res, { once: true });
             c.#ws.addEventListener('error', () => rej(new Error('CDP socket error')), { once: true });
@@ -91,6 +91,14 @@ class Cdp {
     }
     async evaluate(expression) {
         const f = await this.send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+        if (f.error) throw new Error(`CDP: ${JSON.stringify(f.error)}`);
+        if (f.result.exceptionDetails) throw new Error(`page threw: ${f.result.exceptionDetails.exception?.description ?? '?'}`);
+        return f.result.result.value;
+    }
+    /** A function in the page, its values passed as data: nothing of them becomes code. */
+    async call(functionDeclaration, ...args) {
+        const page = await this.send('Runtime.evaluate', { expression: 'globalThis' });
+        const f = await this.send('Runtime.callFunctionOn', { functionDeclaration, objectId: page.result.result.objectId, arguments: args.map((value) => ({ value })), returnByValue: true, awaitPromise: true });
         if (f.error) throw new Error(`CDP: ${JSON.stringify(f.error)}`);
         if (f.result.exceptionDetails) throw new Error(`page threw: ${f.result.exceptionDetails.exception?.description ?? '?'}`);
         return f.result.result.value;
@@ -113,10 +121,15 @@ function workspaceFolder(name, hook) {
     execFileSync('git', ['init', '-q'], { cwd: folder, windowsHide: true, stdio: 'ignore' });
     return folder;
 }
-const open = (cdp, id) => cdp.evaluate(`window.location.hash = '#genie://workspace/' + ${JSON.stringify(id)}; true`);
-const stepFor = (id) => `document.querySelector('[data-trust-step=' + ${JSON.stringify(JSON.stringify(id))} + ']')`;
-const add = (cdp, path) => cdp.evaluate(`window.genie.workspaces.confirmAdd(${JSON.stringify(path)}).then((r) => JSON.stringify(r))`);
-const idOf = async (cdp, path) => cdp.evaluate(`window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === ${JSON.stringify(path)})?.id ?? null)`);
+/** A workspace id, as text in an expression: only a word, or this stops here. */
+const word = (id) => {
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]+$/.test(id)) throw new Error(`not a workspace id: ${String(id)}`);
+    return id;
+};
+const open = (cdp, id) => cdp.evaluate(`window.location.hash = '#genie://workspace/${word(id)}'; true`);
+const stepFor = (id) => `document.querySelector('[data-trust-step="${word(id)}"]')`;
+const add = (cdp, path) => cdp.call('function (path) { return window.genie.workspaces.confirmAdd(path).then((r) => JSON.stringify(r)); }', path);
+const idOf = async (cdp, path) => cdp.call('function (path) { return window.genie.snapshot().then((s) => s.workspaces.find((w) => w.path === path)?.id ?? null); }', path);
 
 console.log('\nTHE TRUST STEP — what a person sees, in the real app\n');
 const record = join(home, '.genie', 'runtime', 'workspace-trust.json');
@@ -181,7 +194,7 @@ try {
     await open(cdp, otherId);
     check(await waitFor(cdp, `Boolean(${stepFor(otherId)})`), '14. CONTROL: after the relaunch that one still asks, so a missing step below means something');
     await open(cdp, acmeId);
-    check(await waitFor(cdp, `document.querySelector('[data-surface="workspace"]')?.getAttribute('data-workspace') === ${JSON.stringify(acmeId)}`), '15. the trusted workspace opens');
+    check(await waitFor(cdp, `document.querySelector('[data-surface="workspace"]')?.getAttribute('data-workspace') === '${word(acmeId)}'`), '15. the trusted workspace opens');
     // Long enough for a step that was coming to have come: the control above came in this run.
     await sleep(3000);
     check(await cdp.evaluate(`!${stepFor(acmeId)}`), '16. it reads trusted after a relaunch');
