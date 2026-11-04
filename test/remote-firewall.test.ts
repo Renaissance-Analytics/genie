@@ -152,6 +152,13 @@ describe('buildInnerFirewallScript (elevated delete-then-add)', () => {
     });
 });
 
+describe('the elevated script', () => {
+    it('runs netsh by its whole path, both lines', () => {
+        const lines = buildInnerFirewallScript(4123).split('\n').slice(0, 2);
+        for (const line of lines) expect(line).toMatch(/^& '[A-Za-z]:\\[^']*\\System32\\netsh\.exe' /);
+    });
+});
+
 describe('buildElevationCommand (single UAC prompt)', () => {
     it('the elevated PowerShell goes by its whole path', () => {
         expect(buildElevationCommand('QkFTRTY0')).toMatch(/-FilePath '[A-Za-z]:\\[^']*\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe'/);
