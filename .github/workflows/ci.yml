@@ -378,6 +378,14 @@ jobs:
       - name: build the installers
         run: npx electron-builder --publish never
 
+      # The fuse as the built binary has it, not as the config asks.
+      - name: the cookie fuse is on in what was packaged
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then app=$(ls release/win-unpacked/*.exe | head -1); else app=$(ls -d release/linux-unpacked/[gG]enie* | head -1); fi
+          npx --yes @electron/fuses read --app "$app" | tee fuses.txt
+          grep -q "EnableCookieEncryption is Enabled" fuses.txt
+
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.
       - uses: actions/upload-artifact@v4
