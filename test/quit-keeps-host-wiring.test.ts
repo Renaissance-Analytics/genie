@@ -62,7 +62,7 @@ describe('main.ts', () => {
     it('the tray offers the host’s verbs while the host is genie-host, and says what it runs', () => {
         const src = main();
         // ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time.
-        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ if \(confirmTray\('restart'\)\) restartGenie\(\); \}, onShutDown: \(\) => \{ if \(confirmTray\('shut-down'\)\) requestQuit\('shut-down'\); \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
+        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ if \(confirmTray\('restart'\)\) restartGenie\(\); \}, onShutDown: \(\) => \{ if \(confirmTray\('shut-down'\)\) \{ leftRunning\.set\(false\); requestQuit\('shut-down'\); \} \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
         expect(block(src, 'function refreshTray', '\n}\n')).toMatch(/trayTooltip\(held, signedOut, paused, designLogin, trayWaiting, hostNow\)/);
     });
 
