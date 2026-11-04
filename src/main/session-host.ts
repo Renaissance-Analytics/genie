@@ -360,14 +360,14 @@ export interface GenieInstructionFiles { readonly promptFile: string; readonly p
 /**
  * A CLAUDE AGENT IN AN UNTRUSTED WORKSPACE: the person's own settings and no project's, Genie's own MCP servers and no folder's, and Genie's words from files of its own. Measured against a stand-in API (CLI 2.1.317), through a fresh launch and
  * --resume, and by prism against real CLIs: hooks given by --settings and servers given by --mcp-config stay. Every construction carries these: nothing sticks between launches.
- * The two file flags go through `binaryArgs` until prism-acp has options for them; a configured script stays first, as they are arguments to it.
  */
-export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { settingSources?: readonly ('user' | 'project' | 'local')[]; strictMcpConfig?: boolean; binaryArgs?: readonly string[] } {
+export function claudeTrustOptions(untrusted: GenieInstructionFiles | null): { settingSources?: readonly ('user' | 'project' | 'local')[]; strictMcpConfig?: boolean; appendSystemPromptFile?: string; pluginDirs?: readonly string[] } {
     if (untrusted === null) return {};
     return {
         settingSources: ['user'],
         strictMcpConfig: true,
-        binaryArgs: ['--append-system-prompt-file', untrusted.promptFile, '--plugin-dir', untrusted.pluginDir],
+        appendSystemPromptFile: untrusted.promptFile,
+        pluginDirs: [untrusted.pluginDir],
     };
 }
 
