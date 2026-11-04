@@ -1,4 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
@@ -137,6 +138,8 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** This window's local connection status; absent when connected to another host. */
+    localProtocol?: LocalProtocolControl;
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string, name?: string | null): Promise<void>; onReconnectAsked?(listener: () => void): () => void };
     /**
@@ -593,12 +596,13 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
 };
 
 /**
- * WHAT THE PRELOAD EXPOSES: the bridge, except an agent's live detail, which crosses as main's PATCH
+ * WHAT THE PRELOAD EXPOSES: unmoved bridge families and an agent's live detail as main's PATCH
  * (`subscribeAgentWire`) and is rebuilt on the page's side by {@link pageBridge}. Whatever crosses `contextBridge` is
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'localProtocol'> & {
+    workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
     subscribeAgentWire: AgentWireSubscribe<Omit<AgentDetail, 'rows'>, TimedEvent>;
 };
 
@@ -631,8 +635,10 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const known = pageBridges.get(preload);
     if (known !== undefined) return known;
     const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(preload.subscribeAgentWire);
+    const local = localSession(typeof window === 'undefined' ? undefined : window.genieLocalProtocol);
     const { subscribeAgentWire: _wire, ...rest } = preload;
-    const bridge: GenieBridge = { ...rest, subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
+    const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, localProtocol: local.control,
+        subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     return bridge;
 }

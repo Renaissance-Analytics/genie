@@ -308,6 +308,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             settings: (workspaceId) => answer('workspaces.settings', workspaceId),
             setSetting: (workspaceId, key, value) => answer('workspaces.setSetting', workspaceId, key, value),
             resetSetting: (workspaceId, key) => answer('workspaces.resetSetting', workspaceId, key),
+            ...(auth.kind === 'local' ? { onSettingsChanged: (listener: (id: string) => void) => on('workspace-settings-changed', (id) => listener(id as string)) } : {}),
             setGoverns: (workspaceId, childIds) => answer('workspaces.setGoverns', workspaceId, [...childIds]),
             setDefaultAgent: (workspaceId, agentId) => answer('workspaces.setDefaultAgent', workspaceId, agentId),
             setColor: (workspaceId, color) => answer('workspaces.setColor', workspaceId, color),
