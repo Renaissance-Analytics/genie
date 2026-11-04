@@ -62,11 +62,15 @@ describe('elevationPlan', () => {
     });
 });
 
+// The system folder as this machine spells it (the Windows VM's is C:\WINDOWS), read back as the rows below write it. The path still has to be the whole one.
+const SYSTEM_ROOT = process.env.SystemRoot ?? process.env.SYSTEMROOT ?? 'C:\\Windows';
+const asWritten = (text: string): string => text.split(SYSTEM_ROOT).join('C:\\Windows');
+
 describe('the program an elevated step runs', () => {
     it('a system program named bare goes by its whole path, once and in a batch', () => {
-        expect(elevationPlan('win32', { command: 'certutil', args: ['-addstore'] }).args[3]).toContain("-FilePath 'C:\\Windows\\System32\\certutil.exe'");
+        expect(asWritten(elevationPlan('win32', { command: 'certutil', args: ['-addstore'] }).args[3]!)).toContain("-FilePath 'C:\\Windows\\System32\\certutil.exe'");
         const encoded = /-EncodedCommand','([^']+)'/.exec(elevationBatchPlan('win32', [{ command: 'certutil', args: [] }]).args[3]!)?.[1] ?? '';
-        expect(Buffer.from(encoded, 'base64').toString('utf16le')).toContain("& 'C:\\Windows\\System32\\certutil.exe'");
+        expect(asWritten(Buffer.from(encoded, 'base64').toString('utf16le'))).toContain("& 'C:\\Windows\\System32\\certutil.exe'");
     });
 
     it('a bare name that is not a system program is refused before any prompt', () => {
@@ -133,8 +137,8 @@ describe('ONE prompt for a batch (genie#604): elevationBatchPlan', () => {
         expect(plan.args.slice(0, 3)).toEqual(['-NoProfile', '-NonInteractive', '-Command']);
         // COUNTED: one RunAs — one prompt — for two steps.
         expect(plan.args[3]!.match(/-Verb RunAs/g) ?? []).toHaveLength(1);
-        expect(plan.args[3]).toMatch(/^\$ErrorActionPreference='Stop'; \$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe' -ArgumentList @\('-NoProfile','-NonInteractive','-EncodedCommand','[A-Za-z0-9+/=]+'\); if \(\$null -eq \$p\) \{ exit 1 \}; exit \$p\.ExitCode$/);
-        expect(decoded(plan).split('\n')).toEqual([
+        expect(asWritten(plan.args[3]!)).toMatch(/^\$ErrorActionPreference='Stop'; \$p = Start-Process -Wait -PassThru -Verb RunAs -FilePath 'C:\\Windows\\System32\\WindowsPowerShell\\v1\.0\\powershell\.exe' -ArgumentList @\('-NoProfile','-NonInteractive','-EncodedCommand','[A-Za-z0-9+/=]+'\); if \(\$null -eq \$p\) \{ exit 1 \}; exit \$p\.ExitCode$/);
+        expect(asWritten(decoded(plan)).split('\n')).toEqual([
             `& 'C:\\Windows\\System32\\certutil.exe' '-addstore' '-f' 'Root' 'C:\\Users\\Jo Example\\.genie\\runtime\\gen-ca\\ca.crt'`,
             'if ($LASTEXITCODE -ne 0) { exit 90 }',
             `& 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe' '-NoProfile' '-NonInteractive' '-Command' 'Copy-Item -LiteralPath ''C:\\Users\\Jo Example\\.genie\\runtime\\hosts.next'' -Destination ''C:\\Windows\\System32\\drivers\\etc\\hosts'' -Force'`,
