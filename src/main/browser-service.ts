@@ -15,6 +15,8 @@ export type BrowserActivation = 'user-gesture' | 'background';
 
 export type BrowserEvent =
     | { readonly kind: 'facts'; readonly facts: BrowserFacts }
+    /** Whether a window holds the front door. With none, `.gen` pages cannot load until P5 moves the door to the host. */
+    | { readonly kind: 'door'; readonly up: boolean }
     | { readonly kind: 'open'; readonly url: string; readonly activation: BrowserActivation };
 
 const HELD_LIMIT = 20;
@@ -28,6 +30,7 @@ function isFacts(value: unknown): value is BrowserFacts {
 export class BrowserService {
     readonly #listeners = new Set<(event: BrowserEvent) => void>();
     #facts: BrowserFacts | null = null;
+    #publisher: string | null = null;
     #browser: string | null = null;
     #held: Array<Extract<BrowserEvent, { kind: 'open' }>> = [];
 
@@ -46,7 +49,10 @@ export class BrowserService {
             case 'publish': {
                 if (!isFacts(args[0])) throw new Error('those are not the facts a browser needs');
                 this.#facts = args[0];
+                const wasDown = this.#publisher === null;
+                this.#publisher = from;
                 this.#emit({ kind: 'facts', facts: this.#facts });
+                if (wasDown) this.#emit({ kind: 'door', up: true });
                 return null;
             }
             case 'open': {
@@ -65,7 +71,7 @@ export class BrowserService {
                 const held = this.#held;
                 this.#held = [];
                 for (const event of held) this.#emit(event);
-                return { facts: this.#facts };
+                return { facts: this.#facts, doorUp: this.#publisher !== null };
             }
             default:
                 throw new Error(`the browser service has no ${method}`);
@@ -75,5 +81,9 @@ export class BrowserService {
     /** A connection went. Only the browser's own going means there is no browser. */
     dropped(connection: string): void {
         if (this.#browser === connection) this.#browser = null;
+        if (this.#publisher === connection) {
+            this.#publisher = null;
+            this.#emit({ kind: 'door', up: false });
+        }
     }
 }
