@@ -216,7 +216,7 @@ export function caExportArgv(dest: string): [string, string[]] {
         '$all = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2Collection',
         'try {',
         '  $sst = Join-Path $env:TEMP ("genie-roots-" + [Guid]::NewGuid().ToString("N") + ".sst")',
-        '  $null = & certutil -generateSSTFromWU $sst 2>&1',
+        '  $null = & "$env:SystemRoot\\System32\\certutil.exe" -generateSSTFromWU $sst 2>&1',
         '  if (Test-Path $sst) { $all.Import($sst); Remove-Item $sst -Force -ErrorAction SilentlyContinue }',
         '} catch { }',
         'foreach ($c in Get-ChildItem Cert:\\LocalMachine\\Root) { $null = $all.Add($c) }',

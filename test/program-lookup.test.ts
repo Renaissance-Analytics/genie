@@ -3,7 +3,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { hardenProcess, notFoundWords, resolveProgram } from '../src/core/program-lookup.js';
+import { hardenProcess, notFoundWords, resolveProgram, systemProgram } from '../src/core/program-lookup.js';
 import { open as openEngine } from '@particle-academy/fancy-pty';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
 import { fancyTermPort } from '../src/main/fancy-term-port.js';
@@ -179,6 +179,24 @@ describe('a provider, whose environment is an allow-list', () => {
     });
 });
 
+describe('a system program by its whole path, for text another program runs', () => {
+    const env = { SystemRoot: 'D:\\Win' };
+    it.each([
+        ['powershell', 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'],
+        ['powershell.exe', 'D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe'],
+        ['certutil', 'D:\\Win\\System32\\certutil.exe'],
+    ])('%s', (name, whole) => { expect(systemProgram(name, env)).toBe(whole); });
+
+    it('with no usable SystemRoot, the usual folder', () => {
+        expect(systemProgram('certutil', {})).toBe('C:\\Windows\\System32\\certutil.exe');
+        expect(systemProgram('certutil', { SystemRoot: 'relative' })).toBe('C:\\Windows\\System32\\certutil.exe');
+    });
+
+    it('a name it does not know is refused, not guessed', () => {
+        expect(() => systemProgram('caddy', env)).toThrow(/caddy/);
+    });
+});
+
 describe('no bare name is spawned', () => {
     const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
     const walk = (dir: string): string[] => readdirSync(dir).flatMap((name) => { const path = `${dir}/${name}`; return statSync(path).isDirectory() ? walk(path) : /\.tsx?$/.test(name) ? [path] : []; });
@@ -188,6 +206,25 @@ describe('no bare name is spawned', () => {
 
     it('under src/main and src/core', () => {
         expect(['src/main', 'src/core'].flatMap(walk).filter((file) => BARE.test(code(file)))).toEqual([]);
+    });
+
+    // What the spawn rows above cannot see: a program named inside text that another program runs.
+    const IN_A_SCRIPT = [/-FilePath\s+'[^'\\/$]+'/, /(?<!&)&\s+'?[a-zA-Z][\w.-]*'?\s+-/];
+    const namesOneInAScript = (text: string) => IN_A_SCRIPT.some((reading) => reading.test(text));
+    it.each([
+        ["Start-Process -FilePath 'powershell.exe' -Verb RunAs"],
+        ["Start-Process -Wait -FilePath 'powershell' -ArgumentList @()"],
+        ['$null = & certutil -generateSSTFromWU $sst'],
+        ["& 'certutil' -addstore"],
+    ])('the reading catches a bare name in a script: %s', (text) => { expect(namesOneInAScript(text)).toBe(true); });
+    it.each([
+        ["Start-Process -FilePath 'C:\\Windows\\System32\\cmd.exe'"],
+        ['Start-Process -FilePath ${psQuote(path)}'],
+        ['one && two -x'],
+    ])('the reading leaves: %s', (text) => { expect(namesOneInAScript(text)).toBe(false); });
+
+    it('no script under src/main and src/core names a program bare', () => {
+        expect(['src/main', 'src/core'].flatMap(walk).filter((file) => namesOneInAScript(code(file)))).toEqual([]);
     });
 
     it('the central runner resolves, and a line given to a shell stays a line', () => {
