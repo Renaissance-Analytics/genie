@@ -163,11 +163,21 @@ try {
 
     // Leaving the tab keeps the page: the same guest, not reloaded.
     const before = (await webviews()).find((t) => t.url.includes(HOST))?.id;
+    const held = await Cdp.connect((await webviews()).find((t) => t.url.includes(HOST)).webSocketDebuggerUrl);
+    await held.evaluate('window.kept = 42; true');
     await cdp.evaluate(`window.location.hash = '#genie://dashboard'; true`);
     await sleep(1500);
     const hidden = await cdp.evaluate(`(() => { const v = [...document.querySelectorAll('webview')].find((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)})); return v ? getComputedStyle(v).visibility : 'no such webview'; })()`);
     check(hidden === 'hidden', 'off screen, the page is hidden', String(hidden));
     check((await webviews()).find((t) => t.url.includes(HOST))?.id === before && before !== undefined, 'and the same guest is still there', String(before));
+    // And back: Genie's Workspace mounts again, before its settings have arrived. Batch SS on omarchy-test: the page was closed here.
+    await cdp.evaluate(`window.location.hash = '#genie://workspace/${WORKSPACE}?view=tab:sitetab'; true`);
+    check(await until('the panel again', 20_000, () => cdp.evaluate(`!!document.querySelector('[data-site-panel-box]')`)) === true, 'back on the tab, the panel is there');
+    await sleep(2000);
+    check((await webviews()).find((t) => t.url.includes(HOST))?.id === before, 'back on the tab: the same guest', JSON.stringify((await webviews()).map((t) => t.id)));
+    check(await held.evaluate('String(window.kept)').catch((e) => e.message) === '42', 'back on the tab: its page as it was left');
+    check(await cdp.evaluate(`[...document.querySelectorAll('webview')].filter((w) => (w.getAttribute('src') || '').includes(${JSON.stringify(HOST)})).map((w) => getComputedStyle(w).visibility).join()`) === 'visible', 'back on the tab: one page, visible');
+    held.close();
     cdp.close();
 } catch (error) {
     check(false, 'the run', error.stack ?? String(error));
