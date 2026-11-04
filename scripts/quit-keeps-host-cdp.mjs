@@ -409,6 +409,10 @@ function finish() {
             const log = join(OUT, `quit-keeps-host-${label}.log`);
             if (existsSync(log)) { console.log(`\n--- ${log} (last 40 lines) ---`); console.log(readOr(log).split('\n').slice(-40).join('\n')); }
         }
+        // Where the window's boot stopped: batch SS on Windows had a window process with DevTools up and no page for 90 s.
+        for (const log of [LIFECYCLE, HOST_LOG]) {
+            if (existsSync(log)) { console.log(`\n--- ${log} (last 60 lines) ---`); console.log(readOr(log).split('\n').slice(-60).join('\n')); }
+        }
         process.exit(1);
     }
     console.log(`\n[${since()}] QUIT KEEPS THE HOST — measured: the UI closed and opened again over the same host and providers, every tick kept; "Shut down everything" ended them.`);
