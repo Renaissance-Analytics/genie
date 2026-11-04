@@ -19,8 +19,9 @@ function setup(hosts = ['moic.gen']) {
     guardSiteWebviews(contents, { enabledHosts: () => hosts, sessionForHost, openInWindow, openExternal, onGuest });
     const attach = (src: string, prefs: Record<string, unknown> = {}, params: Record<string, unknown> = {}) => {
         const event = { preventDefault: vi.fn() };
-        contents.emit('will-attach-webview', event, prefs, { src, ...params });
-        return { refused: event.preventDefault.mock.calls.length > 0, prefs, params };
+        const handed = { src, ...params };
+        contents.emit('will-attach-webview', event, prefs, handed);
+        return { refused: event.preventDefault.mock.calls.length > 0, prefs, params: handed as Record<string, unknown> };
     };
     const guest = () => {
         const g = Object.assign(new EventEmitter(), { setWindowOpenHandler: vi.fn(), stop: vi.fn() });

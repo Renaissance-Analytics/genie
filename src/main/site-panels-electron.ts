@@ -58,12 +58,12 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
 
     return {
         attach(window: BrowserWindow): void {
-            guardSiteWebviews<Electron.Session, WebContents>(window.webContents, {
+            guardSiteWebviews(window.webContents, {
                 enabledHosts: options.enabledHosts,
                 sessionForHost: (host) => storeFor(host)?.ses ?? null,
                 openInWindow: options.openInWindow,
                 openExternal: (url) => { void shell.openExternal(url).catch(() => {}); },
-                onGuest: (guest) => {
+                onGuest: (guest: WebContents) => {
                     const detach = attachPageNavigation(`panel:${guest.id}`, guest);
                     guest.once('destroyed', detach);
                 },
