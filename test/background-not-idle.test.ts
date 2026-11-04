@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { BackgroundCount } from '../src/core/background-count.js';
 import { statePill } from '../src/core/agent-view.js';
 import { chatContext } from '../src/core/chat-view.js';
-import { statusOf, type AgentRow } from '../src/core/dashboard-view.js';
+import { groupByStatus, groupByWorkspace, statusOf, summaryChips, type AgentRow } from '../src/core/dashboard-view.js';
 import { agentRowFor, type LiveSession } from '../src/core/roster.js';
 import { toStreamEvent, type StreamEvent } from '../src/core/stream-event.js';
 import type { TimedEvent } from '../src/core/stream-view.js';
@@ -40,6 +40,77 @@ describe('wherever the agent is seen', () => {
         expect(statePill(live({ background: 0 }), () => 0).word).not.toMatch(/background/);
         expect(statusOf(row({ background: 0 })).word).toBe('Idle');
         expect(statusOf(row({ background: 2, state: 'waiting', ask: 'Run it?' })).word).toBe('Waiting on you');
+    });
+});
+
+/**
+ * "AN AGENT THAT IS WORKING IN THE BACKGROUND IS NOT AN IDLE AGENT, JUST AN IDLE CHAT" (the owner, genie#1528): the row read
+ * `Working · 5 in the background` under the Idle heading, and the header counted it idle. `row.state` stays `idle`, because
+ * its chat IS idle and takes a prompt or mail at once: only how the board groups, counts and orders the row changes.
+ */
+describe('the board groups, counts and orders it as Working', () => {
+    const grouped = (rows: readonly AgentRow[]) => groupByStatus(rows).map((g) => [g.label, g.rows.map((r) => r.id)]);
+    const chips = (rows: readonly AgentRow[]) => summaryChips(rows).map((c) => c.label);
+    const bg = row({ id: 'bg', background: 5 });
+    const quiet = row({ id: 'quiet' });
+    const busy = row({ id: 'busy', state: 'working' });
+
+    it('in the Working group, in the order given', () => {
+        expect(grouped([quiet, bg, busy])).toEqual([['Working', ['bg', 'busy']], ['Idle', ['quiet']]]);
+    });
+
+    it('counted as working in the header, never as idle', () => {
+        expect(chips([quiet, bg, busy])).toEqual(['2 working', '1 idle']);
+        expect(chips([bg])).toEqual(['1 working']);
+    });
+
+    it('By workspace: ordered with Working too, ahead of the idle rows', () => {
+        expect(groupByWorkspace([quiet, bg, busy], ['ws'])[0]!.rows.map((r) => r.id)).toEqual(['bg', 'busy', 'quiet']);
+    });
+
+    it('CONTROL: a count of 0, or none reported, is Idle: word, group and chip', () => {
+        for (const background of [0, null, undefined]) {
+            const r = row({ id: 'r', background });
+            expect(statusOf(r).word).toBe('Idle');
+            expect(grouped([r])).toEqual([['Idle', ['r']]]);
+            expect(chips([r])).toEqual(['1 idle']);
+        }
+    });
+
+    it('CONTROL: a fresh agent reads idle, with or without a session', () => {
+        const fresh = [agentRowFor(record, null, () => 2), agentRowFor(record, live({ background: 0 }), () => 2)];
+        for (const r of fresh) expect(grouped([r])).toEqual([['Idle', ['a1']]]);
+    });
+
+    it('CONTROL: what already outranks it keeps its place: waiting, broken, and Cooling (with Working, as ever)', () => {
+        const waiting = row({ id: 'waiting', state: 'waiting', ask: 'Run it?', background: 2 });
+        const broken = row({ id: 'broken', state: 'broken', reason: 'gone', background: 2 });
+        const cooling = row({ id: 'cooling', state: 'cooling' });
+        const coolingBg = row({ id: 'coolingBg', state: 'cooling', background: 2 });
+        const rows = [waiting, broken, cooling, coolingBg];
+        expect(grouped(rows)).toEqual([['Waiting on you', ['waiting']], ['Broken', ['broken']], ['Working', ['cooling', 'coolingBg']]]);
+        expect(chips(rows)).toEqual(['1 waiting on you', '1 broken', '2 working']);
+        expect(statusOf(cooling)).toEqual({ word: 'Cooling', detail: null, tone: 'cool' });
+    });
+
+    it('CONTROL: only a declared agent: an observed row stays Quiet and a remote one Unreachable, grouped as they read', () => {
+        const observed = row({ id: 'observed', fidelity: 'observed', background: 3 });
+        const remote = row({ id: 'remote', fidelity: 'remote', background: 3 });
+        expect(statusOf(observed).word).toBe('Quiet');
+        expect(statusOf(remote).word).toBe('Unreachable');
+        expect(grouped([observed, remote])).toEqual([['Idle', ['observed', 'remote']]]);
+        expect(chips([observed])).toEqual(['1 idle']);
+    });
+
+    it('a stopped process runs nothing: its last count is not work (the header and the chat already ask `running`)', () => {
+        const r = agentRowFor(record, live({ running: false, background: 3 }), () => 2);
+        expect(r.background).toBeNull();
+        expect(statusOf(r).word).toBe('Idle');
+        expect(grouped([r])).toEqual([['Idle', ['a1']]]);
+    });
+
+    it('its STATE stays idle: what reads the state for behaviour sees what it saw', () => {
+        expect(agentRowFor(record, live({ background: 3 }), () => 2).state).toBe('idle');
     });
 });
 
