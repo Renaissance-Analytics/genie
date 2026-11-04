@@ -225,6 +225,17 @@ describe('the trust step, through the real composition', () => {
         expect(existsSync(join(repo, '.mcp.json'))).toBe(false);
     });
 
+    it('a yes that cannot be saved: refused, and it stays untrusted when next read too', async () => {
+        const record = join(dir, 'home', 'runtime', 'workspace-trust.json');
+        rmSync(record, { force: true });
+        mkdirSync(record, { recursive: true });
+        writeFileSync(join(record, 'in-the-way'), 'x');
+        await expect(handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'acme', workspacePath: repo }, state())).rejects.toThrow();
+        expect(services.workspaceTrust.view('acme')).toMatchObject({ trusted: false });
+        expect(await services.workspaceTrust.refresh('acme')).toMatchObject({ trusted: false });
+        expect((await stepOf())?.workspaceId).toBe('acme');
+    });
+
     it('a workspace that is not there: refused, in words', async () => {
         await expect(handleFeatureAction(services, { kind: 'workspace.trust', workspaceId: 'gone', workspacePath: repo }, state())).rejects.toThrow(/gone/);
     });
