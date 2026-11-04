@@ -92,7 +92,7 @@ const targets = async (port = PORT) => (await fetch(`http://127.0.0.1:${port}/js
 async function pageFor(predicate) { return until('page target', async () => (await targets()).find((t) => t.webSocketDebuggerUrl && predicate(t)), 60_000); }
 const evaluateFn = (cdp, fn, arg) => cdp.evaluate(`(${fn.toString()})(${JSON.stringify(arg)})`);
 
-// Runs before the page's modules, alongside the real preload; does not replace its port/client.
+// Observe the real preload after it is ready, before opening an explicit native probe connection.
 function browserProbe() {
     const attach = () => {
         if (!window.genieLocalProtocol) return;
@@ -125,15 +125,27 @@ function browserProbe() {
     attach(); setTimeout(() => clearInterval(timer), 10_000);
 }
 async function attachPage(cdp) {
-    if (!cdp.probeInstalled) {
-        await cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `(${browserProbe.toString()})()` });
-        cdp.probeInstalled = true;
-    }
     await cdp.send('Page.reload');
-    try { await until('native owner welcome', () => cdp.evaluate('window.__doorCdp?.welcome?.isOwner === true'), 30_000); }
-    catch (error) {
-        const reason = await cdp.evaluate('window.__doorCdp?.frames.find((f) => f.frame?.kind === "refused")?.frame.reason').catch(() => null);
-        throw new Error(`${error.message}${reason ? `; actual refusal: ${reason}` : ''}`);
+    await until('native preload after reload', () => cdp.evaluate('typeof window.genieLocalProtocol === "object" && document.readyState === "complete"'), 30_000);
+    await cdp.evaluate(`(${browserProbe.toString()})()`);
+    const answer = await cdp.evaluate(`(async () => {
+        const s=window.__doorCdp, after=s.total, handle='cdp_'+crypto.randomUUID();
+        window.genieLocalProtocol.send('open',handle,'');
+        window.genieLocalProtocol.send('frame',handle,JSON.stringify({kind:'hello',auth:{kind:'local'},label:'native door probe'}));
+        return (await s.wait(after,f=>f.handle===handle&&(f.frame?.kind==='welcome'||f.frame?.kind==='refused'))).frame;
+    })()`);
+    demand(answer.kind === 'welcome' && answer.isOwner, `actual refusal: ${answer.reason ?? 'no owner welcome'}`);
+    if (cdp === main) {
+        // Opening replaces the App's connection. Restore it using the real UI, so later tab
+        // creation still uses the product's stable family bridge. Other probe windows use
+        // their explicit native connection directly and are reported as such.
+        await until('actual main Retry button after replacement', () => cdp.evaluate(`Array.from(document.querySelectorAll('[role="alert"] button')).some(b=>b.textContent.trim()==='Retry')`));
+        await cdp.evaluate(`(async () => {
+            const s=window.__doorCdp, after=s.total;
+            Array.from(document.querySelectorAll('[role="alert"] button')).find(b=>b.textContent.trim()==='Retry').click();
+            await s.wait(after,f=>f.frame?.kind==='welcome');
+            return true;
+        })()`);
     }
 }
 const call = (cdp, method, args) => evaluateFn(cdp, ({ method, args }) => window.__doorCdp.call(method, args), { method, args });
