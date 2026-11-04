@@ -526,6 +526,8 @@ export class SessionHost {
         mcpServersFor?: (record: AgentRecord) => readonly McpServer[];
         /** Genie's own files when this agent's workspace is not trusted, or `null` when it is. Asked before each launch; a failure starts nothing. */
         untrustedFilesFor?: (record: AgentRecord) => Promise<GenieInstructionFiles | null>;
+        /** Skeleton. */
+        untrustedNow?: (record: AgentRecord) => boolean;
         /** Private session credentials, prepared before constructing or starting either provider. */
         prepareMcpServers?: (record: AgentRecord, cwd: string, signal: AbortSignal) => Promise<readonly McpServer[]>;
         /**
@@ -1243,6 +1245,16 @@ export class SessionHost {
     /** The prompt held under `id` (`deliver`'s answer) is still waiting in the agent's current run. */
     hasQueuedPrompt(agentId: AgentId, id: string): boolean {
         return this.#running.get(agentId)?.session.hasQueuedPrompt(id) ?? false;
+    }
+
+    /** Skeleton. */
+    launchedUntrusted(_agentId: AgentId): boolean | null {
+        return null;
+    }
+
+    /** Skeleton. */
+    quiet(_agentId: AgentId): boolean {
+        return false;
     }
 
     /** The agent's current RUN while it has a session, promptable or not; `null` when it has none. */

@@ -558,6 +558,11 @@ export class AgentSession {
         this.#changed();
     }
 
+    /** Skeleton. */
+    get quiet(): boolean {
+        return true;
+    }
+
     get turnState(): TurnState {
         return this.#turnState;
     }

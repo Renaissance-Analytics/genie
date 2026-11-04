@@ -23,6 +23,8 @@ export interface WorkspaceTrustPorts extends TrustListPorts {
     record(): { readonly carried: readonly string[]; readonly workspaces: Readonly<Record<string, string>> };
     recordWorkspace(workspaceId: string, hash: string): Promise<void>;
     approveSites(workspaceId: string): Promise<void>;
+    /** Skeleton. */
+    verdictMoved?(workspaceId: string): void;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
