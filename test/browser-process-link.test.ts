@@ -29,6 +29,7 @@ function setup(clients: Array<ReturnType<typeof fakeClient> | null>) {
         door: vi.fn(),
         open: vi.fn(),
         quit: vi.fn(),
+        linked: vi.fn(),
         log: vi.fn(),
     };
     return { ports, lose: () => lost() };
