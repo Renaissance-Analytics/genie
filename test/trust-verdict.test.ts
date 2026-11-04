@@ -7,7 +7,7 @@ import type { ProcessTree } from '../src/core/process-tree.js';
 import { AgentSession, COOLING_MS, type DriverEvents, type PermissionRequestLike, type SessionDriverFactory } from '../src/core/session.js';
 import { openDurableStore } from '../src/core/thread-store.js';
 import { SessionHost, type DriverFor, type GenieInstructionFiles } from '../src/main/session-host.js';
-import { NOW_TRUSTED, TRUSTED_AGAIN, UNTRUSTED_AT_TURN_END, UNTRUSTED_NOW, TrustVerdicts } from '../src/main/trust-verdict.js';
+import { NOW_TRUSTED, TRUSTED_AGAIN, UNTRUSTED_AT_NEXT_WORK, UNTRUSTED_AT_TURN_END, TrustVerdicts } from '../src/main/trust-verdict.js';
 import { WorkspaceTrust } from '../src/main/workspace-trust-host.js';
 
 /**
@@ -77,6 +77,9 @@ function rig(startUntrusted: boolean, options: { launchGate?: Promise<void>; res
         untrustedNow: () => untrusted,
         launchedUntrusted: (id) => host.launchedUntrusted(id),
         quiet: (id) => host.quiet(id),
+        inTurn: (id) => host.inTurn(id),
+        workWaiting: (id) => host.workWaiting(id),
+        releaseWork: (id) => host.releaseWork(id),
         runOf: (id) => host.runOf(id),
         hold: (id, text) => { const taken = host.holdForNextWork(id, text); if (taken) held.push(text); return taken; },
         withdraw: (id) => host.withdrawHeld(id),
@@ -86,7 +89,9 @@ function rig(startUntrusted: boolean, options: { launchGate?: Promise<void>; res
             if (options.restartAnswer) return options.restartAnswer;
             host.stop(id);
             await host.ended(id);
-            return host.start(record, dir);
+            const started = host.start(record, dir);
+            await host.deliverOwed(id);
+            return started;
         },
     });
     const off = host.subscribe((id) => verdicts.check(id));
@@ -126,8 +131,8 @@ describe('the answer to a shell call', () => {
     });
 });
 
-describe('gone untrusted: a restart, when the turn has ended', () => {
-    it('mid-turn: the chat says so once, the turn and the message sent during it stand, and the restart comes after the quiet', async () => {
+describe('gone untrusted, in a turn: a restart when it has ended, and no work reaches the old session', () => {
+    it('the chat says so once, the turn stands, and a message sent during it goes to the new run', async () => {
         const t = rig(false);
         t.host.start(t.record, dir);
         await flush();
@@ -141,8 +146,7 @@ describe('gone untrusted: a restart, when the turn has ended', () => {
 
         t.host.prompt(t.record.id, 'and this', 'you');
         await flush();
-        expect(t.restarts).toEqual([]);
-        expect(t.fakes[0]!.prompts.join('\n')).toContain('and this');
+        expect(t.fakes[0]!.prompts).toEqual(['go']);
 
         t.endTurn();
         await flush();
@@ -154,19 +158,22 @@ describe('gone untrusted: a restart, when the turn has ended', () => {
         await flush();
         expect(t.restarts).toEqual([t.record.id]);
         expect(t.launches).toEqual([null, FILES]);
+        expect(t.fakes[0]!.prompts).toEqual(['go']);
+        expect(t.fakes[1]!.prompts).toEqual(['and this']);
         expect(t.notices).toEqual([UNTRUSTED_AT_TURN_END]);
     });
 
-    it('a new turn in the quiet after a turn: it waits for that one too', async () => {
+    it('a turn the provider opens by itself in the quiet after one, for a prompt it already took: it waits for that one too', async () => {
         const t = rig(false);
         t.host.start(t.record, dir);
         await flush();
         t.host.prompt(t.record.id, 'go', 'you');
+        t.host.prompt(t.record.id, 'taken mid-turn', 'you');
         t.set(true);
         await flush();
         t.endTurn();
         await flush();
-        t.host.prompt(t.record.id, 'next', 'you');
+        t.last().events.onUpdate?.({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'on it' } });
         await vi.advanceTimersByTimeAsync(COOLING_MS * 2);
         await flush();
         expect(t.restarts).toEqual([]);
@@ -176,26 +183,14 @@ describe('gone untrusted: a restart, when the turn has ended', () => {
         expect(t.restarts).toEqual([t.record.id]);
     });
 
-    it('already idle: restarts now, says so, and the new run is level with the verdict, so there is no second', async () => {
-        const t = rig(false);
-        t.host.start(t.record, dir);
-        await flush();
-        t.set(true);
-        await flush();
-        expect(t.restarts).toEqual([t.record.id]);
-        expect(t.notices).toEqual([UNTRUSTED_NOW]);
-        t.verdicts.changed('acme');
-        await flush();
-        expect(t.restarts).toEqual([t.record.id]);
-        expect(t.launches).toEqual([null, FILES]);
-    });
-
-    it('trusted again before the turn ended: no restart, and the chat is told', async () => {
+    it('trusted again before the turn ended: no restart, the chat is told, and what waited goes to this session', async () => {
         const t = rig(false);
         t.host.start(t.record, dir);
         await flush();
         t.host.prompt(t.record.id, 'go', 'you');
         t.set(true);
+        await flush();
+        t.host.prompt(t.record.id, 'and this', 'you');
         await flush();
         t.set(false);
         await flush();
@@ -204,16 +199,86 @@ describe('gone untrusted: a restart, when the turn has ended', () => {
         await flush();
         expect(t.restarts).toEqual([]);
         expect(t.notices).toEqual([UNTRUSTED_AT_TURN_END, TRUSTED_AGAIN]);
+        expect(t.fakes[0]!.prompts).toEqual(['go', 'and this']);
+    });
+});
+
+describe('gone untrusted, idle: it stays as it is until work arrives, and that work goes to a new run', () => {
+    it('no restart however long it waits, and nothing spent. The chat says so, once', async () => {
+        const t = rig(false);
+        t.host.start(t.record, dir);
+        await flush();
+        t.set(true);
+        await flush();
+        await vi.advanceTimersByTimeAsync(COOLING_MS * 4);
+        await flush();
+        expect(t.restarts).toEqual([]);
+        expect(t.launches).toEqual([null]);
+        expect(t.fakes[0]!.prompts).toEqual([]);
+        expect(t.notices).toEqual([UNTRUSTED_AT_NEXT_WORK]);
     });
 
-    it('a restart that is refused says why', async () => {
+    it.each([
+        ['prompt', (t: ReturnType<typeof rig>) => t.host.prompt(t.record.id, 'work', 'you')],
+        ['deliver', (t: ReturnType<typeof rig>) => t.host.deliver(t.record.id, 'work', 'you')],
+        ['handOff (the inbox)', (t: ReturnType<typeof rig>) => t.host.handOff(t.record.id, 'work', 'genie')],
+        ['promptWith (the composer)', (t: ReturnType<typeof rig>) => t.host.promptWith(t.record.id, 'work', [], 'you')],
+    ])('work by %s: not one word to the old session, one restart, and the new run has it', async (_name, send) => {
+        const t = rig(false);
+        t.host.start(t.record, dir);
+        await flush();
+        t.set(true);
+        await flush();
+        send(t);
+        await flush();
+        expect(t.restarts).toEqual([t.record.id]);
+        expect(t.fakes[0]!.prompts).toEqual([]);
+        expect(t.fakes[1]!.prompts).toEqual(['work']);
+        expect(t.launches).toEqual([null, FILES]);
+        t.verdicts.changed('acme');
+        await flush();
+        expect(t.restarts).toEqual([t.record.id]);
+    });
+
+    it('changed in the quiet just after a turn: that counts as idle', async () => {
+        const t = rig(false);
+        t.host.start(t.record, dir);
+        await flush();
+        t.host.prompt(t.record.id, 'go', 'you');
+        t.endTurn();
+        await flush();
+        t.set(true);
+        await vi.advanceTimersByTimeAsync(COOLING_MS * 2);
+        await flush();
+        expect(t.restarts).toEqual([]);
+    });
+
+    it('answered, trusted again: no restart, and later work goes to this session', async () => {
+        const t = rig(false);
+        t.host.start(t.record, dir);
+        await flush();
+        t.set(true);
+        await flush();
+        t.set(false);
+        await flush();
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
+        expect(t.restarts).toEqual([]);
+        expect(t.fakes[0]!.prompts).toEqual(['work']);
+        expect(t.notices).toEqual([UNTRUSTED_AT_NEXT_WORK, TRUSTED_AGAIN]);
+    });
+
+    it('a restart that is refused says why, and the work is not given to the old session', async () => {
         const t = rig(false, { restartAnswer: { ok: false, reason: 'its folder has gone' } });
         t.host.start(t.record, dir);
         await flush();
         t.set(true);
         await flush();
+        t.host.prompt(t.record.id, 'work', 'you');
+        await flush();
         expect(t.restarts).toEqual([t.record.id]);
         expect(t.notices.join('\n')).toContain('its folder has gone');
+        expect(t.fakes[0]!.prompts).toEqual([]);
     });
 });
 

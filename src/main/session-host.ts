@@ -1271,6 +1271,14 @@ export class SessionHost {
         return this.#running.get(agentId)?.session.withdrawHeld() ?? false;
     }
 
+    /** Skeleton. */
+    workWaiting(_agentId: AgentId): boolean {
+        return false;
+    }
+
+    /** Skeleton. */
+    releaseWork(_agentId: AgentId): void {}
+
     /** A restart now would cut nothing (`AgentSession.quiet`); `false` when the agent has no session. */
     quiet(agentId: AgentId): boolean {
         return this.#running.get(agentId)?.session.quiet ?? false;

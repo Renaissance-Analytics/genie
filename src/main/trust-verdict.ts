@@ -15,6 +15,7 @@ import type { AgentId } from '../core/identity.js';
 export const NOW_TRUSTED = 'This workspace is trusted now. Read its instructions and your persona before you carry on.';
 export const UNTRUSTED_AT_TURN_END = 'This workspace is no longer trusted. This agent restarts when its turn ends.';
 export const UNTRUSTED_NOW = 'This workspace is no longer trusted, so this agent restarted.';
+export const UNTRUSTED_AT_NEXT_WORK = 'This workspace is no longer trusted. This agent restarts before its next work.';
 export const TRUSTED_AGAIN = 'This workspace is trusted again. No restart.';
 
 export interface TrustVerdictPorts {
@@ -24,6 +25,11 @@ export interface TrustVerdictPorts {
     /** What the running session was launched under; `null` = no session, or its launch has not read it yet. */
     launchedUntrusted(agentId: AgentId): boolean | null;
     quiet(agentId: AgentId): boolean;
+    inTurn(agentId: AgentId): boolean;
+    /** Work the session is holding because this run may not take it. */
+    workWaiting(agentId: AgentId): boolean;
+    /** This run may take work again: what it held goes now. */
+    releaseWork(agentId: AgentId): void;
     runOf(agentId: AgentId): number | null;
     /** Put ahead of the next work this run gets. False = no session took it. */
     hold(agentId: AgentId, text: string): boolean;
