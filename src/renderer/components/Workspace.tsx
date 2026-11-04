@@ -10,7 +10,7 @@ import { useCallback, useEffect, useRef, useState, type ComponentType, type Poin
 import { DesignedTab } from './DesignedTab.js';
 import { WorkspaceTabs } from './WorkspaceTabs.js';
 import { SitePanel } from './SitePanel.js';
-import { siteWebviewLayerFor } from '../site-webview-layer.js';
+import { siteWebviewLayerFor, tabsChanged, type SeenTabs } from '../site-webview-layer.js';
 import { TerminalCell } from './TerminalCell.js';
 import { addTab, clearCell, panelKey, parseTabs, placePanel, removeTab, renameTab, serializeTabs, setLayout, sitePanelKeys, type TabsState } from '../../core/workspace-tabs.js';
 import {
@@ -231,7 +231,12 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
     // A terminal panel's new terminal, placed in its cell. Two panels starting at once each build on the other's placement
     // (the setting's round trip has not come back yet), never on the same stale tabs.
     // A panel no longer in these tabs closes its page; the layer keeps the rest, on screen or not.
-    useEffect(() => { if (sitePanels) siteWebviewLayerFor(sitePanels).retainIn(workspace.id, sitePanelKeys(workspace.id, designed)); }, [tabsRaw, sitePanels, workspace.id]);
+    const seenTabs = useRef<SeenTabs | null>(null);
+    useEffect(() => {
+        const now = { workspaceId: workspace.id, raw: tabsRaw };
+        if (sitePanels && tabsChanged(seenTabs.current, now)) siteWebviewLayerFor(sitePanels).retainIn(workspace.id, sitePanelKeys(workspace.id, designed));
+        if (typeof tabsRaw === 'string' || seenTabs.current?.workspaceId !== workspace.id) seenTabs.current = now;
+    }, [tabsRaw, sitePanels, workspace.id]);
     const tabsBase = useRef<{ raw: unknown; state: TabsState }>({ raw: tabsRaw, state: designed });
     if (tabsBase.current.raw !== tabsRaw) tabsBase.current = { raw: tabsRaw, state: designed };
     const placeTerminal = (tabId: string, cell: number, terminalId: string): void => {
