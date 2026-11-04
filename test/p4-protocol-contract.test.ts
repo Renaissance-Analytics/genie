@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Baton, PairingPins } from '../src/core/remote.js';
-import { inMemoryPair, REMOTE_METHODS, type ControlMethod, type RemoteMethod, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
+import { capabilityOf, inMemoryPair, REMOTE_METHODS, type ControlMethod, type RemoteMethod, type ServerConnection, type WireMessage } from '../src/core/remote-protocol.js';
 import { DeviceStore } from '../src/main/remote-devices.js';
 import { RemoteHost } from '../src/main/remote-host.js';
 import { buildHostApi } from '../src/main/host-api.js';
@@ -12,6 +12,13 @@ import { protocolContractDeps } from './support/protocol-contract-deps.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
 
 const ROOT = '<test-root>';
+const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
+    addWorkspace: 'addWorkspace opens a folder picker on the host; do it there',
+    takeOver: 'takeOver opens a window on the host; do it there',
+    providerLogin: 'providerLogin opens the provider login in a window on the host; do it there',
+    'features.setBrowserBounds': "features.setBrowserBounds places a view on the host's own window; nothing to do remotely",
+};
+const hostOnlyMethods = REMOTE_METHODS.filter((method) => capabilityOf(method) === 'host-only');
 /** Explicit rows: adding a protocol method without its contract must fail, rather than silently testing nothing. */
 const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     snapshot: [], agentDetail: ['missing'], openAgent: ['agent_a'], stopAgent: ['agent_a'],
@@ -67,15 +74,18 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
     let devices: DeviceStore;
     let remote: ReturnType<typeof connectRemote>;
     let api: ReturnType<typeof buildHostApi>;
+    let wireInvocations: RemoteMethod[];
     let rpc: (method: RemoteMethod | ControlMethod, args: unknown[]) => Promise<Result>;
 
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie-p4-contract-'));
         devices = await DeviceStore.open(dir, { now: () => 1, random: () => 'contract-token' });
         api = buildHostApi(protocolContractDeps(dir));
+        wireInvocations = [];
         let accept: (connection: ServerConnection) => void = () => {};
         const host = new RemoteHost({
-            api, devices, hostName: 'contract-host', baton: new Baton(),
+            api: { ...api, invoke: (method, args) => { wireInvocations.push(method); return api.invoke(method, args); } },
+            devices, hostName: 'contract-host', baton: new Baton(),
             pins: new PairingPins({ now: () => 1, random: () => 0.482913 }), confirm: allowEveryPairing,
             transport: { onConnection: (listener) => { accept = listener; return () => {}; } },
         });
@@ -111,6 +121,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
 
     it('has an explicit row for exactly every method in the protocol table', () => {
         expect(Object.keys(ROWS).sort()).toEqual([...REMOTE_METHODS].sort());
+        expect(Object.keys(HOST_ONLY_BACKSTOPS).sort()).toEqual([...hostOnlyMethods].sort());
     });
 
     it.each(REMOTE_METHODS)('%s keeps the direct value, null, or refusal across the wire', async (method) => {
@@ -118,6 +129,14 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
         expect(row, `missing contract row for ${method}`).toBeDefined();
         const args = row!.map((arg) => arg === ROOT ? dir : arg);
         const wireArgs = [...args];
+        if (capabilityOf(method) === 'host-only') {
+            const result = await rpc(method, wireArgs);
+            expect(result.ok).toBe(false);
+            if (result.ok) throw new Error(`host-only call ${method} was answered`);
+            expect(result.reason).toContain('contract-host');
+            expect(wireInvocations).not.toContain(method);
+            return;
+        }
         if (method === 'files.upload') {
             const begun = await rpc('upload.begin', [{ name: 'sample.txt', size: 2 }]);
             expect(begun.ok).toBe(true);
@@ -129,6 +148,11 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
         }
         const expected = await directResult(() => api.invoke(method, args));
         expect(await rpc(method, wireArgs)).toEqual(expected);
+    });
+
+    it.each(hostOnlyMethods)('%s keeps its direct API backstop, separate from connection policy', async (method) => {
+        const args = ROWS[method]!.map((arg) => arg === ROOT ? dir : arg);
+        expect(await directResult(() => api.invoke(method, args))).toEqual({ ok: false, reason: HOST_ONLY_BACKSTOPS[method] });
     });
 
     it('CONTROL: explicit null and an API refusal stay different', async () => {
