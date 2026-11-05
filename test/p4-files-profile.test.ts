@@ -50,3 +50,27 @@ it('instrumentation is optional for absent APIs and does not overwrite a later o
     counters.stop(); counters.stop(); expect(scope.btoa).toBe(later);
     expect(installFilesCounters({}, () => 0).summary()).toEqual({});
 });
+
+it('pairs actual serialized calls/results without recording their arguments or returned content', async () => {
+    const { installFilesCounters } = await module();
+    let now = 0;
+    const scope = { JSON: { parse: JSON.parse, stringify: JSON.stringify } };
+    const counters = installFilesCounters(scope, () => now);
+    scope.JSON.stringify({ kind: 'call', id: 7, method: 'blob.read', args: ['private contents'] });
+    now = 11; scope.JSON.parse('{"kind":"result","id":7,"ok":true,"value":"private result"}');
+    expect(counters.calls()).toEqual([{ method: 'blob.read', ms: 11 }]);
+    expect(JSON.stringify(counters.calls())).not.toContain('private');
+    counters.reset(); expect(counters.calls()).toEqual([]); counters.stop();
+});
+
+it('pausing counters excludes the measurement gauge while preserving application calls', async () => {
+    const { installFilesCounters } = await module();
+    let now = 0;
+    const scope = { btoa(value: string) { now += 5; return value; } };
+    const counters = installFilesCounters(scope, () => now);
+    expect(scope.btoa('application')).toBe('application'); counters.pause();
+    expect(scope.btoa('gauge')).toBe('gauge');
+    expect(counters.summary()).toEqual({ btoa: { calls: 1, syncMs: 5, wallMs: 5 } });
+    counters.resume(); scope.btoa('next application');
+    expect(counters.summary()).toEqual({ btoa: { calls: 2, syncMs: 10, wallMs: 10 } }); counters.stop();
+});
