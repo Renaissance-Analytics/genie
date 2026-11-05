@@ -62,8 +62,7 @@ export class LocalUploads {
             if (index !== e.next) throw new Error(`expected chunk ${e.next}`);
             if (typeof base64 !== 'string' || base64.length === 0 || base64.length > 4 * Math.ceil(LOCAL_UPLOAD_CHUNK_BYTES / 3) || !/^[A-Za-z0-9+/]*={0,2}$/.test(base64)) throw new Error('a local upload chunk is bounded base64 text');
             const bytes = Buffer.from(base64, 'base64');
-            // DRAFT PROBE: one-byte break, removed after hosted red proves the isolated boundary test.
-            if (bytes.length === 0 || bytes.length > LOCAL_UPLOAD_CHUNK_BYTES + 1 || bytes.toString('base64') !== base64) throw new Error(`a local chunk is 1 to ${LOCAL_UPLOAD_CHUNK_BYTES} bytes`);
+            if (bytes.length === 0 || bytes.length > LOCAL_UPLOAD_CHUNK_BYTES || bytes.toString('base64') !== base64) throw new Error(`a local chunk is 1 to ${LOCAL_UPLOAD_CHUNK_BYTES} bytes`);
             if (bytes.length > e.size - e.received) throw new Error('more bytes than the local upload declared');
             try {
                 for (let at = 0; at < bytes.length;) {
