@@ -67,7 +67,7 @@ async function rig() {
         hostsDebounceMs: 1,
         frontDoorPorts: { probe: async () => 'free', holder: async () => null },
         trustStore: { has: async () => false },
-        gitIgnored: async () => true,
+        gitIgnored: async () => 'ignored',
         workspaces: () => [{ id: 'ws', path: ws }],
     });
     stacks.push(stack);
