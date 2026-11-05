@@ -237,12 +237,35 @@ describe.each(['codex', 'claude'] as const)('stop means stop — a %s agent', (p
             expect(deliveries(record.id)).toEqual([[held!, 'sent']]);
         });
 
-        it('CODEX: the person’s own message held mid-turn becomes a DRAFT at their stop, not a turn; their Send on it lifts the pause', async () => {
+        /*
+         * THE PERSON'S OWN QUEUED MESSAGE IS THE PERSON ACTING (genie#1143: "Cancelling a turn preserves the queue";
+         * test/queued-input.test.tsx holds it). They wrote it, and it shows as Queued; Claude, too, runs a message taken
+         * mid-turn after the interrupt (test/stop-cancels-turn.test.ts). So it goes, as its own turn — and a Genie notice
+         * held BEFORE it does not ride ahead of it: dropped, and told as usual once the person's turn ends.
+         */
+        it('CODEX: the person’s OWN message held mid-turn still goes after their stop; a notice held ahead of it does not', async () => {
             const record = register();
             await startWorking(record);
-            host.prompt(record.id, 'also do this', 'you');
             await mail(record.id, 'arrived mid-turn');
-            const draft = pendingIdOf(record.id, 'also do this');
+            const notice = pendingIdOf(record.id, NOTICE_1);
+            host.prompt(record.id, 'also do this', 'you');
+            const yours = pendingIdOf(record.id, 'also do this');
+            expect(notice).not.toBeNull();
+            expect(yours).not.toBeNull();
+
+            personStops(record);
+            expect(promptsOf(record.id)).toEqual(['work', 'also do this']);
+            expect(new Map(deliveries(record.id))).toEqual(new Map([[notice!, 'discarded'], [yours!, 'sent']]));
+            endTurn(record.id);
+            expect(promptsOf(record.id)).toEqual(['work', 'also do this', NOTICE_1]);
+        });
+
+        it('CODEX: a PEER’s message held mid-turn becomes a DRAFT at the person’s stop, not a turn; the person’s Send on it lifts the pause', async () => {
+            const record = register();
+            await startWorking(record);
+            host.prompt(record.id, 'from wren', 'wren');
+            await mail(record.id, 'arrived mid-turn');
+            const draft = pendingIdOf(record.id, 'from wren');
             expect(draft).not.toBeNull();
 
             personStops(record);
@@ -250,9 +273,9 @@ describe.each(['codex', 'claude'] as const)('stop means stop — a %s agent', (p
             expect(new Map(deliveries(record.id)).get(draft!)).toBe('undelivered');
 
             await expect(host.resolvePrompt(record.id, draft!, 'send')).resolves.toEqual({ ok: true });
-            expect(promptsOf(record.id)).toEqual(['work', 'also do this']);
+            expect(promptsOf(record.id)).toEqual(['work', 'from wren']);
             endTurn(record.id);
-            expect(promptsOf(record.id)).toEqual(['work', 'also do this', NOTICE_1]);
+            expect(promptsOf(record.id)).toEqual(['work', 'from wren', NOTICE_1]);
         });
     }
 
