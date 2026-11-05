@@ -360,6 +360,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Chat drafts with large attachments, paste and paged load-all
+        run: timeout 360 node scripts/chat-drafts-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-drafts-linux
+          path: smoke-out/chat-drafts*
+          if-no-files-found: warn
+          retention-days: 7
+
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
@@ -606,6 +617,18 @@ jobs:
         with:
           name: files-watch-windows
           path: smoke-out/files-watch*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Chat drafts with large attachments, paste and paged load-all
+        shell: pwsh
+        run: node scripts/chat-drafts-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chat-drafts-windows
+          path: smoke-out/chat-drafts*
           if-no-files-found: warn
           retention-days: 7
 

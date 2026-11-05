@@ -34,12 +34,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['browser-window:pop-back', 'later:P2b browser process'],
     ['browser-window:restart', 'later:P2b browser process'],
 
-    // Drafts and artboard need family 7's shared transfer for content above the frame cap.
-    ['genie:chat-drafts-load', 'later:family 7 chunked transfer'],
-    ['genie:chat-drafts-save', 'later:family 7 chunked transfer'],
-    ['genie:chat-drafts-put-file', 'later:family 7 chunked transfer'],
-    ['genie:chat-drafts-read-file', 'later:family 7 chunked transfer'],
-    ['genie:chat-drafts-release', 'later:family 7 chunked transfer'],
     ['genie:window-overlay-colors', 'window-port'],
     ['genie:window-overlay-colors-current', 'window-port'],
     ['genie:renderer-stall', 'window-port'],

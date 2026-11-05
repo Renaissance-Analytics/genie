@@ -195,14 +195,6 @@ const bridge: PreloadBridge = {
             return () => { ipcRenderer.removeListener('genie:remote-reconnect', handler); };
         },
     },
-    // Every chat's unsent draft, kept by main across a restart and a reload (genie#1261, main/chat-draft-store.ts).
-    chatDrafts: {
-        load: () => ipcRenderer.invoke('genie:chat-drafts-load') as Promise<unknown>,
-        save: (agentId, draft) => ipcRenderer.invoke('genie:chat-drafts-save', agentId, draft) as Promise<void>,
-        putFile: (bytes) => ipcRenderer.invoke('genie:chat-drafts-put-file', bytes) as Promise<string | null>,
-        readFile: (ref) => ipcRenderer.invoke('genie:chat-drafts-read-file', ref) as Promise<Uint8Array | null>,
-        release: (refs) => ipcRenderer.invoke('genie:chat-drafts-release', refs) as Promise<void>,
-    },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
     sitePanels: {
         prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,

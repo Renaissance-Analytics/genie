@@ -598,7 +598,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo' | 'chatDrafts'> & {
     files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
     deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
     tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
@@ -642,7 +642,7 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
         appInbox: local.owner.appInbox,
         deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
         tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
-        files: { ...preload.files, ...local.files }, repo: local.repo,
+        files: { ...preload.files, ...local.files }, repo: local.repo, chatDrafts: local.chatDrafts,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
     if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;

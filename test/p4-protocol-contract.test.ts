@@ -10,6 +10,8 @@ import { buildHostApi } from '../src/main/host-api.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { protocolContractDeps } from './support/protocol-contract-deps.js';
 import { allowEveryPairing } from './support/allow-every-pairing.js';
+import { LocalStagingArea } from '../src/main/local-staging-area.js';
+import type { LocalUploads } from '../src/main/local-uploads.js';
 
 const ROOT = '<test-root>';
 const HOST_ONLY_BACKSTOPS: Partial<Record<RemoteMethod, string>> = {
@@ -66,6 +68,9 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'files.rename': ['work', 'a', 'b'], 'files.duplicate': ['work', 'a'], 'files.trash': ['work', 'a'],
     'files.readBytes': ['work', 'editor', 'missing.xlsx'], 'files.write': ['work', 'a.txt', 'hello', null],
     'files.writeBytes': ['work', 'editor', 'a.xlsx', 'b2s=', null], 'repo.call': ['status', 'work', ''],
+    'chatDrafts.load': [], 'chatDrafts.save': ['agent_a', { v: 1, text: 'kept draft', pills: [], attachments: [] }],
+    'chatDrafts.putFile': [Uint8Array.of(111, 107)], 'chatDrafts.readFile': ['00000000-0000-4000-8000-000000000001'],
+    'chatDrafts.release': [['00000000-0000-4000-8000-000000000001']],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
@@ -92,11 +97,22 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
     let api: ReturnType<typeof buildHostApi>;
     let wireInvocations: RemoteMethod[];
     let rpc: (method: RemoteMethod | ControlMethod, args: unknown[]) => Promise<Result>;
+    let uploads: LocalUploads[];
+    let draftCalls: Array<{ method: string; args: unknown[] }>;
 
     beforeEach(async () => {
         dir = await mkdtemp(join(tmpdir(), 'genie-p4-contract-'));
         devices = await DeviceStore.open(dir, { now: () => 1, random: () => 'contract-token' });
-        api = buildHostApi(protocolContractDeps(dir));
+        draftCalls = []; uploads = [];
+        const recorded = <T>(method: string, args: unknown[], value: T): T => { draftCalls.push({ method, args }); return value; };
+        api = buildHostApi({ ...protocolContractDeps(dir), chatDrafts: {
+            all: () => recorded('chatDrafts.load', [], {}),
+            save: async (id, raw) => recorded('chatDrafts.save', [id, raw], undefined),
+            putFile: async bytes => recorded('chatDrafts.putFile', [bytes], '00000000-0000-4000-8000-000000000001'),
+            readFile: async ref => recorded('chatDrafts.readFile', [ref], null),
+            release: async refs => recorded('chatDrafts.release', [refs], undefined),
+        } });
+        const area = await LocalStagingArea.open(dir);
         wireInvocations = [];
         let accept: (connection: ServerConnection) => void = () => {};
         const host = new RemoteHost({
@@ -104,6 +120,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
             devices, hostName: 'contract-host', baton: new Baton(),
             pins: new PairingPins({ now: () => 1, random: () => 0.482913 }), confirm: allowEveryPairing,
             transport: { onConnection: (listener) => { accept = listener; return () => {}; } },
+            createLocalUploads: () => { const registry = area.createConnection(); uploads.push(registry); return registry; },
         });
         const pair = inMemoryPair(), localPair = inMemoryPair();
         let nextId = 10_000;
@@ -119,7 +136,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
                 clearTimeout(timer); pending.delete(id);
                 resolve(frame.ok ? { ok: true, value: frame.value } : { ok: false, reason: frame.reason });
             });
-            const transport = capabilityOf(method as RemoteMethod) === 'local' ? localPair.client : pair.client;
+            const transport = capabilityOf(method as RemoteMethod) === 'local' || method.startsWith('localUpload.') ? localPair.client : pair.client;
             transport.send(JSON.stringify({ kind: 'call', id, method, args }));
         });
         accept(pair.server);
@@ -135,6 +152,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
     afterEach(async () => {
         remote?.close();
         local?.close();
+        await Promise.all(uploads?.map(registry => registry.dispose()) ?? []);
         await tick();
         await devices?.flushed();
         await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });
@@ -167,8 +185,15 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
             args[2] = { name: 'sample.txt', bytes: Uint8Array.of(111, 107) };
             wireArgs[2] = { staged: id };
         }
+        if (method === 'chatDrafts.putFile') {
+            const begun = await rpc('localUpload.begin', [{ purpose: 'draft-file', subtype: 'attachment', size: 2 }]);
+            expect(begun.ok).toBe(true); if (!begun.ok) throw new Error(begun.reason);
+            const id = (begun.value as { id: string }).id;
+            expect((await rpc('localUpload.chunk', [id, 0, 'b2s='])).ok).toBe(true); wireArgs[0] = { staged: id };
+        }
         const expected = await directResult(() => api.invoke(method, args));
         expect(await rpc(method, wireArgs)).toEqual(expected);
+        if (method.startsWith('chatDrafts.')) expect(draftCalls).toEqual([{ method, args }, { method, args }]);
     });
 
     it.each(hostOnlyMethods)('%s keeps its direct API backstop, separate from connection policy', async (method) => {

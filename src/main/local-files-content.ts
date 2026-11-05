@@ -2,13 +2,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { BlobKind, BlobOpener, BlobSource } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_TTL_MS, type MetadataItem, type PageKind, type PageOpener, type PageSource } from '../core/local-content.js';
 import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesPageKind, type FilesProjection } from '../core/local-files.js';
+import { validateDraftRanges, type DraftContentEnvelope, type DraftMetadata, type LocalDraftMethod } from '../core/local-drafts.js';
 import { LocalBlobs } from './local-blobs.js';
 import { LocalPageBudget, LocalPages } from './local-pages.js';
 
-interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource> }
-type Resource = { scope: Scope } & ({ type: 'blob'; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> });
+interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; closing: Promise<void> }
+interface StreamResource { scope: Scope; type: 'source'; source: BlobSource; closing: Promise<void> | null }
+type Resource = StreamResource | ({ scope: Scope } & ({ type: 'blob'; kind: BlobKind; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> } | { type: 'draft-page'; items: readonly DraftMetadata[] }));
+const sourceValue = (value: unknown): value is BlobSource => !!value && typeof value === 'object' && typeof (value as BlobSource).read === 'function' && typeof (value as BlobSource).close === 'function';
 
-/** One connection's workspace snapshots. References expire even if a client forgets its finally/release. */
+/** One connection's workspace/draft snapshots. Shared budget and expiry, including forgotten finally/release. */
 export class LocalFilesContent {
     readonly blobs: LocalBlobs;
     readonly pages: LocalPages;
@@ -26,7 +29,7 @@ export class LocalFilesContent {
         this.#assertOpen(); this.#expire();
         const ref = randomUUID(), releaseBudget = this.#budget.hold(ref);
         const timer = setTimeout(() => this.release(ref), LOCAL_UPLOAD_TTL_MS); timer.unref?.();
-        this.#scopes.set(ref, { ref, releaseBudget, timer, expires: this.#now() + LOCAL_UPLOAD_TTL_MS, refs: new Set(), sources: new Set() });
+        this.#scopes.set(ref, { ref, releaseBudget, timer, expires: this.#now() + LOCAL_UPLOAD_TTL_MS, refs: new Set(), sources: new Set(), heldSources: new Set(), closing: Promise.resolve() });
         return ref;
     }
     capture(value: unknown, kind: FilesPageKind, bytes = false): unknown {
@@ -38,14 +41,50 @@ export class LocalFilesContent {
         if (scope.refs.size === 0) { this.release(ref); return value; }
         return { filesContent: { ref, value: projected } } satisfies FilesContentEnvelope;
     }
+    async draftResult(ref: string, method: LocalDraftMethod, value: unknown): Promise<unknown> {
+        let scope: Scope;
+        try { scope = this.#scope(ref); }
+        catch (error) { if (sourceValue(value)) { try { await value.close(); } catch { console.warn('[genie] a late draft source could not be released'); } } throw error; }
+        if (value === null) { this.release(ref); return null; }
+        if (method === 'chatDrafts.readFile') {
+            if (sourceValue(value)) {
+                if (!Number.isSafeInteger(value.size) || value.size < 0 || typeof value.sha256 !== 'string' || !/^[0-9a-f]{64}$/i.test(value.sha256)) { await value.close(); throw new Error('invalid host draft file source'); }
+                const resource: StreamResource = { scope, type: 'source', source: value, closing: null }; scope.heldSources.add(resource);
+                try { const blob = this.#resource(scope, resource); return { draftsContent: { ref, blob } } satisfies DraftContentEnvelope; }
+                catch (error) { await this.#closeStream(resource); throw error; }
+            }
+            if (!(value instanceof Uint8Array)) throw new Error('invalid kept draft file bytes');
+            const bytes = Buffer.from(value), blob = this.#resource(scope, { scope, type: 'blob', kind: 'draft-file', bytes, sha256: createHash('sha256').update(bytes).digest('hex') });
+            return { draftsContent: { ref, blob } } satisfies DraftContentEnvelope;
+        }
+        if (method !== 'chatDrafts.load' || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid kept draft list');
+        const entries = Object.entries(value);
+        if (!entries.length) { this.release(ref); return value; }
+        const resource: Resource = { scope, type: 'blob', kind: 'draft-file', bytes: null, sha256: '' }, blob = this.#resource(scope, resource);
+        const chunks: Buffer[] = [], items: DraftMetadata[] = []; let length = 0;
+        for (const [name, draft] of entries) {
+            const bytes = Buffer.from(JSON.stringify(draft));
+            items.push({ id: String(items.length), name, size: bytes.length, type: 'application/json', sha256: createHash('sha256').update(bytes).digest('hex'), ref: blob, offset: length, length: bytes.length });
+            chunks.push(bytes); length += bytes.length;
+        }
+        validateDraftRanges(items, length);
+        resource.bytes = Buffer.concat(chunks, length); resource.sha256 = createHash('sha256').update(resource.bytes).digest('hex');
+        const list = this.#resource(scope, { scope, type: 'draft-page', items });
+        return { draftsContent: { ref, blob, list, count: items.length } } satisfies DraftContentEnvelope;
+    }
     release(ref: unknown): { released: boolean } {
         const scope = typeof ref === 'string' ? this.#scopes.get(ref) : undefined;
         if (!scope) return { released: false };
         this.#scopes.delete(scope.ref); clearTimeout(scope.timer);
         this.pages.releaseResource(scope.ref); this.blobs.releaseSources(scope.sources);
+        scope.closing = Promise.all([...scope.heldSources].map(resource => this.#closeStream(resource).catch(() => { console.warn('[genie] a draft response source could not be released'); }))).then(() => {});
+        scope.heldSources.clear();
         for (const id of scope.refs) { const resource = this.#refs.get(id); if (resource?.type === 'blob') resource.bytes = null; this.#refs.delete(id); }
         scope.refs.clear(); scope.sources.clear(); scope.releaseBudget();
         return { released: true };
+    }
+    async releaseAndWait(ref: unknown): Promise<{ released: boolean }> {
+        const scope = typeof ref === 'string' ? this.#scopes.get(ref) : undefined, result = this.release(ref); await scope?.closing; return result;
     }
     dispose(): void {
         if (this.#closed) return; this.#closed = true;
@@ -66,7 +105,7 @@ export class LocalFilesContent {
         if (typeof value === 'string') {
             if (Buffer.byteLength(JSON.stringify(value)) <= FILES_INLINE_BYTES) return { t: 'value', value };
             const buffer = Buffer.from(value, bytes && key === 'base64' ? 'base64' : 'utf8');
-            const ref = this.#resource(scope, { scope, type: 'blob', bytes: buffer, sha256: createHash('sha256').update(buffer).digest('hex') });
+            const ref = this.#resource(scope, { scope, type: 'blob', kind: 'workspace-file', bytes: buffer, sha256: createHash('sha256').update(buffer).digest('hex') });
             return { t: 'blob', ref, encoding: bytes && key === 'base64' ? 'base64' : 'utf8' };
         }
         if (value === null || typeof value === 'number' || typeof value === 'boolean') return { t: 'value', value };
@@ -90,7 +129,16 @@ export class LocalFilesContent {
     }
     #blob(kind: BlobKind, ref: string): BlobSource {
         const resource = this.#refs.get(ref);
-        if (kind !== 'workspace-file' || resource?.type !== 'blob') throw new Error('no such workspace content ref');
+        if (resource?.type === 'source' && kind === 'draft-file') {
+            const scope = this.#scope(resource.scope.ref); if (resource.closing) throw new Error('this draft source is already closed'); let closed = false;
+            const source: BlobSource = {
+                size: resource.source.size, sha256: resource.source.sha256,
+                read: async (offset, length) => { this.#scope(scope.ref); if (closed || resource.closing) throw new Error('the draft source is closed'); return resource.source.read(offset, length); },
+                close: async () => { closed = true; scope.sources.delete(source); await this.#closeStream(resource); },
+            };
+            scope.sources.add(source); return source;
+        }
+        if (resource?.type !== 'blob' || kind !== resource.kind) throw new Error('no such workspace content ref');
         const scope = this.#scope(resource.scope.ref); let closed = false;
         const source: BlobSource = {
             size: resource.bytes!.length, sha256: resource.sha256,
@@ -99,8 +147,16 @@ export class LocalFilesContent {
         };
         scope.sources.add(source); return source;
     }
+    #closeStream(resource: StreamResource): Promise<void> { return resource.closing ??= Promise.resolve().then(() => resource.source.close()); }
     #page(kind: PageKind, ref: string): PageSource {
         const resource = this.#refs.get(ref);
+        if (resource?.type === 'draft-page' && kind === 'chat-drafts') {
+            const scope = this.#scope(resource.scope.ref); let index = 0, closed = false;
+            return {
+                next: async () => { this.#scope(scope.ref); if (closed) throw new Error('this draft metadata source is closed'); return resource.items[index++] ?? null; },
+                close: async () => { closed = true; },
+            };
+        }
         if (resource?.type !== 'page' || resource.kind !== kind) throw new Error('no such workspace metadata ref');
         this.#scope(resource.scope.ref); let index = 0, closed = false;
         const entries = resource.object ? Object.entries(resource.value) : null;

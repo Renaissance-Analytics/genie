@@ -24,6 +24,8 @@ import { LocalPages } from './local-pages.js';
 import { LocalFilesContent } from './local-files-content.js';
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { localFilesArguments } from './local-files-arguments.js';
+import { isLocalDraftMethod } from '../core/local-drafts.js';
+import { localDraftArguments } from './local-drafts-api.js';
 import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
 import type { FilesHubEvent } from './files-watch-hub.js';
 
@@ -429,7 +431,7 @@ export class RemoteHost {
             }
             case 'content.release': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
-                return ok(connection.content?.release(args[0]) ?? { released: false });
+                return ok(await connection.content?.releaseAndWait(args[0]) ?? { released: false });
             }
             case 'localUpload.begin':
             case 'localUpload.chunk':
@@ -555,12 +557,18 @@ export class RemoteHost {
         const materialized = this.#materialize(connection, method, args);
         if (!materialized.ok) return refuse(materialized.reason);
 
-        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, response: string | null = null;
+        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, drafts: Awaited<ReturnType<typeof localDraftArguments>> | null = null, response: string | null = null;
         try {
             if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
-            const value = await this.#api.invoke(method, files?.args ?? materialized.args);
+            if (isLocalDraftMethod(method)) {
+                drafts = await localDraftArguments(method, materialized.args, connection.uploads);
+                if (method === 'chatDrafts.load' || method === 'chatDrafts.readFile') response = this.#content(connection).begin();
+            }
+            const value = await this.#api.invoke(method, files?.args ?? drafts?.args ?? materialized.args);
             if (files) { await files.close(); files = null; }
+            if (drafts) { await drafts.close(); drafts = null; }
             if (isLocalFilesMethod(method)) return ok(this.#content(connection).result(response!, value, method === 'files.localChildren' ? 'folder-children' : 'workspace-tree', method === 'files.localReadMedia' || method === 'files.readBytes'));
+            if (isLocalDraftMethod(method) && response !== null) return ok(await connection.content!.draftResult(response, method, value));
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.
@@ -570,7 +578,10 @@ export class RemoteHost {
         } catch (error) {
             if (response !== null) connection.content?.release(response);
             return refuse(error instanceof Error ? error.message : String(error));
-        } finally { if (files) { try { await files.close(); } catch { console.warn('[genie] a consumed Files stage could not be released'); } } }
+        } finally {
+            if (files) { try { await files.close(); } catch { console.warn('[genie] a consumed Files stage could not be released'); } }
+            if (drafts) { try { await drafts.close(); } catch { console.warn('[genie] a consumed draft stage could not be released'); } }
+        }
     }
 
     #content(connection: Connection): LocalFilesContent {

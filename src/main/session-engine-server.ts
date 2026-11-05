@@ -328,6 +328,7 @@ export class SessionEngineServer {
             if (was) this.#options.spawn?.windowGone?.();
             if (was) this.#options.browser?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
+            if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
         });
     }
@@ -566,6 +567,15 @@ export class SessionEngineServer {
             case 'engine.stores': {
                 if (!this.#options.stores) throw new Error('This host keeps no stores.');
                 return this.#options.stores.call(str(0), str(1), Array.isArray(args[2]) ? args[2] : []);
+            }
+            case 'engine.drafts.fileOpen':
+            case 'engine.drafts.fileRead':
+            case 'engine.drafts.fileClose': {
+                if (!this.#connections.has(conn)) throw new Error('the draft file engine connection is closed');
+                const stores = this.#options.stores; if (!stores) throw new Error('this host keeps no chat drafts');
+                if (method === 'engine.drafts.fileOpen') return stores.draftFileOpen(conn.id, args[0]);
+                if (method === 'engine.drafts.fileRead') return stores.draftFileRead(conn.id, args[0], args[1], args[2]);
+                return stores.draftFileClose(conn.id, args[0]);
             }
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));

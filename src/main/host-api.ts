@@ -25,6 +25,8 @@ import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../rend
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
 import type { FilesWatchPort } from './local-files-watches.js';
+import { isLocalDraftMethod } from '../core/local-drafts.js';
+import { invokeLocalDrafts, type LocalDraftsStore } from './local-drafts-api.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -64,6 +66,7 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    chatDrafts?: LocalDraftsStore;
     filesWatch?: FilesWatchPort;
     localFiles?: LocalFilesDeps;
     localOwner?: LocalOwnerDeps;
@@ -238,6 +241,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
         if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
+        if (isLocalDraftMethod(method)) return invokeLocalDrafts(deps.chatDrafts, deps.find, method, args);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };
