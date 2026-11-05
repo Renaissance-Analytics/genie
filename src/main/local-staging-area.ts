@@ -3,7 +3,7 @@ import { lstat, mkdir, readdir, rm, unlink } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { systemProcessTree, type ProcessInfo } from '../core/process-tree.js';
 import { runtimeDir } from './paths.js';
-import { restrictPrivateDirectories } from './private-credentials.js';
+import { secureStagingDirectories } from './staging-permissions.js';
 import { LocalUploads } from './local-uploads.js';
 
 type ProcessReader = () => Promise<readonly ProcessInfo[] | null>;
@@ -61,7 +61,7 @@ export class LocalStagingArea {
                 if (table !== null) await area.#removeDead(entries, table);
                 await mkdir(area.directory, { recursive: true, mode: 0o700 }); await realDirectory(area.directory);
                 // Both directories have a verified private ACL; this process's protected folder is independent of another host's.
-                await restrictPrivateDirectories([root, area.directory]);
+                await secureStagingDirectories([root, area.directory]);
                 return area;
             })();
             areas.set(key, opening);

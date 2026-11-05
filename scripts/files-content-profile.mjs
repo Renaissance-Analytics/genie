@@ -94,6 +94,26 @@ export function installFilesStageCounters(scope, now = () => performance.now()) 
     const fs = builtin('node:fs/promises');
     for (const key of ['mkdir', 'lstat', 'readFile', 'writeFile', 'rename', 'rm']) instrument(fs, key, `fs.${key}`);
     instrument(fs, 'open', 'fs.open', handle);
+    const workerPrototype = builtin('node:worker_threads').Worker?.prototype, originalPost = workerPrototype?.postMessage;
+    const workers = new WeakMap();
+    if (typeof originalPost === 'function') replace(workerPrototype, 'postMessage', function (...args) {
+        const message = args[0];
+        if (message?.kind !== 'staging-acl-request' || !Number.isSafeInteger(message.id)) return originalPost.apply(this, args);
+        let pending = workers.get(this);
+        if (!pending) {
+            pending = new Map(); workers.set(this, pending);
+            const own = pending;
+            const reply = value => {
+                if (value?.kind !== 'staging-acl-result') return;
+                const call = own.get(value.id); if (!call) return; own.delete(value.id);
+                record({ operation: 'staging.acl', startedMs: call.start - call.epoch, syncMs: call.syncMs, wallMs: now() - call.start, ok: value.ok === true, helperStarts: value.helper?.starts ?? null, threadId: value.helper?.threadId ?? null }, call.generation);
+            };
+            this.on('message', reply); undo.push(() => { this.off('message', reply); own.clear(); });
+        }
+        const call = { start: now(), epoch, generation, syncMs: 0 }; pending.set(message.id, call);
+        try { const value = originalPost.apply(this, args); call.syncMs = now() - call.start; return value; }
+        catch (error) { pending.delete(message.id); throw error; }
+    });
     const prototype = builtin('node:child_process').ChildProcess?.prototype, originalSpawn = prototype?.spawn;
     if (typeof originalSpawn === 'function') replace(prototype, 'spawn', function (...args) {
         const start = now(), ownEpoch = epoch, ownGeneration = generation;
