@@ -76,11 +76,13 @@ describe('7B local disk staging, not used by any family', () => {
         exact(await source!.read(LIMIT - CHUNK, CHUNK), chunk); await source!.close();
     });
     it('refuses empty, oversized, malformed and over-declared chunks without moving the index', async () => {
-        const { s } = await staging(), b = await s.begin(input(CHUNK));
+        // One byte ABOVE the chunk cap but WITHIN the declared size: the chunk limit must refuse it itself.
+        const { s } = await staging(), b = await s.begin(input(CHUNK + 1));
         for (const bad of ['', '%%%', 5, base64(new Uint8Array(CHUNK + 1))]) await expect(s.chunk(b.id, 0, bad)).rejects.toThrow();
         expect(await s.chunk(b.id, 0, base64(new Uint8Array(CHUNK)))).toEqual({ received: CHUNK });
-        await expect(s.chunk(b.id, 1, 'YQ==')).rejects.toThrow();
-        expect((await s.take(b.id, 'draft-file', 'attachment'))?.size).toBe(CHUNK);
+        await expect(s.chunk(b.id, 1, 'YWI=')).rejects.toThrow();
+        expect(await s.chunk(b.id, 1, 'YQ==')).toEqual({ received: CHUNK + 1 });
+        expect((await s.take(b.id, 'draft-file', 'attachment'))?.size).toBe(CHUNK + 1);
     });
     it('owns handles, refuses incomplete/foreign stages, and aborts once', async () => {
         const { s } = await staging(), other = (await staging()).s, b = await s.begin(input(2));
