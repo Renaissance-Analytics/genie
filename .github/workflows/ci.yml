@@ -361,7 +361,7 @@ jobs:
           retention-days: 7
 
       - name: Chat drafts with large attachments, paste and paged load-all
-        run: timeout 360 node scripts/chat-drafts-cdp.mjs
+        run: timeout 360 node scripts/chat-drafts-cdp.mjs --profile-main
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -622,7 +622,7 @@ jobs:
 
       - name: Chat drafts with large attachments, paste and paged load-all
         shell: pwsh
-        run: node scripts/chat-drafts-cdp.mjs
+        run: node scripts/chat-drafts-cdp.mjs --profile-main
 
       - uses: actions/upload-artifact@v4
         if: always()

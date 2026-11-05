@@ -9,7 +9,7 @@ function rig() {
     return { buffer, from, encode, stopGc, now: () => time, advance: (ms: number) => { time += ms; }, emit: (entries: Parameters<typeof gc>[0]) => gc(entries),
         onGc: (listen: typeof gc) => { gc = listen; return stopGc; } };
 }
-it('counts actual base64 decode and encode CPU/bytes, with a zero then one positive control', async () => {
+it('counts actual base64 decode and encode time/bytes, with a zero then one positive control', async () => {
     const { installDraftMainDiagnostics } = await helper(), f = rig(), d = installDraftMainDiagnostics(f);
     expect(d.snapshot().decode.calls).toBe(0);
     const value = f.buffer.from('YQ==', 'base64'); expect(value.length).toBe(1);
