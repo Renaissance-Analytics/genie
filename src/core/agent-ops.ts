@@ -94,13 +94,20 @@ export type ManifestUpdate = { updated: true; tuis: string[] } | { updated: fals
 /** Where the Provider control's switch stands (genie#1569). */
 export type ProviderSwitchState = { kind: 'idle' } | { kind: 'working'; to: string } | { kind: 'done'; text: string } | { kind: 'failed'; to: string; reason: string };
 
-export function providerSwitchAfter(_agentName: string, _to: string, _decision: SwitchDecision): ProviderSwitchState {
-    return { kind: 'idle' };
+/** The Provider control's state once a switch to `to` has answered: a refusal keeps `to`, so Retry asks for it again. */
+export function providerSwitchAfter(agentName: string, to: string, decision: SwitchDecision): ProviderSwitchState {
+    return decision.ok ? { kind: 'done', text: switchOutcome(agentName, decision) } : { kind: 'failed', to, reason: decision.reason };
 }
 
-export function switchDriverDecision(manifest: AgentManifest, from: string, to: string, _by: 'user' | 'agent'): SwitchDecision {
+/**
+ * THE PERSON IS NEVER LOCKED TO A PROVIDER (genie#1569; the owner, 2026-11-05: "I should never be restricted to a
+ * provider. I need to be able to switch them any time I want to."). `tuis:` is the persona's default and its description
+ * of the drivers it is written for: it binds an AGENT asking to switch itself, never the person. The host still refuses a
+ * provider Genie cannot run, or one that is not installed or signed in, each with its reason.
+ */
+export function switchDriverDecision(manifest: AgentManifest, from: string, to: string, by: 'user' | 'agent'): SwitchDecision {
     if (from === to) return { ok: true, carries: [], from, to, noop: true };
-    if (manifest.tuis && !manifest.tuis.includes(to)) {
+    if (by === 'agent' && manifest.tuis && !manifest.tuis.includes(to)) {
         return { ok: false, reason: `${manifest.name}’s AGENT.md allows tuis: ${manifest.tuis.join(', ')}; ${to} is not among them` };
     }
     return { ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from, to };
@@ -118,6 +125,8 @@ export function switchOutcome(agentName: string, decision: SwitchDecision): stri
     if (decision.discarded) parts.push(`its ${decision.from} conversation stays with ${decision.from}`);
     if (decision.droppedModel) parts.push(`"${decision.droppedModel}" is a ${decision.from} model; ${decision.to} starts on its default model`);
     parts.push(`kept: ${decision.carries.join(', ')}`);
+    if (decision.manifest?.updated === true) parts.push(`its AGENT.md now lists tuis: ${decision.manifest.tuis.join(', ')}`);
+    if (decision.manifest?.updated === false) parts.push(`its AGENT.md was not updated: ${decision.manifest.reason}`);
     return `${parts.join('; ')}. Start it when ready.`;
 }
 

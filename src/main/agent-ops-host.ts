@@ -1,7 +1,8 @@
 import { permissionDecisionFor } from '../core/agent-ops.js';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { parseAgentManifest } from '../core/agent-manifest.js';
-import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
+import { manifestWithTui, parseAgentManifest } from '../core/agent-manifest.js';
+import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type ManifestUpdate, type SwitchDecision } from '../core/agent-ops.js';
+import { providerLogin } from '../core/provider-login.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
@@ -16,7 +17,7 @@ import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
  * RESTART (`restartAgent(…, 'graceful')`) is THE ONE ACTION every Restart and Start control calls (genie#1238): it works
  * from every state and delivers what the agent is owed; `fresh` clears the thread on purpose. Delete is PREVIEWED
  * with its plan before it acts, and the cross-system opt-in travels in the same call. Switch driver
- * reads the persona's own `tuis:`. A budget is set and judged at once — unenforceable when the
+ * is the person's (genie#1569): never refused for the persona's `tuis:`, which it then updates. A budget is set and judged at once — unenforceable when the
  * provider reports no cost, said rather than silently never firing. Diagnose names a cause and the
  * repair that fits; a never-run agent is dormant, not a fault. Every port is injected; main.ts
  * passes the registry, the session host and the filesystem.
@@ -264,9 +265,15 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (!isAcpProvider(to)) return { ok: false, reason: `Genie cannot run a "${to}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
-    const manifest = parseAgentManifest(await ports.readManifest(record), record.name);
+    const text = await ports.readManifest(record);
+    const manifest = parseAgentManifest(text, record.name);
+    // A PERSON's switch: `tuis:` is never a reason to refuse it (genie#1569) — see switchDriverDecision.
     const decision = switchDriverDecision(manifest, record.provider, to, 'user');
     if (!decision.ok || decision.noop) return decision;
+    // Refused BEFORE anything is stopped: a provider that cannot run here would leave the agent on nothing.
+    const name = providerLogin(to)?.name ?? to;
+    if (!ports.providerInstalled(to)) return { ok: false, reason: `${name} is not installed on this machine, so ${record.name} cannot switch to it. Install it, then switch again.` };
+    if (!ports.signedIn(to)) return { ok: false, reason: `${name} is not signed in on this machine, so ${record.name} cannot switch to it. Log in to ${name}, then switch again.` };
     /*
      * A CLEAN START ON THE NEW PROVIDER (the owner, 2026-10-21: "I need to be able to change provider as well as model").
      * The old provider's conversation and model used to ride along — a Claude session id resumed on Codex, `opus` passed
@@ -279,7 +286,26 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     await ports.host.ended(record.id);
     const switched = await ports.registry.setProvider(record.id, to, { keepModel });
     if (!switched.ok) return switched;
-    return { ...decision, discarded: record.threadId, droppedModel: record.model !== undefined && !keepModel ? record.model : null };
+    const result = { ...decision, discarded: record.threadId, droppedModel: record.model !== undefined && !keepModel ? record.model : null };
+    const written = text === null ? null : await recordChoiceInPersona(ports, record, text, to);
+    return written === null ? result : { ...result, manifest: written };
+}
+
+/**
+ * The person's choice, written into the persona's `tuis:` (genie#1569) so the file, Take Over and adoption agree with it.
+ * After the switch, never before: a file that cannot be written does not undo the person's switch — it is said.
+ * `null` = nothing to write (the provider is already its first entry).
+ */
+async function recordChoiceInPersona(ports: AgentOpsPorts, record: AgentRecord, text: string, to: string): Promise<ManifestUpdate | null> {
+    const edit = manifestWithTui(text, to);
+    if (edit.kind === 'unchanged') return null;
+    if (edit.kind === 'refused') return { updated: false, reason: edit.reason };
+    try {
+        await ports.writeManifest(record, edit.text);
+        return { updated: true, tuis: edit.tuis };
+    } catch (error) {
+        return { updated: false, reason: error instanceof Error ? error.message : String(error) };
+    }
 }
 
 /** Whether `provider`'s own model list (asked of its CLI) names `model`. No list, or no way to ask, is `false`. */
