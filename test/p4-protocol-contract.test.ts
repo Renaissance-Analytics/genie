@@ -136,7 +136,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
                 clearTimeout(timer); pending.delete(id);
                 resolve(frame.ok ? { ok: true, value: frame.value } : { ok: false, reason: frame.reason });
             });
-            const transport = capabilityOf(method as RemoteMethod) === 'local' ? localPair.client : pair.client;
+            const transport = capabilityOf(method as RemoteMethod) === 'local' || method.startsWith('localUpload.') ? localPair.client : pair.client;
             transport.send(JSON.stringify({ kind: 'call', id, method, args }));
         });
         accept(pair.server);

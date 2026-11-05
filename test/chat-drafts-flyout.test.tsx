@@ -142,7 +142,7 @@ describe('wiring', () => {
         expect(main.indexOf('ChatDraftStore.open(')).toBeGreaterThan(main.indexOf('await registry.load('));
         expect(main).toMatch(/registry\.subscribe\(\(\) => \{ void drafts\.prune\(/);
         for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(main).not.toContain(`'genie:chat-drafts-${ch}'`);
-        expect(main).toMatch(/chatDrafts:\s*drafts/);
+        expect(main).toMatch(/chatDrafts:\s*engineDraftsPort\(drafts,/);
     });
 
     it('the page composes local draft calls; the preload retires them and remote clients have no draft port', () => {

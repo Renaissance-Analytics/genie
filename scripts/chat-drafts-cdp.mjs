@@ -63,7 +63,7 @@ try {
     reports.push({ label: 'startup', elapsedMs: Date.now() - launchStarted }); console.log(`DRAFT_STARTUP ${JSON.stringify(reports.at(-1))}`);
     hostRecord = json(join(runtime, 'host.json'));
     const handlers = await main.evaluate(`(() => { const ipc=process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').ipcMain;
-        const s=globalThis.__draftMain={ticks:0,gap:0,last:performance.now(),rss:process.memoryUsage().rss,methods:{}};
+        const rss=process.memoryUsage().rss,s=globalThis.__draftMain={ticks:0,ticksBefore:0,gap:0,last:performance.now(),rss,rssBefore:rss,methods:{}};
         s.timer=setInterval(()=>{const now=performance.now();s.gap=Math.max(s.gap,now-s.last);s.last=now;s.ticks++;s.rss=Math.max(s.rss,process.memoryUsage().rss);},16);
         s.listener=(_event,action,_handle,text)=>{if(action==='frame'){const m=JSON.parse(text);if(m.method)s.methods[m.method]=(s.methods[m.method]??0)+1;}};
         ipc.on('genie:local-frame',s.listener);s.stop=()=>{clearInterval(s.timer);ipc.removeListener('genie:local-frame',s.listener);};
@@ -79,12 +79,13 @@ try {
         { label: 'paste-2MiB', method: 'save', args: [agents[0].id, paste], expect: { bytes: Buffer.byteLength(JSON.stringify(paste)), sha256: sha(JSON.stringify(paste)) } },
     ];
     for (const input of rows) {
-        await page.evaluate('Object.assign(window.__draftWire,{maxBytes:0,forbidden:0,pages:0,invalidPages:0});true'); await main.evaluate('globalThis.__draftMain.methods={};globalThis.__draftMain.gap=0;true');
-        const value = await run(input), wire = await page.evaluate('window.__draftWire'), native = await main.evaluate('({ticks:globalThis.__draftMain.ticks,maxGapMs:globalThis.__draftMain.gap,rssPeak:globalThis.__draftMain.rss,methods:globalThis.__draftMain.methods})');
-        demand(value.heartbeat.before > 0 && value.heartbeat.after > 0 && value.concurrentSettings.ok && native.ticks > 0 && wire.maxBytes <= 1048576 && wire.forbidden === 0 && wire.invalidPages === 0, 'draft completeness/frame/heartbeat/settings controls');
+        await page.evaluate('Object.assign(window.__draftWire,{maxBytes:0,forbidden:0,pages:0,invalidPages:0});true'); await main.evaluate('(()=>{const s=globalThis.__draftMain;s.methods={};s.gap=0;s.last=performance.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;return true;})()');
+        const value = await run(input), wire = await page.evaluate('window.__draftWire'), native = await main.evaluate('((s)=>({ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods}))(globalThis.__draftMain)');
+        demand(value.heartbeat.before > 0 && value.heartbeat.after > 0 && value.concurrentSettings.ok && native.ticks > native.ticksBefore && wire.maxBytes <= 1048576 && wire.forbidden === 0 && wire.invalidPages === 0, 'draft completeness/frame/heartbeat/settings controls');
         if (!BASELINE && input.method === 'load') demand(native.methods['blob.open'] === 1 && wire.pages >= 3, 'one blob and count-bounded pages for all drafts');
         if (!BASELINE && input.method === 'save') demand(native.methods['localUpload.begin'] === 1 && native.methods['localUpload.chunk'] > 1, 'large paste uses bounded local staging');
         const row = { label: input.label, ...value, wire, native }; reports.push(row); console.log(`CHAT_DRAFTS ${JSON.stringify(row)}`);
+        if (!BASELINE && input.method === 'readFile') demand(native.maxGapMs < 250 && native.rssPeak - native.rssBefore < 100 * 1024 * 1024, `100MiB attachment blocked main or retained its bytes: gap=${native.maxGapMs}ms RSS growth=${native.rssPeak - native.rssBefore}B`);
     }
     let broke = false; try { await run({ method: 'load', args: [], expect: { sha256: '0'.repeat(64) } }); } catch (e) { demand(/hash differs/.test(e.message), 'negative draft hash failed for another reason'); broke = true; }
     demand(broke, 'deliberate draft hash mismatch must fail'); reports.push({ label: 'negative-hash-control', passed: true }); code = 0;
