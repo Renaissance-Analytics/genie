@@ -671,6 +671,9 @@ async function phpChoices(services: ComposedServices, ports: FeaturePorts): Prom
 
 /** Apply one action as the person, then answer with the next snapshot. Refusals throw with the reason — except a toolchain row's, which comes back IN the snapshot, on that row (`toolchain.refusals`). */
 export async function handleFeatureAction(services: ComposedServices, action: FeatureAction, state: FeatureState = { toolStatuses: null, knowledgeQuery: '' }, ports: FeaturePorts = {}, origin: FeatureOrigin = REMOTE_ORIGIN): Promise<FeatureData> {
+    // genie#1583: which half of a slow action waits, the action itself or the snapshot it answers with.
+    const actStarted = Date.now();
+    const slow = (part: string, started: number): void => { const ms = Date.now() - started; if (ports.slowPart && ms >= ports.slowPart.ms) ports.slowPart.log(part, ms); };
     const next: FeatureState = { ...state };
     switch (action.kind) {
         // WHAT'S NEW (Tynn #762): asked for again from Help; closing records the version as seen.
@@ -1727,6 +1730,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
         case 'browser.reload':
             break;
     }
-    return featureSnapshot(services, next, ports);
+    slow(`act:${action.kind}`, actStarted);
+    const snapshotStarted = Date.now();
+    try {
+        return await featureSnapshot(services, next, ports);
+    } finally {
+        slow('snapshot', snapshotStarted);
+    }
 }
 
