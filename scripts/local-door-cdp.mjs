@@ -556,6 +556,16 @@ try {
         } finally { await main.evaluate('window.__doorActivityOff?.(); delete window.__doorActivityOff; true'); }
         await sleep(500);
         const unwatchTicks = Math.max(...count(await ticks())), unwatchStart = await main.evaluate('window.__doorCdp.total'), unwatchNative = await nativeSummary();
+        // Coordinator5200/5202 probe: deliberately overlap a real check with this interval.
+        // Keep strict zero until the actual unexpected channel has been measured on CI.
+        demand(await inspector.evaluate(`(() => {
+            const { Menu, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
+            const find = (items) => { for (const item of items) { if (item.label === 'Check for updates') return item; const nested = find(item.submenu?.items ?? []); if (nested) return nested; } return null; };
+            const item = find(Menu.getApplicationMenu()?.items ?? []);
+            if (!item) return false;
+            item.click(item, BrowserWindow.getAllWindows().find(w=>w.webContents.id===${mainId}), {});
+            return true;
+        })()`), 'probe fired the real application-menu update check inside the zero interval');
         await until('eight more unwatched provider ticks',async()=>Math.max(...count(await ticks()))>=unwatchTicks+8,20_000);
         const unwatchEnd = await nativeSummary();
         const unwatchFrameEnd = await main.evaluate('window.__doorCdp.total');
