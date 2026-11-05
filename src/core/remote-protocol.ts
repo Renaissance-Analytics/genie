@@ -3,6 +3,7 @@ import { LOCAL_CONTENT_METHODS } from './local-content.js';
 import { FILES_WATCH_METHODS } from './local-files-watch.js';
 import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 import { LOCAL_DRAFT_METHODS, type LocalDraftMethod } from './local-drafts.js';
+import { LOCAL_ARTBOARD_METHODS, type LocalArtboardMethod } from './local-artboard.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
@@ -123,6 +124,7 @@ export const REMOTE_METHODS = [
     'files.upload',
     ...LOCAL_FILES_METHODS,
     ...LOCAL_DRAFT_METHODS,
+    ...LOCAL_ARTBOARD_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -260,6 +262,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'files.upload': 'write',
     ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     ...Object.fromEntries(LOCAL_DRAFT_METHODS.map(method => [method, 'local'])) as Record<LocalDraftMethod, 'local'>,
+    ...Object.fromEntries(LOCAL_ARTBOARD_METHODS.map(method => [method, 'local'])) as Record<LocalArtboardMethod, 'local'>,
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.

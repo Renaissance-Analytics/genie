@@ -71,6 +71,7 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'chatDrafts.load': [], 'chatDrafts.save': ['agent_a', { v: 1, text: 'kept draft', pills: [], attachments: [] }],
     'chatDrafts.putFile': [Uint8Array.of(111, 107)], 'chatDrafts.readFile': ['00000000-0000-4000-8000-000000000001'],
     'chatDrafts.release': [['00000000-0000-4000-8000-000000000001']],
+    'artboard.read': ['work'], 'artboard.review': ['work', 'p1', 'approved', 'review comment'],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
@@ -111,6 +112,9 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
             putFile: async bytes => recorded('chatDrafts.putFile', [bytes], '00000000-0000-4000-8000-000000000001'),
             readFile: async ref => recorded('chatDrafts.readFile', [ref], null),
             release: async refs => recorded('chatDrafts.release', [refs], undefined),
+        }, artboard: {
+            read: async id => recorded('artboard.read', [id], { posts: [] }),
+            review: async (id, post, verdict, comment) => recorded('artboard.review', [id, post, verdict, comment], { ok: true, delivered: false }),
         } });
         const area = await LocalStagingArea.open(dir);
         wireInvocations = [];

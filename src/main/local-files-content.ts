@@ -3,15 +3,17 @@ import type { BlobKind, BlobOpener, BlobSource } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_TTL_MS, type MetadataItem, type PageKind, type PageOpener, type PageSource } from '../core/local-content.js';
 import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesPageKind, type FilesProjection } from '../core/local-files.js';
 import { validateDraftRanges, type DraftContentEnvelope, type DraftMetadata, type LocalDraftMethod } from '../core/local-drafts.js';
+import type { ResolvedBoard } from '../core/artboard.js';
+import type { ArtboardBlob, ArtboardContentEnvelope, ArtboardMetadata } from '../core/local-artboard.js';
 import { LocalBlobs } from './local-blobs.js';
 import { LocalPageBudget, LocalPages } from './local-pages.js';
 
 interface Scope { ref: string; expires: number; timer: ReturnType<typeof setTimeout>; releaseBudget: () => void; refs: Set<string>; sources: Set<BlobSource>; heldSources: Set<StreamResource>; closing: Promise<void> }
 interface StreamResource { scope: Scope; type: 'source'; source: BlobSource; closing: Promise<void> | null }
-type Resource = StreamResource | ({ scope: Scope } & ({ type: 'blob'; kind: BlobKind; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> } | { type: 'draft-page'; items: readonly DraftMetadata[] }));
+type Resource = StreamResource | ({ scope: Scope } & ({ type: 'blob'; kind: BlobKind; bytes: Buffer | null; sha256: string } | { type: 'page'; kind: FilesPageKind; value: readonly unknown[] | Record<string, unknown>; object: boolean; projected: boolean; cache?: Map<number, MetadataItem> } | { type: 'draft-page'; items: readonly DraftMetadata[] } | { type: 'artboard-page'; items: readonly ArtboardMetadata[] }));
 const sourceValue = (value: unknown): value is BlobSource => !!value && typeof value === 'object' && typeof (value as BlobSource).read === 'function' && typeof (value as BlobSource).close === 'function';
 
-/** One connection's workspace/draft snapshots. Shared budget and expiry, including forgotten finally/release. */
+/** One connection's workspace/draft/ArtBoard snapshots. Shared budget and expiry, including forgotten finally/release. */
 export class LocalFilesContent {
     readonly blobs: LocalBlobs;
     readonly pages: LocalPages;
@@ -71,6 +73,29 @@ export class LocalFilesContent {
         resource.bytes = Buffer.concat(chunks, length); resource.sha256 = createHash('sha256').update(resource.bytes).digest('hex');
         const list = this.#resource(scope, { scope, type: 'draft-page', items });
         return { draftsContent: { ref, blob, list, count: items.length } } satisfies DraftContentEnvelope;
+    }
+    artboardResult(ref: string, value: unknown): unknown {
+        const scope = this.#scope(ref), board = value as ResolvedBoard;
+        if (!board || !Array.isArray(board.posts)) throw new Error('invalid native ArtBoard response');
+        if (!board.posts.length) { this.release(ref); return value; }
+        const blob = (bytes: Buffer, type: string): ArtboardBlob => {
+            const sha256 = createHash('sha256').update(bytes).digest('hex'), ref = this.#resource(scope, { scope, type: 'blob', kind: 'artboard-post', bytes, sha256 });
+            return { ref, size: bytes.length, sha256, type };
+        };
+        const items: ArtboardMetadata[] = board.posts.map((post, index) => {
+            let artifact: ArtboardBlob;
+            if (post.kind === 'html' && typeof post.html === 'string') artifact = blob(Buffer.from(post.html), 'text/html');
+            else if (post.kind === 'image' && typeof post.src === 'string') {
+                const match = /^data:(image\/(?:png|jpeg|gif|svg\+xml|webp));base64,([A-Za-z0-9+/]*={0,2})$/.exec(post.src);
+                if (!match) throw new Error('invalid native ArtBoard image');
+                artifact = blob(Buffer.from(match[2]!, 'base64'), match[1]!);
+            } else throw new Error('invalid native ArtBoard artifact');
+            return { id: String(index), postId: post.id, title: post.title, kind: post.kind, createdAt: post.createdAt, askVerdict: post.askVerdict, artifact,
+                ...(post.note === undefined ? {} : { note: post.note }),
+                ...(post.review ? { review: { verdict: post.review.verdict, at: post.review.at, ...(post.review.comment === undefined ? {} : { comment: blob(Buffer.from(JSON.stringify(post.review.comment)), 'application/json') }) } } : {}) };
+        });
+        const list = this.#resource(scope, { scope, type: 'artboard-page', items });
+        return { artboardContent: { ref, list, count: items.length, ...(board.error === undefined ? {} : { error: board.error }) } } satisfies ArtboardContentEnvelope;
     }
     release(ref: unknown): { released: boolean } {
         const scope = typeof ref === 'string' ? this.#scopes.get(ref) : undefined;
@@ -150,6 +175,10 @@ export class LocalFilesContent {
     #closeStream(resource: StreamResource): Promise<void> { return resource.closing ??= Promise.resolve().then(() => resource.source.close()); }
     #page(kind: PageKind, ref: string): PageSource {
         const resource = this.#refs.get(ref);
+        if (resource?.type === 'artboard-page' && kind === 'artboard-posts') {
+            const scope = this.#scope(resource.scope.ref); let index = 0, closed = false;
+            return { next: async () => { this.#scope(scope.ref); if (closed) throw new Error('this ArtBoard metadata source is closed'); return resource.items[index++] ?? null; }, close: async () => { closed = true; } };
+        }
         if (resource?.type === 'draft-page' && kind === 'chat-drafts') {
             const scope = this.#scope(resource.scope.ref); let index = 0, closed = false;
             return {
