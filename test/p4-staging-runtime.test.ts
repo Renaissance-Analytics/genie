@@ -136,7 +136,7 @@ describe('7B owned staging at real host composition startup', () => {
         const env = { ...process.env }; for (const key of Object.keys(env)) if (key.toUpperCase() === 'PSMODULEPATH') delete env[key];
         const { stdout } = await promisify(execFile)(join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'), ['-NoLogo', '-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { env, windowsHide: true, timeout: 15_000 });
         const acl = JSON.parse(stdout); expect(acl.targets[0].protected).toBe(true);
-        for (const target of acl.targets.slice(0, 2)) { expect(target.owner).toBe(acl.sid); expect(target.rules).toEqual([{ sid: acl.sid, allow: true, full: true }]); }
+        for (const [index, target] of acl.targets.slice(0, 2).entries()) { expect(target.owner, index === 0 ? 'staging root owner' : 'stage file owner').toBe(acl.sid); expect(target.rules).toEqual([{ sid: acl.sid, allow: true, full: true }]); }
         expect(acl.targets[2].rules.some((r: { sid: string }) => r.sid !== acl.sid)).toBe(true);
     });
 });

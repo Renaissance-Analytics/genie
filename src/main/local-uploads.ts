@@ -1,8 +1,9 @@
 import { createHash, randomUUID, type Hash } from 'node:crypto';
-import { chmod, mkdir, open, rm, type FileHandle } from 'node:fs/promises';
+import { mkdir, open, rm, type FileHandle } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { BLOB_READ_BYTES } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_CHUNK_BYTES, LOCAL_UPLOAD_MAX_BYTES, LOCAL_UPLOAD_TTL_MS, MAX_LOCAL_UPLOADS, type LocalUploadInfo, type LocalUploadSource, type LocalUploadTarget } from '../core/local-content.js';
+import { restrictPrivateDirectories, restrictPrivateFile } from './private-credentials.js';
 
 /** Host policy, never a max supplied by the window. Previously unlimited writes get the approved staging ceiling. */
 export const LOCAL_UPLOAD_RULES = Object.freeze([
@@ -45,12 +46,12 @@ export class LocalUploads {
             if (!this.#dir) {
                 const dir = this.directory;
                 await mkdir(dir, { mode: 0o700 });
-                try { await chmod(dir, 0o700); this.#dir = dir; }
+                try { await restrictPrivateDirectories([dir]); this.#dir = dir; }
                 catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
             }
             const id = randomUUID(), entry: Entry = { id, purpose: rule.purpose, subtype: rule.subtype, size: v.size, received: 0, next: 0, startedAt: this.#now(), path: join(this.#dir, id), file: null, hash: createHash('sha256') };
             this.#staged.set(id, entry);
-            try { entry.file = await open(entry.path, 'wx+', 0o600); }
+            try { entry.file = await open(entry.path, 'wx+', 0o600); await restrictPrivateFile(entry.path); }
             catch (error) { await this.#release(entry); throw error; }
             return { id, size: entry.size };
         });
