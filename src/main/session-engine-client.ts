@@ -40,6 +40,7 @@ import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js'
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
+import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
@@ -146,6 +147,7 @@ export class SessionEngineClient {
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
+    #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
     #tynn: TynnAccountReplica | null = null;
@@ -328,6 +330,12 @@ export class SessionEngineClient {
                 return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
+                return;
+            case 'appInbox.dump':
+                this.appInbox().rebase(payload as AppInboxDump);
+                return;
+            case 'appInbox.event':
+                this.appInbox().apply(payload as AppInboxEvent);
                 return;
             case 'hosting.dump':
                 this.hosting().rebase(payload as HostingDump);
@@ -518,6 +526,16 @@ export class SessionEngineClient {
      * genie-host's front door, service engines and site routes (P5a), as this window reads and drives them: the dump
      * arrives before `engine.ready`, so a connected window reads them synchronously.
      */
+    appInbox(): AppInboxReplica {
+        this.#appInbox ??= new AppInboxReplica(async (method, args) => {
+            const reply = await this.call('engine.appInbox', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#appInbox;
+    }
+
+    /** genie-host's app door and its keys (P5a.2), as this window reads and changes them. */
     hosting(): HostingReplica {
         this.#hosting ??= new HostingReplica(async (method, args) => {
             const reply = await this.call('engine.hosting', [method, [...args]]);

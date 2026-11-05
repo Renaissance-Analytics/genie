@@ -31,6 +31,7 @@ import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
 import type { HostingService } from './hosting-host.js';
+import type { AppInboxHost } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { ProcessesService } from './processes-host.js';
 import type { FlowsService } from './flows-host.js';
@@ -130,6 +131,8 @@ export interface EngineServerOptions {
     readonly supervisor?: SupervisorService;
     /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */
     readonly hosting?: HostingService;
+    /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only, like the hosting. */
+    readonly appInbox?: AppInboxHost;
     /** Takes the window's environment into this host's (`engine.windowEnv`, and with each start); `adoptWindowEnv` on `process.env` by default. */
     readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
@@ -214,6 +217,9 @@ export class SessionEngineServer {
         });
         options.hosting?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'hosting.event', event);
+        });
+        options.appInbox?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'appInbox.event', event);
         });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
@@ -371,6 +377,7 @@ export class SessionEngineServer {
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
         // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
         if (this.#options.hosting && conn.local) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
+        if (this.#options.appInbox && conn.local) this.#event(conn, 'appInbox.dump', this.#options.appInbox.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
@@ -535,6 +542,10 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.appInbox':
+                if (!this.#options.appInbox) throw new Error('This host runs no app door.');
+                if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
+                return this.#options.appInbox.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.hosting':
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
                 if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');

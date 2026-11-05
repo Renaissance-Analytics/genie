@@ -230,6 +230,7 @@ import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
 import { AppInboxKeys } from './app-inbox-keys.js';
+import type { AppInboxReplica } from './app-inbox-host.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
 import { type AppSourceKind } from '../core/app-inbox.js';
 import { IssueWatchClient, type IssueWatchRefreshAnswer } from './issue-watch-client.js';
@@ -2544,11 +2545,16 @@ async function boot(): Promise<void> {
      * composition, so the sites compose starts are handed their own credential at their first start. Its port is
      * remembered (a script outside Genie keeps one address); the keys are app-inbox-keys.ts's.
      */
-    const appInboxKeys = await AppInboxKeys.open(genieHome());
+    // WITH GENIE-HOST LINKED THE DOOR AND ITS KEYS ARE THE HOST'S (P5a.2 ruling 3): every credential is minted there, window or
+    // no window. This window starts no door and opens no keys (one writer of app-inbox.json); it drives the host's through the
+    // replica — a script key's secret reaches it once, in the answer to its own create. Its own door only on the emergency path.
+    const linkedAppInbox = agentEngineLink ? agentEngineLink.client.appInbox() : null;
+    const ownAppInboxKeys = linkedAppInbox ? null : await AppInboxKeys.open(genieHome());
+    const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox ?? ownAppInboxKeys!;
     const appInboxEndpointFile = join(genieHome(), 'app-inbox-endpoint.json');
     let appInboxServer: AppInboxServer | null = null;
-    const appInboxService = new AppInboxService({
-        keys: appInboxKeys,
+    const appInboxService = ownAppInboxKeys ? new AppInboxService({
+        keys: ownAppInboxKeys,
         // Late-bound: a request that arrives while Genie is still composing is answered, never crashed on.
         inbox: {
             send: (input) => (services ? services.inbox.send(input) : Promise.reject(new Error('Genie is still starting; try again in a moment'))),
@@ -2561,8 +2567,8 @@ async function boot(): Promise<void> {
         enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
         log: (line) => console.log(line),
-    });
-    try {
+    }) : null;
+    if (appInboxService) try {
         let remembered: number | undefined;
         try { const v = JSON.parse(readFileSync(appInboxEndpointFile, 'utf8')) as { port?: unknown }; if (typeof v.port === 'number') remembered = v.port; } catch { remembered = undefined; }
         appInboxServer = await startAppInboxServer({ service: appInboxService, port: remembered ?? APP_INBOX_PORT });
@@ -2572,7 +2578,7 @@ async function boot(): Promise<void> {
         console.error(`[app-inbox] the door for apps could not listen: ${error instanceof Error ? error.message : String(error)}`);
     }
     /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
-    const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
+    const appInboxEnv = (source: AppEnvSource): Record<string, string> => (ownAppInboxKeys ? appInboxEnvFor({ url: appInboxServer?.url ?? null, token: ownAppInboxKeys.tokenFor(source) }) : {});
     // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
     // replicas of them. Only the emergency in-process engine opens them here.
     const engineForStores = agentEngineLink;
@@ -3411,7 +3417,7 @@ async function boot(): Promise<void> {
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     const appInboxState = (workspaceId: string) => ({
-        url: appInboxServer?.url ?? null,
+        url: appInboxServer?.url ?? linkedAppInbox?.url() ?? null,
         enabled: composed.settings.snapshotFor(workspaceId).app_inbox !== false,
         sources: appInboxKeys.sources(workspaceId),
         revoked: appInboxKeys.revokedSources(workspaceId),

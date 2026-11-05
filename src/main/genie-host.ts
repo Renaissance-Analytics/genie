@@ -23,6 +23,7 @@ import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
+import { AppInboxHost } from './app-inbox-host.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
@@ -226,8 +227,23 @@ async function main(): Promise<void> {
         connected: () => engineRef?.localWindowConnected() ?? false,
         ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
     });
-    /** Each site's app-inbox credential, as a window minted it (the app-inbox server is the window's until P5b). */
-    const siteAppEnvs = new Map<string, Readonly<Record<string, string>>>();
+    /*
+     * THE APP DOOR (genie#1345; P5a.2 ruling 3): the door apps and scripts post through, and its keys — one writer of
+     * app-inbox.json — run HERE, so every site's and kept process's credential is minted here, with or without a window,
+     * and the door that accepts it is up as long as the host is. Before the hosting: a site started at boot gets one.
+     */
+    let hostingNow: HostingStack | null = null;
+    const appInboxDoor = await AppInboxHost.start({
+        home,
+        inbox: own.inbox,
+        roster: () => hostRegistry.listAgents(),
+        slugs: () => hostRegistry.workspaceSlugs(),
+        defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+        enabled: (workspaceId) => settings.snapshotFor(workspaceId).app_inbox !== false,
+        siteHosts: (workspaceId) => hostingNow?.sites.list(workspaceId).map((s) => s.host) ?? [],
+        workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        log: (line) => { say(line); lifecycleLog(line); },
+    });
     const workspacesListeners = new Set<() => void>();
     stores.onEvent((event) => {
         if (event.store !== 'registry') return;
@@ -240,7 +256,7 @@ async function main(): Promise<void> {
             userData: home,
             supervisor: processSupervisor,
             settings,
-            appEnv: (source) => siteAppEnvs.get(source.id) ?? {},
+            appEnv: (source) => appInboxDoor.envFor(source),
             elevate: (steps) => hostingElevation.run(steps),
             workspaces: () => hostRegistry.listWorkspaces(),
             onWorkspacesChange: (listener) => { workspacesListeners.add(listener); return () => { workspacesListeners.delete(listener); }; },
@@ -249,6 +265,7 @@ async function main(): Promise<void> {
         say(`Genie's hosting could not start in the host: ${error instanceof Error ? error.message : String(error)}`);
     }
     const hostingStack = hosting;
+    hostingNow = hostingStack;
     const hostingService = hostingStack ? new HostingService(hostingStack, {
         workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
         elevation: hostingElevation,
@@ -259,22 +276,6 @@ async function main(): Promise<void> {
             return () => { off(); workspacesListeners.delete(listener); };
         },
     }) : null;
-    /** The sites' app credentials, asked of the newest window; a site whose credential moved gets it now. */
-    const refreshSiteAppEnvs = async (): Promise<void> => {
-        if (!hostingStack || !engineRef?.windowConnected()) return;
-        const sites = hostingStack.sites.list().map((s) => ({ kind: 'site' as const, id: s.id, name: s.name, workspaceId: s.workspaceId }));
-        if (sites.length === 0) return;
-        const envs = await engineRef.appEnvs(sites).catch(() => ({} as Record<string, Record<string, string>>));
-        const moved = new Set<string>();
-        for (const s of sites) {
-            const next = envs[s.id];
-            if (!next || JSON.stringify(next) === JSON.stringify(siteAppEnvs.get(s.id) ?? {})) continue;
-            siteAppEnvs.set(s.id, next);
-            moved.add(s.workspaceId);
-        }
-        for (const ws of moved) hostingStack.sites.serviceEnvChanged(ws);
-    };
-    hostingStack?.sites.onChange(() => { void refreshSiteAppEnvs(); });
     /*
      * THE TERMINALS (P3.3e): the `terminals` spawn-host child is this host's own now — its shells (and their scrollback)
      * outlive the window, and an agent's `manageTerminals` works with none. Windows drive them through the service.
@@ -353,8 +354,6 @@ async function main(): Promise<void> {
             say(`windows connected: ${n}`);
             // A window linking is a good moment to ask Tynn again, for an agent still waiting on it.
             if (n > windowsLinked) tynnRecovery?.nudge();
-            // And for the sites' app credentials, which only a window can mint (P5a).
-            if (n > windowsLinked) void refreshSiteAppEnvs();
             windowsLinked = n;
         },
         // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
@@ -363,6 +362,7 @@ async function main(): Promise<void> {
         terminals: terminalsService,
         supervisor: supervisorService,
         ...(hostingService ? { hosting: hostingService } : {}),
+        appInbox: appInboxDoor,
         processes: processesService,
         flows: flowsService,
         stores,
@@ -481,14 +481,6 @@ async function main(): Promise<void> {
         void tynnRecovery?.recover();
         tynnRecovery?.kick();
     }, () => {});
-    /** Kept processes' app-inbox credentials, as a window minted them (P3.3c); none with no window since the host began. */
-    const appEnvCache = new Map<string, Readonly<Record<string, string>>>();
-    const refreshAppEnvs = async (book: ProcessBook): Promise<void> => {
-        const kept = book.kept().map((p) => ({ id: p.id, name: p.name, workspaceId: p.workspaceId }));
-        if (kept.length === 0 || !engine.windowConnected()) return;
-        const envs = await engine.appEnvs(kept).catch(() => ({} as Record<string, Record<string, string>>));
-        for (const [id, env] of Object.entries(envs)) appEnvCache.set(id, env);
-    };
     /** Flows (P3.3d), once — at the first window's v1 import, after the book (the old scheduled tasks move into it). */
     let flowsOpening: Promise<void> | null = null;
     let processBookNow: ProcessBook | null = null;
@@ -546,7 +538,8 @@ async function main(): Promise<void> {
                 supervisor: processSupervisor,
                 // The workspace's service variables the last window handed over (its engines are the window's until P5).
                 envFor: (workspaceId: string) => engine.serviceEnvFor(workspaceId),
-                appEnv: (p: { readonly id: string }) => appEnvCache.get(p.id) ?? {},
+                // Each kept process's OWN app credential, minted here (P5a.2), window or no window.
+                appEnv: (p: { readonly kind: 'process'; readonly id: string; readonly name: string; readonly workspaceId: string }) => appInboxDoor.envFor(p),
                 asleep: (workspaceId: string) => hostRegistry.workspace(workspaceId)?.asleep === true,
             };
             const processBook = await ProcessBook.open(home, {
@@ -570,8 +563,6 @@ async function main(): Promise<void> {
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
             processBookNow = processBook;
-            // Each kept process's app-inbox credential, minted by the window that is here, BEFORE they are restored.
-            await refreshAppEnvs(processBook);
             const restored = processBook.restore();
             lifecycleLog(`process book open: ${restored.started.length} restored, ${restored.heldBack.length} held back`);
         })();
@@ -664,6 +655,7 @@ async function main(): Promise<void> {
         // Then the hosting's own part (P5a), after the supervised processes: its syncs, its watches, the in-app door. The
         // engines' containers keep running (the ruling: databases outlive "Shut down everything").
         await hostingStack?.shutdown().catch(() => undefined);
+        await appInboxDoor.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));
