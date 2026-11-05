@@ -367,7 +367,7 @@ try {
         } catch (error) {
             // What there was instead, and what the panel says: the row's question unchanged, its failure readable.
             log(`  4 candidates after 30 s: ${JSON.stringify(await candidatesNow().catch((e) => String(e)))}`);
-            log(`  4 panel box says: ${JSON.stringify(await main.evaluate('document.querySelector("[data-site-panel-box]")?.innerText?.slice(0, 300) ?? null').catch((e) => String(e)))}`);
+            log(`  4 panel refusal says: ${JSON.stringify(await main.evaluate('document.querySelector("[data-site-refused]")?.innerText?.slice(0, 300) ?? null').catch((e) => String(e)))}`);
             throw error;
         }
         let lastPanelState;

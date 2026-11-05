@@ -25,7 +25,8 @@ describe('the store', () => {
         expect(guard).toBeGreaterThan(-1);
         expect(guard).toBeLessThan(body.indexOf('session.fromPath('));
         expect(guard).toBeLessThan(body.indexOf('mkdirSync('));
-        expect(body).toMatch(/throw new Error\(STORE_LOCKED\)/);
+        // In words a person can act on: unlock a locked keyring, install a missing one (core/browser-store.ts storeRefusal).
+        expect(body).toMatch(/throw new Error\(storeRefusal\(process\.platform, /);
     });
 
     it('a store already open is handed back without asking again: it opened with the key', () => {

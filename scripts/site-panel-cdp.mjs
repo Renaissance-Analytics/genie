@@ -94,6 +94,8 @@ try {
     if (LOCKED) {
         const refused = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`);
         check(refused.ok === false && refused.locked === true, 'no key: a site is refused, and says why', JSON.stringify(refused));
+        // No keyring at all (basic): the words say none is available and what to install, never "unlock it".
+        check(/no system keyring is available/.test(refused.error ?? '') && /GNOME Keyring or KWallet/.test(refused.error ?? '') && !/unlock/i.test(refused.error ?? ''), 'no keyring: the panel’s words say none is there and what to install', JSON.stringify(refused.error));
         await cdp.evaluate(`(() => { const v = document.createElement('webview'); v.setAttribute('src', 'https://${HOST}/'); document.body.appendChild(v); return true; })()`);
         await sleep(2500);
         check((await webviews()).length === 0, 'no key: a webview gets no guest', JSON.stringify((await webviews()).map((t) => t.url)));
