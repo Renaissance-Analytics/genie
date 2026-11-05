@@ -510,6 +510,8 @@ try {
         const restarted = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(added.id)},'graceful')`);
         demand(restarted?.ok, `start through app bridge: ${restarted?.reason??'no result'}`);
         demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app owns a ready connection');
+        // Off the workspace Dashboard: this view must have no activity subscription.
+        await main.evaluate("location.hash='#genie://settings'; true");
         await until('streaming agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
         const prompt = await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
         const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
@@ -533,7 +535,23 @@ try {
         demand(nativeEnd.records.some(r=>r.connectionId===w.connectionId&&!r.closed),'native connection remains live');
         demand(frameEnd===frameStart,'no frame reached connected main preload while ledger grew');
         demand(nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames===nativeStart.records.find(r=>r.connectionId===w.connectionId).frames,'actual server socket also sent no frame');
-        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; page/native frame deltas=0/0`;
+        // Positive activity gauge on that SAME app connection, then a second absence interval.
+        await main.evaluate(`window.__doorActivitySeen=0; window.__doorActivityOff=window.genieTest.activity.subscribe(feed=>{if(feed.agentId===${JSON.stringify(added.id)})window.__doorActivitySeen++}); true`);
+        try {
+            await until('watched activity callback',()=>main.evaluate('window.__doorActivitySeen>=2'),20_000);
+            demand(await main.evaluate('window.__doorCdp.frames.some(r=>r.frame?.kind==="event"&&r.frame.channel==="local-activity")'),'watched activity traverses the actual app frame channel');
+            const watched = await nativeSummary();
+            demand((await welcome(main)).connectionId===w.connectionId,'watch uses the unchanged app connection');
+            demand(watched.records.find(r=>r.connectionId===w.connectionId).frames>nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames,'native socket also measures watched activity frames');
+        } finally { await main.evaluate('window.__doorActivityOff?.(); delete window.__doorActivityOff; true'); }
+        await sleep(500);
+        const unwatchTicks = Math.max(...count(await ticks())), unwatchStart = await main.evaluate('window.__doorCdp.total'), unwatchNative = await nativeSummary();
+        await until('eight more unwatched provider ticks',async()=>Math.max(...count(await ticks()))>=unwatchTicks+8,20_000);
+        const unwatchEnd = await nativeSummary();
+        demand(await main.evaluate(`window.__doorCdp.total===${unwatchStart}`),'unwatched app receives zero frames again');
+        demand(unwatchEnd.records.find(r=>r.connectionId===w.connectionId).frames===unwatchNative.records.find(r=>r.connectionId===w.connectionId).frames,'native socket also sends zero frames after unwatch');
+        demand((await welcome(main)).connectionId===w.connectionId,'unwatch keeps the same app connection');
+        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; page/native frame deltas=0/0; watched local-activity positive; unwatched page/native=0/0`;
     });
 } catch (error) {
     if (!reports.some((r) => r.status === 'FAIL')) result(Number.parseInt(phase) || 1, error instanceof Unmeasured ? 'UNMEASURED' : 'FAIL', error.message);

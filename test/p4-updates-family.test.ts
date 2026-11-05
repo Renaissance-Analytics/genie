@@ -182,15 +182,34 @@ describe('update CDP callers use the actual cached page bridge', () => {
 });
 
 describe('the local protocol does not bypass the existing update state/explicit-action gates', () => {
-    function updater() {
+    function updater(overrides: Partial<UpdaterPort> = {}) {
         const quitAndInstall = vi.fn(), processes = vi.fn(() => []), kill = vi.fn(() => true), deferred: Array<() => void> = [];
-        const port: UpdaterPort = { configure: () => {}, check: async () => ({ version: '2.0.0-beta.58' }), download: async () => {}, quitAndInstall };
+        const port: UpdaterPort = { configure: () => {}, check: async () => ({ version: '2.0.0-beta.58' }), download: async () => {}, quitAndInstall, ...overrides };
         const host = new UpdateHost({ port, installDir: dir, ownPid: 1, processes, kill, clock: () => 123, caseInsensitive: false, defer: (fn) => { deferred.push(fn); } });
         const deps = protocolContractDeps(dir);
         deps.updates = { state: () => host.state(), check: () => host.check(), download: () => host.download(),
             install: () => { const pending = host.install(); return pending ? pending.then((result) => ({ report: result.report })) : null; }, onChange: (listener) => host.onChange(listener) };
         return { host, source: serve(deps), quitAndInstall, processes, kill, deferred };
     }
+    it.each(['idle', 'checking', 'none', 'available', 'downloading', 'installing', 'error'] as const)('install is refused in the %s phase without another drain or application', async (phase) => {
+        let releaseCheck!: (result: null) => void, releaseDownload!: () => void;
+        const f = updater(phase === 'checking' ? { check: () => new Promise((resolve) => { releaseCheck = resolve; }) }
+            : phase === 'none' ? { check: async () => null }
+                : phase === 'error' ? { check: async () => { throw new Error('fixture feed unavailable'); } }
+                    : phase === 'downloading' ? { download: () => new Promise<void>((resolve) => { releaseDownload = resolve; }) } : {});
+        let held: Promise<unknown> | undefined;
+        if (phase === 'checking') held = f.host.check();
+        else if (phase !== 'idle') {
+            await f.host.check();
+            if (phase === 'downloading') held = f.host.download();
+            if (phase === 'installing') { await f.host.download(); await f.host.install(); }
+        }
+        expect(f.host.state().phase).toBe(phase);
+        const scanned = f.processes.mock.calls.length, deferred = f.deferred.length, client = await f.source.connect();
+        expect(await client.bridge.updates.install()).toBeNull();
+        expect(f.processes).toHaveBeenCalledTimes(scanned); expect(f.deferred).toHaveLength(deferred); expect(f.kill).not.toHaveBeenCalled(); expect(f.quitAndInstall).not.toHaveBeenCalled();
+        releaseCheck?.(null); releaseDownload?.(); await held;
+    });
     it('install before a download is refused both idle and after a check, without process/installer side effects', async () => {
         const f = updater(), client = await f.source.connect();
         expect(await client.bridge.updates.install()).toBeNull();
