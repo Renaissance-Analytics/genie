@@ -40,6 +40,7 @@ const rows: Array<{ method: typeof methods[number]; args: unknown[]; call: (b: O
 let dir: string, devices: DeviceStore;
 const closes: Array<() => void> = [];
 function setup() {
+    const pairedDevices = devices;
     const ports = {
         state: vi.fn(() => state), workspaceExists: vi.fn((id: string) => id === 'work'),
         createKey: vi.fn(async (_id: string, _name: string) => ({ id: 'key_fixture', token: 'synthetic-key-never-a-real-secret' })),
@@ -56,14 +57,16 @@ function setup() {
     Object.assign(deps, { localOwner: { appInbox: ports, deviceLink: ports, tynnNetwork: { ...ports, shares: ports } } });
     const api = buildHostApi(deps), invoke = vi.spyOn(api, 'invoke'), calls: Array<{ method: string; args: unknown[] }> = [];
     let accept!: (connection: ServerConnection) => void;
-    new RemoteHost({ api, hostName: 'owner-fixture', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
+    new RemoteHost({ api, hostName: 'owner-fixture', baton: new Baton(), devices: pairedDevices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
         transport: { onConnection: (listener) => { accept = c => { c.onMessage(text => { const m = JSON.parse(text); if (m.kind === 'call') calls.push({ method: m.method, args: m.args }); }); listener(c); }; return () => {}; } } });
     function pair(proof?: PreAuth) { const p = inMemoryPair(); accept({ ...p.server, ...(proof ? { preAuth: proof } : {}) }); closes.push(() => p.client.close()); return p; }
     async function client(proof: PreAuth = localProof, mobile = false) { const p = pair(proof), c = connectRemote(p.client, { kind: proof.kind === 'local' ? 'local' : 'relay' }, 'owner-fixture', mobile ? { profile: 'mobile' } : {}); expect(await c.ready).toEqual({ ok: true }); return c; }
     async function raw(proof?: PreAuth, mobile = false) {
         const p = pair(proof), frames: WireMessage[] = []; p.client.onMessage(text => frames.push(JSON.parse(text)));
-        p.client.send(JSON.stringify({ kind: 'hello', auth: proof ? { kind: 'relay' } : { kind: 'token', token: devices.pair('owner').token }, ...(mobile ? { profile: 'mobile' } : {}) })); await tick();
-        expect(frames.some(f => f.kind === 'welcome')).toBe(true); frames.length = 0;
+        p.client.send(JSON.stringify({ kind: 'hello', auth: proof ? { kind: 'relay' } : { kind: 'token', token: pairedDevices.pair('owner').token }, ...(mobile ? { profile: 'mobile' } : {}) })); await tick();
+        expect(frames.some(f => f.kind === 'welcome')).toBe(true);
+        // Pairing and its token renewal are setup, including their real private-file ACL writes.
+        await pairedDevices.flushed(); frames.length = 0;
         return { frames, call: async (method: string, args: unknown[]) => { const id = calls.length + 100; p.client.send(JSON.stringify({ kind: 'call', id, method, args })); await tick(); return frames.find(f => f.kind === 'result' && f.id === id); } };
     }
     function port(): LocalFramePort {
@@ -76,7 +79,11 @@ function setup() {
     return { ports, deps, api, invoke, calls, client, raw, port };
 }
 beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'genie-p4-owner-')); let seq = 0; devices = await DeviceStore.open(dir, { now: Date.now, random: () => `synthetic-owner-${++seq}` }); });
-async function cleanupOwnerFixture(remove: typeof rm = rm) { for (const close of closes.splice(0)) close(); vi.unstubAllGlobals(); await tick(); await devices.flushed(); await remove(dir, { recursive: true, force: true }); }
+async function cleanupOwnerFixture(remove: typeof rm = rm) {
+    const ownedDir = dir, ownedDevices = devices;
+    for (const close of closes.splice(0)) close(); vi.unstubAllGlobals(); await tick();
+    await ownedDevices.flushed(); await remove(ownedDir, { recursive: true, force: true });
+}
 afterEach(() => cleanupOwnerFixture());
 
 it('late fixture cleanup removes only the directory whose device writes it awaited', async () => {
