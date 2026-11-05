@@ -9,7 +9,7 @@ import { activityTotal, activityWords, onTheClock, trayOnlyStep, trayProbeEnable
  * Genie between two lives — and then shuts everything down and exits.
  */
 
-const none: HostActivity = { agents: 0, terminals: 0, processes: 0, services: 0, armedFlows: 0, scheduledTasks: 0 };
+const none: HostActivity = { agents: 0, terminals: 0, processes: 0, services: 0, armedFlows: 0, scheduledTasks: 0, browser: 0 };
 
 describe('the host’s activity, in words and in total', () => {
     it('counts every kind, and words only the kinds that run', () => {

@@ -1,91 +1,84 @@
-import { WebContentsView, ipcMain, shell, type BrowserWindow } from 'electron';
-import { attachPageNavigation } from './page-navigation-electron.js';
+import { ipcMain, safeStorage, shell, type BrowserWindow, type WebContents } from 'electron';
+import { storeRefusal } from '../core/browser-store.js';
 import { normalizeNavUrl } from '../core/genie-browser.js';
-import { genieBrowserSession } from './genie-browser-electron.js';
-import { SitePanelViews, type PanelViewPort } from './site-panel-views.js';
 import type { Activation } from '../core/window-activation.js';
+import { workspaceBrowserSession } from './genie-browser-electron.js';
+import { attachPageNavigation } from './page-navigation-electron.js';
+import { guardSiteWebviews } from './site-webview-guard.js';
 
 /**
- * LIVE SITE PANELS — the Electron half (beta.35 item 36, step 5). Everything decidable is in site-panel-views.ts
- * (tested); this file only touches Electron, and its load-bearing lines are source-checked (test/site-panel-live.test.tsx):
+ * LIVE SITE PANELS, MAIN'S HALF (the host split, P2b; the owner, 2026-11-03). The page is a <webview> the window keeps in a
+ * layer (renderer/site-webview-layer.ts), so no bounds or show cross to main. Main does what must not be the renderer's:
  *
- * - each panel's page is a WebContentsView on the WINDOW the panel is in, placed over the panel's box;
- * - in the Genie browser's own session (`genieBrowserSession`: .gen to the front door, Genie's CA for .gen only, every
- *   request secure or cancelled) — the window's own session has no .gen route;
- * - isolated from Node with no preload, and NOT sandboxed (a sandboxed child view renders blank, electron#44897);
- * - a page's new window opens in the Genie browser window; a link off the Genie sites opens in the machine's browser;
- * - the MAIN window can be closed and built again (P1b: "Just close the UI", then Open Genie): the panels follow whichever
- *   window is the main one now — their IPC registered ONCE, each window attached as it is built, its panels closed with it.
+ * - the session is the store of the site's OWN workspace, from main's own list, whatever panel asked;
+ * - a site loads only once that store is routed to the front door (a `.gen` load before it would go to DNS);
+ * - each main window is guarded as it is built (site-webview-guard.ts);
+ * - a guest is driven as any page: fancy's navigation script, in an isolated world, on every load.
  */
 
 export interface SitePanelsOptions {
     /** The main window now; null while there is none (tray-only Genie). */
     readonly window: () => BrowserWindow | null;
-    /** The front door's port and Genie's CA NOW — read again when they change (P5a.2). */
-    readonly frontDoorPort: () => number;
-    readonly caPem: () => string | null;
+    readonly genieHome: string;
+    readonly frontDoorPort: number;
+    readonly caPem: string | null;
     readonly enabledHosts: () => readonly string[];
+    /** The workspace a served site belongs to, or null. */
+    readonly workspaceOfHost: (host: string) => string | null;
     /**
      * The Genie browser window, for a page's new window and the panel's "Open in browser". `activation` (genie#1235): the
      * panel's button is the person's; a page opening a window — its own script, or an agent driving it — is background.
      */
     readonly openInWindow: (url: string, activation: Activation) => void;
+    /** The host's browser service, for a panel's site in its own window. Null with no host. */
+    readonly browserCall: (method: string, args: readonly unknown[]) => Promise<unknown> | null;
+    /** Genie, started again: what lets a store open once the keyring is back. */
+    readonly restart: () => void;
 }
 
-export interface LiveSitePanels extends SitePanelViews {
-    /** A (new) main window: its panels close with it, and the next one starts with none. */
+export interface LiveSitePanels {
+    /** A (new) main window: its webviews are guarded from the start. */
     attach(window: BrowserWindow): void;
 }
 
 export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
-    const createView = (panelKey: string): PanelViewPort => {
-        // Asked by the window that shows the panel: there is one while a renderer can ask.
-        const window = options.window();
-        if (!window || window.isDestroyed()) throw new Error('no Genie window to place a site panel in');
-        const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem });
-        const view = new WebContentsView({ webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: false } });
-        const wc = view.webContents;
-        // Agents may drive it (browser rebuild step 7): fancy's navigation script, in an isolated world, on every load.
-        const detachPage = attachPageNavigation(`panel:${panelKey}`, wc);
-        view.setVisible(false);
-        window.contentView.addChildView(view);
-        wc.setWindowOpenHandler(({ url }) => {
-            options.openInWindow(url, 'background');
-            return { action: 'deny' };
-        });
-        wc.on('will-navigate', (event, url) => {
-            if ('url' in normalizeNavUrl(url, new Set(options.enabledHosts()))) return;
-            event.preventDefault();
-            if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {});
-        });
-        return {
-            load: (url) => { void (async () => { await routed(); await wc.loadURL(url); })().catch(() => {}); },
-            reload: () => wc.reload(),
-            setBounds: (bounds) => view.setBounds(bounds),
-            setVisible: (visible) => view.setVisible(visible),
-            destroy: () => {
-                detachPage();
-                if (!window.isDestroyed()) window.contentView.removeChildView(view);
-                if (!wc.isDestroyed()) wc.close();
-            },
-        };
+    const storeFor = (host: string) => {
+        const workspaceId = options.workspaceOfHost(host);
+        return workspaceId === null ? null : workspaceBrowserSession({ genieHome: options.genieHome, workspaceId, side: 'window', frontDoorPort: options.frontDoorPort, caPem: options.caPem });
     };
-    const panels = new SitePanelViews({ enabledHosts: options.enabledHosts, createView });
-
-    // The window's calls: only the main window's own (a panel is placed in the window that shows it).
+    // The window's calls: only the main window's own.
     const ours = (event: { sender: unknown }) => { const w = options.window(); return w !== null && !w.isDestroyed() && event.sender === w.webContents; };
     const key = (raw: unknown) => (typeof raw === 'string' ? raw : '');
-    ipcMain.handle('site-panel:show', (event, panelKey: unknown, host: unknown, raw: unknown) => {
-        const b = raw as { x?: unknown; y?: unknown; width?: unknown; height?: unknown } | null;
-        if (!ours(event) || !b || [b.x, b.y, b.width, b.height].some((n) => typeof n !== 'number' || !Number.isFinite(n))) return { ok: false, error: 'not a panel of this window' };
-        return panels.show(key(panelKey), key(host), { x: b.x as number, y: b.y as number, width: b.width as number, height: b.height as number });
+
+    ipcMain.handle('site-panel:prepare', async (event, raw: unknown) => {
+        if (!ours(event)) return { ok: false, error: 'this is not the main window' };
+        if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: storeRefusal(process.platform, process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null), locked: true };
+        const nav = normalizeNavUrl(key(raw), new Set(options.enabledHosts()));
+        if ('error' in nav) return { ok: false, error: nav.error };
+        const store = storeFor(new URL(nav.url).hostname);
+        if (store === null) return { ok: false, error: `${key(raw)} belongs to no workspace here` };
+        await store.routed;
+        return { ok: true };
     });
-    ipcMain.handle('site-panel:hide', (event, panelKey: unknown) => { if (ours(event)) panels.hide(key(panelKey)); });
-    ipcMain.handle('site-panel:reload', (event, panelKey: unknown) => { if (ours(event)) panels.reload(key(panelKey)); });
+    ipcMain.handle('site-panel:pop-out', async (event, panelKey: unknown, host: unknown) => { if (ours(event)) await options.browserCall('popOut', [key(panelKey), key(host)]); });
+    ipcMain.handle('site-panel:pop-back', async (event, panelKey: unknown) => { if (ours(event)) await options.browserCall('popBack', [key(panelKey)]); });
+    ipcMain.handle('site-panel:popped', async (event) => (ours(event) ? (await options.browserCall('popped', [])) ?? [] : []));
+    ipcMain.handle('site-panel:restart', (event) => { if (ours(event)) options.restart(); });
     ipcMain.handle('site-panel:open-window', (event, host: unknown) => { if (ours(event)) options.openInWindow(`https://${key(host)}/`, 'user-gesture'); });
-    return Object.assign(panels, {
+
+    return {
         attach(window: BrowserWindow): void {
-            window.on('closed', () => panels.closeAll());
+            guardSiteWebviews(window.webContents, {
+                enabledHosts: options.enabledHosts,
+                sessionForHost: (host) => { try { return storeFor(host)?.ses ?? null; } catch { return null; } },
+                openInWindow: options.openInWindow,
+                storeOf: (url) => { try { return options.workspaceOfHost(new URL(url).hostname.toLowerCase()); } catch { return null; } },
+                openExternal: (url) => { void shell.openExternal(url).catch(() => {}); },
+                onGuest: (guest: WebContents) => {
+                    const detach = attachPageNavigation(`panel:${guest.id}`, guest);
+                    guest.once('destroyed', detach);
+                },
+            });
         },
-    });
+    };
 }

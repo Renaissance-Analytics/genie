@@ -308,15 +308,18 @@ jobs:
         id: local-door
         continue-on-error: true
         run: |
+          # On a test keyring, as the site panel rows: row 4 opens a real site panel, and its store opens only with the key (P2b store guard).
+          # This step runs before the site panel step, so it installs the keyring itself (apt is idempotent).
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
           set +e
-          timeout 300 node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
           probe=$?
           cat local-door-break.log
           if [ "$probe" -ne 1 ] || ! grep -q 'FAIL 1:' local-door-break.log || ! grep -q 'actual refusal:.*not an admitted' local-door-break.log; then
             echo 'code=1' >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          timeout 300 node scripts/local-door-cdp.mjs > local-door.log 2>&1
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs > local-door.log 2>&1
           code=$?
           cat local-door.log
           echo "code=$code" >> "$GITHUB_OUTPUT"
@@ -349,6 +352,21 @@ jobs:
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
+      # A SITE PANEL IN GENIE'S OWN WINDOW (P2b): its real CSP, its real preload, a real <webview>, main's guard.
+      # Its own launch, home and profile. No Caddy here, so the page itself is the VM's to show.
+      - name: a site panel in the real window
+        run: |
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
+          # An unlocked keyring on its own session bus: no store opens without one (core/browser-store.ts).
+          timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs
+
+      - name: a site panel with no key opens no store
+        run: SITE_PANEL_LOCKED=1 CDP_PORT=9336 timeout 120 node scripts/site-panel-cdp.mjs
+
+      # THE GENIE BROWSER AS ITS OWN PROCESS (P2b): started by the host, outliving the window, ended with the host.
+      - name: the Genie browser's own process
+        run: timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs
+
       - name: the spawn host started in the real app
         run: |
           grep -h "spawn host" ~/.genie/runtime/lifecycle.log | tail -5 || true
@@ -408,6 +426,14 @@ jobs:
 
       - name: build the installers
         run: npx electron-builder --publish never
+
+      # The fuse as the built binary has it, not as the config asks.
+      - name: the cookie fuse is on in what was packaged
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then app=$(ls release/win-unpacked/*.exe | head -1); else app=$(ls -d release/linux-unpacked/[gG]enie* | head -1); fi
+          npx --yes @electron/fuses read --app "$app" | tee fuses.txt
+          grep -q "EnableCookieEncryption is Enabled" fuses.txt
 
       # The artifacts, so somebody can actually install one and find out. A build that produced
       # a file nobody can reach proves only that the command exited zero.

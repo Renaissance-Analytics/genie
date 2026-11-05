@@ -158,14 +158,12 @@ describe('the Electron half, from source', () => {
     it('that session trusts the HOST’s CA (looked up live), and is routed to that connection’s door (re-routed when it moves)', () => {
         expect(win).toMatch(/guardSession\(ses, \(\) => remotes\.get\(key\)\?\.ca\(\) \?\? null\)/);
         expect(win).toMatch(/if \(remote && live\.port !== remote\.port\(\)\) \{\s*live\.port = remote\.port\(\);\s*live\.routed = routeSession\(live\.ses, remote\.port\(\), log\);/);
-        // CONTROL: this machine's session keeps Genie's own CA and front door — read as they are now (P5a.2: genie-host's
-        // front door can come back on another port or with another CA), and re-routed when the port moves.
-        expect(win).toMatch(/guardSession\(ses, options\.caPem\)/);
-        expect(win).toMatch(/const live = \{ port: options\.frontDoorPort\(\), routed: Promise\.resolve\(\) \};\s*live\.routed = routeSession\(ses, live\.port, log\);/);
-        expect(win).toMatch(/if \(port !== live\.port\) \{ live\.port = port; live\.routed = routeSession\(ses, port, log\); \}/);
-        // One place each rule is written: both sessions go through it.
+        // CONTROL: this machine's session keeps Genie's own CA and front door.
+        expect(win).toMatch(/guardSession\(ses, \(\) => sharedCa\)/);
+        expect(win).toMatch(/routeSession\(ses, options\.frontDoorPort, log\)/);
+        // One place each rule is written: every session goes through it (this machine's, a remote's, a workspace's store).
         expect(count(win, /setCertificateVerifyProc\(/g)).toBe(1);
-        expect(count(win, /guardSession\(ses,/g)).toBe(2);
+        expect(count(win, /guardSession\(ses,/g)).toBe(3);
     });
 
     it('main decides by the window that asked: the sender’s remote URL and its relay channels, never an argument', () => {
