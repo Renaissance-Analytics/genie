@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CONTROL_METHODS, type WireMessage } from '../src/core/remote-protocol.js';
 import { pageBridge, type PreloadBridge } from '../src/renderer/bridge.js';
 import { localWatchDoor, watchTick as tick } from './support/local-watch-door.js';
-import { resultValue } from './support/local-resource-door.js';
+import { resourceDoor, resultValue } from './support/local-resource-door.js';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => { vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
@@ -95,6 +95,19 @@ describe('7D owned views preserve the existing hub batching and git counts', () 
 });
 
 describe('7D same-client subscriptions and bounded cached refetch', () => {
+    it('two local clients keep their Files business calls on their own admitted connections', async () => {
+        const a = [{ id: 'a.txt', label: 'a.txt', type: 'file' }], b = [{ id: 'b.txt', label: 'b.txt', type: 'file' }];
+        const first = await resourceDoor(cleanups, {}, { localFiles: { files: () => ({ tree: async () => a }) } }), ca = await first.client();
+        const second = await resourceDoor(cleanups, {}, { localFiles: { files: () => ({ tree: async () => b }) } }), cb = await second.client();
+        expect(await ca.bridge.files.tree('work')).toEqual(a); expect(await cb.bridge.files.tree('work')).toEqual(b);
+        expect(first.invoke).toHaveBeenCalledExactlyOnceWith('files.tree', ['work']); expect(second.invoke).toHaveBeenCalledExactlyOnceWith('files.tree', ['work']);
+    });
+    it('a remote bridge keeps its no-Files result when a local bridge exists in the same page', async () => {
+        const local = await resourceDoor(cleanups, {}, { localFiles: { files: () => ({ tree: async () => [{ id: 'local.txt', label: 'local.txt', type: 'file' }] }) } });
+        const ca = await local.client(); expect(await ca.bridge.files.tree('work')).not.toBeNull(); local.invoke.mockClear();
+        const remote = await local.client({ kind: 'relay', label: 'remote owner', isOwner: true, workspaceId: null, readonly: false });
+        expect(await remote.bridge.files.tree('work')).toBeNull(); expect(local.invoke).not.toHaveBeenCalled();
+    });
     it('records each view registration and cleanup and preserves native changed/git and onChange callbacks', async () => {
         const f = await localWatchDoor(cleanups), client = await f.client(), a = vi.fn(), b = vi.fn(), changed = vi.fn();
         const offChanges = client.bridge.files.onChange(changed), offA = client.bridge.files.subscribe!('work', { git: true }, a), offB = client.bridge.files.subscribe!('work', {}, b); await tick();
