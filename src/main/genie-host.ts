@@ -496,6 +496,8 @@ async function main(): Promise<void> {
     /** Flows (P3.3d), once — at the first window's v1 import, after the book (the old scheduled tasks move into it). */
     let flowsOpening: Promise<void> | null = null;
     let processBookNow: ProcessBook | null = null;
+    /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
+    const clocks: Array<{ stop(): void }> = [];
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
@@ -536,6 +538,7 @@ async function main(): Promise<void> {
             const regs = mcp?.registrations() ?? [];
             if (regs.length > 0) engineFlows.setToolCaller(createFlowToolCaller({ registrations: regs, callers: flowCallers }));
             flowsService.attach({ store, scheduler: engineFlows.scheduler });
+            clocks.push(engineFlows);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
@@ -571,6 +574,7 @@ async function main(): Promise<void> {
                 schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
             });
             scheduler.plan();
+            clocks.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
@@ -670,6 +674,7 @@ async function main(): Promise<void> {
             supervisor: processSupervisor,
             hosting: hostingStack,
             endChildren: async () => { await relay?.stop(); },
+            schedulers: clocks,
             log: (line) => { say(line); lifecycleLog(line); },
         });
         await appInboxDoor.close().catch(() => undefined);

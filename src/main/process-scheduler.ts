@@ -41,6 +41,8 @@ export interface ProcessSchedulerDeps {
 export class ProcessScheduler {
     readonly #deps: ProcessSchedulerDeps;
     #cancel: (() => void) | null = null;
+    /** Stopped for good ("Shut down everything", P5a.3): nothing is armed, fired or run from here. */
+    #stopped = false;
     /** Command runs in flight: the task id → its run's start, settled when the supervisor reports its exit. */
     readonly #inFlight = new Map<string, { at: number; done: Promise<void>; finish: () => void }>();
     /** Outcome writes not yet on disk (and not yet told to the book's listeners) — `settled()` waits for these too. */
@@ -56,6 +58,7 @@ export class ProcessScheduler {
     plan(): void {
         this.#cancel?.();
         this.#cancel = null;
+        if (this.#stopped) return;
         const now = this.#deps.now();
         let at: number | null = null;
         let due: string[] = [];
@@ -75,6 +78,7 @@ export class ProcessScheduler {
     async runNow(id: string): Promise<RunNowResult> {
         const p = this.#deps.book.scheduledTasks().find((x) => x.id === id);
         if (!p) throw new Error(`no scheduled task ${id}`);
+        if (this.#stopped) return 'held';
         return this.#run(p);
     }
 
@@ -92,8 +96,16 @@ export class ProcessScheduler {
         }
     }
 
+    /** Stop for good — "Shut down everything" (host-shutdown.ts): the timer cancelled, and a fire already due runs nothing. */
+    stop(): void {
+        this.#stopped = true;
+        this.#cancel?.();
+        this.#cancel = null;
+    }
+
     #fire(ids: readonly string[]): void {
         this.#cancel = null;
+        if (this.#stopped) return;
         const tasks = this.#deps.book.scheduledTasks().filter((p) => ids.includes(p.id) && p.wanted);
         // Re-plan FIRST, so the next due is held whatever the runs do.
         this.plan();
