@@ -43,6 +43,17 @@ async function heldProcess() {
 }
 
 describe('7B owned staging at real host composition startup', () => {
+    it('two sequential native process reads give this process the identical birth time used by staging', async () => {
+        const nativeRead = systemProcessTree.read!.bind(systemProcessTree);
+        const first = (await nativeRead())?.find(p => p.pid === process.pid);
+        expect(first?.started).toBeGreaterThan(0);
+        const second = (await systemProcessTree.read!())?.find(p => p.pid === process.pid);
+        expect(second?.started).toBe(first!.started);
+        const f = await homeFixture(), module = await areaModule(), area = await module.LocalStagingArea.open(f.home);
+        expect(area.directory).toBe(join(f.root, `${process.pid}-${first!.started}`));
+        await area.sweep();
+        expect((await stat(area.directory)).isDirectory()).toBe(true);
+    });
     it('removes stale files and nested connection folders at start, while preserving other runtime data', async () => {
         const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); // same pid, DIFFERENT start time
         await mkdir(join(stale, 'old-connection'), { recursive: true });

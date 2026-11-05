@@ -60,6 +60,12 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],
     'files.children': ['work', ''], 'files.open': ['work', 'missing.txt'],
     'files.readMedia': ['work', 'missing.png'], 'files.upload': ['work', '', null],
+    'files.tree': ['work'], 'files.localChildren': ['work', ''], 'files.localOpen': ['work', 'missing.txt'],
+    'files.localReadMedia': ['work', 'missing.png'], 'files.lastCommitted': ['work', 'missing.txt'],
+    'files.state': ['work'], 'files.gitStatus': ['work'], 'files.create': ['work', 'a', 'file'],
+    'files.rename': ['work', 'a', 'b'], 'files.duplicate': ['work', 'a'], 'files.trash': ['work', 'a'],
+    'files.readBytes': ['work', 'editor', 'missing.xlsx'], 'files.write': ['work', 'a.txt', 'hello', null],
+    'files.writeBytes': ['work', 'editor', 'a.xlsx', 'b2s=', null], 'repo.call': ['status', 'work', ''],
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };

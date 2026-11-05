@@ -1,5 +1,6 @@
 import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
+import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
@@ -118,6 +119,7 @@ export const REMOTE_METHODS = [
     'files.open',
     'files.readMedia',
     'files.upload',
+    ...LOCAL_FILES_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -253,6 +255,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'files.open': 'read',
     'files.readMedia': 'read',
     'files.upload': 'write',
+    ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.

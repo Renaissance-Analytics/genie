@@ -22,6 +22,8 @@ import { droneRefusal, type WorkstationRole } from '../core/workstation-role.js'
 import type { AppSourceKind } from '../core/app-inbox.js';
 import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
+import { isLocalFilesMethod } from '../core/local-files.js';
+import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -61,6 +63,7 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    localFiles?: LocalFilesDeps;
     localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
     schedule?: (ms: number, fn: () => void) => () => void;
@@ -232,6 +235,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     };
 
     const invoke = async (method: RemoteMethod, args: unknown[]): Promise<unknown> => {
+        if (isLocalFilesMethod(method)) return invokeLocalFiles(deps.localFiles, method, args);
         switch (method) {
             case 'appInbox.state':
                 return named(args[0]) ? { ok: true, state: owner().appInbox.state(args[0]) } : { ok: false, reason: 'name a workspace' };

@@ -29,7 +29,7 @@ async function staging(clock = { now: 0 }) {
     return { s, root, clock };
 }
 const rows = [
-    ['draft-file', 'attachment'], ['draft-file', 'text'], ['file-write', 'text'], ['file-write', 'bytes'], ['board-image', 'comment'],
+    ['draft-file', 'attachment'], ['draft-file', 'text'], ['file-write', 'text'], ['file-write', 'bytes'], ['file-write', 'repo-args'], ['board-image', 'comment'],
 ] as const;
 const input = (size: number, purpose = 'draft-file', subtype = 'attachment'): Input => ({ purpose, subtype, size });
 function exact(actual: Uint8Array, expected: Uint8Array) {

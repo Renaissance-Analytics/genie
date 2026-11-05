@@ -244,19 +244,9 @@ const bridge: PreloadBridge = {
     },
 
     files: {
-        tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
-        children: (workspaceId, dir) => ipcRenderer.invoke('genie:files-children', workspaceId, dir) as Promise<never>,
-        open: (workspaceId, path) => ipcRenderer.invoke('genie:files-open', workspaceId, path) as Promise<never>,
-        readMedia: (workspaceId, path) => ipcRenderer.invoke('genie:files-read-media', workspaceId, path) as Promise<never>,
         openExternal: (workspaceId, path) => ipcRenderer.invoke('genie:files-open-external', workspaceId, path) as Promise<never>,
         reveal: (workspaceId, path) => ipcRenderer.invoke('genie:files-reveal', workspaceId, path) as Promise<never>,
         export: (workspaceId, path) => ipcRenderer.invoke('genie:files-export', workspaceId, path) as Promise<never>,
-        create: (workspaceId, path, kind) => ipcRenderer.invoke('genie:files-create', workspaceId, path, kind) as Promise<never>,
-        rename: (workspaceId, from, to) => ipcRenderer.invoke('genie:files-rename', workspaceId, from, to) as Promise<never>,
-        duplicate: (workspaceId, path) => ipcRenderer.invoke('genie:files-duplicate', workspaceId, path) as Promise<never>,
-        trash: (workspaceId, path) => ipcRenderer.invoke('genie:files-trash', workspaceId, path) as Promise<never>,
-        lastCommitted: (workspaceId, path) => ipcRenderer.invoke('genie:files-last-committed', workspaceId, path) as Promise<string | null>,
-        state: (workspaceId) => ipcRenderer.invoke('genie:files-state', workspaceId) as Promise<never>,
         // ONE SUBSCRIPTION PER VIEW (the host split, P2.2): watched while held, unwatched when let go; its batches and the
         // git it asked for come back on the two channels, for its workspace only.
         subscribe: (workspaceId, want, listener) => {
@@ -273,10 +263,6 @@ const bridge: PreloadBridge = {
                 void ipcRenderer.invoke('genie:files-unwatch', viewId);
             };
         },
-        write: (workspaceId, path, text, expectedSha) => ipcRenderer.invoke('genie:files-write', workspaceId, path, text, expectedSha) as Promise<never>,
-        gitStatus: (workspaceId) => ipcRenderer.invoke('genie:files-git-status', workspaceId) as Promise<never>,
-        readBytes: (workspaceId, pluginId, path) => ipcRenderer.invoke('genie:files-read-bytes', workspaceId, pluginId, path) as Promise<never>,
-        writeBytes: (workspaceId, pluginId, path, base64, expectedSha) => ipcRenderer.invoke('genie:files-write-bytes', workspaceId, pluginId, path, base64, expectedSha) as Promise<never>,
         onChange: (listener) => {
             const handler = (_e: unknown, workspaceId: string, paths?: readonly string[]) => listener(workspaceId, paths);
             ipcRenderer.on('genie:files-changed', handler);
@@ -294,9 +280,6 @@ const bridge: PreloadBridge = {
         },
     },
     // The official panels (beta.33 item 14): the Repository panel's git and the ArtBoard, by workspace.
-    repo: {
-        call: (op, workspaceId, rel, a, b) => ipcRenderer.invoke('genie:repo', op, workspaceId, rel, a, b) as Promise<never>,
-    },
     artboard: {
         read: (workspaceId) => ipcRenderer.invoke('genie:artboard-read', workspaceId) as Promise<never>,
         review: (workspaceId, postId, verdict, comment) => ipcRenderer.invoke('genie:artboard-review', workspaceId, postId, verdict, comment) as Promise<never>,

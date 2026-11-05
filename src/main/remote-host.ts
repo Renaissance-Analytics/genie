@@ -21,6 +21,9 @@ import { LocalBlobs } from './local-blobs.js';
 import type { PageOpener } from '../core/local-content.js';
 import { LocalUploads } from './local-uploads.js';
 import { LocalPages } from './local-pages.js';
+import { LocalFilesContent } from './local-files-content.js';
+import { isLocalFilesMethod } from '../core/local-files.js';
+import { localFilesArguments } from './local-files-arguments.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -96,6 +99,7 @@ interface Connection {
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
     pages: LocalPages | null;
+    content: LocalFilesContent | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -193,6 +197,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        connection.content?.dispose();
         connection.blobs?.dispose();
         connection.pages?.dispose();
         // Disposal marks the connection closed synchronously, then drains any pending disk operation.
@@ -289,7 +294,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null, uploads: null, pages: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null, uploads: null, pages: null, content: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -405,6 +410,10 @@ export class RemoteHost {
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
 
         switch (method) {
+            case 'content.release': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                return ok(connection.content?.release(args[0]) ?? { released: false });
+            }
             case 'localUpload.begin':
             case 'localUpload.chunk':
             case 'localUpload.abort': {
@@ -423,7 +432,7 @@ export class RemoteHost {
             case 'page.close': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
                 if (!this.#connections.has(connection.id)) return refuse('the list connection closed');
-                const pages = connection.pages ??= new LocalPages(this.#openPage);
+                const pages = connection.pages ??= this.#content(connection).pages;
                 try {
                     if (method === 'page.open') return ok(await pages.open(args[0], args[1]));
                     if (method === 'page.next') return ok(await pages.next(args[0]));
@@ -435,7 +444,7 @@ export class RemoteHost {
             case 'blob.close': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
                 if (!this.#connections.has(connection.id)) return refuse('the blob connection closed');
-                const blobs = connection.blobs ??= new LocalBlobs(this.#openBlob);
+                const blobs = connection.blobs ??= this.#content(connection).blobs;
                 try {
                     if (method === 'blob.open') return ok(await blobs.open(args[0], args[1]));
                     if (method === 'blob.read') return ok(await blobs.read(args[0], args[1], args[2]));
@@ -529,8 +538,12 @@ export class RemoteHost {
         const materialized = this.#materialize(connection, method, args);
         if (!materialized.ok) return refuse(materialized.reason);
 
+        let files: Awaited<ReturnType<typeof localFilesArguments>> | null = null, response: string | null = null;
         try {
-            const value = await this.#api.invoke(method, materialized.args);
+            if (isLocalFilesMethod(method)) { files = await localFilesArguments(method, materialized.args, connection.uploads); response = this.#content(connection).begin(); }
+            const value = await this.#api.invoke(method, files?.args ?? materialized.args);
+            if (files) { await files.close(); files = null; }
+            if (isLocalFilesMethod(method)) return ok(this.#content(connection).result(response!, value, method === 'files.localChildren' ? 'folder-children' : 'workspace-tree', method === 'files.localReadMedia' || method === 'files.readBytes'));
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.
@@ -538,8 +551,14 @@ export class RemoteHost {
             if (method === 'features.snapshot') return ok(withoutPairRequests(value));
             return ok(value);
         } catch (error) {
+            if (response !== null) connection.content?.release(response);
             return refuse(error instanceof Error ? error.message : String(error));
-        }
+        } finally { if (files) { try { await files.close(); } catch { console.warn('[genie] a consumed Files stage could not be released'); } } }
+    }
+
+    #content(connection: Connection): LocalFilesContent {
+        if (!this.#connections.has(connection.id)) throw new Error('the local content connection closed');
+        return connection.content ??= new LocalFilesContent({ now: this.#now, ...(this.#openBlob ? { openBlob: this.#openBlob } : {}), ...(this.#openPage ? { openPage: this.#openPage } : {}) });
     }
 
     /**
