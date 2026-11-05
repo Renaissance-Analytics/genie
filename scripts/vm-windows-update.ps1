@@ -9,16 +9,19 @@
 # made here — provider → latest.yml → download → verify sha512 → quit → NSIS /S → relaunch —
 # against a different URL. In order:
 #
-#   1. package the tree at its current version (0.0.0) and install it silently
-#   2. bump to 0.0.1, package again → release\ now holds 0.0.1 + latest.yml; restore the bump
+#   1. package the tree as $Base (2.0.0) and install it silently. Not the tree's own version: a prerelease looks for its own channel's feed, and this proves the path, not a channel
+#   2. bump to $Next (2.0.1), package again → release\ now holds it + latest.yml; package.json goes back as it was at the end
 #   3. serve release\ on 127.0.0.1:8099; point the installed app's app-update.yml at it
 #   4. launch the installed 0.0.0 with CDP; update-cdp.mjs drives check → download → install,
 #      visiting the Deck so the signal strip is seen doing each phase
-#   5. the app quits, the installer runs, the app relaunches: assert Genie.exe is now 0.0.1,
-#      a Genie process is running, and the §7.2 report was printed; tear down; uninstall
+#   5. the app quits, the installer runs, the app relaunches: assert Genie.exe is $Next,
+#      a Genie process is running, genie-host is a new process (§4.3: until P6 a host update always restarts the host),
+#      and the §7.2 report was printed; tear down; uninstall
+#
+# In the logged-on session for the host's keychain: scripts/vm-acceptance-windows.sh packaged, in the envelope. Prints `### packaged=PASS` at the end; a failure throws.
 #
 # Expects `npm ci` to have run (vm-run.sh keeps node_modules between runs).
-param([string] $Next = '0.0.1')
+param([string] $Base = '2.0.0', [string] $Next = '2.0.1')
 $ErrorActionPreference = 'Stop'
 $root = (Get-Location).Path
 Start-Transcript -Path (Join-Path $root 'update.log') -Force | Out-Null
@@ -79,9 +82,13 @@ function Uninstall-AnyGenie() {
     }
 }
 function Genie-Processes($dir) { return @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -like "$dir\*" }) }
-$current = (Get-Content package.json | ConvertFrom-Json).version
+# Put back whatever happens, after the `finally` below has ended the feed.
+Copy-Item package.json package.json.pristine -Force
+Copy-Item package-lock.json package-lock.json.pristine -Force
+$current = $Base
 $feed = $null
 try {
+    Run "npm version $Base --no-git-tag-version --allow-same-version" 'bump-base.log'
     Step "package $current and install it"
     if (Test-Path release) { Remove-Item -Recurse -Force release }
     Run 'npm run build' 'build-current.log'
@@ -179,6 +186,17 @@ try {
     # (the owner: "this should happen all of the time, not a god damn setting"). A stub process
     # older than the relaunched Genie is a survivor; one younger is the restored agent.
     $relaunchAt = ($relaunched | ForEach-Object { $_.StartTime } | Sort-Object | Select-Object -First 1)
+    # §4.3: a host update restarts the host, gracefully, until P6. A host from before would be mapping the install it was just replaced under.
+    $hostRecord = Join-Path $env:USERPROFILE '.genie\runtime\host.json'
+    $deadline = (Get-Date).AddSeconds(60)
+    $hostNow = $null
+    while ((Get-Date) -lt $deadline -and -not $hostNow) {
+        Start-Sleep 2
+        try { $hostNow = Get-Process -Id (Get-Content $hostRecord -Raw | ConvertFrom-Json).pid -ErrorAction Stop } catch { $hostNow = $null }
+    }
+    if (-not $hostNow) { throw 'no live genie-host recorded in host.json after the update' }
+    Write-Output ("genie-host after the update: pid " + $hostNow.Id + ", started " + $hostNow.StartTime + "; the window relaunched at " + $relaunchAt)
+    if ($hostNow.StartTime -lt $relaunchAt.AddSeconds(-5)) { throw "genie-host pid $($hostNow.Id) is from before the update" }
     Start-Sleep 15
     $stubs = @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine -like '*stub-codex.mjs*' -and $_.Name -eq 'node.exe' })
     $survivors = @($stubs | Where-Object { $_.CreationDate -lt $relaunchAt })
@@ -210,7 +228,10 @@ try {
 
     Write-Output ""
     Write-Output "UPDATE PROVEN: $current -> $Next applied in-app, relaunched, §7.2 reported"
+    Write-Output "### packaged=PASS"
 } finally {
     if ($feed -and -not $feed.HasExited) { Kill-Tree $feed.Id }
+    Move-Item package.json.pristine package.json -Force
+    Move-Item package-lock.json.pristine package-lock.json -Force
     Stop-Transcript | Out-Null
 }
