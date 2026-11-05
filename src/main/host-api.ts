@@ -251,37 +251,52 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return restartWithHandoff({ restart: (id) => deps.agentOps.restart(id, 'graceful'), prompt: (id, text, by) => deps.host.prompt(id, text, by) }, deps.attention, r, str(args[1]));
             }
             case 'agents.restart':
-                return deps.agentOps.restart(str(args[0]), args[1] === 'fresh' ? 'fresh' : 'graceful');
+                if (typeof args[0] !== 'string' || (args[1] !== 'graceful' && args[1] !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
+                return deps.agentOps.restart(args[0], args[1]);
             case 'agents.previewDelete':
-                return deps.agentOps.previewDelete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : []);
+                if (typeof args[0] !== 'string' || (args[1] !== 'unmount' && args[1] !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
+                return deps.agentOps.previewDelete(args[0], args[1], Array.isArray(args[2]) ? args[2].map(String) : []);
             case 'agents.delete':
-                return deps.agentOps.delete(str(args[0]), args[1] === 'delete' ? 'delete' : 'unmount', Array.isArray(args[2]) ? args[2].map(String) : [], args[3] === true);
+                if (typeof args[0] !== 'string' || (args[1] !== 'unmount' && args[1] !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
+                return deps.agentOps.delete(args[0], args[1], Array.isArray(args[2]) ? args[2].map(String) : [], args[3] === true);
             case 'agents.switchDriver':
-                return deps.agentOps.switchDriver(str(args[0]), str(args[1]));
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
+                return deps.agentOps.switchDriver(args[0], args[1]);
             case 'agents.setBudget':
-                return deps.agentOps.setBudget(str(args[0]), args[1] === null ? null : Number(args[1]));
+                if (typeof args[0] !== 'string' || (args[1] !== null && !(typeof args[1] === 'number' && args[1] >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
+                return deps.agentOps.setBudget(args[0], args[1] as number | null);
             case 'agents.setMode':
-                return deps.agentOps.setMode(str(args[0]), args[1] === 'automated' ? 'automated' : 'manual');
+                if (typeof args[0] !== 'string' || (args[1] !== 'automated' && args[1] !== 'manual')) return { ok: false, reason: 'mode is automated or manual' };
+                return deps.agentOps.setMode(args[0], args[1]);
             case 'agents.setAutoApprove':
-                return deps.agentOps.setAutoApprove(str(args[0]), args[1] === true);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'autonomy is on or off' };
+                return deps.agentOps.setAutoApprove(args[0], args[1]);
             case 'agents.setManageTabs':
-                return deps.agentOps.setManageTabs(str(args[0]), args[1] === true);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'managing tabs is on or off' };
+                return deps.agentOps.setManageTabs(args[0], args[1]);
             case 'agents.setDrivePages':
-                return deps.agentOps.setDrivePages(str(args[0]), args[1] === true);
+                if (typeof args[0] !== 'string' || typeof args[1] !== 'boolean') return { ok: false, reason: 'driving pages is on or off' };
+                return deps.agentOps.setDrivePages(args[0], args[1]);
             case 'agents.setIssueWatch':
-                return deps.agentOps.setIssueWatch(str(args[0]), args[1]);
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
+                return deps.agentOps.setIssueWatch(args[0], args[1]);
             case 'agents.setAccessScope':
-                return deps.agentOps.setAccessScope(str(args[0]), args[1] === 'none' || args[1] === 'all' ? args[1] : 'self');
+                if (typeof args[0] !== 'string' || (args[1] !== 'none' && args[1] !== 'self' && args[1] !== 'all')) return { ok: false, reason: 'scope is none, self or all' };
+                return deps.agentOps.setAccessScope(args[0], args[1]);
             case 'agents.setPermissions':
-                return deps.agentOps.setPermissions(str(args[0]), args[1] === 'edits' || args[1] === 'ask' ? args[1] : 'all');
+                if (typeof args[0] !== 'string' || (args[1] !== 'all' && args[1] !== 'edits' && args[1] !== 'ask')) return { ok: false, reason: 'permissions are all, ask or edits' };
+                return deps.agentOps.setPermissions(args[0], args[1]);
             case 'agents.setModel':
-                // `null` (or nothing, or empty) = back to the provider's default.
-                return deps.agentOps.setModel(str(args[0]), args[1] === null || args[1] === undefined || args[1] === '' ? null : str(args[1]));
+                if (typeof args[0] !== 'string' || (args[1] !== null && typeof args[1] !== 'string')) return { ok: false, reason: 'a model is a name, or null for the provider default' };
+                // Only explicit null clears it. The operation keeps its existing empty-name refusal.
+                return deps.agentOps.setModel(args[0], args[1]);
             case 'agents.models':
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'unknown agent' };
                 // Only an explicit `true` asks the provider again: a refresh starts its CLI.
-                return deps.agentOps.models(str(args[0]), args[1] === true);
+                return deps.agentOps.models(args[0], args[1] === true);
             case 'agents.diagnose':
-                return deps.agentOps.diagnose(str(args[0]));
+                if (typeof args[0] !== 'string') return { ok: false, reason: 'diagnose names an agent' };
+                return deps.agentOps.diagnose(args[0]);
             case 'workspaces.previewAdd':
                 // Preserve the retired native wizard's early refusals before any coercion or disk operation.
                 if (typeof args[0] !== 'string' || args[0] === '') return { ok: false, reason: 'no folder picked' };

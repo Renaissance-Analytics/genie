@@ -154,24 +154,6 @@ const bridge: PreloadBridge = {
         },
     },
 
-    agents: {
-        restart: (agentId, kind) => ipcRenderer.invoke('genie:agent-restart', agentId, kind) as never,
-        previewDelete: (agentId, outcome, alsoRemoveFrom) => ipcRenderer.invoke('genie:agent-preview-delete', agentId, outcome, [...alsoRemoveFrom]) as never,
-        delete: (agentId, outcome, alsoRemoveFrom, handoff) => ipcRenderer.invoke('genie:agent-delete', agentId, outcome, [...alsoRemoveFrom], handoff === true) as never,
-        switchDriver: (agentId, to) => ipcRenderer.invoke('genie:agent-switch-driver', agentId, to) as never,
-        setBudget: (agentId, dailyLimitUsd) => ipcRenderer.invoke('genie:agent-set-budget', agentId, dailyLimitUsd) as never,
-        setMode: (agentId, mode) => ipcRenderer.invoke('genie:agent-set-mode', agentId, mode) as never,
-        setAccessScope: (agentId, scope) => ipcRenderer.invoke('genie:agent-set-access-scope', agentId, scope) as never,
-        setAutoApprove: (agentId, on) => ipcRenderer.invoke('genie:agent-set-auto-approve', agentId, on) as never,
-        setManageTabs: (agentId, on) => ipcRenderer.invoke('genie:agent-set-manage-tabs', agentId, on) as never,
-        setDrivePages: (agentId, on) => ipcRenderer.invoke('genie:agent-set-drive-pages', agentId, on) as never,
-        setIssueWatch: (agentId, setting) => ipcRenderer.invoke('genie:agent-set-issue-watch', agentId, setting) as never,
-        setPermissions: (agentId, permissions) => ipcRenderer.invoke('genie:agent-set-permissions', agentId, permissions) as never,
-        setModel: (agentId, model) => ipcRenderer.invoke('genie:agent-set-model', agentId, model) as never,
-        models: (agentId, refresh) => ipcRenderer.invoke('genie:agent-models', agentId, refresh === true) as never,
-        diagnose: (agentId) => ipcRenderer.invoke('genie:agent-diagnose', agentId) as never,
-    },
-
     addWorkspace: () => {
         void ipcRenderer.invoke('genie:add-workspace');
     },
@@ -394,6 +376,8 @@ const bridge: PreloadBridge = {
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+// contextBridge makes this main-supplied value immutable in the page, including when false.
+contextBridge.exposeInMainWorld('genieTestMode', process.argv.includes('--genie-page-probe'));
 
 // One string frame pair, separate from the bridge families that have not moved yet. Admission belongs to main.
 contextBridge.exposeInMainWorld('genieLocalProtocol', {

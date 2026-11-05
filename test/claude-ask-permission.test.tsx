@@ -78,11 +78,12 @@ describe('the operation', () => {
         expect((codex as { reason: string }).reason).toMatch(/Codex asks in the chat/);
     });
 
-    it('the remote method passes ask and edits through; anything else is all', async () => {
+    it('the shared method passes valid settings through and preserves the native refusal for other input', async () => {
         const seen: string[] = [];
         const api = buildHostApi({ agentOps: { setPermissions: async (_id: string, p: AgentPermissions) => { seen.push(p); return { ok: true }; } } } as unknown as HostApiDeps);
-        for (const arg of ['ask', 'edits', 'all', 'bogus']) await api.invoke('agents.setPermissions', ['agent_a', arg]);
-        expect(seen).toEqual(['ask', 'edits', 'all', 'all']);
+        for (const arg of ['ask', 'edits', 'all']) expect(await api.invoke('agents.setPermissions', ['agent_a', arg])).toEqual({ ok: true });
+        expect(await api.invoke('agents.setPermissions', ['agent_a', 'bogus'])).toEqual({ ok: false, reason: 'permissions are all, ask or edits' });
+        expect(seen).toEqual(['ask', 'edits', 'all']);
     });
 });
 

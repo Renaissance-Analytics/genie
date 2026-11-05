@@ -601,7 +601,7 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'localProtocol'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol'> & {
     workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
     subscribeAgentWire: AgentWireSubscribe<Omit<AgentDetail, 'rows'>, TimedEvent>;
 };
@@ -637,14 +637,19 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(preload.subscribeAgentWire);
     const local = localSession(typeof window === 'undefined' ? undefined : window.genieLocalProtocol);
     const { subscribeAgentWire: _wire, ...rest } = preload;
-    const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, localProtocol: local.control,
+    const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
+    if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;
     return bridge;
 }
 
 declare global {
     interface Window {
+        /** Immutable preload value supplied by main's GENIE_PAGE_PROBE flag. */
+        readonly genieTestMode?: boolean;
+        /** The app's same local bridge, exposed only for a main-enabled native probe. */
+        genieTest?: GenieBridge;
         /**
          * Present only in the real app. It is optional on purpose: a renderer that assumes a
          * bridge cannot be rendered in a test, and the surfaces are then only ever checked by

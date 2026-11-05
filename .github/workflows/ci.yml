@@ -280,7 +280,7 @@ jobs:
       # Four releases shipped on green unit suites and every one was broken the moment a human
       # opened it, because nobody ever opened the built app. This opens it: a real Electron
       # window on a virtual display, driven over the Chrome DevTools Protocol — no third-party
-      # test framework and no test-only code in the product.
+      # test framework, using the app's same bridge through GENIE_PAGE_PROBE.
       - name: open the app and drive it
         run: |
           # Point codex at the stub, exactly as `smoke-linux-inner.sh` does. Ordinary provider
@@ -288,6 +288,7 @@ jobs:
           # lets a REAL parked approval reach the screen in an environment with no codex.
           chmod +x scripts/stub-codex.mjs
           export GENIE2_CODEX_BINARY="$PWD/scripts/stub-codex.mjs"
+          export GENIE_PAGE_PROBE=1
 
           xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24'             npx electron . --no-sandbox --remote-debugging-port=9222 > electron.log 2>&1 &
           # `timeout` on each script, and it is not a formality. This step HUNG for 15 minutes
@@ -477,6 +478,7 @@ jobs:
           # shim (a real npm-installed codex IS one, and is accepted). The stub is the .mjs itself: Genie runs a
           # configured script as its own runtime + the script (session-host `providerLaunchOptions`).
           $env:GENIE2_CODEX_BINARY = "$PWD\scripts\stub-codex.mjs"
+          $env:GENIE_PAGE_PROBE = '1'
 
           $app = Start-Process -FilePath "npx.cmd" -ArgumentList "electron",".","--remote-debugging-port=9222" `
                                -PassThru -RedirectStandardOutput electron-out.log -RedirectStandardError electron-err.log

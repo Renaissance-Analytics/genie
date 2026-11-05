@@ -318,7 +318,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             previewDelete: (agentId, outcome, also) => answer('agents.previewDelete', agentId, outcome, [...also]),
             delete: (agentId, outcome, also, handoff) => answer('agents.delete', agentId, outcome, [...also], handoff === true),
             switchDriver: (agentId, to) => answer('agents.switchDriver', agentId, to),
-            setBudget: (agentId, usd) => answer('agents.setBudget', agentId, usd),
+            setBudget: (agentId, usd) => {
+                // JSON arrays would turn these into null, which means an explicit clear.
+                if (usd === undefined || (typeof usd === 'number' && !Number.isFinite(usd))) return Promise.resolve({ ok: false, reason: 'a budget is a finite non-negative number of dollars, or null to clear it' });
+                return answer('agents.setBudget', agentId, usd);
+            },
             setMode: (agentId, mode) => answer('agents.setMode', agentId, mode),
             setAccessScope: (agentId, scope) => answer('agents.setAccessScope', agentId, scope),
             setAutoApprove: (agentId, on) => answer('agents.setAutoApprove', agentId, on),
@@ -326,7 +330,9 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
             setDrivePages: (agentId, on) => answer('agents.setDrivePages', agentId, on),
             setIssueWatch: (agentId, setting) => answer('agents.setIssueWatch', agentId, setting),
             setPermissions: (agentId, permissions) => answer('agents.setPermissions', agentId, permissions),
-            setModel: (agentId, model) => answer('agents.setModel', agentId, model),
+            setModel: (agentId, model) => model === undefined
+                ? Promise.resolve({ ok: false, reason: 'a model is a name, or null for the provider default' })
+                : answer('agents.setModel', agentId, model),
             models: (agentId, refresh) => answer('agents.models', agentId, refresh === true),
             diagnose: (agentId) => answer('agents.diagnose', agentId),
         },

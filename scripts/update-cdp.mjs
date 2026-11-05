@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * DRIVE AN UPDATE THROUGH THE REAL APP — check → download → install, over CDP, via the same
  * `window.genie.updates` the Deck's signal strip uses.
@@ -139,7 +140,8 @@ try {
     check(typeof codexId === 'string', '11b. the seed left a codex agent to run', String(codexId));
     if (typeof codexId === 'string') {
         // Start (the one restart): opening an agent starts nothing since q_04ce323c.
-        await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
+        await waitForPageProbe(cdp);
+        await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
         const end = Date.now() + 30_000;
         let running = null;
         while (Date.now() < end) {

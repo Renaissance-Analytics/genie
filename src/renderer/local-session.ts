@@ -9,6 +9,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'stageFromGit' | 'registerExisting' | 'buildEnvelope' | 'discardStaged' | 'githubRepos' | 'tynnProjects'
     | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn';
 type Workspaces = GenieBridge['workspaces'];
+type Agents = GenieBridge['agents'];
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -29,7 +30,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey> } {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents } {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -78,18 +79,37 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         return fail(STARTING);
     };
     let ready = start(false);
-    const request = async <T>(call: (ws: Workspaces) => Promise<T>): Promise<T | Refusal> => {
+    const requestBridge = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T | Refusal> => {
         if (state.phase === 'failed') return { ok: false, reason: state.reason! };
         const result = await ready;
         if (!result.ok) return result;
         if (!client || state.phase !== 'ready') return { ok: false, reason: state.reason ?? 'The connection to Genie closed. Retry to reconnect.' };
-        return call(client.bridge.workspaces);
+        return call(client.bridge);
     };
+    const request = <T>(call: (ws: Workspaces) => Promise<T>) => requestBridge((bridge) => call(bridge.workspaces));
+    const requestAgent = <T>(call: (agents: Agents) => Promise<T>) => requestBridge((bridge) => call(bridge.agents));
     return {
         control: {
             state: () => state,
             onState: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
             retry: () => { if (state.phase === 'failed') ready = start(true); },
+        },
+        agents: {
+            restart: (id, kind) => requestAgent((agents) => agents.restart(id, kind)),
+            previewDelete: (id, outcome, also) => requestAgent((agents) => agents.previewDelete(id, outcome, also)),
+            delete: (id, outcome, also, handoff) => requestAgent((agents) => agents.delete(id, outcome, also, handoff)),
+            switchDriver: (id, to) => requestAgent((agents) => agents.switchDriver(id, to)),
+            setBudget: (id, usd) => requestAgent((agents) => agents.setBudget(id, usd)),
+            setMode: (id, mode) => requestAgent((agents) => agents.setMode(id, mode)),
+            setAccessScope: (id, scope) => requestAgent((agents) => agents.setAccessScope(id, scope)),
+            setAutoApprove: (id, on) => requestAgent((agents) => agents.setAutoApprove(id, on)),
+            setManageTabs: (id, on) => requestAgent((agents) => agents.setManageTabs(id, on)),
+            setDrivePages: (id, on) => requestAgent((agents) => agents.setDrivePages(id, on)),
+            setIssueWatch: (id, setting) => requestAgent((agents) => agents.setIssueWatch(id, setting)),
+            setPermissions: (id, permissions) => requestAgent((agents) => agents.setPermissions(id, permissions)),
+            setModel: (id, model) => requestAgent((agents) => agents.setModel(id, model)),
+            models: (id, refresh) => requestAgent((agents) => agents.models!(id, refresh)),
+            diagnose: (id) => requestAgent((agents) => agents.diagnose(id)),
         },
         workspaces: {
             previewAdd: (path) => request((ws) => ws.previewAdd(path)),

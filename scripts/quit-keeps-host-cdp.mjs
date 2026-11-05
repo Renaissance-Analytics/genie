@@ -38,6 +38,7 @@
  *
  * Exit: 0 every check passed; 1 a check failed (or a deadline was missed); 2 cannot run here.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -199,7 +200,7 @@ function launch(label) {
     const out = openSync(log, 'a');
     const argv = ['electron', `--inspect=${INSPECT}`, '.', `--remote-debugging-port=${PORT}`, ...launchArgs()];
     // GENIE_TRAY_PROBE=1: main.ts's read-only tray probe exists only in a launch that asks for it (this proof's).
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE_TRAY_PROBE: '1' } });
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     const exited = new Promise((r) => {
         child.once('exit', (code, signal) => { gone = true; r({ code, signal }); });
@@ -477,7 +478,8 @@ try {
     }
     for (const ag of agents) {
         step('2', `starting ${ag.name} (≤ 30 s to running)`);
-        await a.cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
+        await waitForPageProbe(a.cdp);
+        await a.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
         const running = await until(() => a.cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 30_000);
         check(running === true, `2. ${ag.name}'s session is running`);
         step('3', `prompting ${ag.name}`);
