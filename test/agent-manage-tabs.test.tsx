@@ -65,9 +65,12 @@ describe('the workspace setting that gated nothing is gone', () => {
 });
 
 describe('the wiring', () => {
-    it('main: the tool is registered with the agent’s switch read from the roster; the switch has its IPC', () => {
+    it('the switch is read from the roster and uses the shared protocol without native forwarding', () => {
         const main = src('src/main/main.ts');
-        expect(main).toMatch(/ipcMain\.handle\('genie:agent-set-manage-tabs'/);
+        expect(main.includes("ipcMain.handle('genie:agent-set-manage-tabs'")).toBe(false);
+        expect(src('src/main/preload.ts').includes('genie:agent-set-manage-tabs')).toBe(false);
+        expect(src('src/main/host-api.ts')).toContain('return deps.agentOps.setManageTabs(args[0], args[1]);');
+        expect(src('src/renderer/local-session.ts')).toContain('setManageTabs: (id, on) => requestAgent((agents) => agents.setManageTabs(id, on))');
         expect(main).toMatch(/manageTabs: record\.manageTabs === true/);
     });
 

@@ -160,6 +160,24 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const bridge = pageBridge({ subscribeAgentWire: () => () => {}, workspaces: {}, agents: oldAgents(vi.fn(async () => ({ ok: true }))) } as unknown as PreloadBridge);
         expect(await bridge.agents.models!('agent_a', true)).toEqual({ ok: false, reason: 'provider model list unavailable' });
     });
+    it.each([false, true])('probe enabled=%s changes only genieTest presence, not calls/results or the one connection', async (enabled) => {
+        const deps = protocolContractDeps(dir), result = { ok: true, record: { ...record, mode: 'manual' } };
+        const operation = vi.fn(async () => result); deps.agentOps.setMode = operation;
+        const source = serve(deps), port = source.framePort(), send = vi.fn(port.send);
+        const snapshot = vi.fn(async () => ({ agents: [] }));
+        const preload = { snapshot, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge;
+        const page: Record<string, unknown> = { genie: preload, genieLocalProtocol: { ...port, send } };
+        Object.defineProperty(page, 'genieTestMode', { value: enabled, writable: false, configurable: false });
+        vi.stubGlobal('window', page);
+        const bridge = pageBridge(preload);
+        expect(await bridge.agents.setMode('agent_a', 'manual')).toEqual(result);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith('agents.setMode', ['agent_a', 'manual']);
+        expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', 'manual');
+        expect(send.mock.calls.filter(([action]) => action === 'open')).toHaveLength(1);
+        expect(await bridge.snapshot()).toEqual({ agents: [] }); expect(snapshot).toHaveBeenCalledTimes(1);
+        expect(pageBridge(preload)).toBe(bridge); expect(page['genie']).toBe(preload);
+        expect(page['genieTest']).toBe(enabled ? bridge : undefined);
+    });
     it.each([
         { name: 'restart', args: ['agent_a', 'graceful'] },
         { name: 'previewDelete', args: ['agent_a', 'unmount', []] },
