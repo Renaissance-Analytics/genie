@@ -56,7 +56,7 @@ export class ScratchTerminals {
         } catch (error) {
             return { ok: false, reason: `The terminal could not start: ${(error as Error).message}` };
         }
-        if (where.workspaceId !== OS_WORKSPACE) this.#open.add(opened.id);
+        this.#open.add(opened.id);
         this.#options.openWindow(`genie://takeover/${opened.id}`);
         return { ok: true, terminalId: opened.id };
     }
