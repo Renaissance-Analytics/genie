@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { PROGRAM_LOOKUP_VARIABLE, findProgram, notFoundWords } from '../core/program-lookup.js';
-import { shellLaunch } from '../core/shell-launch.js';
+import { ptyShellLaunch } from '../core/shell-launch.js';
 import { fanOut } from '../core/fan-out.js';
 import {
     configureInProcessBackend,
@@ -92,9 +92,10 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
             // rather than open a new one, silently.
             const id = `term_${randomUUID()}`;
             // A command line asked to run through the shell is (`&&`, pipes, quoting); otherwise it is split as before.
-            const { command, args } = spawn.command
-                ? spawn.shell ? shellLaunch(options.platform ?? process.platform, options.defaultShell, spawn.command) : parseCommandLine(spawn.command)
-                : options.defaultShell();
+            // On Windows the line travels in the environment, never in the argv (genie#1428: a pty's argv cannot carry a quote to cmd).
+            const shellLine = spawn.command && spawn.shell ? ptyShellLaunch(options.platform ?? process.platform, options.defaultShell, spawn.command, { ...process.env, ...(spawn.env ?? {}) }) : null;
+            const { command, args } = shellLine ?? (spawn.command ? parseCommandLine(spawn.command) : options.defaultShell());
+            const launchEnv = shellLine?.env ?? {};
 
             // A whole path, always: the engine's own search must never see a bare name, whichever engine this is. Nothing found starts nothing, and the words say so.
             const lookup = { platform: options.platform ?? process.platform, env: process.env };
@@ -111,7 +112,7 @@ export function fancyTermPort(backend: HostBackend, options: FancyTermPortOption
                 // Only when given — a plain shell gets the user's environment untouched.
                 // GENIE_TERMINAL_ID in EVERY terminal (§6.9): the id is minted above, so the shell is born knowing which terminal it is.
                 // A caller's own GENIE_TERMINAL_ID wins (the Take Over host mints an attribution id of its own); the engine merges this over process.env.
-                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
+                env: { GENIE_TERMINAL_ID: id, ...(spawn.env ?? {}), ...launchEnv, ...(spawn.personal ? { [PROGRAM_LOOKUP_VARIABLE]: undefined as unknown as string } : {}) },
             });
             // An engine that could not start the process answers a non-positive pid rather than
             // throwing (fancy-term-host 0.10.0-rc.1 on the installed app: the helper could not be

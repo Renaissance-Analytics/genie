@@ -17,6 +17,8 @@ export interface Stopping {
     readonly processes: readonly string[];
     readonly services: readonly string[];
     readonly sites: readonly string[];
+    readonly flows: readonly string[];
+    readonly scheduled: readonly string[];
 }
 
 export interface TrayQuestion {
@@ -41,12 +43,29 @@ export function trayConfirm(action: TrayAction, stopping: Stopping): TrayQuestio
     add(stopping.processes, 'kept process', 'kept processes');
     add(stopping.services, 'service', 'services');
     add(stopping.sites, 'site', 'sites');
+    add(stopping.flows, 'armed flow', 'armed flows');
+    add(stopping.scheduled, 'scheduled task', 'scheduled tasks');
     if (lines.length === 0) {
         const verb = action === 'restart' ? 'Restart' : 'Shut down';
         return { ...base, title: `${verb} Genie?`, message: `Nothing is running. ${verb} Genie?` };
     }
     const after = action === 'restart' ? ['Then Genie starts again: the agents that were running come back; terminals do not.'] : [];
     return { ...base, title: action === 'restart' ? 'Restart Genie?' : 'Shut down everything?', message: ['This stops:', ...lines, ...after].join('\n') };
+}
+
+/**
+ * THE QUESTION COMES AT ONCE (ss-repeat5, 2026-11-05): the process table that marks busy terminals, read off main and only
+ * for as long as the question can wait. A table that is late or fails is null, and the question is asked without the
+ * marks (`terminalBusy(pid, null)` is false). A synchronous read froze the window 30 s on the Windows VM.
+ */
+export async function tableWithin<T>(read: () => Promise<T>, ms: number): Promise<T | null> {
+    let bound: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<null>((r) => { bound = setTimeout(() => r(null), ms); });
+    try {
+        return await Promise.race([read().catch(() => null), late]);
+    } finally {
+        clearTimeout(bound);
+    }
 }
 
 /** The dialog's button: only the confirm button (1) goes on; Cancel, Esc and a closed dialog do nothing. */
