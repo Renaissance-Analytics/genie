@@ -9,6 +9,8 @@ import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows 
 import type { TimedEvent } from '../core/stream-view.js';
 import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
 import { verifiedBlobClient } from './blob-reader.js';
+import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
+import { localPageClient, localUploadClient } from './local-content-client.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -37,6 +39,8 @@ export interface RemoteState {
 export interface RemoteClient {
     /** Local connection resources, not yet consumed by a family bridge. */
     readonly blobs?: BlobClient;
+    readonly uploads?: LocalUploadClient;
+    readonly pages?: PageClient;
     /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
     readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
     readonly bridge: GenieBridge;
@@ -488,10 +492,22 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // Disconnect already releases the server's resources; never wait on a closed frame stream.
         close: id => state.connected ? blobRead<{ closed: boolean }>('blob.close', id) : Promise.resolve({ closed: false }),
     }) : undefined;
+    const uploads = local ? localUploadClient({
+        begin: input => blobRead<LocalUploadInfo>('localUpload.begin', input),
+        chunk: (id, index, base64) => blobRead<{ received: number }>('localUpload.chunk', id, index, base64),
+        abort: id => state.connected ? blobRead<{ aborted: boolean }>('localUpload.abort', id) : Promise.resolve({ aborted: false }),
+    }) : undefined;
+    const pages = local ? localPageClient({
+        open: (kind, ref) => blobRead<MetadataPage>('page.open', kind, ref),
+        next: cursor => blobRead<MetadataPage>('page.next', cursor),
+        close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
+    }) : undefined;
 
     return {
         bridge,
         ...(blobs ? { blobs } : {}),
+        ...(uploads ? { uploads } : {}),
+        ...(pages ? { pages } : {}),
         ...(localOwner ? { localOwner } : {}),
         ready,
         state: () => state,
