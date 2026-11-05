@@ -34,9 +34,9 @@ describe('a slow features action names its slow half', () => {
         dir = await mkdtemp(join(tmpdir(), 'act-timing-'));
         services = await composeServices({ userData: dir, pty: fakePty(), v1Settings: () => null, caddyBin: null, frontDoorPort: 0 });
         const real = services.settings;
-        const slowSettings = Object.assign(Object.create(Object.getPrototypeOf(real)), real, {
-            set: async (...a: Parameters<typeof real.set>) => { await new Promise((r) => setTimeout(r, 60)); return real.set(...a); },
-        });
+        // A Proxy, not a copy: the store keeps private fields (#values), which a copied object does not have.
+        const slowSet = async (...a: Parameters<typeof real.set>) => { await new Promise((r) => setTimeout(r, 60)); return real.set(...a); };
+        const slowSettings = new Proxy(real, { get: (t, p) => (p === 'set' ? slowSet : ((v) => (typeof v === 'function' ? v.bind(t) : v))(Reflect.get(t, p, t))) });
         const slow = { ...services, settings: slowSettings } as ComposedServices;
         const said: string[] = [];
         await handleFeatureAction(slow, { kind: 'settings.set', key: 'detached_terminals', value: true }, undefined, { slowPart: { ms: 40, log: (part, ms) => said.push(`${part} ${ms >= 40 ? 'over' : 'under'}`) } });
