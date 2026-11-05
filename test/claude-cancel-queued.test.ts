@@ -10,7 +10,7 @@ import { AgentSession, CANCEL_STATE_UNCERTAIN, CANCEL_STATE_UNCERTAIN_CODE, type
 import { restartAgent, type AgentOpsPorts } from '../src/main/agent-ops-host.js';
 import { sessionHostPort } from '../src/main/agent-ops-host-port.js';
 import { SessionHost, type DriverFor } from '../src/main/session-host.js';
-import { NEW_DRIVER_NOTICE, startForYourMessage } from '../src/main/start-on-demand.js';
+import { NEW_DRIVER_NOTICE, startForWork, startForYourMessage } from '../src/main/start-on-demand.js';
 
 /**
  * STOP MEANS STOP, CLAUDE HALF (genie#1565, prism-acp 0.37.0). `ClaudeDriver.cancel()` now sends `cancel_queued: true`:
@@ -165,10 +165,7 @@ describe('SessionHost — Claude’s cancel state uncertain: the person’s next
         } as unknown as AgentOpsPorts;
         const restarts: string[] = [];
         const ports = {
-            probe: (id: AgentRecord['id']) => host.probe(id),
-            start: (r: AgentRecord, cwd: string) => host.start(r, cwd),
-            cwdFor: () => dir,
-            startRefusal: () => null,
+            startForWork: (r: AgentRecord) => startForWork({ probe: (id) => host.probe(id), start: (a, cwd) => host.start(a, cwd), cwdFor: () => dir, startRefusal: () => null }, r),
             needsNewDriver: (id: AgentRecord['id']) => host.needsNewDriver(id),
             restart: (id: AgentRecord['id']) => { restarts.push(id); return restartAgent(ops, id, 'graceful'); },
             notice: (id: AgentRecord['id'], message: string) => host.notice(id, message),

@@ -62,6 +62,8 @@ export interface InboxPushPorts {
         /** The prompt held under `id` is still waiting in the agent's current run (SessionHost.hasQueuedPrompt). */
         hasQueuedPrompt(agentId: AgentId, id: string): boolean;
         probe(agentId: AgentId): LiveSession | null;
+        /** How the agent's last turn ended (SessionHost.lastTurnEnd): a notice whose turn was STOPPED was not told. */
+        lastTurnEnd?(agentId: AgentId): 'replied' | 'stopped' | 'failed' | 'held' | 'signed-out' | null;
         /**
          * The typed-input path (SessionHost.handOff → AgentSession.deliver): `{ queued: null }` = the provider has it now;
          * `{ queued: id }` = held for the turn's end; `null` = no session. Throws when the provider refuses it outright.
@@ -151,7 +153,9 @@ export function wireInboxPush(ports: InboxPushPorts): () => void {
         // it opened. That turn ending cleanly is the notice told, so the turn's end never sends the same batch again.
         if (host.turnsEndedThisRun(id) <= sent.endedBefore) return true;
         out.delete(id);
-        settled(id, host.probe(id)?.turnState !== 'failed');
+        // Not a turn that was STOPPED either: since prism-acp 0.37.0 a notice Claude took mid-turn is dropped by the Stop
+        // (genie#1565), so it is told again once the person acts.
+        settled(id, host.probe(id)?.turnState !== 'failed' && host.lastTurnEnd?.(id) !== 'stopped');
         return false;
     };
 

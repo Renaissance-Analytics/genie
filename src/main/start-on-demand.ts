@@ -36,7 +36,9 @@ export function startForWork(ports: StartOnDemandPorts, record: AgentRecord): St
 export const NEW_DRIVER_NOTICE = 'The last Stop could not be confirmed, so that run was ended. Genie started the agent again on the same conversation for your message.';
 
 /** THE PERSON'S MESSAGE: what `startForWork` does, and a new driver when the run's own stopped itself. */
-export interface StartForYourMessagePorts extends StartOnDemandPorts {
+export interface StartForYourMessagePorts {
+    /** The rule every sender of work shares (`startForWork` with main's ports: `startOnDemand`). */
+    startForWork(record: AgentRecord): StartForWork;
     /** The run's driver stopped itself and must be replaced before it takes work (`SessionHost.needsNewDriver`). */
     needsNewDriver(agentId: AgentRecord['id']): boolean;
     /** THE ONE RESTART (genie#1238, `restartAgent(…, 'graceful')`): the same conversation, what is owed delivered. */
@@ -45,6 +47,16 @@ export interface StartForYourMessagePorts extends StartOnDemandPorts {
     notice(agentId: AgentRecord['id'], message: string): boolean;
 }
 
+/**
+ * The rule for the PERSON'S message (the composer, a remote window's chat): `startForWork`, except when the run's driver
+ * stopped itself (prism-acp 0.37.0: Claude's cancel state uncertain). Then their message starts a new driver through the
+ * one Restart — the same conversation, whatever that run still owed delivered first — and the chat says why. Mail and
+ * flows keep `startForWork`: after a Stop, only the person starts the agent again (genie#1565).
+ */
 export async function startForYourMessage(ports: StartForYourMessagePorts, record: AgentRecord): Promise<StartForWork> {
-    return startForWork(ports, record);
+    if (!ports.needsNewDriver(record.id)) return ports.startForWork(record);
+    const restarted = await ports.restart(record.id);
+    if (!restarted.ok) return restarted;
+    ports.notice(record.id, NEW_DRIVER_NOTICE);
+    return { ok: true, started: true };
 }

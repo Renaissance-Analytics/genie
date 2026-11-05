@@ -1329,8 +1329,7 @@ export class SessionHost {
      * uncertain, prism-acp 0.37.0): the person's next message starts a new one (main/start-on-demand.ts).
      */
     needsNewDriver(agentId: AgentId): boolean {
-        void agentId;
-        return false;
+        return this.#running.get(agentId)?.session.needsNewDriver ?? false;
     }
 
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
