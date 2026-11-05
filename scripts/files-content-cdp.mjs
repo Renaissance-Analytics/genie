@@ -152,7 +152,7 @@ try {
         s.stop=()=>{clearInterval(s.timer);ipc.removeListener('genie:local-frame',s.listen);};
         return {nativeFilesOpen:ipc._invokeHandlers.has('genie:files-open'),nativeWatch:ipc._invokeHandlers.has('genie:files-watch'),snapshotControl:ipc._invokeHandlers.has('genie:snapshot')};
     })()`);
-    demand(handlerState.snapshotControl && handlerState.nativeWatch, 'native retained-handler controls');
+    demand(handlerState.snapshotControl && handlerState.nativeWatch === process.argv.includes('--baseline'), 'snapshot retained; watch moved after7D (baseline flag for earlier native path)');
     reports.push({ label: 'path-control', ...handlerState, fixtureRoot: root, actualFixtureFiles: readdirSync(workspace).filter(n => n.startsWith('entry-')).length });
     // Same hash gauge must reject a corrupted expected result before normal rows may count.
     let rejected = false; try { await measure('intentional-hash-break', { method: 'open', args: ['tynn', 'text.txt'], expect: { sha256: '0'.repeat(64) } }); } catch (e) { rejected = /hash differs/.test(e.message); }

@@ -1,5 +1,6 @@
 import { BLOB_METHODS } from './local-blobs.js';
 import { LOCAL_CONTENT_METHODS } from './local-content.js';
+import { FILES_WATCH_METHODS } from './local-files-watch.js';
 import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
 
 /**
@@ -130,11 +131,11 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `files.upload` or a prompt's attachments.
  * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS, ...FILES_WATCH_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
-export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom' } as const;
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom', files: 'local-files' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 

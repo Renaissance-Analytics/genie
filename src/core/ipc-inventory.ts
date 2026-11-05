@@ -68,8 +68,6 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['genie:files-export', 'window-port'],
     ['genie:artboard-read', 'later:family 7 chunked transfer'],
     ['genie:artboard-review', 'later:family 7 chunked transfer'],
-    ['genie:files-watch', 'protocol:files.watch'],
-    ['genie:files-unwatch', 'protocol:files.unwatch'],
     ['genie:browser-window-open', 'later:P2b browser process'],
     ['genie:files-popout', 'window-port'],
     ['genie:remote-open-window', 'window-port'],

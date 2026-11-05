@@ -24,6 +24,8 @@ import { LocalPages } from './local-pages.js';
 import { LocalFilesContent } from './local-files-content.js';
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { localFilesArguments } from './local-files-arguments.js';
+import { LocalFilesWatches, type FilesWatchPort } from './local-files-watches.js';
+import type { FilesHubEvent } from './files-watch-hub.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -38,6 +40,7 @@ import { localFilesArguments } from './local-files-arguments.js';
  */
 
 export interface HostApi {
+    readonly filesWatch?: FilesWatchPort;
     /** Perform a bridge method on this host. Throws → the caller gets the message as a refusal. */
     invoke(method: RemoteMethod, args: unknown[]): Promise<unknown>;
     /**
@@ -96,6 +99,7 @@ interface Connection {
     readonly watching: Map<string, WindowState<WireRow>>;
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
+    filesViews: LocalFilesWatches | null;
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
     pages: LocalPages | null;
@@ -197,6 +201,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        connection.filesViews?.dispose();
         connection.content?.dispose();
         connection.blobs?.dispose();
         connection.pages?.dispose();
@@ -294,7 +299,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null, uploads: null, pages: null, content: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, pages: null, content: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -410,6 +415,18 @@ export class RemoteHost {
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
 
         switch (method) {
+            case 'files.watch':
+            case 'files.unwatch':
+            case 'files.watchState': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the Files watch connection closed');
+                const views = connection.filesViews ??= new LocalFilesWatches(this.#api.filesWatch);
+                try {
+                    if (method === 'files.watch') return ok(await views.watch(args[0], args[1], args[2]));
+                    if (method === 'files.unwatch') return ok(views.unwatch(args[0]));
+                    return ok(this.#content(connection).capture(views.state(args[0]), 'workspace-tree'));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
             case 'content.release': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
                 return ok(connection.content?.release(args[0]) ?? { released: false });
@@ -638,6 +655,11 @@ export class RemoteHost {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
             if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
+            if (channel === LOCAL_EVENT_CHANNELS.files) {
+                const push = c.filesViews?.event(payload as FilesHubEvent);
+                if (push) this.#send(c, { kind: 'event', channel, payload: push });
+                continue;
+            }
             if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
