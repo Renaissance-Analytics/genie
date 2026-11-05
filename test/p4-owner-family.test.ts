@@ -159,6 +159,16 @@ describe('native guards, null and refusal remain visible', () => {
 });
 
 describe('native paths retired and P5/window boundaries pinned', () => {
+    it('the app routes owner operations through its page bridge and keeps connect-link native', () => {
+        const app = readFileSync('src/renderer/App.tsx', 'utf8');
+        expect(app).not.toContain('window.genie?.appInbox'); expect(app).not.toContain('window.genie?.deviceLink');
+        const nativeNetwork = app.split('\n').filter(line => line.includes('window.genie?.tynnNetwork'));
+        expect(nativeNetwork).toHaveLength(1); expect(nativeNetwork[0]).toContain('openLink=');
+        expect(app).toContain('function ownWindowBridge()'); expect(app).toContain('pageBridge(window.genie)');
+        expect(app).toContain('ownWindowBridge()?.appInbox'); expect(app).toContain('ownWindowBridge()?.tynnNetwork?.shares');
+        const desktop = app.slice(app.indexOf('function useRemote('), app.indexOf('function useMobileRemote('));
+        expect(desktop).toContain('const local = ownWindowBridge()'); expect(desktop).toContain('const link = local?.deviceLink'); expect(desktop).toContain('const net = local?.tynnNetwork');
+    });
     it('current device proof reads moved hosts through the page bridge and waits for it', () => {
         const script = readFileSync('scripts/device-link-cdp.mjs', 'utf8');
         expect(script).not.toContain('window.genie.deviceLink.hosts()'); expect(script.match(/window\.genieTest\.deviceLink\.hosts\(\)/g)).toHaveLength(2);
