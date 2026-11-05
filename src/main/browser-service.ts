@@ -1,3 +1,5 @@
+import { isCookieMessage, type CookieMessage } from '../core/cookie-sync.js';
+
 /**
  * THE GENIE BROWSER'S PROCESS, AS THE HOST SEES IT (the host split, P2b; decision 5). The window and the browser never talk
  * directly: each is a client of the host, so either can go without the other. The window says what the browser needs (the
@@ -14,6 +16,8 @@ export interface BrowserFacts {
     /** How to start the browser's process: the window knows the install; the host may run from a copy of it (P6). */
     readonly launch: { readonly file: string; readonly args: readonly string[] };
 }
+
+export type { SyncedCookie } from '../core/cookie-sync.js';
 
 /** A page in the browser's process, as the `pages` tool needs to read it. */
 export interface BrowserPage {
@@ -36,6 +40,9 @@ export type BrowserEvent =
     | { readonly kind: 'openSingle'; readonly panelKey: string; readonly url: string }
     | { readonly kind: 'closeSingle'; readonly panelKey: string }
     | { readonly kind: 'poppedBack'; readonly panelKey: string }
+    /** One workspace's cookie, between its two stores. Relayed, never kept. */
+    | { readonly kind: 'cookies'; readonly from: string; readonly workspaceId: string; readonly message: CookieMessage }
+    | { readonly kind: 'cookiesWanted'; readonly from: string; readonly workspaceId: string }
     /** A call into a page, for the browser to run and answer with `pageReply`. */
     | { readonly kind: 'pageCall'; readonly requestId: string; readonly pageId: string; readonly method: string; readonly args: readonly unknown[] }
     /** The host is ending on purpose, and the browser ends with it: an installer needs the binary free. */
@@ -125,6 +132,16 @@ export class BrowserService {
                 for (const event of held) this.#emit(event);
                 return { facts: this.#facts, doorUp: this.#publisher !== null };
             }
+            case 'cookies': {
+                if (!isCookieMessage(args[1])) throw new Error('only a .gen cookie crosses');
+                this.#emit({ kind: 'cookies', from, workspaceId: String(args[0]), message: args[1] });
+                return null;
+            }
+            case 'whoami':
+                return from;
+            case 'cookiesWanted':
+                this.#emit({ kind: 'cookiesWanted', from, workspaceId: String(args[0]) });
+                return null;
             case 'popOut': {
                 const [panelKey, host] = [String(args[0]), String(args[1]).toLowerCase()];
                 if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.gen$/.test(host)) throw new Error('that is not a Genie site');

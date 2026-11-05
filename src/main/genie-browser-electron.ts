@@ -2,6 +2,7 @@ import { BrowserWindow, WebContentsView, ipcMain, session, shell, type IpcMainIn
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { browserStorePath, type BrowserStoreSide } from '../core/browser-store.js';
+import type { SyncedCookie } from '../core/cookie-sync.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
 import { initialGenUrl, isSecureBrowserUrl, normalizeNavUrl } from '../core/genie-browser.js';
 import { browserWindowOptions, overlayColorsOk, TITLE_BAR_HEIGHT } from '../core/window.js';
@@ -106,6 +107,15 @@ export function rerouteGenieBrowserSession(options: { frontDoorPort: number; caP
  * share one (measured on Electron 45.2.2). Made once per path.
  */
 const workspaceStores = new Map<string, { ses: Session; routed: Promise<void> }>();
+/** Who watches this process's stores: its cookie sync. Told of each store as it opens. */
+export interface StoreWatcher {
+    attach(workspaceId: string, ses: Session): void;
+    changed(workspaceId: string, cookie: SyncedCookie, cause: string, removed: boolean): void;
+}
+let storeWatcher: StoreWatcher | null = null;
+export function watchWorkspaceStores(watcher: StoreWatcher): void {
+    storeWatcher = watcher;
+}
 export function workspaceBrowserSession(options: { genieHome: string; workspaceId: string; side: BrowserStoreSide; frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): { ses: Session; routed: Promise<void> } {
     const path = browserStorePath(options.genieHome, options.workspaceId, options.side);
     const found = workspaceStores.get(path);
@@ -116,6 +126,8 @@ export function workspaceBrowserSession(options: { genieHome: string; workspaceI
     guardSession(ses, () => sharedCa);
     const store = { ses, routed: routeSession(ses, options.frontDoorPort, options.log ?? ((line: string) => console.log(line))) };
     workspaceStores.set(path, store);
+    storeWatcher?.attach(options.workspaceId, ses);
+    ses.cookies.on('changed', (_event, cookie, cause, removed) => { storeWatcher?.changed(options.workspaceId, cookie as SyncedCookie, cause, removed); });
     return store;
 }
 

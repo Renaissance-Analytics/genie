@@ -29,6 +29,7 @@ function setup(clients: Array<ReturnType<typeof fakeClient> | null>) {
         door: vi.fn(),
         open: vi.fn(),
         quit: vi.fn(),
+        linked: vi.fn(),
         log: vi.fn(),
     };
     return { ports, lose: () => lost() };
@@ -53,6 +54,25 @@ describe('linking', () => {
         await link.linked;
         expect(ports.connect).toHaveBeenCalledTimes(3);
         expect(ports.sleep).toHaveBeenCalledTimes(2);
+        link.stop();
+    });
+});
+
+describe('the order on linking (batch SS: a store opened by a held open asked for cookies with no link yet)', () => {
+    it('the link is handed on before anything held is opened', async () => {
+        const c = fakeClient({ facts: FACTS, doorUp: true });
+        const order: string[] = [];
+        const { ports } = setup([c]);
+        ports.linked = vi.fn(() => { order.push('linked'); });
+        ports.open = vi.fn(() => { order.push('open'); });
+        ports.facts = vi.fn(() => { order.push('facts'); });
+        (c.client.browserCall as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+            c.emit({ kind: 'open', url: 'https://a.gen/', activation: 'background' });
+            return { facts: FACTS, doorUp: true };
+        });
+        const link = runBrowserLink(ports as never);
+        await link.linked;
+        expect(order).toEqual(['linked', 'facts', 'open']);
         link.stop();
     });
 });
