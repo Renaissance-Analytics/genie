@@ -337,6 +337,13 @@ export async function restrictPrivateFile(file: string): Promise<void> {
     await withHelperOrALaunch(() => restrict([target]));
 }
 
+/** Dedicated host-owned directories, using the same owner-only ACL and read-back as private files. */
+export async function restrictPrivateDirectories(directories: readonly string[]): Promise<void> {
+    const targets = directories.map(directory => ({ path: resolve(directory), directory: true }));
+    for (const target of targets) if (!await inspect(target)) throw new Error(REFUSED);
+    await withHelperOrALaunch(() => restrict(targets));
+}
+
 /** Restrict existing storage before reading it or issuing a credential. Final links are refused. */
 export async function preparePrivateCredential(file: string): Promise<void> {
     await withHelperOrALaunch(() => preparePrivateStorage(file));

@@ -132,7 +132,7 @@ export class RemoteHost {
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
-    readonly #createLocalUploads: () => LocalUploads;
+    readonly #createLocalUploads: (() => LocalUploads) | undefined;
     readonly #hostName: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
@@ -171,7 +171,7 @@ export class RemoteHost {
         this.#transport = deps.transport;
         this.#now = deps.now ?? Date.now;
         this.#openPage = deps.openPage;
-        this.#createLocalUploads = deps.createLocalUploads ?? (() => new LocalUploads({ now: this.#now }));
+        this.#createLocalUploads = deps.createLocalUploads;
         this.#staging = new UploadStaging({ now: this.#now });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
@@ -410,6 +410,7 @@ export class RemoteHost {
             case 'localUpload.abort': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
                 if (!this.#connections.has(connection.id)) return refuse('the local upload connection closed');
+                if (!this.#createLocalUploads) return refuse('local staging is not configured on this host');
                 try {
                     const uploads = connection.uploads ??= this.#createLocalUploads();
                     if (method === 'localUpload.begin') return ok(await uploads.begin(args[0]));

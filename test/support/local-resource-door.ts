@@ -10,6 +10,8 @@ import { inMemoryPair, transportHub, type PreAuth, type ServerConnection, type W
 import { localProtocolDoor, type LocalDoorContents } from '../../src/main/local-protocol-door.js';
 import { DeviceStore } from '../../src/main/remote-devices.js';
 import { RemoteHost } from '../../src/main/remote-host.js';
+import { LocalStagingArea } from '../../src/main/local-staging-area.js';
+import type { LocalUploads } from '../../src/main/local-uploads.js';
 import { buildHostApi } from '../../src/main/host-api.js';
 import { connectRemote } from '../../src/renderer/remote-bridge.js';
 import { localTransport } from '../../src/renderer/local-transport.js';
@@ -25,16 +27,17 @@ class Contents extends EventEmitter {
 /** The actual admitted door, real host/API and same renderer client, with only host resource sources injected. */
 export async function resourceDoor(cleanups: Array<() => Promise<void>>, sources: Record<string, unknown> = {}) {
     const dir = await mkdtemp(join(tmpdir(), 'genie-p4-resources-'));
+    const area = await LocalStagingArea.open(dir), uploads: LocalUploads[] = [];
     let seq = 0;
     const devices = await DeviceStore.open(dir, { now: Date.now, random: () => `synthetic-resource-device-${++seq}` });
     const api = buildHostApi(protocolContractDeps(dir)), invoke = vi.spyOn(api, 'invoke');
     const ipc = new EventEmitter(), door = localProtocolDoor(ipc);
     let accept!: (connection: ServerConnection) => void;
     const hub = transportHub({ onConnection: listener => { accept = listener; return () => {}; } }); hub.add(door);
-    new RemoteHost(Object.assign({ api, hostName: 'resource-fixture', devices, baton: new Baton(), pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing, transport: hub }, sources));
+    new RemoteHost(Object.assign({ api, hostName: 'resource-fixture', devices, baton: new Baton(), pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing, transport: hub, createLocalUploads: () => { const registry = area.createConnection(); uploads.push(registry); return registry; } }, sources));
     const closes: Array<() => void> = [], serialized: string[] = [], calls: Array<{ method: string; args: unknown[] }> = [];
     const rewrite = { frame: (text: string) => text };
-    cleanups.push(async () => { for (const close of closes) close(); door.dispose(); await tick(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
+    cleanups.push(async () => { for (const close of closes) close(); door.dispose(); await Promise.all(uploads.map(registry => registry.dispose())); await tick(); await devices.flushed(); await rm(dir, { recursive: true, force: true }); });
     function port(): LocalFramePort {
         const contents = new Contents(), listeners = new Set<Parameters<LocalFramePort['onFrame']>[0]>();
         contents.mainFrame.send = (_channel, action, handle, text) => {

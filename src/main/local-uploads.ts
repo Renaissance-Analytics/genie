@@ -1,7 +1,6 @@
 import { createHash, randomUUID, type Hash } from 'node:crypto';
-import { chmod, mkdtemp, open, rm, type FileHandle } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { chmod, mkdir, open, rm, type FileHandle } from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import { BLOB_READ_BYTES } from '../core/local-blobs.js';
 import { LOCAL_UPLOAD_CHUNK_BYTES, LOCAL_UPLOAD_MAX_BYTES, LOCAL_UPLOAD_TTL_MS, MAX_LOCAL_UPLOADS, type LocalUploadInfo, type LocalUploadSource, type LocalUploadTarget } from '../core/local-content.js';
 
@@ -21,7 +20,7 @@ interface Entry {
 
 /** One local connection's private disk area; phone UploadStaging is independent and unchanged. */
 export class LocalUploads {
-    readonly #root: string;
+    readonly directory: string;
     readonly #now: () => number;
     readonly #staged = new Map<string, Entry>();
     readonly #claimed = new Set<Entry>();
@@ -30,8 +29,9 @@ export class LocalUploads {
     #closed = false;
     #disposal: Promise<void> | null = null;
 
-    constructor(deps: { root?: string; now?: () => number } = {}) {
-        this.#root = deps.root ?? tmpdir(); this.#now = deps.now ?? Date.now;
+    constructor(deps: { root: string; now?: () => number }) {
+        if (!deps || typeof deps.root !== 'string' || deps.root.length === 0) throw new Error('local uploads need a host-owned root directory');
+        this.directory = join(resolve(deps.root), randomUUID()); this.#now = deps.now ?? Date.now;
     }
 
     begin(input: unknown): Promise<LocalUploadInfo> {
@@ -43,7 +43,8 @@ export class LocalUploads {
                 throw new Error(`a local upload is 0 to ${rule.maxBytes} bytes`);
             if (this.#staged.size + this.#claimed.size >= MAX_LOCAL_UPLOADS) throw new Error(`only ${MAX_LOCAL_UPLOADS} local uploads at a time`);
             if (!this.#dir) {
-                const dir = await mkdtemp(join(this.#root, 'genie-local-upload-'));
+                const dir = this.directory;
+                await mkdir(dir, { mode: 0o700 });
                 try { await chmod(dir, 0o700); this.#dir = dir; }
                 catch (error) { await rm(dir, { recursive: true, force: true }); throw error; }
             }
