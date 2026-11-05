@@ -17,7 +17,7 @@ describe('P5a: the entry points are wired to the host’s hosting', () => {
     it('genie-host composes the hosting under its own supervisor, elevates through a window only, and serves it', () => {
         expect(host).toMatch(/hosting = await composeHosting\(\{[\s\S]{0,600}?supervisor: processSupervisor,/);
         expect(host).toMatch(/elevate: \(steps\) => hostingElevation\.run\(steps\),/);
-        expect(host).toMatch(/new WindowElevation\(\{\s*connected: \(\) => engineRef\?\.windowConnected\(\) \?\? false,\s*ask: \(steps\) => \(engineRef \? engineRef\.elevate\(steps\)/);
+        expect(host).toMatch(/new WindowElevation\(\{\s*connected: \(\) => engineRef\?\.localWindowConnected\(\) \?\? false,\s*ask: \(steps\) => \(engineRef \? engineRef\.elevate\(steps\)/);
         expect(host).toMatch(/\.\.\.\(hostingService \? \{ hosting: hostingService \} : \{\}\),/);
     });
 

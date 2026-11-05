@@ -751,7 +751,9 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         frontDoorPort,
         browserTrust: () => {
             const opened = genCa();
-            return opened.ca ? { caPem: readFileSync(opened.ca.certPath, 'utf8'), thumbprint: opened.ca.thumbprint } : { caPem: null, reason: opened.error };
+            if (!opened.ca) return { caPem: null, reason: opened.error };
+            // Read at each ask: a CA file that went away (a folder removed under a running Genie) is a reason, never a throw.
+            try { return { caPem: readFileSync(opened.ca.certPath, 'utf8'), thumbprint: opened.ca.thumbprint }; } catch (error) { return { caPem: null, reason: `Genie’s certificate authority could not be read: ${message(error)}` }; }
         },
         get externalFrontDoor() { return frontDoorCtl.status(); },
         onFrontDoorChange: frontDoorCtl.onChange,

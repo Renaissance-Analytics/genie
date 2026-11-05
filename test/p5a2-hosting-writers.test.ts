@@ -5,17 +5,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ServiceInstance } from '../src/core/services.js';
-import { memoryPair } from '../src/core/line-transport.js';
 import { composeServices, type ComposedServices } from '../src/main/compose.js';
 import { HostingReplica, type HostingDump } from '../src/main/hosting-host.js';
 import { hostMachinePaths } from '../src/main/hosting-inputs.js';
 import type { DockerRunner } from '../src/main/service-driver.js';
-import { SessionEngineClient } from '../src/main/session-engine-client.js';
-import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { HostingSurface } from '../src/renderer/components/FeatureSurfaces.js';
 import { EMPTY_FEATURES, type FeatureData } from '../src/renderer/features.js';
-import { hostingRig, tick, TOKEN, type HostingRig } from './helpers/hosting-rig.js';
+import { hostingRig, tick, type HostingRig } from './helpers/hosting-rig.js';
 
 /**
  * P5a.2 (the host split): what the window still decided about the host's hosting is the host's now.
@@ -130,14 +127,11 @@ describe('2. the inputs only Electron knows are explicit and checked', () => {
 
     it('the window’s environment reaches the host LIVE: pushed after a Check and repair, no restart', async () => {
         const adopted: Array<Readonly<Record<string, string>>> = [];
-        const server = new SessionEngineServer({ token: TOKEN, build: 't', adoptWindowEnv: (env) => { adopted.push(env); } });
+        const r = await rig({ server: { adoptWindowEnv: (env) => { adopted.push(env); } } });
         let env: Record<string, string> = { PHP_INI_SCAN_DIR: '/before' };
-        const [h, t] = memoryPair();
-        server.accept(h, { local: true });
-        const client = new SessionEngineClient({ env: () => env });
-        expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
+        const w = await r.window({ client: { env: () => env } });
         env = { PHP_INI_SCAN_DIR: '/repaired', PATH: '/genie/php' };
-        await client.pushEnv();
+        await w.client.pushEnv();
         expect(adopted.at(-1)).toMatchObject({ PHP_INI_SCAN_DIR: '/repaired', PATH: '/genie/php' });
     });
 });
