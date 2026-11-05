@@ -57,7 +57,7 @@ describe('main and compose', () => {
         expect(main).toMatch(/composed\.onFrontDoorChange\(\(\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*rerouteGenieBrowserSession\(\{ frontDoorPort: frontDoorNow\.port, caPem: frontDoorNow\.caPem \}\);\s*publishBrowserFacts\?\.\(\);/);
         // A store or session made after the door moved uses the door it moved to, not its creator's port.
         const gbe = readFileSync(new URL('../src/main/genie-browser-electron.ts', import.meta.url), 'utf8');
-        expect(gbe).toMatch(/export function rerouteGenieBrowserSession\([^)]*\): void \{\s*currentPort = options\.frontDoorPort;/);
+        expect(gbe).toMatch(/export function rerouteGenieBrowserSession\(options: \{[^}]*\}\): void \{\s*currentPort = options\.frontDoorPort;/);
         expect(count(gbe, /routeSession\(ses, currentPort \?\? options\.frontDoorPort, /g)).toBe(2);
         // The browser's facts and the cookie bridge's stores carry the CA as it is now.
         expect(count(main, /caPem: browserTrust\.caPem/g)).toBe(2); // frontDoorNow's first read, and the site panels' first read
