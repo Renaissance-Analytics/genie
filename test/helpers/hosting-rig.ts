@@ -39,6 +39,8 @@ export interface HostingRig {
     readonly supervisor: ProcessSupervisor;
     readonly server: SessionEngineServer;
     readonly ws: string;
+    /** Genie's home for this host: a NEXT host on the same home is the same machine after a restart. */
+    readonly home: string;
     readonly elevationsAsked: Array<readonly PrivilegedStep[]>;
     /** Every process the host's supervisor opened, with its env. */
     readonly opened: PtySpawnOptions[];
@@ -80,7 +82,7 @@ export async function hostingRig(options: { appEnv?: (source: { readonly kind: '
     const elevationsAsked: Array<readonly PrivilegedStep[]> = [];
     const theServer = server;
     return {
-        stack, supervisor, server: theServer, ws, elevationsAsked, opened,
+        stack, supervisor, server: theServer, ws, home, elevationsAsked, opened,
         window: async (w = {}) => {
             const [h, raw] = memoryPair();
             theServer.accept(h, { local: w.local ?? true });
