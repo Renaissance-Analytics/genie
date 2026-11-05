@@ -25,6 +25,7 @@ import { SupervisorService } from './supervisor-host.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
+import { shutDownHosted } from './host-shutdown.js';
 import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
@@ -495,6 +496,8 @@ async function main(): Promise<void> {
     /** Flows (P3.3d), once — at the first window's v1 import, after the book (the old scheduled tasks move into it). */
     let flowsOpening: Promise<void> | null = null;
     let processBookNow: ProcessBook | null = null;
+    /** The host's clocks, once they exist: stopped first at "Shut down everything" (P5a.3, host-shutdown.ts). */
+    const clocks: Array<{ stop(): void }> = [];
     const openFlows = (databasePath: string): Promise<void> => {
         flowsOpening ??= (async () => {
             const store = await FlowStore.open(home);
@@ -535,6 +538,7 @@ async function main(): Promise<void> {
             const regs = mcp?.registrations() ?? [];
             if (regs.length > 0) engineFlows.setToolCaller(createFlowToolCaller({ registrations: regs, callers: flowCallers }));
             flowsService.attach({ store, scheduler: engineFlows.scheduler });
+            clocks.push(engineFlows);
             // A hibernate or a wake changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') engineFlows.scheduler.plan(); });
             lifecycleLog(`flows open: ${store.list().length} flow(s)`);
@@ -570,6 +574,7 @@ async function main(): Promise<void> {
                 schedule: (fn, ms) => { const t = setTimeout(fn, Math.min(ms, 2 ** 31 - 1)); return () => clearTimeout(t); },
             });
             scheduler.plan();
+            clocks.push(scheduler);
             // A workspace hibernated or woken changes what may fire: plan again on every registry write.
             stores.onEvent((event) => { if (event.store === 'registry') scheduler.plan(); });
             processesService.attach({ book: processBook, scheduler, supervisor: processSupervisor });
@@ -658,15 +663,20 @@ async function main(): Promise<void> {
         // Every session stopped and its stop verified, every write drained — bounded, so a stuck stop never keeps a
         // host nobody wants.
         await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
-        // Then every process the window started ("Shut down everything"): the spawn-host children end their ptys.
         files?.close();
         await mcp?.stop();
         approvals.cancelAll('Genie is shutting down');
         own.knowledge.close();
-        await relay?.stop().catch(() => undefined);
-        // Then the hosting's own part (P5a), after the supervised processes: its syncs, its watches, the in-app door. The
-        // engines' containers keep running (the ruling: databases outlive "Shut down everything").
-        await hostingStack?.shutdown().catch(() => undefined);
+        // THEN EVERYTHING THIS HOST SUPERVISES (P5a.3): its sites, the front door's Caddy, the kept processes — stopped, then
+        // the hosting's own part, then the spawn-host children end. The engines' containers keep running: databases
+        // outlive "Shut down everything", and the next host's reconcile finds them (host-shutdown.ts).
+        await shutDownHosted({
+            supervisor: processSupervisor,
+            hosting: hostingStack,
+            endChildren: async () => { await relay?.stop(); },
+            schedulers: clocks,
+            log: (line) => { say(line); lifecycleLog(line); },
+        });
         await appInboxDoor.close().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
