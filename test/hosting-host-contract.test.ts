@@ -78,7 +78,7 @@ async function rig() {
     const elevationsAsked: Array<readonly PrivilegedStep[]> = [];
     const window = async () => {
         const [h, w] = memoryPair();
-        server!.accept(h);
+        server!.accept(h, { local: true });
         const client = new SessionEngineClient({ elevate: async (steps) => { elevationsAsked.push(steps); return { ok: true }; } });
         expect(await client.connect(w, TOKEN)).toMatchObject({ ok: true });
         return { replica: client.hosting(), close: () => w.close() };
