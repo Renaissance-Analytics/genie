@@ -1,8 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import { LOCAL_FRAME_CHANNELS, type LocalFramePort } from '../core/local-frame.js';
-import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge, type UpdateState } from '../renderer/bridge.js';
+import { FEATURE_CHANNELS, type AgentDetail, type FilesViewEvent, type GenieSnapshot, type PreloadBridge } from '../renderer/bridge.js';
 import type { FeatureData } from '../renderer/features.js';
-import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
 import type { AgentPushPayload } from '../core/agent-push-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
@@ -63,12 +62,6 @@ const bridge: PreloadBridge = {
         ipcRenderer.on('genie:workspace-pulse', listener);
         return () => ipcRenderer.removeListener('genie:workspace-pulse', listener);
     },
-    onHeadroom: (onHeadroom) => {
-        const listener = (_event: unknown, limits: Readonly<Record<string, Headroom>>): void => onHeadroom(limits);
-        ipcRenderer.on('genie:headroom', listener);
-        void ipcRenderer.invoke('genie:headroom').then((limits: Readonly<Record<string, Headroom>>) => onHeadroom(limits), () => {});
-        return () => ipcRenderer.removeListener('genie:headroom', listener);
-    },
     onAction: (onAction) => {
         const listener = (_event: unknown, action: { agentId: string | null; kind: string; to?: string; id?: string; ids?: readonly string[] }): void => onAction(action);
         ipcRenderer.on('genie:action', listener);
@@ -115,7 +108,6 @@ const bridge: PreloadBridge = {
     cancelTurn: (agentId) => ipcRenderer.invoke('genie:cancel-turn', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     resumeLimit: (agentId) => ipcRenderer.invoke('genie:resume-limit', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     providerLogin: (agentId) => ipcRenderer.invoke('genie:provider-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
-    accountRetry: (agentId) => ipcRenderer.invoke('genie:account-retry', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
     designLogin: (agentId) => ipcRenderer.invoke('genie:design-login', agentId) as Promise<{ ok: true } | { ok: false; reason: string }>,
 
     prompt: (agentId, text, attachments) => ipcRenderer.invoke('genie:prompt', agentId, text, attachments) as Promise<{ ok: boolean; reason?: string }>,
@@ -213,16 +205,6 @@ const bridge: PreloadBridge = {
         release: (refs) => ipcRenderer.invoke('genie:chat-drafts-release', refs) as Promise<void>,
     },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
-    // Every agent's activity feed (beta.33 item 10): the workspace Dashboard's lanes. Pushed, never polled.
-    activity: {
-        feeds: (workspaceId) => ipcRenderer.invoke('genie:activity', workspaceId) as Promise<never>,
-        subscribe: (onFeed) => {
-            // A feed is small (its newest items, 30 minutes of beats), so one channel carries every agent's.
-            const listener = (_event: unknown, feed: unknown): void => onFeed(feed as never);
-            ipcRenderer.on('genie:activity-changed', listener);
-            return () => { ipcRenderer.removeListener('genie:activity-changed', listener); };
-        },
-    },
     sitePanels: {
         show: (panelKey, host, bounds) => ipcRenderer.invoke('site-panel:show', panelKey, host, bounds) as Promise<never>,
         hide: (panelKey) => ipcRenderer.invoke('site-panel:hide', panelKey) as Promise<void>,
@@ -278,10 +260,6 @@ const bridge: PreloadBridge = {
         },
     },
 
-    /*
-     * UPDATES — §7. State is pushed on one channel; the three actions are invokes whose
-     * answers are the host's own (a refusal is `false` / `null`, crossed as-is).
-     */
     files: {
         tree: (workspaceId) => ipcRenderer.invoke('genie:files-tree', workspaceId) as Promise<never>,
         children: (workspaceId, dir) => ipcRenderer.invoke('genie:files-children', workspaceId, dir) as Promise<never>,
@@ -361,18 +339,6 @@ const bridge: PreloadBridge = {
         current: () => ipcRenderer.invoke('genie:window-overlay-colors-current') as Promise<{ color: string; symbolColor: string } | null>,
     },
 
-    updates: {
-        state: () => ipcRenderer.invoke('genie:updates-state') as Promise<UpdateState>,
-        subscribe: (onChange) => {
-            const handler = (_e: unknown, state: UpdateState) => onChange(state);
-            ipcRenderer.on('genie:updates-changed', handler);
-            return () => { ipcRenderer.removeListener('genie:updates-changed', handler); };
-        },
-        check: () => ipcRenderer.invoke('genie:updates-check') as Promise<UpdateState>,
-        download: () => ipcRenderer.invoke('genie:updates-download') as Promise<boolean>,
-        install: () => ipcRenderer.invoke('genie:updates-install') as Promise<{ report: string } | null>,
-        notes: () => ipcRenderer.invoke('genie:updates-notes') as Promise<UpdateState | null>,
-    },
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);

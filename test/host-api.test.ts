@@ -227,6 +227,7 @@ describe('events', () => {
             ['terminal-exit', { id: 'term_1', exitCode: 0 }],
             ['features', { knowledge: {} }],
             ['updates', { phase: 'none' }],
+            ['local-updates', { phase: 'none' }],
         ]);
         off();
         for (const l of f.listeners.snapshot) l({ agents: [] } as never);

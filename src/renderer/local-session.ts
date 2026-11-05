@@ -10,6 +10,7 @@ export type WorkspaceProtocolKey = 'listRepos' | 'addRepo' | 'removeRepo' | 'rem
     | 'tynnOwnerOptions' | 'createTynnProject' | 'importedAgents' | 'adoptAgent' | 'previewAddFromTynn' | 'confirmAddFromTynn';
 type Workspaces = GenieBridge['workspaces'];
 type Agents = GenieBridge['agents'];
+type HostFamily = Required<Pick<GenieBridge, 'updates' | 'activity' | 'onHeadroom' | 'accountRetry'>>;
 type Refusal = { ok: false; reason: string };
 type Connected = { ok: true } | Refusal;
 
@@ -30,13 +31,20 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents } {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
     let client: RemoteClient | null = null;
     let offState = () => {};
     let offSettings = () => {};
+    const subscriptions = new Set<{ start: (bridge: GenieBridge) => () => void; off: () => void }>();
+    const subscribe = (start: (bridge: GenieBridge) => () => void): (() => void) => {
+        const entry = { start, off: () => {} };
+        subscriptions.add(entry);
+        if (client && state.phase === 'ready') entry.off = start(client.bridge);
+        return () => { entry.off(); entry.off = () => {}; subscriptions.delete(entry); };
+    };
     const update = (next: LocalProtocolState) => {
         state = next;
         for (const listener of listeners) listener();
@@ -44,6 +52,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     const release = () => {
         offSettings(); offSettings = () => {};
         offState(); offState = () => {};
+        for (const entry of subscriptions) { entry.off(); entry.off = () => {}; }
         const previous = client;
         client = null;
         previous?.close();
@@ -66,6 +75,7 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
                     offState = connected.onState((next) => {
                         if (!next.connected && client === connected) fail('The connection to Genie closed. Retry to reconnect.');
                     });
+                    for (const entry of subscriptions) entry.off = entry.start(connected.bridge);
                     update({ phase: 'ready', reason: null, revision: state.revision + (manual ? 1 : 0) });
                     return result;
                 }
@@ -88,12 +98,35 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     };
     const request = <T>(call: (ws: Workspaces) => Promise<T>) => requestBridge((bridge) => call(bridge.workspaces));
     const requestAgent = <T>(call: (agents: Agents) => Promise<T>) => requestBridge((bridge) => call(bridge.agents));
+    // Reads/actions that rejected over IPC must also reject on startup or connection failure.
+    // Checking connection state separately avoids mistaking an actual host value for a refusal.
+    const read = async <T>(call: (bridge: GenieBridge) => Promise<T>): Promise<T> => {
+        if (state.phase === 'failed') throw new Error(state.reason!);
+        const result = await ready;
+        if (!result.ok) throw new Error(result.reason);
+        if (!client || state.phase !== 'ready') throw new Error(state.reason ?? 'The connection to Genie closed. Retry to reconnect.');
+        return call(client.bridge);
+    };
     return {
         control: {
             state: () => state,
             onState: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
             retry: () => { if (state.phase === 'failed') ready = start(true); },
         },
+        updates: {
+            state: () => read((bridge) => bridge.updates.state()),
+            check: () => read((bridge) => bridge.updates.check()),
+            download: () => read((bridge) => bridge.updates.download()),
+            install: () => read((bridge) => bridge.updates.install()),
+            notes: () => read((bridge) => bridge.updates.notes!()),
+            subscribe: (listener) => subscribe((bridge) => bridge.updates.subscribe(listener)),
+        },
+        activity: {
+            feeds: (id) => read((bridge) => bridge.activity!.feeds(id)),
+            subscribe: (listener) => subscribe((bridge) => bridge.activity!.subscribe(listener)),
+        },
+        onHeadroom: (listener) => subscribe((bridge) => bridge.onHeadroom!(listener)),
+        accountRetry: (id) => requestBridge((bridge) => bridge.accountRetry!(id)),
         agents: {
             restart: (id, kind) => requestAgent((agents) => agents.restart(id, kind)),
             previewDelete: (id, outcome, also) => requestAgent((agents) => agents.previewDelete(id, outcome, also)),

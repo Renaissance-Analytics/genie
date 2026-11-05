@@ -1,4 +1,5 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import type { Headroom } from '../core/headroom.js';
 import { listHostDir, makeHostDir } from './host-fs.js';
 import { Coalescer, realSchedule } from '../core/coalesce.js';
 import { AGENT_PUSH_INTERVAL_MS } from './agent-push.js';
@@ -6,7 +7,7 @@ import type { BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-o
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import type { CancelOutcome } from '../core/session.js';
 import type { Diagnosis, FolderKind } from '../core/workspace-model.js';
-import type { RemoteMethod } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, type RemoteMethod } from '../core/remote-protocol.js';
 import type { AgentDetail, GenieSnapshot, UpdateState } from '../renderer/bridge.js';
 import type { FeatureAction, FeatureData } from '../renderer/features.js';
 import type { Finished } from './attention-store.js';
@@ -163,6 +164,12 @@ export interface HostApiDeps {
         feeds(workspaceId: string): Readonly<Record<string, ActivityFeed>>;
         subscribe(listener: (feed: ActivityFeed) => void): () => void;
     };
+    /** Buffered provider readings, with the native initial read and subsequent changes. */
+    headroom?: {
+        view(): Readonly<Record<string, Headroom>>;
+        subscribe(listener: (room: Readonly<Record<string, Headroom>>) => void): () => void;
+    };
+    retryPausedAccount?(provider: string): void;
     features: {
         snapshot(): Promise<FeatureData>;
         act(action: FeatureAction): Promise<FeatureData>;
@@ -173,6 +180,7 @@ export interface HostApiDeps {
         check(): Promise<UpdateState>;
         download(): Promise<boolean>;
         install(): Promise<{ report: string }> | null;
+        notes?(): Promise<UpdateState | null>;
         /** Abandon a drain in progress (§7.5); `false` when there is none. */
         onChange(listener: (state: UpdateState) => void): () => void;
     } | null;
@@ -452,8 +460,19 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 return deps.updates ? deps.updates.download() : false;
             case 'updates.install':
                 return deps.updates?.install() ?? null;
+            case 'updates.notes':
+                return deps.updates?.notes?.() ?? null;
+            case 'headroom':
+                return deps.headroom ? deps.headroom.view() : null;
+            case 'accountRetry': {
+                const record = typeof args[0] === 'string' ? deps.find(args[0]) : null;
+                if (!record) return { ok: false, reason: 'No agent named.' };
+                deps.retryPausedAccount?.(record.provider);
+                return { ok: true };
+            }
             case 'activity':
-                return deps.activity?.feeds(str(args[0])) ?? {};
+                if (typeof args[0] !== 'string') return {};
+                return deps.activity ? deps.activity.feeds(args[0]) : {};
             case 'inbox.sendFile':
                 return deps.uploads.sendFile(str(args[0]), str(args[1]), str(args[2]), Buffer.from(str(args[3]), 'base64'));
             case 'files.children':
@@ -498,8 +517,9 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.terminals.onData((id, data) => listener('terminal-data', { id, data })),
                 deps.terminals.onExit((id, exitCode) => listener('terminal-exit', { id, exitCode })),
                 deps.features.onChange((data) => listener('features', data)),
-                deps.updates?.onChange((state) => listener('updates', state)) ?? (() => {}),
-                deps.activity?.subscribe((feed) => listener('activity', feed)) ?? (() => {}),
+                deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
+                deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
+                deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };

@@ -105,6 +105,7 @@ describe('the three new family4 product methods are local', () => {
         const f = setup(), find = vi.spyOn(f.deps, 'find'), source = server(f.deps), client = await source.connect();
         const oldInvoke = vi.fn(async (_channel: string, _agent: string) => ({ ok: true }));
         expect(await client.bridge.accountRetry!('agent_a')).toEqual(await oldInvoke('genie:account-retry', 'agent_a'));
+        expect(oldInvoke).toHaveBeenCalledExactlyOnceWith('genie:account-retry', 'agent_a');
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith('accountRetry', ['agent_a']); expect(find).toHaveBeenCalledExactlyOnceWith('agent_a');
         expect(f.retry).toHaveBeenCalledExactlyOnceWith('claude');
     });
@@ -144,8 +145,12 @@ describe('family4 subscriptions on the shared page connection', () => {
         vi.stubGlobal('window', { genieLocalProtocol: source.port() });
         const old = vi.fn();
         const bridge = target === 'client' ? (await source.connect()).bridge : pageBridge({ onHeadroom: old, subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge);
+        // Frozen native first paint: listen, then invoke headroom with no arguments.
+        const oldInvoke = vi.fn(async (_channel: string, ..._args: unknown[]) => room), nativeFirst = vi.fn();
+        void oldInvoke('genie:headroom').then(nativeFirst);
         const received = vi.fn(), off = bridge.onHeadroom!(received); await tick();
-        expect(received).toHaveBeenCalledExactlyOnceWith(room); expect(f.view).toHaveBeenCalledExactlyOnceWith();
+        expect(oldInvoke).toHaveBeenCalledExactlyOnceWith('genie:headroom');
+        expect(received.mock.calls).toEqual(nativeFirst.mock.calls); expect(received).toHaveBeenCalledExactlyOnceWith(room); expect(f.view).toHaveBeenCalledExactlyOnceWith();
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith('headroom', []); expect(old).not.toHaveBeenCalled();
         const next = { claude: { ...room.claude, leftPct: 39 } }; f.headroom.emit(next); await tick();
         expect(received).toHaveBeenLastCalledWith(next); off(); received.mockClear(); f.headroom.emit(room); await tick(); expect(received).not.toHaveBeenCalled();

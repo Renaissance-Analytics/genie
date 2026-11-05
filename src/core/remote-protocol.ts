@@ -33,6 +33,8 @@ export const REMOTE_METHODS = [
     'agents.setManageTabs',
     'agents.setDrivePages',
     'activity',
+    'accountRetry',
+    'headroom',
     'agents.setIssueWatch',
     'agents.setPermissions',
     'agents.setModel',
@@ -90,6 +92,7 @@ export const REMOTE_METHODS = [
     'updates.check',
     'updates.download',
     'updates.install',
+    'updates.notes',
     /** A phone's upload (§6.8): bytes over the socket → the inbox's byte copy; never a path from the device. */
     'inbox.sendFile',
     /*
@@ -109,8 +112,11 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `upload.begin` / `upload.chunk` / `upload.abort`: bytes staged on the connection under the 1 MiB frame cap, taken by
  * `files.upload` or a prompt's attachments.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
+
+/** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom' } as const;
 
 export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
@@ -145,6 +151,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setDrivePages': 'write',
     // The Dashboard's lanes (beta.33 item 10): every agent's activity feed in one workspace — a read, workspace-scoped.
     activity: 'read',
+    accountRetry: 'local',
+    headroom: 'local',
     'agents.setIssueWatch': 'write',
     'agents.setPermissions': 'write',
     'agents.setModel': 'write',
@@ -209,6 +217,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'updates.check': 'upgrade',
     'updates.download': 'upgrade',
     'updates.install': 'upgrade',
+    'updates.notes': 'local',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',
     // The phone's files (genie#1346): reading a workspace's files is a read; an upload writes into it.

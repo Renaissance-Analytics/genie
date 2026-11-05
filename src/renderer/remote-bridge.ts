@@ -1,6 +1,7 @@
 import type { ActivityFeed } from '../core/activity-feed.js';
+import type { Headroom } from '../core/headroom.js';
 import type { RepoListing } from '../core/github.js';
-import { parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
+import { LOCAL_EVENTS, parseMessage, type AuthRequest, type ClientTransport, type ControlMethod, type RemoteMethod, type WireMessage } from '../core/remote-protocol.js';
 import { NO_FILES, type AgentDetail, type GenieBridge, type GenieSnapshot, type UpdateState } from './bridge.js';
 import type { FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
@@ -187,6 +188,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
 
     const phone = options.profile === 'mobile';
+    const local = auth.kind === 'local';
+    let activityView = 0;
     const windows = options.windows ?? new AgentWindows();
 
     /** Bytes staged on the host in chunks under the socket's frame cap; the id a call then names (`{ staged: id }`). */
@@ -230,8 +233,29 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         // The Dashboard's lanes (beta.33 item 10): the host's feeds, read once and pushed after (a guest: its workspace's).
         activity: {
             feeds: (workspaceId) => read<Record<string, ActivityFeed>>('activity', workspaceId),
-            subscribe: (onFeed) => on('activity', (p) => onFeed(p as ActivityFeed)),
+            subscribe: (onFeed) => {
+                if (!local) return on('activity', (p) => onFeed(p as ActivityFeed));
+                const viewId = `activity-${++activityView}`;
+                const off = on(LOCAL_EVENTS.activity, (p) => onFeed(p as ActivityFeed));
+                void call('activity.watch', viewId).then((r) => { if (!r.ok) setState({ lastRefusal: r.reason }); });
+                let live = true;
+                return () => {
+                    if (!live) return;
+                    live = false; off();
+                    void call('activity.unwatch', viewId).then((r) => { if (!r.ok) setState({ lastRefusal: r.reason }); });
+                };
+            },
         },
+        ...(local ? {
+            accountRetry: (agentId: string) => answer<{ ok: true } | { ok: false; reason: string }>('accountRetry', agentId),
+            onHeadroom: (listener: (room: Readonly<Record<string, Headroom>>) => void) => {
+                let live = true;
+                const off = on(LOCAL_EVENTS.headroom, (p) => listener(p as Readonly<Record<string, Headroom>>));
+                // Native subscriptions also read once, and ignore an unavailable initial read.
+                void read<Readonly<Record<string, Headroom>>>('headroom').then((room) => { if (live) listener(room); }, () => {});
+                return () => { live = false; off(); };
+            },
+        } : {}),
         agentDetail: (agentId) => (phone ? watch(agentId) : read<AgentDetail | null>('agentDetail', agentId)),
         subscribeAgent: (agentId, onChange) => {
             if (!phone) return on(`agent:${agentId}`, (p) => onChange(p as AgentDetail | null));
@@ -388,10 +412,11 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         } : {}),
         updates: {
             state: () => read<UpdateState>('updates.state'),
-            subscribe: (onChange) => on('updates', (p) => onChange(p as UpdateState)),
+            subscribe: (onChange) => on(local ? LOCAL_EVENTS.updates : 'updates', (p) => onChange(p as UpdateState)),
             check: () => read<UpdateState>('updates.check'),
             download: () => read<boolean>('updates.download'),
             install: () => read<{ report: string } | null>('updates.install'),
+            ...(local ? { notes: () => read<UpdateState | null>('updates.notes') } : {}),
         },
     };
 
