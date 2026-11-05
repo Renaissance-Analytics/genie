@@ -16,7 +16,8 @@
  * running, and their threads still growing; a relaunched window must ADOPT the same host (same pid, same providers)
  * and is measured again.
  *
- * Results: perf-out/host-split-proof.json and a summary on stdout. Every Genie process this started is ended on exit.
+ * Results: perf-out/host-split-proof.json and a summary on stdout, then `### survival <check>=PASS|FAIL` and `### survival=PASS|FAIL` for the crash and the adoption, which is what the exit code says. The timing is read, not judged.
+ * Every Genie process this started is ended on exit.
  */
 import { spawn, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -197,4 +198,16 @@ log(`BEFORE  (agents in Electron main): ${JSON.stringify(report.before)}`);
 log(`AFTER   (agents in genie-host):    ${JSON.stringify(report.after)}`);
 log(`ADOPTED (after a window crash):    ${JSON.stringify(report.adopted)}`);
 log(`CRASH: ${JSON.stringify(summary.crash)}`);
-process.exit(0);
+const c = summary.crash;
+const checks = [
+    ['0-CONTROL-the-gauge-saw-the-agents-alive', c.controlOk === true, `${c.providersAliveBefore} of ${c.providers}`],
+    ['1-the-host-outlives-the-window', c.hostAliveAfterCrash === true, `pid ${c.hostPid}`],
+    ['2-so-does-every-provider', c.providers > 0 && c.providersAliveAfterCrash === c.providers, `${c.providersAliveAfterCrash} of ${c.providers}`],
+    ['3-their-threads-grow-with-no-window', c.threadBytesGrewWithNoWindow === true, JSON.stringify(c.threadBytes)],
+    ['4-a-new-window-adopts-the-same-host', c.samehostPidAfterRelaunch === true, JSON.stringify(c.adoptedLine)],
+    ['5-and-the-same-providers', c.providers > 0 && c.providersAliveAfterRelaunch === c.providers, `${c.providersAliveAfterRelaunch} of ${c.providers}`],
+];
+for (const [name, ok, detail] of checks) console.log(`### survival ${name}=${ok ? 'PASS' : 'FAIL'}  ${detail}`);
+const failed = checks.filter(([, ok]) => !ok).map(([name]) => name);
+console.log(`### survival=${failed.length === 0 ? 'PASS' : 'FAIL'}${failed.length ? `  failed: ${failed.join(', ')}` : ''}`);
+process.exit(failed.length === 0 ? 0 : 1);

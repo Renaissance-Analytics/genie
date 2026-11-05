@@ -45,6 +45,7 @@ echo "=== seeding ==="
 node scripts/smoke-seed.mjs
 
 echo "=== launching the INSTALLED app ==="
+export GENIE_PAGE_PROBE=1
 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' \
     "$APPIMAGE" --appimage-extract-and-run --no-sandbox --remote-debugging-port=9222 \
     >/tmp/electron.log 2>&1 &

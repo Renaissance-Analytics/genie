@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * REAL KEYS FROM A REAL TYNN, ACROSS THE UPGRADE (P3.4; plan §13, the beta.56 acceptance): S7, S5 and S6, against tynn.gen. On omarchy-test, with tynn.ai aliased. Refuses anywhere else.
  *
@@ -55,12 +56,23 @@ const hostPid = () => { try { return JSON.parse(readFileSync(join(runtime, 'host
 const records = () => { try { return readFileSync(RECORD, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)); } catch { return []; } };
 const pgrep = (pattern) => { try { return execFileSync('pgrep', ['-f', pattern], { encoding: 'utf8' }).split('\n').filter(Boolean).map(Number).filter((p) => p !== process.pid); } catch { return []; } };
 
+// Windows' curl is schannel: it asks for a revocation answer the alias's local certificate cannot give, and refuses without one (batch II: CRYPT_E_NO_REVOCATION_CHECK). Only that check is off; the chain and the name are still checked (0a, 0b). And it has no /dev/null.
+const CURL_OS = process.platform === 'win32' ? ['--ssl-no-revoke'] : [];
+const NOWHERE = process.platform === 'win32' ? 'NUL' : '/dev/null';
+
+const curlSafely = (args, options) => {
+    try { return execFileSync('curl', args, { encoding: 'utf8', timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'], ...options }); } catch (error) {
+        const url = args.findLast((a) => a.startsWith('http')) ?? 'an address';
+        throw new Error(`curl ${url.split('?')[0]}: ${String(error.stderr ?? 'no answer').trim().split(/\r?\n/)[0].slice(0, 200)}`);
+    }
+};
+
 // tynn.gen as the same person, by curl, which reads the OS store the alias CA is in.
-const curl = (...args) => execFileSync('curl', ['-sS', '-A', 'Genie-upgrade-acceptance', '-c', jar, '-b', jar, ...args], { encoding: 'utf8', timeout: 30_000 });
+const curl = (...args) => curlSafely(['-sS', ...CURL_OS, '-A', 'Genie-upgrade-acceptance', '-c', jar, '-b', jar, ...args]);
 const xsrf = () => { const v = readFileSync(jar, 'utf8').split('\n').map((l) => l.split('\t')).find((f) => f[5] === 'XSRF-TOKEN')?.[6]; if (!v) throw new Error('no XSRF cookie'); return decodeURIComponent(v); };
 function logIn() {
-    curl('-o', '/dev/null', `${TYNN}/login`);
-    const status = curl('-o', '/dev/null', '-w', '%{http_code}', '-H', `X-XSRF-TOKEN: ${xsrf()}`, '-H', 'Accept: text/html', '--data-urlencode', `email=${ACCOUNT}`, `${TYNN}/dev/quick-login`);
+    curl('-o', NOWHERE, `${TYNN}/login`);
+    const status = curl('-o', NOWHERE, '-w', '%{http_code}', '-H', `X-XSRF-TOKEN: ${xsrf()}`, '-H', 'Accept: text/html', '--data-urlencode', `email=${ACCOUNT}`, `${TYNN}/dev/quick-login`);
     if (status !== '302') throw new Error(`quick login answered ${status}: not a local Tynn, or no such seeded account`);
 }
 function signInCode() {
@@ -78,7 +90,7 @@ const tokensOf = (project) => {
     return rows;
 };
 const publicIdOf = (key) => /^rpk_([0-9A-Za-z]{26})\./.exec(key ?? '')?.[1] ?? null;
-const mcpAnswers = (key) => curl('-o', '/dev/null', '-w', '%{http_code}', '-X', 'POST', '-H', 'Content-Type: application/json', '-H', 'Accept: application/json, text/event-stream', '-H', `Authorization: Bearer ${key}`, '--data', JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mint-check', version: '1' } } }), `${TYNN}/mcp/tynn`);
+const mcpAnswers = (key) => curl('-o', NOWHERE, '-w', '%{http_code}', '-X', 'POST', '-H', 'Content-Type: application/json', '-H', 'Accept: application/json, text/event-stream', '-H', `Authorization: Bearer ${key}`, '--data', JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mint-check', version: '1' } } }), `${TYNN}/mcp/tynn`);
 
 let window = null;
 async function stopApp() {
@@ -122,7 +134,7 @@ class Cdp {
     close() { try { this.#ws.close(); } catch { /* gone */ } }
 }
 async function launch(command, args) {
-    const env = { ...process.env, GENIE2_CODEX_BINARY: join(process.cwd(), 'scripts', 'stub-codex.mjs'), XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0' };
+    const env = { ...process.env, GENIE_PAGE_PROBE: '1', GENIE2_CODEX_BINARY: join(process.cwd(), 'scripts', 'stub-codex.mjs'), XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0' };
     delete env.ELECTRON_RUN_AS_NODE;
     window = spawn(command, [...args, '--no-sandbox', '--ozone-platform=x11', `--remote-debugging-port=${PORT}`], { env, stdio: 'ignore' });
     const page = await until('a window on the debugger port', 90_000, async () => {
@@ -134,7 +146,7 @@ async function launch(command, args) {
     return cdp;
 }
 const signedIn = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.tynn?.user?.name ?? null)');
-const start = (cdp, id) => cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(id)}, "graceful"); true`);
+const start = async (cdp, id) => { await waitForPageProbe(cdp); return cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(id)}, "graceful"); true`); };
 const newRun = (seen) => until('a new run of the provider', 60_000, () => records().find((r) => !seen.has(r.pid)) ?? null);
 
 try {
@@ -228,7 +240,7 @@ try {
 
     say('S6: that key revoked on tynn.gen');
     if (!rowB) throw new Error('no token row for B to revoke');
-    const revoked = curl('-o', '/dev/null', '-w', '%{http_code}', '-X', 'DELETE', '-H', 'Accept: application/json', '-H', `X-XSRF-TOKEN: ${xsrf()}`, `${TYNN}/api/v1/projects/${project.id}/agents/${rowB.agent}/tokens/${rowB.id}`);
+    const revoked = curl('-o', NOWHERE, '-w', '%{http_code}', '-X', 'DELETE', '-H', 'Accept: application/json', '-H', `X-XSRF-TOKEN: ${xsrf()}`, `${TYNN}/api/v1/projects/${project.id}/agents/${rowB.agent}/tokens/${rowB.id}`);
     check(revoked.startsWith('2'), 'S6.0-revoked-on-tynn-gen', `http ${revoked}`);
     const again = await launch(require('electron'), ['.']);
     await until('the account', 60_000, () => signedIn(again));

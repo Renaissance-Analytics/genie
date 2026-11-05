@@ -12,8 +12,9 @@
 #   ... -Phase wait-logon       waits for a logged-on session after that boot
 #   ... -Phase persist-write    then a reboot, then   ... -Phase persist-read    a value written in one boot and read in the next, each in the logged-on session
 #   ... -Phase autologon-clear  takes it away again
+#   ... -Phase script -Script scripts\x.mjs [-Minutes 25]    any script (.mjs by node, .ps1 by PowerShell), in the logged-on person's session, its output printed when it ends and its exit code passed on
 # The whole sequence, reboot included: scripts/vm-keychain-windows.sh in the envelope.
-param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'persist-write', 'persist-read', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon')][string]$Phase)
+param([Parameter(Mandatory = $true)][ValidateSet('ssh', 'interactive', 'persist-write', 'persist-read', 'logon-install', 'logon-read', 'autologon', 'autologon-clear', 'wait-logon', 'script')][string]$Phase, [string]$Script = '', [int]$Minutes = 25)
 # Continue: quser and schtasks write to stderr in ordinary answers, and under Stop PowerShell 5.1 turns that into a throw (quser with nobody on: "No User exists", batch F0).
 $ErrorActionPreference = 'Continue'
 $winlogon = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon'
@@ -63,6 +64,95 @@ echo %ERRORLEVEL% > "$done"
     } finally { schtasks /Delete /TN $name /F 2>$null | Out-Null }
 }
 
+# Everything new in a file since last time, as it comes. The script holds it open, so it is read shared. A hang must say where it hung, and this printed nothing for 42 minutes in batch HH.
+$script:positions = @{}
+function Drain([string]$file, [string]$prefix = '') {
+    if (-not (Test-Path $file)) { return }
+    try {
+        $stream = [System.IO.File]::Open($file, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite -bor [System.IO.FileShare]::Delete)
+        try {
+            $at = if ($script:positions.ContainsKey($file)) { $script:positions[$file] } else { 0 }
+            if ($stream.Length -le $at) { return }
+            $stream.Seek($at, [System.IO.SeekOrigin]::Begin) | Out-Null
+            $bytes = New-Object byte[] ($stream.Length - $at)
+            $count = $stream.Read($bytes, 0, $bytes.Length)
+            $text = [System.Text.Encoding]::UTF8.GetString($bytes, 0, $count)
+            # Only whole lines: the rest waits for the next look.
+            $end = $text.LastIndexOf("`n")
+            if ($end -lt 0) { return }
+            $script:positions[$file] = $at + [System.Text.Encoding]::UTF8.GetByteCount($text.Substring(0, $end + 1))
+            foreach ($line in ($text.Substring(0, $end) -split "`r?`n")) { Write-Output "$prefix$line" }
+        } finally { $stream.Dispose() }
+    } catch { Write-Output "--- could not read $file : $($_.Exception.Message)" }
+}
+
+function Say-What-Is-Running([string]$why) {
+    Write-Output "--- $why"
+    Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(node|electron|genie|powershell|cmd|consent|credentialuibroker|werfault)' -and $_.ProcessId -ne $PID } | ForEach-Object {
+        $line = "$($_.Name) $($_.ProcessId) (parent $($_.ParentProcessId), session $($_.SessionId)) $($_.CommandLine)"
+        Write-Output ('    ' + $line.Substring(0, [Math]::Min(220, $line.Length)))
+    }
+}
+
+# A whole script in the logged-on session. What the host it starts inherits is that session, which is what Credential Manager needs. Its output and the session's windows are printed as they come; at the deadline
+# what is running and what Genie logged are printed too, the session's task is ended, and this exits non-zero.
+function Script-In-Session {
+    if (-not $Script) { Write-Output '### keychain-sessions script=FAIL  name a -Script'; exit 2 }
+    if ((Active-Sessions).Count -eq 0) { Write-Output '### keychain-sessions script=NEEDS-A-LOGGED-ON-SESSION'; exit 4 }
+    $out = Join-Path $env:PUBLIC 'genie-session-script.txt'
+    $done = "$out.done"
+    $windows = Join-Path $env:PUBLIC 'genie-session-windows.txt'
+    Remove-Item -Force -ErrorAction SilentlyContinue $out, $done, $windows
+    $cmd = Join-Path $env:PUBLIC 'genie-session-script.cmd'
+    $runner = if ($Script -like '*.ps1') { 'powershell -NoProfile -ExecutionPolicy Bypass -File' } else { "`"$node`"" }
+    Set-Content -Encoding ASCII -Path $cmd -Value @"
+@echo off
+cd /d "$repo"
+set QUIT_CDP_ALLOW=1
+start "" /b powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$repo\scripts\perf-lag\session-watch-windows.ps1" -Done "$done" -Log "$windows" -Shot "$repo\session-shot"
+$runner "$Script" > "$out" 2>&1
+echo %ERRORLEVEL% > "$done"
+"@
+    $name = 'GenieSessionScript'
+    schtasks /Create /TN $name /TR "`"$cmd`"" /SC ONCE /ST 23:59 /IT /F /RL LIMITED | Out-Null
+    $began = Get-Date
+    $deadline = $began.AddMinutes($Minutes)
+    $beat = $began
+    try {
+        schtasks /Run /TN $name | Out-Null
+        Write-Output "--- in the session: $Script, up to $Minutes minutes"
+        while (-not (Test-Path $done) -and (Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds 3
+            Drain $out
+            Drain $windows '--- session '
+            if (((Get-Date) - $beat).TotalSeconds -ge 120) {
+                $beat = Get-Date
+                $state = (schtasks /Query /TN $name /FO LIST | Select-String 'Status').ToString().Trim()
+                Write-Output "--- still running after $([int]((Get-Date) - $began).TotalMinutes) min: task $state; output file $(if (Test-Path $out) { (Get-Item $out).Length } else { 'not there' }) bytes"
+            }
+        }
+        Start-Sleep -Seconds 1
+        Drain $out
+        Drain $windows '--- session '
+        if (-not (Test-Path $done)) {
+            Write-Output "### keychain-sessions script=FAIL  $Script did not finish within $Minutes minutes"
+            Say-What-Is-Running 'what is running'
+            Write-Output "--- the task: $((schtasks /Query /TN $name /FO LIST | Select-String 'Status|Last Result') -join '; ')"
+            foreach ($log in @((Join-Path $env:USERPROFILE '.genie\runtime\lifecycle.log'), (Join-Path $env:USERPROFILE '.genie\logs\genie-host.log'))) {
+                if (Test-Path $log) { Write-Output "--- the end of $log"; Get-Content $log -Tail 30 | ForEach-Object { Write-Output ('    ' + $_.Substring(0, [Math]::Min(220, $_.Length))) } }
+            }
+            exit 1
+        }
+        exit [int](Get-Content $done).Trim()
+    } finally {
+        schtasks /End /TN $name 2>$null | Out-Null
+        schtasks /Delete /TN $name /F 2>$null | Out-Null
+        # What the task started outlives the task. Not this process, nor the alias's proxy.
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'node.exe' -and $_.CommandLine -like "*$($Script -replace '/', '*')*" } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+        if (-not (Test-Path $done)) { Set-Content -Path $done -Value 1 -ErrorAction SilentlyContinue }
+    }
+}
+
 function Run-In-Session([string]$measurePhase) {
     $code = 1
     In-Session $measurePhase | ForEach-Object { if ($_ -is [int]) { $code = $_ } else { Write-Output $_ } }
@@ -76,6 +166,7 @@ switch ($Phase) {
         exit $LASTEXITCODE
     }
     'interactive' { Run-In-Session 'before' }
+    'script' { Script-In-Session }
     'persist-write' { Run-In-Session 'persist-write' }
     'persist-read' { Run-In-Session 'persist-read' }
     'autologon' {
@@ -85,6 +176,9 @@ switch ($Phase) {
         Set-ItemProperty -Path $winlogon -Name DefaultUserName -Value $env:USERNAME
         Set-ItemProperty -Path $winlogon -Name DefaultDomainName -Value $env:COMPUTERNAME
         Set-ItemProperty -Path $winlogon -Name DefaultPassword -Value $password
+        # A session whose screen stays on: VBoxManage's screenshot of a hang was black.
+        powercfg /change monitor-timeout-ac 0
+        powercfg /change standby-timeout-ac 0
         Write-Output "### keychain-sessions autologon=PASS  $env:USERNAME logs on at the next boot"
     }
     'autologon-clear' {
