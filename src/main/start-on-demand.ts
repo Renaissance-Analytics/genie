@@ -31,3 +31,20 @@ export function startForWork(ports: StartOnDemandPorts, record: AgentRecord): St
     const started = ports.start(record, ports.cwdFor(record));
     return started.ok ? { ok: true, started: true } : started;
 }
+
+/** What the chat says when the person's message started a new driver because the last one stopped itself. */
+export const NEW_DRIVER_NOTICE = 'The last Stop could not be confirmed, so that run was ended. Genie started the agent again on the same conversation for your message.';
+
+/** THE PERSON'S MESSAGE: what `startForWork` does, and a new driver when the run's own stopped itself. */
+export interface StartForYourMessagePorts extends StartOnDemandPorts {
+    /** The run's driver stopped itself and must be replaced before it takes work (`SessionHost.needsNewDriver`). */
+    needsNewDriver(agentId: AgentRecord['id']): boolean;
+    /** THE ONE RESTART (genie#1238, `restartAgent(…, 'graceful')`): the same conversation, what is owed delivered. */
+    restart(agentId: AgentRecord['id']): Promise<{ ok: true } | { ok: false; reason: string }>;
+    /** A warning in the agent's chat (`SessionHost.notice`). */
+    notice(agentId: AgentRecord['id'], message: string): boolean;
+}
+
+export async function startForYourMessage(ports: StartForYourMessagePorts, record: AgentRecord): Promise<StartForWork> {
+    return startForWork(ports, record);
+}

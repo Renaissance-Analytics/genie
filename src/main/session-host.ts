@@ -1324,6 +1324,15 @@ export class SessionHost {
         return true;
     }
 
+    /**
+     * The run's driver stopped itself and cannot take another prompt (`AgentSession.needsNewDriver`: Claude's cancel state
+     * uncertain, prism-acp 0.37.0): the person's next message starts a new one (main/start-on-demand.ts).
+     */
+    needsNewDriver(agentId: AgentId): boolean {
+        void agentId;
+        return false;
+    }
+
     /** A warning in the agent's chat (`AgentSession.notice`); `false` when it has no session. */
     notice(agentId: AgentId, message: string): boolean {
         const entry = this.#running.get(agentId);

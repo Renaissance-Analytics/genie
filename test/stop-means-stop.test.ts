@@ -289,5 +289,30 @@ describe.each(['codex', 'claude'] as const)('stop means stop — a %s agent', (p
             expect(promptsOf(record.id)).toEqual(['work']);
             expect(unread(record.id)).toBe(2);
         });
+
+        /*
+         * prism-acp 0.37.0 (`cancel_queued: true`): a notice Claude took MID-TURN is dropped by the Stop, not run after it,
+         * and ends on its own (`dropped by cancel`). It is told again once the person acts — the turn it went into was
+         * stopped, so it was never told — and not before.
+         */
+        it('CLAUDE: a notice taken mid-turn is dropped by the person’s Stop — no turn for it; told again after their next message', async () => {
+            const record = register();
+            await startWorking(record);
+            await mail(record.id, 'arrived mid-turn');
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+
+            personStops(record);
+            endTurn(record.id, { stopReason: 'cancelled', isError: false, raw: 'dropped by cancel' });
+            await Promise.resolve();
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+            expect(host.inTurn(record.id)).toBe(false);
+            expect(host.rowsFor(record.id).map((r) => r.event).filter((e) => e.kind === 'turn')).toHaveLength(1);
+            expect(unread(record.id)).toBe(1);
+            host.notice(record.id, 'something else changed');
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1]);
+
+            expect(host.prompt(record.id, 'carry on', 'you')).toBe(true);
+            expect(promptsOf(record.id)).toEqual(['work', NOTICE_1, 'carry on', NOTICE_1]);
+        });
     }
 });

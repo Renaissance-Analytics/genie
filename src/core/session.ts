@@ -238,6 +238,16 @@ export const OVERLOAD_RETRY_MS: readonly number[] = [30_000, 60_000, 120_000, 24
 export const OVERLOAD_RESUME_PROMPT = 'The provider was overloaded and your last turn did not finish. Continue where you left off.';
 
 /**
+ * CLAUDE'S CANCEL STATE UNCERTAIN (prism-acp 0.37.0): its cancel receipt was missing (30 s) or did not account for the
+ * prompts in flight, so prism-acp ended them all cancelled (raw `cancel accounting mismatch`), stopped the CLI and said
+ * this fixed reason through `onProtocolError`; that driver's `prompt()` throws `ClaudeCancelStateError` with this code
+ * from then on. Matched here by value so core/ stays free of prism-acp at runtime; test/prism-acp-version.test.ts holds
+ * them to the installed package's own error.
+ */
+export const CANCEL_STATE_UNCERTAIN = 'cancel state uncertain; driver stopped';
+export const CANCEL_STATE_UNCERTAIN_CODE = 'claude_cancel_state_uncertain';
+
+/**
  * COOLING (the owner, 2026-11-01): "a state they enter right after finishing a turn (coming out of the work state).
  * Instead of immediately marking them as idle, they are "Cooling" down for 15 seconds then become Idle. This way I can
  * sort By status and agents that are in between turns aren't making the whole list jump around."
