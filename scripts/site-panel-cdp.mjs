@@ -71,7 +71,7 @@ writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WO
 
 const log = openSync(join(tmpdir(), 'site-panel-electron.log'), 'a');
 const launcher = process.platform === 'linux' ? ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox']] : ['npx', ['electron', '.']];
-const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, HOME: user, USERPROFILE: user, GENIE_HOME: home }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
+const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, HOME: user, USERPROFILE: user, GENIE_HOME: home, GENIE_PAGE_PROBE: '1' }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
 const end = (code) => {
     try { if (process.platform !== 'win32') process.kill(-app.pid, 'SIGKILL'); else app.kill(); } catch { /* gone */ }
     if (code !== 0) { try { console.log(readFileSync(join(tmpdir(), 'site-panel-electron.log'), 'utf8').slice(-3000)); } catch { /* none */ } }
@@ -118,7 +118,7 @@ try {
 
     // Through the product: the tab's panel, not a tag of ours.
     const tabs = { tabs: [{ id: 'sitetab', name: 'SiteTab', layout: 'single', cells: [{ kind: 'site', ref: HOST }] }] };
-    const set = await cdp.evaluate(`window.genie.workspaces.setSetting(${JSON.stringify(WORKSPACE)}, 'workspace_tabs', ${JSON.stringify(JSON.stringify(tabs))})`);
+    const set = await cdp.evaluate(`window.genieTest.workspaces.setSetting(${JSON.stringify(WORKSPACE)}, 'workspace_tabs', ${JSON.stringify(JSON.stringify(tabs))})`);
     console.log(`  setSetting: ${JSON.stringify(set)}`);
     await cdp.evaluate(`window.location.hash = '#genie://workspace/${WORKSPACE}?view=tab:sitetab'; true`);
     const opened = await until('the tab', 20_000, () => cdp.evaluate(`!!document.querySelector('[data-site-panel-box]')`));
