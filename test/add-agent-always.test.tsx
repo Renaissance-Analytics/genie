@@ -65,7 +65,7 @@ describe('the workspace dashboard always offers Add agent', () => {
 describe('the settings’ Agents section offers it too', () => {
     it('under "Registered", the same "Add agent" react-fancy Button', () => {
         const props = { registered: [{ id: 'a1', name: 'kai', provider: 'claude' }], onDisk: [], busy: null, notice: null, error: null, onReattach: () => {}, onAddAgent: () => {} };
-        const h = renderToStaticMarkup(<AgentRosterView {...(props as never)} />);
+        const h = renderToStaticMarkup(<AgentRosterView {...(props as unknown as Parameters<typeof AgentRosterView>[0])} />);
         const registered = h.slice(h.indexOf('data-roster-registered'), h.indexOf('data-roster-on-disk'));
         expect(control(registered, 'data-action="add-agent"')).toMatchObject({ tag: 'button', fancy: true, text: 'Add agent' });
     });
@@ -90,7 +90,7 @@ describe('pressing it opens the New agent form for this workspace', () => {
     it('the settings’, under Registered: its onAddAgent once', () => {
         let asked = 0;
         const props = { registered: [{ id: 'a1', name: 'kai', provider: 'claude' }], onDisk: [], busy: null, notice: null, error: null, onReattach: () => {}, onAddAgent: () => { asked += 1; } };
-        act(() => root.render(<AgentRosterView {...(props as never)} />));
+        act(() => root.render(<AgentRosterView {...(props as unknown as Parameters<typeof AgentRosterView>[0])} />));
         const button = host.querySelector('[data-roster-registered] [data-action="add-agent"]') as HTMLButtonElement | null;
         expect(button).not.toBeNull();
         act(() => { button!.click(); });
