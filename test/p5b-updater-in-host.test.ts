@@ -275,7 +275,8 @@ describe('the install order', () => {
         await tick();
         await w.replica.install();
         await tick();
-        expect(r.order).toEqual([]);
+        // The dropped helper left (its link closed outside an install); nothing was drained, stopped or killed.
+        expect(r.order).toEqual(['helper quit']);
         expect(r.service.dump()).toMatchObject({ phase: 'error', error: expect.stringMatching(/updater/i) });
         expect(told).toBe(0);
     });
