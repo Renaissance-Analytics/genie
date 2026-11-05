@@ -83,7 +83,7 @@ export interface EngineClientOptions {
     /** A tool's moment: a glow, a thumbs-up, an action signal. */
     readonly onToolSignal?: (signal: unknown) => void;
     /** Each kept process's app-inbox credential, for the host's process book (P3.3c). */
-    readonly appEnvs?: (processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>) => Record<string, Record<string, string>>;
+    readonly appEnvs?: (processes: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) => Record<string, Record<string, string>>;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
@@ -400,7 +400,7 @@ export class SessionEngineClient {
         let reply: Record<string, unknown>;
         try {
             if (method === 'client.appEnvs') {
-                const list = Array.isArray(args[0]) ? (args[0] as Array<{ id: string; name: string; workspaceId: string }>) : [];
+                const list = Array.isArray(args[0]) ? (args[0] as Array<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) : [];
                 reply = { kind: 'result', id, ok: true, value: this.#options.appEnvs?.(list) ?? {} };
                 this.#transport?.send(JSON.stringify(reply));
                 return;

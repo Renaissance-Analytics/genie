@@ -267,7 +267,7 @@ export class SessionEngineServer {
     }
 
     /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
-    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>): Promise<Record<string, Record<string, string>>> {
+    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>): Promise<Record<string, Record<string, string>>> {
         return this.#reverse('client.appEnvs', [processes]) as Promise<Record<string, Record<string, string>>>;
     }
 
@@ -691,7 +691,7 @@ export class SessionEngineServer {
 }
 
 /** What is the host's own and never the window's: how it runs, and where its home is. */
-const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST_BUILD', 'GENIE_HOST_IDLE_MS']);
+const HOST_ONLY_ENV = new Set(['ELECTRON_RUN_AS_NODE', 'GENIE_HOME', 'GENIE_HOST_BUILD', 'GENIE_HOST_IDLE_MS', 'GENIE_V1_USERDATA', 'GENIE_APPDATA', 'GENIE_RESOURCES']);
 
 /**
  * THE WINDOW'S ENVIRONMENT, TAKEN BEFORE A START: a provider is launched from the host's `process.env` (filtered by the
