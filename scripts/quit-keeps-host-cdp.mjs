@@ -61,6 +61,8 @@ const DEADLINE_MS = Number(process.env.QUIT_CDP_DEADLINE_MS ?? 360_000);
 const AGENTS = 3;
 const TICKER = join(tmpdir(), 'genie-stub-codex-ticker');
 const PROOF = join(tmpdir(), `genie-quit-answer-${process.pid}.json`);
+// Every dialog call the window makes while a substitution is in place, answered or not (batch SS on Windows: 26e read none).
+const CALLS = join(tmpdir(), `genie-quit-dialog-calls-${process.pid}.log`);
 const GENIE_HOME = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : join(homedir(), '.genie');
 const HOST_RECORD = join(GENIE_HOME, 'runtime', 'host.json');
 const LIFECYCLE = join(GENIE_HOME, 'runtime', 'lifecycle.log');
@@ -273,7 +275,14 @@ async function answerTheQuit(inspector, index) {
         const require = module.createRequire(process.execPath);
         const { app, dialog } = require('electron');
         const fs = require('node:fs');
+        const note = (kind, args) => { try { const o = args.find((a) => a && typeof a === 'object' && Array.isArray(a.buttons)) ?? {}; fs.appendFileSync(${JSON.stringify(CALLS)}, new Date().toISOString() + ' ' + kind + ' ' + JSON.stringify({ title: o.title ?? null, buttons: o.buttons ?? null }) + ' at ' + (new Error().stack ?? '').split('\\n').slice(2, 6).map((l) => l.trim()).join(' < ') + '\\n'); } catch {} };
+        if (!dialog.__genieNoted) {
+            dialog.__genieNoted = true;
+            const realAsync = dialog.showMessageBox;
+            dialog.showMessageBox = (...args) => { note('showMessageBox (async, not answered)', args); return realAsync.apply(dialog, args); };
+        }
         const click = (...args) => {
+            note('showMessageBoxSync (answered ${index})', args);
             const options = args.find((a) => a && typeof a === 'object' && Array.isArray(a.buttons)) ?? {};
             fs.writeFileSync(${JSON.stringify(PROOF)}, JSON.stringify({ buttons: options.buttons ?? null, message: options.message ?? null, answered: ${index} }));
             return ${index};
@@ -617,6 +626,12 @@ try {
     const cancelAsked = await until(() => asked(), 10_000);
     check(JSON.stringify(cancelAsked?.buttons) === JSON.stringify(['Cancel', 'Shut down everything']) && agents.every((ag) => (cancelAsked?.message ?? '').includes(ag.name)),
         '26e. it ASKED, naming what would stop (this run\'s agents among them), with Cancel and "Shut down everything"', JSON.stringify(cancelAsked));
+    if (!cancelAsked) {
+        // A real modal dialog blocks the window's main thread: an inspector call then doesn't answer.
+        const answers = await c.inspector.evaluate('1', 5_000).then(() => 'answers', (e) => `does not answer in 5 s (${String(e?.message ?? e).slice(0, 80)}): a real dialog may be open`);
+        console.log(`  26e: the window's main thread ${answers}`);
+        console.log(`  26e: dialog calls the window made since 26c:\n${readOr(CALLS) || '    none'}`);
+    }
     await sleep(3_000);
     check(!a.app.gone && alive(a.windowPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the window process, the host and the providers all alive');
     step('26', 'Shut down everything from the tray, confirmed (button 1); then wait for the window process to exit (≤ 60 s)');
