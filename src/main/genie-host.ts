@@ -22,6 +22,7 @@ import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { SpawnHostClient } from './spawn-host-client.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
+import { LinkGate } from './linked-stream.js';
 import { composeHosting, type HostingStack } from './hosting-compose.js';
 import { HostingService, WindowElevation } from './hosting-host.js';
 import { AppInboxHost } from './app-inbox-host.js';
@@ -221,6 +222,12 @@ async function main(): Promise<void> {
     );
     processSupervisor.watchLiveness();
     const supervisorService = new SupervisorService(processSupervisor);
+    /**
+     * The `supervised` child's link: up once it is ready and reconciled, down when it exits (or while it never came up).
+     * Streams started there wait for it, and while it is down Hosting says the engines' live status is paused.
+     */
+    const supervisedLink = new LinkGate();
+    const supervisedStream = supervisedLink.stream(supervisedClient.stream);
     /*
      * GENIE'S HOSTING (the host split, P5a): the front door, the service engines and the site routes are built HERE, under
      * this host's supervisor, so sites stay served and routed with the UI closed; windows read and drive them through the
@@ -257,6 +264,11 @@ async function main(): Promise<void> {
     try {
         hosting = await composeHosting({
             ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
+            // ONE OWNER FOR EVERY PROCESS THE HOST STARTS: `docker events` runs under this host's `supervised` spawn-host
+            // child, which ends its streams when this host dies however it dies (spawn-host.ts). Started by the host itself,
+            // it was orphaned on Linux by a killed host (P5a.3's probe). It waits for the child's link at boot.
+            dockerEvents: (args, onLine, onEnd) => supervisedStream('docker', args, onLine, onEnd),
+            liveStatusLink: supervisedLink,
             userData: home,
             supervisor: processSupervisor,
             settings,
@@ -633,11 +645,16 @@ async function main(): Promise<void> {
             const client = ownChildren[profile];
             client.linkFrame(frame);
             if (frame.kind === 'event' && frame.channel === 'host.ready') {
-                void client.linkUp().catch((error: unknown) => lifecycleLog(`${profile} spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
+                void client.linkUp().then(() => {
+                    if (profile === 'supervised') supervisedLink.setUp(true);
+                }).catch((error: unknown) => lifecycleLog(`${profile} spawn host did not come up: ${error instanceof Error ? error.message : String(error)}`));
             }
         },
         // Between their lives, opens are refused in words (a crash the supervisor backs off from), never sent into nothing.
-        onChildExit: (profile) => { if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`); },
+        onChildExit: (profile) => {
+            if (profile === 'supervised') supervisedLink.setUp(false);
+            if (profile !== 'processes') ownChildren[profile].linkDown(`the ${profile} spawn host exited`);
+        },
         log: (line) => { say(line); lifecycleLog(line); },
         onPtys: writePtys,
     });

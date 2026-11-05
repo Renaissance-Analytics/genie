@@ -33,6 +33,7 @@ import { readJson, writeJsonAtomic } from './store.js';
 import { execFileRunner, lineStreamRunner } from './toolchain-runner.js';
 import type { SettingsApi } from './agent-stores-api.js';
 import type { HostingApi } from './hosting-host.js';
+import { LIVE_STATUS_PAUSED } from './linked-stream.js';
 
 /**
  * THE HOSTING HALF OF THE COMPOSITION (the host split, P5a): the shared port allocator, the service engines on the Docker
@@ -72,6 +73,11 @@ export interface HostingOptions {
     readonly noCaddyReason?: string;
     /** What this hosting was started without, each with what goes without it — shown in Hosting (genie-host's launch inputs). */
     readonly problems?: readonly string[];
+    /**
+     * The link of the spawn-host child the engines' `docker events` watch runs under (genie-host's process helper). While it
+     * is down the live status cannot be followed, and Hosting says so (LIVE_STATUS_PAUSED) until it is back. Absent = none.
+     */
+    readonly liveStatusLink?: { up(): boolean; onChange(listener: () => void): () => void };
     /**
      * `docker events` as a stream of lines, so engine states are read on change instead of on every look (genie#1397).
      * Absent with no `docker` given = the real one, created where `execFileRunner`'s commands are; absent with a `docker`
@@ -726,7 +732,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
                 if (now.some((d) => !(options.approvedDependents ?? []).includes(d))) throw new Error('The engine’s dependents changed while its image was downloading; nothing was replaced. Review them and try again.');
             },
         }),
-        hostingProblems: () => [...(input.problems ?? [])],
+        hostingProblems: () => [...(input.problems ?? []), ...(input.liveStatusLink && !input.liveStatusLink.up() ? [LIVE_STATUS_PAUSED] : [])],
         startEngine: async (id) => {
             // The person wants it running: no longer stopped by them, even if Docker refuses (the refusal is the answer).
             if (engineStopped.delete(id)) await saveEngineStopped();
@@ -756,7 +762,12 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
             try { return { caPem: readFileSync(opened.ca.certPath, 'utf8'), thumbprint: opened.ca.thumbprint }; } catch (error) { return { caPem: null, reason: `Genie’s certificate authority could not be read: ${message(error)}` }; }
         },
         get externalFrontDoor() { return frontDoorCtl.status(); },
-        onFrontDoorChange: frontDoorCtl.onChange,
+        // The live-status line moves with the process helper's link: told like any other change Hosting shows.
+        onFrontDoorChange: (listener) => {
+            const offDoor = frontDoorCtl.onChange(listener);
+            const offLink = input.liveStatusLink?.onChange(listener);
+            return () => { offDoor(); offLink?.(); };
+        },
         frontDoorSettled: frontDoorCtl.settled,
         syncHosts: frontDoorCtl.syncHosts,
         retryFrontDoor: frontDoorCtl.retry,
