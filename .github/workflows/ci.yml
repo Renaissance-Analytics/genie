@@ -337,6 +337,27 @@ jobs:
       - name: profile Files on the existing app connection
         if: github.event_name == 'pull_request' && github.event.pull_request.number == 1572
         run: |
+          set -euo pipefail
+          reference=69c4112177c546c1a629aa9fcecdb9f9c9487356
+          reference_dir="$RUNNER_TEMP/files-reference"
+          git fetch --no-tags --depth=1 origin "$reference"
+          git diff --exit-code "$reference" HEAD -- package.json package-lock.json
+          mkdir "$reference_dir"
+          git archive "$reference" | tar -x -C "$reference_dir"
+          ln -s "$GITHUB_WORKSPACE/node_modules" "$reference_dir/node_modules"
+          cp scripts/files-content-cdp.mjs scripts/files-content-measure-page.mjs scripts/files-content-profile.mjs "$reference_dir/scripts/"
+          cd "$reference_dir"
+          npm run build > "$GITHUB_WORKSPACE/files-content-reference-build.log" 2>&1
+          set +e
+          timeout 300 node scripts/files-content-cdp.mjs --profile > "$GITHUB_WORKSPACE/files-content-reference.log" 2>&1
+          code=$?
+          set -e
+          cat "$GITHUB_WORKSPACE/files-content-reference.log"
+          if [ "$code" -ne 0 ]; then exit "$code"; fi
+          cp smoke-out/files-content-result.json "$GITHUB_WORKSPACE/smoke-out/files-content-reference-result.json"
+          cp smoke-out/files-content-profiles.json "$GITHUB_WORKSPACE/smoke-out/files-content-reference-profiles.json"
+          printf 'FILES_REFERENCE_SOURCE %s\n' "$reference"
+          cd "$GITHUB_WORKSPACE"
           set +e
           timeout 300 node scripts/files-content-cdp.mjs --profile > files-content-profile.log 2>&1
           code=$?
@@ -350,7 +371,7 @@ jobs:
           path: |
             local-door*.log
             smoke-out/local-door*
-            files-content-profile.log
+            files-content*.log
             smoke-out/files-content*
           if-no-files-found: warn
           retention-days: 7
