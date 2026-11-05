@@ -3661,8 +3661,6 @@ async function boot(): Promise<void> {
     };
     const featurePorts: FeaturePorts = {
         ...processPorts(),
-        // Which part of a features snapshot was slow (genie-test-windows, job Q0: an action took 20 s, main mostly free).
-        slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) },
         openInBrowser: openInBrowserFor('user-gesture'),
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
@@ -3761,6 +3759,8 @@ async function boot(): Promise<void> {
                 remove: (version) => removeJavaVersion(version, javaVersionsPorts()),
             },
         },
+        // Which part of a features snapshot was slow (genie-test-windows, job Q0: an action took 20 s, main mostly free).
+        slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) },
     };
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
     // reads the SAME items Pending Questions (the Deck) shows and answers through the same action, so the two stay one

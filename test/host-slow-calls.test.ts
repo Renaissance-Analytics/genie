@@ -46,7 +46,10 @@ describe('genie-host times the calls a window makes', () => {
         const client = new SessionEngineClient();
         expect(await client.connect(windowSide, TOKEN)).toMatchObject({ ok: true });
         expect(await client.ping()).toBe(true);
-        expect(timed).toEqual(['begin engine.ping', 'end engine.ping']);
+        // The client's own calls at connect are timed too; the ping is one call, begun and ended.
+        expect(timed.filter((t) => t.endsWith(' engine.ping'))).toEqual(['begin engine.ping', 'end engine.ping']);
+        // Every call timed is ended: none is left open once its answer is in.
+        expect(timed.filter((t) => t.startsWith('begin ')).length).toBe(timed.filter((t) => t.startsWith('end ')).length);
         client.disconnect();
     });
 
