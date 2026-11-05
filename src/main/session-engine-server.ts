@@ -642,10 +642,14 @@ export class SessionEngineServer {
                 if (!this.#options.issueWatch) throw new Error('This host runs no IssueWatch.');
                 if (!conn.local) throw new Error('IssueWatch is asked from a local window only.');
                 return this.#options.issueWatch.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            // LOCAL ONLY (P4 rule 4): a non-local link may be a share-link guest, and the board is the owner's, read with the
+            // owner's own account. So a guest neither follows one nor is sent its events (it holds no views).
             case 'engine.tynnBoardWatch':
                 if (!this.#options.tynnBoard) throw new Error('This host follows no Tynn board.');
+                if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
                 return this.#options.tynnBoard.watch(conn.id, str(0), str(1));
             case 'engine.tynnBoardUnwatch':
+                if (!conn.local) throw new Error('The Tynn board is followed from a local window only.');
                 this.#options.tynnBoard?.unwatch(conn.id, str(0));
                 return true;
             case 'engine.configSync':
@@ -720,7 +724,7 @@ export class SessionEngineServer {
 
     /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */
     tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
-        for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
+        for (const conn of this.#connections) if (conn.authed && conn.local && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

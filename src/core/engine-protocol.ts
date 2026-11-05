@@ -65,7 +65,7 @@ export const ENGINE_METHODS = [
     // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
     // local windows only.
     'engine.issueWatch',
-    // The live board's per-view subscriptions (P5c): `[viewId, workspaceId]` / `[viewId]`, under the calling window's
+    // The live board's per-view subscriptions (P5c), LOCAL windows only: `[viewId, workspaceId]` / `[viewId]`, under the calling window's
     // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
     'engine.tynnBoardWatch',
     'engine.tynnBoardUnwatch',
