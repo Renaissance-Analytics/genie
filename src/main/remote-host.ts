@@ -18,6 +18,9 @@ import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
 import type { BlobOpener } from '../core/local-blobs.js';
 import { LocalBlobs } from './local-blobs.js';
+import type { PageOpener } from '../core/local-content.js';
+import { LocalUploads } from './local-uploads.js';
+import { LocalPages } from './local-pages.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -91,6 +94,8 @@ interface Connection {
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
     blobs: LocalBlobs | null;
+    uploads: LocalUploads | null;
+    pages: LocalPages | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -126,6 +131,8 @@ const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' &
 export class RemoteHost {
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
+    readonly #openPage: PageOpener | undefined;
+    readonly #createLocalUploads: () => LocalUploads;
     readonly #hostName: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
@@ -153,7 +160,7 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
@@ -163,6 +170,8 @@ export class RemoteHost {
         this.#confirm = deps.confirm;
         this.#transport = deps.transport;
         this.#now = deps.now ?? Date.now;
+        this.#openPage = deps.openPage;
+        this.#createLocalUploads = deps.createLocalUploads ?? (() => new LocalUploads({ now: this.#now }));
         this.#staging = new UploadStaging({ now: this.#now });
         deps.transport.onConnection((socket) => this.#accept(socket));
     }
@@ -185,6 +194,9 @@ export class RemoteHost {
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
         connection.blobs?.dispose();
+        connection.pages?.dispose();
+        // Disposal marks the connection closed synchronously, then drains any pending disk operation.
+        if (connection.uploads) void connection.uploads.dispose().catch(() => console.warn('[genie] a local upload area could not be released'));
         connection.activityViews.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
@@ -277,7 +289,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null, uploads: null, pages: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -393,6 +405,30 @@ export class RemoteHost {
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
 
         switch (method) {
+            case 'localUpload.begin':
+            case 'localUpload.chunk':
+            case 'localUpload.abort': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the local upload connection closed');
+                try {
+                    const uploads = connection.uploads ??= this.#createLocalUploads();
+                    if (method === 'localUpload.begin') return ok(await uploads.begin(args[0]));
+                    if (method === 'localUpload.chunk') return ok(await uploads.chunk(args[0], args[1], args[2]));
+                    return ok(await uploads.abort(args[0]));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
+            case 'page.open':
+            case 'page.next':
+            case 'page.close': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the list connection closed');
+                const pages = connection.pages ??= new LocalPages(this.#openPage);
+                try {
+                    if (method === 'page.open') return ok(await pages.open(args[0], args[1]));
+                    if (method === 'page.next') return ok(await pages.next(args[0]));
+                    return ok(await pages.close(args[0]));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
             case 'blob.open':
             case 'blob.read':
             case 'blob.close': {
