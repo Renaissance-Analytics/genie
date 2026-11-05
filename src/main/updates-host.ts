@@ -1,3 +1,5 @@
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { channelFrom, type UpdateChannel } from '../core/update-channel.js';
 import type { AgentId } from '../core/identity.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
@@ -93,18 +95,38 @@ export interface UpdateFailedRecord {
     readonly log: string;
 }
 
-export function readUpdateFailed(_home: string): UpdateFailedRecord | null {
-    return null;
+const failedFile = (home: string): string => join(home, 'runtime', 'update-failed.json');
+
+export function readUpdateFailed(home: string): UpdateFailedRecord | null {
+    try {
+        const raw = JSON.parse(readFileSync(failedFile(home), 'utf8')) as Partial<UpdateFailedRecord>;
+        if (typeof raw.at !== 'number' || typeof raw.reason !== 'string' || typeof raw.log !== 'string') return null;
+        return { at: raw.at, reason: raw.reason, log: raw.log };
+    } catch {
+        return null;
+    }
 }
 
-export function writeUpdateFailed(_home: string, _record: UpdateFailedRecord): void {}
-
-export function clearUpdateFailed(_home: string): void {}
-
-/** How to start Genie again after an install that did not happen: the installed executable, no updater mode. */
-export function relaunchSpec(launch: HelperLaunch, _env: NodeJS.ProcessEnv): HelperLaunch {
-    return launch;
+export function writeUpdateFailed(home: string, record: UpdateFailedRecord): void {
+    mkdirSync(join(home, 'runtime'), { recursive: true });
+    writeFileSync(failedFile(home), JSON.stringify(record));
 }
+
+export function clearUpdateFailed(home: string): void {
+    rmSync(failedFile(home), { force: true });
+}
+
+/**
+ * How to start Genie again after an install that did not happen: the executable still installed (on Linux the AppImage
+ * file itself, whose mount may be gone), the window's own switches and a dev run's app path — never the updater mode.
+ */
+export function relaunchSpec(launch: HelperLaunch, env: NodeJS.ProcessEnv): HelperLaunch {
+    const appImage = env['APPIMAGE'];
+    return { file: appImage && appImage.length > 0 ? appImage : launch.file, args: launch.args.filter((a) => a !== '--updater') };
+}
+
+/** The helper answered an install with a refusal: it records why and starts Genie again itself. */
+export class HelperRefusal extends Error {}
 
 interface LinkedHelper {
     readonly connection: string;
@@ -135,9 +157,11 @@ export class UpdatesService {
     #config: UpdaterConfig = { allowPrerelease: false, autoDownload: false };
     #nextId = 1;
     #windowPids: number[] = [];
+    #failed: UpdateFailedRecord | null;
 
     constructor(options: UpdatesServiceOptions) {
         this.#options = options;
+        this.#failed = options.failed ?? null;
         this.#launch = options.defaultLaunch;
         const port: UpdaterPort = {
             configure: (config) => {
@@ -176,6 +200,15 @@ export class UpdatesService {
         this.#host.setChannel(channel);
     }
 
+    /** Why the last install did not happen, for the first local window after it: taken once, and the record cleared. */
+    takeFailed(): UpdateFailedRecord | null {
+        const failed = this.#failed;
+        if (failed === null) return null;
+        this.#failed = null;
+        try { this.#options.clearFailed?.(); } catch (error) { this.#log(`updater: the failed-install record could not be cleared: ${error instanceof Error ? error.message : String(error)}`); }
+        return failed;
+    }
+
     /** A window's (or, through it, an owner's remote) call. */
     async call(method: string, args: readonly unknown[], caller: UpdatesCaller): Promise<unknown> {
         switch (method) {
@@ -208,12 +241,12 @@ export class UpdatesService {
     }
 
     /**
-     * The host's own checks (`AUTO_CHECK`): with a window open they only check, and downloading stays the person's click;
-     * with none, what a check finds is downloaded too, so the next window opens on an update ready to install.
+     * The host's own checks (`AUTO_CHECK`), window or no window. What a check finds is downloaded on the schedule only when
+     * the update CHANNEL's own `autoDownload` says so (updaterConfigFor); otherwise downloading stays a person's click.
      */
     startAutoCheck(schedule: (fn: () => void, ms: number) => () => void, timing: { initialMs: number; intervalMs: number } = AUTO_CHECK): () => void {
         const off = this.#host.onChange((state) => {
-            if (state.phase === 'available' && !this.#options.windowConnected()) queueMicrotask(() => { void this.#host.download(); });
+            if (state.phase === 'available' && this.#config.autoDownload) queueMicrotask(() => { void this.#host.download(); });
         });
         const stop = this.#host.startAutoCheck(schedule, timing);
         return () => { off(); stop(); };
@@ -240,7 +273,7 @@ export class UpdatesService {
         if (!pending) return null;
         this.#pending.delete(Number(args[0]));
         if (args[1] === true) pending.resolve(args[2] ?? null);
-        else pending.reject(new Error(typeof args[2] === 'string' ? args[2] : 'Genie’s updater failed'));
+        else pending.reject(new HelperRefusal(typeof args[2] === 'string' ? args[2] : 'Genie’s updater failed'));
         return null;
     }
 
@@ -302,8 +335,17 @@ export class UpdatesService {
             await this.#request('install', undefined, wait);
             this.#log('updater: it has the install; this host exits');
         } catch (error) {
-            // Everything this host ran is already stopped: it exits either way, and the next window starts a host again.
-            this.#log(`updater: it did not take the install (${error instanceof Error ? error.message : String(error)}); this host exits regardless`);
+            const why = error instanceof Error ? error.message : String(error);
+            // Everything this host ran is already stopped: it exits either way. A person who clicked Install is never left
+            // with no Genie — a helper that refused records and relaunches itself; one that is gone cannot, so this host does.
+            this.#log(`updater: it did not take the install (${why}); this host exits regardless`);
+            if (!(error instanceof HelperRefusal)) {
+                try {
+                    this.#options.handOverFailed?.(`Genie’s updater could not be handed the install: ${why}.`, this.#launch);
+                } catch (failure) {
+                    this.#log(`updater: Genie could not be started again: ${failure instanceof Error ? failure.message : String(failure)}`);
+                }
+            }
         }
         this.#options.exit();
     }
