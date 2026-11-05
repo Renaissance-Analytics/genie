@@ -95,6 +95,11 @@ import { readV1Settings } from './v1-settings.js';
 import { Store } from './store.js';
 import { HostRegistry } from './host-registry.js';
 import { wireHostMailWake } from './host-mail-wake.js';
+import { IssueWatchService, TynnBoardHub } from './issue-watch-host.js';
+import type { SocketLike } from './issue-watch-client.js';
+import { dialTynnSocket } from './tynn-socket.js';
+import { tynnProjectIdOf } from '../core/issue-watch.js';
+import { workspaceNameFor } from './workspace-names.js';
 import { gitTreeStatus } from './git-ports.js';
 import { repoStatus } from './repo-git.js';
 
@@ -345,6 +350,52 @@ async function main(): Promise<void> {
     void githubOpening.then((account) => account.refresh(), (error: unknown) => say(`the GitHub account could not open: ${error instanceof Error ? error.message : String(error)}`));
     let hostTynn: TynnAccount | null = null;
     void tynnOpening.then((account) => { hostTynn = account; }, (error: unknown) => say(`the Tynn account could not open: ${error instanceof Error ? error.message : String(error)}`));
+    /*
+     * ISSUEWATCH AND THE LIVE BOARD (the host split, P5c; issue-watch-host.ts): Tynn's pushes are heard HERE, on this host's
+     * account, so a GitHub change reaches the linked workspace's agents with no window open, through this host's one wake
+     * (host-mail-wake.ts). Local windows read the state and play the sounds; their board views are followed per view.
+     * One way to dial Tynn's socket server, with the Origin of the Tynn this account is for (tynn-socket.ts, genie#1478).
+     */
+    const tynnSocket = (url: string): SocketLike => dialTynnSocket(url, hostTynn?.host() ?? TYNN_HOST);
+    const tynnTimer = (fn: () => void, ms: number): (() => void) => { const t = setTimeout(fn, ms); t.unref?.(); return () => clearTimeout(t); };
+    /** A workspace's Tynn project, by its project.json `tynn.projectId`; null = not linked. */
+    const tynnProjectOf = (path: string): string | null => {
+        let manifest: string | null = null;
+        try { manifest = readFileSync(join(path, 'project.json'), 'utf8'); } catch { manifest = null; }
+        return tynnProjectIdOf(manifest);
+    };
+    const workspaceTynnProject = (workspaceId: string): string | null => {
+        const workspace = hostRegistry.workspace(workspaceId);
+        return workspace ? tynnProjectOf(workspace.path) : null;
+    };
+    const issueWatch = new IssueWatchService({
+        tynn: () => hostTynn,
+        socket: tynnSocket,
+        schedule: tynnTimer,
+        projectFor: workspaceTynnProject,
+        delivery: {
+            agents: () => hostRegistry.listAgents(),
+            defaultAgentOf: (workspaceId) => hostRegistry.defaultAgentOf(workspaceId),
+            workspaceFor: (projectId) => {
+                for (const w of hostRegistry.listWorkspaces()) if (tynnProjectOf(w.path) === projectId) return { id: w.id, name: workspaceNameFor(w.path) };
+                return null;
+            },
+        },
+        log: say,
+    });
+    const tynnBoard = new TynnBoardHub({
+        tynn: () => hostTynn,
+        socket: tynnSocket,
+        schedule: tynnTimer,
+        projectFor: workspaceTynnProject,
+        send: (owner, event) => { engineRef?.tynnBoardEvent(owner, event); },
+        log: say,
+    });
+    // Signing in or out of Tynn, or pointing at another one, starts it over with what is set now; and once the account opens.
+    void tynnOpening.then((account) => {
+        account.onChange(() => { issueWatch.restart(); });
+        issueWatch.restart();
+    }, () => { issueWatch.start(); });
     // THE HOST PREPARES ITS AGENTS (P3.4 cut c), with a window open or not. A start waits for the account: opening has its own deadline.
     // One writer of a workspace's agent config: preparing an agent and syncing hold the same lock.
     const withConfig = configWriter();
@@ -515,6 +566,8 @@ async function main(): Promise<void> {
             await openFlows(databasePath);
             await importV1Inbox(own.inbox, () => readV1Inbox(databasePath), hostRegistry.listAgents(), Date.now());
         },
+        issueWatch,
+        tynnBoard,
         files: {
             subscribe: (owner, viewId, workspace, want) => files?.subscribe(owner, viewId, workspace, want),
             unsubscribe: (owner, viewId) => files?.unsubscribe(owner, viewId),
@@ -664,7 +717,8 @@ async function main(): Promise<void> {
         return bookOpening;
     };
     // THE MAIL WAKE (P3.2): mail reaches its agent with no window — told, or started for it under the person's refusals.
-    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); } });
+    // ISSUEWATCH's queue is the wake's second source (P5c): `push` starts a stopped agent through this same wake, `next-turn` waits.
+    wireHostMailWake({ inbox: own.inbox, host, registry: hostRegistry, settings, osaDir: osaHomeDir(), log: (line) => { say(line); lifecycleLog(line); }, issueWatch: issueWatch.delivery });
     mcp = startHostMcp({
         stores: stores.stores,
         settings,
@@ -748,6 +802,7 @@ async function main(): Promise<void> {
         // host nobody wants.
         await Promise.race([host.stopAll().then(() => host.drained(2_000)), bound]).catch(() => undefined);
         files?.close();
+        issueWatch.stop();
         await mcp?.stop();
         approvals.cancelAll('Genie is shutting down');
         own.knowledge.close();

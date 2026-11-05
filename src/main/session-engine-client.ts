@@ -54,7 +54,7 @@ import { UpdatesReplica } from './updates-replica.js';
 import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
 import { IssueWatchReplica } from './issue-watch-replica.js';
-import type { TynnBoardHubEvent } from './issue-watch-host.js';
+import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -148,6 +148,9 @@ export class SessionEngineClient {
     /** The file-watch views this window holds (P2.2), sent again after a reconnect: the host dropped them with the link. */
     readonly #filesViews = new Map<string, { workspace: { id: string; path: string }; want: FilesWant }>();
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
+    /** The board views this window follows in the host (P5c), sent again after a reconnect: the host dropped them with the link. */
+    readonly #boardViews = new Map<string, string>();
+    readonly #boardListeners = new Set<(event: TynnBoardHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
@@ -305,6 +308,7 @@ export class SessionEngineClient {
         void this.call('engine.records', [this.#options.records?.() ?? []]);
         for (const id of this.#watched) void this.call('engine.watchLedger', [id]);
         for (const [viewId, v] of this.#filesViews) void this.call('engine.filesWatch', [viewId, v.workspace, v.want]);
+        for (const [viewId, workspaceId] of this.#boardViews) void this.call('engine.tynnBoardWatch', [viewId, workspaceId]);
     }
 
     #onEvent(channel: string, payload: unknown): void {
@@ -388,6 +392,15 @@ export class SessionEngineClient {
                 return;
             case 'files.event':
                 for (const l of [...this.#filesListeners]) l(payload as FilesHubEvent);
+                return;
+            case 'issueWatch.dump':
+                this.issueWatch().apply({ kind: 'dump', dump: payload as IssueWatchDump });
+                return;
+            case 'issueWatch.event':
+                this.issueWatch().apply(payload as IssueWatchHostEvent);
+                return;
+            case 'tynnBoard.event':
+                for (const l of [...this.#boardListeners]) l(payload as TynnBoardHubEvent);
                 return;
             case 'engine.stopAllLeft':
                 if (typeof payload === 'number') this.#stopAllLeft?.(payload);
@@ -683,27 +696,37 @@ export class SessionEngineClient {
 
     #issueWatch: IssueWatchReplica | null = null;
 
-    /** genie-host's IssueWatch (P5c), as this window reads it and asks it. P5c RED: not linked yet. */
+    /** genie-host's IssueWatch (P5c), as this window reads it (local links only) and asks it. */
     issueWatch(): IssueWatchReplica {
-        this.#issueWatch ??= new IssueWatchReplica(() => Promise.reject(new Error('P5c red: not built')));
+        this.#issueWatch ??= new IssueWatchReplica(async (method, args) => {
+            const reply = await this.call('engine.issueWatch', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
         return this.#issueWatch;
     }
 
-    /** A view follows a workspace's live board in the host (P5c); false = not linked to a Tynn project. P5c RED. */
+    /**
+     * A view follows a workspace's live board in the host (P5c); false = not linked to a Tynn project. Kept here too, so a
+     * reconnect follows it again.
+     */
     tynnBoardWatch(viewId: string, workspaceId: string): Promise<boolean> {
-        void viewId; void workspaceId;
-        return Promise.resolve(false);
+        this.#boardViews.set(viewId, workspaceId);
+        return this.#value('engine.tynnBoardWatch', [viewId, workspaceId], false).then((v) => {
+            if (v !== true) this.#boardViews.delete(viewId);
+            return v === true;
+        });
     }
 
     tynnBoardUnwatch(viewId: string): Promise<boolean> {
-        void viewId;
-        return Promise.resolve(false);
+        this.#boardViews.delete(viewId);
+        return this.#value('engine.tynnBoardUnwatch', [viewId], false).then((v) => v === true);
     }
 
-    /** The rings and states for this window's board views. P5c RED. */
+    /** The rings and states for this window's board views. */
     onTynnBoardEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
-        void listener;
-        return () => {};
+        this.#boardListeners.add(listener);
+        return () => { this.#boardListeners.delete(listener); };
     }
 
     /** The batches and git results for this window's views. */

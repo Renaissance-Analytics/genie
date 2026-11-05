@@ -264,6 +264,11 @@ export class SessionEngineServer {
         options.updates?.onEvent((state) => {
             for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
         });
+        // IssueWatch's state and its sounds (P5c) travel on LOCAL window links only. A sound goes to the windows open now:
+        // with none it is not kept, so nothing plays later.
+        options.issueWatch?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'issueWatch.event', event);
+        });
     }
 
     /** The session host's options that this server answers. Built BEFORE the host (it is handed to its constructor). */
@@ -360,6 +365,7 @@ export class SessionEngineServer {
             // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
             if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
+            if (was) this.#options.tynnBoard?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
         });
@@ -428,6 +434,7 @@ export class SessionEngineServer {
             const failed = this.#options.updates.takeFailed();
             if (failed !== null) this.#event(conn, 'updates.failed', failed);
         }
+        if (this.#options.issueWatch && conn.local) this.#event(conn, 'issueWatch.dump', this.#options.issueWatch.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
@@ -631,6 +638,16 @@ export class SessionEngineServer {
             case 'engine.filesUnwatch':
                 this.#options.files?.unsubscribe(conn.id, str(0));
                 return true;
+            case 'engine.issueWatch':
+                if (!this.#options.issueWatch) throw new Error('This host runs no IssueWatch.');
+                if (!conn.local) throw new Error('IssueWatch is asked from a local window only.');
+                return this.#options.issueWatch.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.tynnBoardWatch':
+                if (!this.#options.tynnBoard) throw new Error('This host follows no Tynn board.');
+                return this.#options.tynnBoard.watch(conn.id, str(0), str(1));
+            case 'engine.tynnBoardUnwatch':
+                this.#options.tynnBoard?.unwatch(conn.id, str(0));
+                return true;
             case 'engine.configSync':
                 if (!this.#options.configSync) throw new Error('This host writes no workspace config.');
                 return this.#options.configSync((args[0] ?? {}) as WorkspaceConfigRequest);
@@ -701,9 +718,9 @@ export class SessionEngineServer {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);
     }
 
-    /** A board's ring or state, to the connection whose views watch that workspace. P5c RED: not sent yet. */
+    /** A board's ring or state, to the connection whose views watch that workspace, and no other (P5c). */
     tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
-        void owner; void event;
+        for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'tynnBoard.event', event);
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {

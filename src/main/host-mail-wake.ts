@@ -6,7 +6,7 @@ import type { HostRegistry } from './host-registry.js';
 import type { InboxStore } from './inbox-store.js';
 import { inboxNotices } from './inbox-notices.js';
 import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
-import type { IssueWatchQueue } from './issue-watch-push.js';
+import { wireIssueWatchPush, type IssueWatchQueue } from './issue-watch-push.js';
 import type { SessionHost } from './session-host.js';
 import type { SettingsStore } from './settings-store.js';
 import { startForWork } from './start-on-demand.js';
@@ -50,7 +50,7 @@ export function wireHostMailWake(p: {
         if (!started.ok) { p.log(`a notice for ${record.name} waits: ${started.reason}`); return false; }
         return started.started || p.host.probe(record.id as AgentId)?.running === true;
     };
-    return wireInboxPush({
+    const offMail = wireInboxPush({
         inbox: p.inbox,
         host: p.host,
         reminders: ({ run }) => inboxNotices({
@@ -68,4 +68,7 @@ export function wireHostMailWake(p: {
             schedule: (fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); },
         }),
     });
+    // ISSUEWATCH (P5c): its own queue, told through this same wake — the one start path, its refusals said by name.
+    const offIssueWatch = p.issueWatch ? wireIssueWatchPush({ delivery: p.issueWatch, host: p.host, wake }) : () => {};
+    return () => { offMail(); offIssueWatch(); };
 }
