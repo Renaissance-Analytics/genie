@@ -30,6 +30,10 @@ export type BrowserEvent =
     /** `url` null: the browser with its first site. */
     | { readonly kind: 'open'; readonly url: string | null; readonly activation: BrowserActivation }
     | { readonly kind: 'pages'; readonly pages: readonly BrowserPage[] }
+    /** A panel's site, alone in its own window (the owner: "a single site ux"). */
+    | { readonly kind: 'openSingle'; readonly panelKey: string; readonly url: string }
+    | { readonly kind: 'closeSingle'; readonly panelKey: string }
+    | { readonly kind: 'poppedBack'; readonly panelKey: string }
     /** A call into a page, for the browser to run and answer with `pageReply`. */
     | { readonly kind: 'pageCall'; readonly requestId: string; readonly pageId: string; readonly method: string; readonly args: readonly unknown[] }
     /** The host is ending on purpose, and the browser ends with it: an installer needs the binary free. */
@@ -58,7 +62,8 @@ export class BrowserService {
     #facts: BrowserFacts | null = null;
     #publisher: string | null = null;
     #browser: string | null = null;
-    #held: Array<Extract<BrowserEvent, { kind: 'open' }>> = [];
+    #held: Array<Extract<BrowserEvent, { kind: 'open' | 'openSingle' }>> = [];
+    readonly #popped = new Map<string, string>();
     #pages: readonly BrowserPage[] = [];
     readonly #calls = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
     #nextCall = 1;
@@ -118,6 +123,30 @@ export class BrowserService {
                 for (const event of held) this.#emit(event);
                 return { facts: this.#facts, doorUp: this.#publisher !== null };
             }
+            case 'popOut': {
+                const [panelKey, host] = [String(args[0]), String(args[1]).toLowerCase()];
+                if (!/^[a-z0-9-]+(\.[a-z0-9-]+)*\.gen$/.test(host)) throw new Error('that is not a Genie site');
+                this.#popped.set(panelKey, host);
+                const event = { kind: 'openSingle' as const, panelKey, url: `https://${host}/` };
+                if (this.#browser === null) {
+                    this.#held.push(event);
+                    if (this.#held.length > HELD_LIMIT) this.#held.shift();
+                    this.#startIfWanted();
+                    return { browserUp: false };
+                }
+                this.#emit(event);
+                return { browserUp: true };
+            }
+            case 'popBack': {
+                const panelKey = String(args[0]);
+                if (!this.#popped.delete(panelKey)) return null;
+                this.#held = this.#held.filter((e) => !(e.kind === 'openSingle' && e.panelKey === panelKey));
+                this.#emit({ kind: 'closeSingle', panelKey });
+                this.#emit({ kind: 'poppedBack', panelKey });
+                return null;
+            }
+            case 'popped':
+                return [...this.#popped].map(([panelKey, host]) => ({ panelKey, host }));
             case 'pages': {
                 if (from !== this.#browser) throw new Error('only the linked browser says what its pages are');
                 this.#pages = Array.isArray(args[0]) ? args[0] as BrowserPage[] : [];
@@ -164,6 +193,7 @@ export class BrowserService {
             this.#calls.clear();
             this.#pages = [];
             this.#emit({ kind: 'pages', pages: [] });
+            for (const panelKey of [...this.#popped.keys()]) { this.#popped.delete(panelKey); this.#emit({ kind: 'poppedBack', panelKey }); }
         }
         if (this.#publisher === connection) {
             this.#publisher = null;

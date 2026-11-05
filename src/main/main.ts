@@ -1511,7 +1511,10 @@ async function boot(): Promise<void> {
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
-                client.onBrowserEvent((event) => { if (event.kind === 'pages') browserPages.apply(event.pages); });
+                client.onBrowserEvent((event) => {
+                    if (event.kind === 'pages') browserPages.apply(event.pages);
+                    if (event.kind === 'poppedBack' && window && !window.isDestroyed()) window.webContents.send('site-panel:popped-back', event.panelKey);
+                });
                 void client.browserCall('pagesNow', []).then((pages) => { browserPages.apply(pages as BrowserPage[]); }, () => {});
             },
             callbacks: engineCallbacks,
@@ -3861,7 +3864,7 @@ async function boot(): Promise<void> {
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
-    livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? null, openInWindow: (url, activation) => { void openLocalBrowser(url, activation); } });
+    livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? null, openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null) });
     mainWindowDeps = { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
     mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.

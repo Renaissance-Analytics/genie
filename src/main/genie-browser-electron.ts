@@ -40,6 +40,8 @@ export interface GenieBrowserWindowOptions {
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
     readonly log?: (line: string) => void;
+    /** A site's own window was closed, or asked to go back to its panel. */
+    readonly onSingleClosed?: (panelKey: string) => void;
     /** Where each bring-up is recorded for main's focus log (genie#1235). */
     readonly ledger?: ActivationLedger;
 }
@@ -132,6 +134,9 @@ export interface GenieBrowserWindows {
      * inactive, or flashes an open one — never takes the keyboard.
      */
     open(address: string | undefined, activation: Activation, remote?: RemoteBrowsing): { ok: true } | { ok: false; error: string };
+    /** A panel's site alone in its own window (the owner: "a single site ux"), with the browser's store. */
+    openSingle(panelKey: string, url: string): void;
+    closeSingle(panelKey: string): void;
     /** One line for this machine's window, shown now and in any made later. */
     setNotice(notice: string | null): void;
 }
@@ -139,6 +144,8 @@ export interface GenieBrowserWindows {
 const NOT_OURS = { ok: false as const, error: 'this is not the Genie browser window' };
 /** This machine's own browser window's key. */
 const LOCAL = 'local';
+/** A panel's site alone in its own window: this machine's sites, keyed by the panel. */
+const SINGLE = 'single:';
 
 export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBrowserWindows {
     const log = options.log ?? ((line: string) => console.log(line));
@@ -152,6 +159,10 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     const entryOf = (event: IpcMainInvokeEvent) => [...windows.values()].find((w) => !w.win.isDestroyed() && event.sender === w.win.webContents) ?? null;
     // The chrome's calls, registered once; answered only for a browser window's own chrome — the brain of THAT window.
     const brain = (event: IpcMainInvokeEvent): GenieBrowser | null => entryOf(event)?.browser ?? null;
+    const closeIfSingle = (event: IpcMainInvokeEvent): void => {
+        const key = [...windows].find(([, w]) => w.win.webContents === event.sender)?.[0];
+        if (key?.startsWith(SINGLE)) windows.get(key)?.win.close();
+    };
     ipcMain.handle('browser-window:state', (event) => brain(event)?.snapshot() ?? null);
     ipcMain.handle('browser-window:navigate', (event, address: unknown) => brain(event)?.navigate(String(address ?? '')) ?? NOT_OURS);
     ipcMain.handle('browser-window:open', (event, address: unknown) => brain(event)?.open(String(address ?? '')) ?? NOT_OURS);
@@ -163,6 +174,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     ipcMain.handle('browser-window:back', (event) => brain(event)?.back());
     ipcMain.handle('browser-window:forward', (event) => brain(event)?.forward());
     ipcMain.handle('browser-window:reload', (event) => brain(event)?.reload());
+    ipcMain.handle('browser-window:pop-back', (event) => brain(event) && closeIfSingle(event));
     ipcMain.handle('browser-window:preset', (event, id: unknown) => brain(event)?.setPreset(String(id)));
     ipcMain.handle('browser-window:bounds', (event, raw: unknown) => {
         const b = brain(event);
@@ -201,12 +213,12 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         };
     };
     const sessionFor = (key: string): { ses: Session; routed: () => Promise<void> } => {
-        if (key !== LOCAL) return remoteSession(key);
+        if (key !== LOCAL && !key.startsWith(SINGLE)) return remoteSession(key);
         const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
         void routed;
         return { ses, routed: () => sharedSession!.routed };
     };
-    const hostsOf = (key: string): readonly string[] => (key === LOCAL ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
+    const hostsOf = (key: string): readonly string[] => (key === LOCAL || key.startsWith(SINGLE) ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 
     const createView = (window: BrowserWindow, key: string, tabId: string, events: TabViewEvents): TabViewPort => {
         const { ses, routed: routing } = sessionFor(key);
@@ -279,8 +291,9 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
         window.on('closed', () => {
             b.closeAll();
             if (windows.get(key)?.win === window) windows.delete(key);
+            if (key.startsWith(SINGLE)) options.onSingleClosed?.(key.slice(SINGLE.length));
         });
-        void window.loadFile(join(options.here, '../renderer/browser.html'));
+        void window.loadFile(join(options.here, '../renderer/browser.html'), key.startsWith(SINGLE) ? { search: 'single=1' } : undefined);
         return { window, brain: b };
     };
 
@@ -288,8 +301,25 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     return {
         setNotice(next) {
             notice = next;
-            const entry = windows.get(LOCAL);
-            if (entry && !entry.win.isDestroyed()) entry.browser.setNotice(next);
+            for (const [key, entry] of windows) if ((key === LOCAL || key.startsWith(SINGLE)) && !entry.win.isDestroyed()) entry.browser.setNotice(next);
+        },
+        openSingle(panelKey, url) {
+            const key = `${SINGLE}${panelKey}`;
+            let entry = windows.get(key);
+            if (!entry || entry.win.isDestroyed()) {
+                const m = make(key, 'Genie browser', 'user-gesture');
+                m.brain.setNotice(notice);
+                entry = { win: m.window, browser: m.brain };
+                windows.set(key, entry);
+            } else {
+                bringUp(entry.win, { activation: 'user-gesture', reason: `Genie browser (${key})`, label: 'browser', ...(options.ledger ? { ledger: options.ledger } : {}) });
+            }
+            const answer = entry.browser.showSite(url, 'user-gesture');
+            if (!answer.ok) log(`a site's own window was refused: ${answer.error}`);
+        },
+        closeSingle(panelKey) {
+            const entry = windows.get(`${SINGLE}${panelKey}`);
+            if (entry && !entry.win.isDestroyed()) entry.win.close();
         },
         open: (address, activation, remote) => {
             const key = remote?.key ?? LOCAL;

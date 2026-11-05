@@ -34,6 +34,7 @@ export async function runBrowserProcess(): Promise<void> {
     await app.whenReady();
 
     let windows: GenieBrowserWindows | null = null;
+    let linkedClient: BrowserLinkClient | null = null;
     let hosts: readonly string[] = [];
     let opened = false;
     // Started and given nothing to open: not a process left behind.
@@ -42,13 +43,12 @@ export async function runBrowserProcess(): Promise<void> {
     const onFacts = (facts: BrowserFacts): void => {
         hosts = facts.hosts;
         if (windows === null) {
-            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => hosts, log });
+            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => hosts, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
         } else {
             rerouteGenieBrowserSession({ frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, log });
         }
     };
 
-    let linkedClient: BrowserLinkClient | null = null;
     const sayPages = (): void => {
         const pages = drivablePages().map((p) => ({ id: p.id, url: p.url, title: p.title, revision: p.revision() }));
         void linkedClient?.browserCall('pages', [pages]).catch(() => {});
@@ -86,6 +86,8 @@ export async function runBrowserProcess(): Promise<void> {
             const answer = windows?.open(url ?? undefined, activation);
             if (answer && !answer.ok) log(`open refused: ${answer.error}`);
         },
+        openSingle: (panelKey, url) => { opened = true; windows?.openSingle(panelKey, url); },
+        closeSingle: (panelKey) => { windows?.closeSingle(panelKey); },
         quit: () => { app.quit(); },
         log,
     });

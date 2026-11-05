@@ -208,6 +208,14 @@ const bridge: PreloadBridge = {
     sitePanels: {
         prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
         openWindow: (host) => ipcRenderer.invoke('site-panel:open-window', host) as Promise<void>,
+        popOut: (panelKey, host) => ipcRenderer.invoke('site-panel:pop-out', panelKey, host) as Promise<void>,
+        popBack: (panelKey) => ipcRenderer.invoke('site-panel:pop-back', panelKey) as Promise<void>,
+        popped: () => ipcRenderer.invoke('site-panel:popped') as Promise<never>,
+        onPoppedBack: (listener) => {
+            const handler = (_event: unknown, panelKey: string) => listener(panelKey);
+            ipcRenderer.on('site-panel:popped-back', handler);
+            return () => { ipcRenderer.removeListener('site-panel:popped-back', handler); };
+        },
     },
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },

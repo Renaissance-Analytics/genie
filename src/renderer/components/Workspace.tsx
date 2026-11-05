@@ -951,7 +951,14 @@ export function Workspace({ workspace, terminals, ops, onOpenRuntime, initialSta
                                 onBack: (key: string) => { siteWebviewLayerFor(sitePanels).back(key); },
                                 onForward: (key: string) => { siteWebviewLayerFor(sitePanels).forward(key); },
                                 onState: (key: string, listener: (state: { canGoBack: boolean; canGoForward: boolean; loading: boolean }) => void) => siteWebviewLayerFor(sitePanels).onState(key, listener),
-                                onOpenInWindow: (host: string) => { void sitePanels.openWindow(host); },
+                                onOpenInWindow: (host: string) => {
+                                    const key = panelKey(workspace.id, tab.id, at);
+                                    siteWebviewLayerFor(sitePanels).setPopped(key, true);
+                                    void sitePanels.popOut(key, host).catch(() => { siteWebviewLayerFor(sitePanels).setPopped(key, false); });
+                                },
+                                popped: siteWebviewLayerFor(sitePanels).isPopped(panelKey(workspace.id, tab.id, at)),
+                                onPopBack: (key: string) => { void sitePanels.popBack(key); },
+                                onPopped: (key: string, listener: (out: boolean) => void) => siteWebviewLayerFor(sitePanels).onPopped(key, listener),
                             } : undefined;
                             return <SitePanel host={p.ref} live={live} onPick={(host) => { if (at >= 0) saveTabs(placePanel(designed, tab.id, at, { kind: 'site', ref: host })); }} />;
                         }}

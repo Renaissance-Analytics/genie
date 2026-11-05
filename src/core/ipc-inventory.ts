@@ -31,6 +31,7 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['browser-window:preset', 'later:P2b browser process'],
     ['browser-window:bounds', 'later:P2b browser process'],
     ['browser-window:overlay-colors', 'later:P2b browser process'],
+    ['browser-window:pop-back', 'later:P2b browser process'],
 
     // Drafts and artboard need family 7's shared transfer for content above the frame cap.
     ['genie:chat-drafts-load', 'later:family 7 chunked transfer'],
@@ -109,5 +110,8 @@ export const IPC_INVENTORY: readonly IpcInventoryEntry[] = [
     ['question:drawer', 'later:question window'],
 
     ['site-panel:prepare', 'later:P2b browser process'],
+    ['site-panel:pop-out', 'later:P2b browser process'],
+    ['site-panel:pop-back', 'later:P2b browser process'],
+    ['site-panel:popped', 'later:P2b browser process'],
     ['site-panel:open-window', 'later:P2b site panels'],
 ];
