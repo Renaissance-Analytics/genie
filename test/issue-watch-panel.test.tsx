@@ -79,6 +79,9 @@ describe('where it lives', () => {
         expect(EMPTY_FEATURES.issueWatch).toBeNull();
         const main = readFileSync('src/main/main.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
         expect(main).toMatch(/issueWatch: \(\) => issueWatchPanels\(\)/);
-        expect(main).toMatch(/onEntry: \(entry\) => \{\s*issueWatchLatest\.set\(entry\.projectId, entry\);\s*issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\);[\s\S]*?pushFeatures\(\);\s*\}/);
+        // The entry is recorded where Tynn is heard, genie-host (P5c), and every change reaches the window's panel.
+        const host = readFileSync('src/main/issue-watch-host.ts', 'utf8').split(/\r?\n/).map((l) => l.replace(/^\s*(\/\/|\*|\/\*).*$/, '')).join('\n');
+        expect(host).toMatch(/onEntry: \(entry\) => \{\s*this\.#latest\.set\(entry\.projectId, entry\);\s*this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\);[\s\S]*?this\.#changed\(\);\s*\}/);
+        expect(main).toMatch(/issueWatchNow\?\.onChange\(\(\) => \{ pushFeatures\(\); \}\);/);
     });
 });
