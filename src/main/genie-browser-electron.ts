@@ -81,19 +81,22 @@ function routeSession(ses: Session, port: number, log: (line: string) => void): 
  */
 let sharedSession: { ses: Session; routed: Promise<void> } | null = null;
 let sharedCa: string | null = null;
+/** The front door's port as it is NOW: a session or store made after it moved routes there, not to its creator's port (P5a.2). */
+let currentPort: number | null = null;
 export function genieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): { ses: Session; routed: Promise<void> } {
     if (sharedSession) return sharedSession;
     const log = options.log ?? ((line: string) => console.log(line));
     const ses = session.fromPartition('persist:genie-browser-window');
     sharedCa = options.caPem;
     guardSession(ses, () => sharedCa);
-    const routed = routeSession(ses, options.frontDoorPort, log);
+    const routed = routeSession(ses, currentPort ?? options.frontDoorPort, log);
     sharedSession = { ses, routed };
     return sharedSession;
 }
 
 /** The window came back with a new front door (its port is per launch): the browser's process follows it. */
 export function rerouteGenieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): void {
+    currentPort = options.frontDoorPort;
     if (!sharedSession) { sharedCa = options.caPem; const log = options.log ?? ((line: string) => console.log(line)); for (const store of workspaceStores.values()) store.routed = routeSession(store.ses, options.frontDoorPort, log); return; }
     sharedCa = options.caPem;
     const log = options.log ?? ((line: string) => console.log(line));
@@ -125,7 +128,7 @@ export function workspaceBrowserSession(options: { genieHome: string; workspaceI
     const ses = session.fromPath(browserStorePath(options.genieHome, options.workspaceId, options.side));
     sharedCa = options.caPem;
     guardSession(ses, () => sharedCa);
-    const store = { ses, routed: routeSession(ses, options.frontDoorPort, options.log ?? ((line: string) => console.log(line))) };
+    const store = { ses, routed: routeSession(ses, currentPort ?? options.frontDoorPort, options.log ?? ((line: string) => console.log(line))) };
     workspaceStores.set(path, store);
     storeWatcher?.attach(options.workspaceId, ses);
     ses.cookies.on('changed', (_event, cookie, cause, removed) => { storeWatcher?.changed(options.workspaceId, cookie as SyncedCookie, cause, removed); });

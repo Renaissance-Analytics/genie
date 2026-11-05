@@ -174,11 +174,11 @@ import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
-import { electronBrowserView } from './electron-browser-view.js';
+import { electronBrowserView, followFrontDoorInPanes } from './electron-browser-view.js';
 import { BrowserCookieBridge } from './browser-cookie-bridge.js';
 import { BrowserPagesReplica } from './browser-pages-replica.js';
 import type { BrowserPage } from './browser-service.js';
-import { genieBrowserWindows, watchWorkspaceStores, workspaceBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { genieBrowserWindows, rerouteGenieBrowserSession, watchWorkspaceStores, workspaceBrowserSession, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
@@ -234,6 +234,7 @@ import { REMOTE_PORT } from '../core/tailscale.js';
 import { attachWebSocketServer } from '@particle-academy/fancy-ws';
 import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
 import { AppInboxKeys } from './app-inbox-keys.js';
+import type { AppInboxReplica } from './app-inbox-host.js';
 import { APP_INBOX_PORT, AppInboxService, appInboxEnvFor, startAppInboxServer, type AppEnvSource, type AppInboxServer } from './app-inbox-service.js';
 import { type AppSourceKind } from '../core/app-inbox.js';
 import { IssueWatchClient, type IssueWatchRefreshAnswer } from './issue-watch-client.js';
@@ -1453,10 +1454,6 @@ async function boot(): Promise<void> {
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
         mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
-        // GENIE'S TOOLS THAT STILL NEED THIS WINDOW, forwarded by genie-host's MCP server (P3.1): run here, answered there.
-        // Each kept process's app-inbox credential, for genie-host's process book (P3.3c): minted here, where the server is.
-        // And each SITE's, for genie-host's hosting (P5a): the same door, named as a site.
-        appEnvs: (list: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) => Object.fromEntries(list.map((p) => [p.id, services ? services.appEnv({ kind: p.kind === 'site' ? 'site' : 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) : {}])),
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
@@ -2539,11 +2536,16 @@ async function boot(): Promise<void> {
      * composition, so the sites compose starts are handed their own credential at their first start. Its port is
      * remembered (a script outside Genie keeps one address); the keys are app-inbox-keys.ts's.
      */
-    const appInboxKeys = await AppInboxKeys.open(genieHome());
+    // WITH GENIE-HOST LINKED THE DOOR AND ITS KEYS ARE THE HOST'S (P5a.2 ruling 3): every credential is minted there, window or
+    // no window. This window starts no door and opens no keys (one writer of app-inbox.json); it drives the host's through the
+    // replica — a script key's secret reaches it once, in the answer to its own create. Its own door only on the emergency path.
+    const linkedAppInbox = agentEngineLink ? agentEngineLink.client.appInbox() : null;
+    const ownAppInboxKeys = linkedAppInbox ? null : await AppInboxKeys.open(genieHome());
+    const appInboxKeys: Pick<AppInboxReplica, 'createScriptKey' | 'scriptKeys' | 'revokeScriptKey' | 'rotate' | 'revokeSource' | 'allowSource' | 'sources' | 'revokedSources'> = linkedAppInbox ?? ownAppInboxKeys!;
     const appInboxEndpointFile = join(genieHome(), 'app-inbox-endpoint.json');
     let appInboxServer: AppInboxServer | null = null;
-    const appInboxService = new AppInboxService({
-        keys: appInboxKeys,
+    const appInboxService = ownAppInboxKeys ? new AppInboxService({
+        keys: ownAppInboxKeys,
         // Late-bound: a request that arrives while Genie is still composing is answered, never crashed on.
         inbox: {
             send: (input) => (services ? services.inbox.send(input) : Promise.reject(new Error('Genie is still starting; try again in a moment'))),
@@ -2556,8 +2558,8 @@ async function boot(): Promise<void> {
         enabled: (workspaceId) => services?.settings.snapshotFor(workspaceId).app_inbox !== false,
         siteHosts: (workspaceId) => services?.sites.list().filter((s) => s.workspaceId === workspaceId).map((s) => s.host) ?? [],
         log: (line) => console.log(line),
-    });
-    try {
+    }) : null;
+    if (appInboxService) try {
         let remembered: number | undefined;
         try { const v = JSON.parse(readFileSync(appInboxEndpointFile, 'utf8')) as { port?: unknown }; if (typeof v.port === 'number') remembered = v.port; } catch { remembered = undefined; }
         appInboxServer = await startAppInboxServer({ service: appInboxService, port: remembered ?? APP_INBOX_PORT });
@@ -2567,7 +2569,7 @@ async function boot(): Promise<void> {
         console.error(`[app-inbox] the door for apps could not listen: ${error instanceof Error ? error.message : String(error)}`);
     }
     /** A site's or process's OWN credential — never the service env's (compose lays it over that one source only). */
-    const appInboxEnv = (source: AppEnvSource): Record<string, string> => appInboxEnvFor({ url: appInboxServer?.url ?? null, token: appInboxKeys.tokenFor(source) });
+    const appInboxEnv = (source: AppEnvSource): Record<string, string> => (ownAppInboxKeys ? appInboxEnvFor({ url: appInboxServer?.url ?? null, token: ownAppInboxKeys.tokenFor(source) }) : {});
     // THE STORES AGENTS WRITE TO are genie-host's when it runs (the host split, P3.1): this window composes against its
     // replicas of them. Only the emergency in-process engine opens them here.
     const engineForStores = agentEngineLink;
@@ -3411,7 +3413,7 @@ async function boot(): Promise<void> {
     // never minted for a window driving another machine. Rotate / Revoke / Allow restart the source so it starts with
     // its new credential, or none.
     const appInboxState = (workspaceId: string) => ({
-        url: appInboxServer?.url ?? null,
+        url: appInboxServer?.url ?? linkedAppInbox?.url() ?? null,
         enabled: composed.settings.snapshotFor(workspaceId).app_inbox !== false,
         sources: appInboxKeys.sources(workspaceId),
         revoked: appInboxKeys.revokedSources(workspaceId),
@@ -3663,7 +3665,13 @@ async function boot(): Promise<void> {
                 const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
             },
-            repair: () => checkAndRepair(toolchainOps()),
+            // Repaired here, in the window's environment — and pushed to genie-host's, so a site's php-cgi it starts next reads
+            // the new PHP_INI_SCAN_DIR and PATH with no host restart (P5a.2; config is hot-swappable).
+            repair: async () => {
+                const report = await checkAndRepair(toolchainOps());
+                await agentEngineLink?.client.pushEnv().catch((error: unknown) => console.error(`[toolchain] genie-host did not take the repaired environment: ${error instanceof Error ? error.message : String(error)}`));
+                return report;
+            },
             // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
             php: {
                 list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
@@ -3833,10 +3841,22 @@ async function boot(): Promise<void> {
     // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
     const browserTrust = composed.browserTrust();
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
+    // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
+    // browser session reads these, and is routed again when they change.
+    frontDoorNow = { port: composed.frontDoorPort, caPem: browserTrust.caPem };
+    composed.onFrontDoorChange(() => {
+        const trust = composed.browserTrust();
+        if (frontDoorNow.port === composed.frontDoorPort && frontDoorNow.caPem === trust.caPem) return;
+        frontDoorNow = { port: composed.frontDoorPort, caPem: trust.caPem };
+        console.log(`[genie] browser: the front door is on :${frontDoorNow.port} now${trust.caPem === null ? ` with no CA (${trust.reason})` : ''}`);
+        followFrontDoorInPanes();
+        rerouteGenieBrowserSession({ frontDoorPort: frontDoorNow.port, caPem: frontDoorNow.caPem });
+        publishBrowserFacts?.();
+    });
     // LIVE SITE PANELS: a <webview> in the MAIN window, whichever window that is now (P1b: it can be closed and built again),
     // in the store of the site's own workspace.
     livePanels = sitePanels({ window: () => window, genieHome: genieHome(), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), workspaceOfHost: (host) => composed.sites.list().find((s) => s.host.toLowerCase() === host.toLowerCase())?.workspaceId ?? '_shared', openInWindow: (url, activation) => { void openLocalBrowser(url, activation); }, browserCall: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : null), restart: panelRestart(confirmTray, restartGenie) });
-    mainWindowDeps = { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
+    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
     mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
     void wireLoginItem(composed.settings, loginItemPort, {
@@ -3909,14 +3929,14 @@ async function boot(): Promise<void> {
     cookieBridge = new BrowserCookieBridge({
         call: (method, args) => (agentEngineLink?.live === true ? agentEngineLink.client.browserCall(method, args) : Promise.resolve(null)),
         me: () => browserConnection,
-        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieHome(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem }).ses,
+        openStore: (workspaceId) => workspaceBrowserSession({ genieHome: genieHome(), workspaceId, side: 'window', frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem }).ses,
     });
     watchWorkspaceStores(cookieBridge);
     publishBrowserFacts = () => {
         if (agentEngineLink?.live !== true) return;
         const facts = {
             frontDoorPort: composed.frontDoorPort,
-            caPem: browserTrust.caPem,
+            caPem: frontDoorNow.caPem,
             hosts: composed.routes().map((r) => r.host),
             workspaceOf: Object.fromEntries(composed.sites.list().map((s) => [s.host.toLowerCase(), s.workspaceId])),
             launch: { file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--genie-browser', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=|genie-browser-debug-port=)/.test(a))] },
@@ -3925,14 +3945,16 @@ async function boot(): Promise<void> {
     };
     composed.sites.onChange(() => { publishBrowserFacts(); });
     publishBrowserFacts();
-    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
+    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: frontDoorNow.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
     // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
     // Genie with nothing left running ends (core/tray-only.ts).
     if (agentEngineLink) setInterval(watchTrayOnly, 5_000).unref?.();
 }
 
 /** What a (re)built main window needs from boot: set once the services are composed. */
-let mainWindowDeps: { readonly frontDoorPort: number; readonly caPem: string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
+/** The front door's port and Genie's CA as the browser sessions use them now (P5a.2); set once the services are composed. */
+let frontDoorNow: { port: number; caPem: string | null } = { port: 0, caPem: null };
+let mainWindowDeps: { readonly frontDoorPort: () => number; readonly caPem: () => string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
 /** The live site panels (once per process); each main window attached as it is built. */
 let livePanels: LiveSitePanels | null = null;
 

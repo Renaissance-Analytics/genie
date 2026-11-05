@@ -580,6 +580,7 @@ export function HostingSurface({ data, onAction, onNavigate, adding, onCloseForm
                 <Skeletons />
             ) : (
                 <>
+                {(hosting.problems ?? []).map((p) => <p key={p} data-hosting-problem className="border-b border-[var(--border-1)] px-5 py-2 text-sm text-[var(--fg-3)]">{p}</p>)}
                 <FrontDoorLines frontDoor={hosting.frontDoor} onAction={onAction} />
                 <Tabs key={tab ?? 'sites'} defaultTab={tab ?? 'sites'} variant="underline" className="flex min-h-0 flex-1 flex-col">
                     <Tabs.List className="px-5">

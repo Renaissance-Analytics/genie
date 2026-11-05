@@ -31,6 +31,7 @@ import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
 import type { HostingService } from './hosting-host.js';
+import type { AppInboxHost } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
@@ -133,6 +134,10 @@ export interface EngineServerOptions {
     readonly supervisor?: SupervisorService;
     /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */
     readonly hosting?: HostingService;
+    /** The host's app door and its keys (P5a.2). Absent = `engine.appInbox` is refused. Local windows only, like the hosting. */
+    readonly appInbox?: AppInboxHost;
+    /** Takes the window's environment into this host's (`engine.windowEnv`, and with each start); `adoptWindowEnv` on `process.env` by default. */
+    readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
     /** Between the window and the Genie browser's process (P2b: browser-service.ts). Absent = `engine.browser` is refused. */
@@ -171,6 +176,12 @@ interface Connection {
     lastGlobal: string;
     nextCall: number;
     readonly pending: Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>;
+    /**
+     * A window on this host's OWN endpoint (its local socket or pipe, token-checked). Only such a link is sent the hosting
+     * — whose dump carries each workspace's service variables — may drive it, or is asked to elevate (P5a.2).
+     * P5d NOTE: a remote or phone path that ever reaches this server must accept as NOT local.
+     */
+    readonly local: boolean;
 }
 
 export class SessionEngineServer {
@@ -210,7 +221,10 @@ export class SessionEngineServer {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'supervisor.event', event);
         });
         options.hosting?.onEvent((event) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'hosting.event', event);
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'hosting.event', event);
+        });
+        options.appInbox?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'appInbox.event', event);
         });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
@@ -271,12 +285,12 @@ export class SessionEngineServer {
 
     /** An elevation the host's hosting needs, run by the newest window (P5a). Rejects with no window: the caller holds it. */
     elevate(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> {
-        return this.#reverse('client.elevate', [steps]) as Promise<ElevationOutcome>;
+        return this.#reverse('client.elevate', [steps], { localOnly: true }) as Promise<ElevationOutcome>;
     }
 
-    /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
-    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>): Promise<Record<string, Record<string, string>>> {
-        return this.#reverse('client.appEnvs', [processes]) as Promise<Record<string, Record<string, string>>>;
+    /** Whether a LOCAL window is connected now: the only kind asked to elevate (P5a.2). */
+    localWindowConnected(): boolean {
+        return [...this.#connections].some((c) => c.authed && c.local);
     }
 
     /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
@@ -301,8 +315,8 @@ export class SessionEngineServer {
     }
 
     /** A connection (a window) arrived: it must say the token before anything else. */
-    accept(transport: ClientTransport & { trusted?: () => void }): void {
-        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map() };
+    accept(transport: ClientTransport & { trusted?: () => void }, options: { local?: boolean } = {}): void {
+        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true };
         this.#connections.add(conn);
         transport.onMessage((text) => this.#onMessage(conn, text));
         transport.onClose(() => {
@@ -366,7 +380,8 @@ export class SessionEngineServer {
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
         // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
-        if (this.#options.hosting) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
+        if (this.#options.hosting && conn.local) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
+        if (this.#options.appInbox && conn.local) this.#event(conn, 'appInbox.dump', this.#options.appInbox.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
@@ -410,7 +425,7 @@ export class SessionEngineServer {
                 const env = args[2];
                 this.#env.set(record.workspaceId, env && typeof env === 'object' ? (env as Record<string, string>) : {});
                 const windowEnv = args[3];
-                if (windowEnv && typeof windowEnv === 'object') adoptWindowEnv(process.env, windowEnv as Record<string, string>);
+                if (windowEnv && typeof windowEnv === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(windowEnv as Record<string, string>);
                 return host.start(record, str(1));
             }
             case 'engine.stop':
@@ -486,6 +501,11 @@ export class SessionEngineServer {
                 for (const r of records) if (r && typeof r.id === 'string') this.#records.set(r.id, r);
                 return true;
             }
+            case 'engine.windowEnv': {
+                const env = args[0];
+                if (env && typeof env === 'object') (this.#options.adoptWindowEnv ?? ((e) => adoptWindowEnv(process.env, e)))(env as Record<string, string>);
+                return true;
+            }
             case 'engine.ping':
                 return 'pong';
             case 'engine.shutdown':
@@ -532,8 +552,13 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.appInbox':
+                if (!this.#options.appInbox) throw new Error('This host runs no app door.');
+                if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
+                return this.#options.appInbox.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.hosting':
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
+                if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
                 return this.#options.hosting.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.supervisor':
                 if (!this.#options.supervisor) throw new Error('This host runs no process supervisor.');
@@ -574,7 +599,6 @@ export class SessionEngineServer {
                 return this.#keychain().set(movableName(str(0)), str(1));
             case 'engine.secretCompare':
                 return hostVault(this.#keychain()).compare(movableName(str(0)), str(1));
-            case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }
@@ -586,8 +610,8 @@ export class SessionEngineServer {
     }
 
     /** A call to the WINDOW (the newest one): what only it has in phase 1. Refused when no window is connected. */
-    #reverse(method: EngineMethod, args: unknown[]): Promise<unknown> {
-        const conn = [...this.#connections].filter((c) => c.authed).at(-1);
+    #reverse(method: EngineMethod, args: unknown[], options: { localOnly?: boolean } = {}): Promise<unknown> {
+        const conn = [...this.#connections].filter((c) => c.authed && (options.localOnly !== true || c.local)).at(-1);
         if (!conn) return Promise.reject(new Error('No Genie window is connected to prepare this agent\'s credentials. Open Genie and start it again.'));
         const id = conn.nextCall++;
         return new Promise((resolve, reject) => {

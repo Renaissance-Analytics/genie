@@ -547,7 +547,7 @@ export async function featureSnapshot(services: ComposedServices, state: Feature
         flows: { flows: services.flows.list(), adding: state.flowAdding ?? null, ...(state.flowSaved ? { saved: state.flowSaved } : {}), toolKinds: flowToolDefinitions() },
         // The kept processes are listed even when not running (a stop is durable, never a disappearance), each with the last
         // lines of its output — the supervisor's tail, so a crashed process still shows why (P1).
-        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor },
+        hosting: { sites: sitesWithLogs(services), processes: withLogTails(services, ports.processes ? ports.processes.list() : []), adding: state.siteAdding ?? null, editing: state.siteEditing ?? null, frontDoor: services.externalFrontDoor, problems: services.hostingProblems() },
         // Status is READ from Docker for every instance, never made up; with Docker down, each says so. A snapshot waits at
         // most ENGINE_STATUS_WAIT_MS for it, then carries Docker's last answer and a fresh push follows (genie#1393).
         services: { instances: await timed('engines', () => engineStatusesWithin(services, ports)), adding: state.serviceAdding ?? null, logs: state.serviceLogs ?? null, ...(state.serviceUpdating !== undefined ? { updating: state.serviceUpdating } : {}) },

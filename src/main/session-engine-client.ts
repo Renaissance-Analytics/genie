@@ -40,6 +40,7 @@ import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js'
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
 import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
+import { AppInboxReplica, type AppInboxDump, type AppInboxEvent } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
@@ -83,8 +84,6 @@ export interface EngineClientOptions {
     readonly onOpenFileLater?: (call: ForwardedToolCall) => void;
     /** A tool's moment: a glow, a thumbs-up, an action signal. */
     readonly onToolSignal?: (signal: unknown) => void;
-    /** Each kept process's app-inbox credential, for the host's process book (P3.3c). */
-    readonly appEnvs?: (processes: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) => Record<string, Record<string, string>>;
     /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
     readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
     /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
@@ -147,6 +146,7 @@ export class SessionEngineClient {
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
     #hosting: HostingReplica | null = null;
+    #appInbox: AppInboxReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
     readonly #browserListeners = new Set<(event: BrowserEvent) => void>();
@@ -274,6 +274,13 @@ export class SessionEngineClient {
     }
 
     /** End the link from this side (a quit): no reconnect is asked for. */
+    /** The window's environment NOW, to the host (P5a.2): after a Check and repair, what the host starts next reads it. */
+    async pushEnv(): Promise<void> {
+        const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        const reply = await this.call('engine.windowEnv', [env]);
+        if (!reply.ok) throw new Error(reply.reason);
+    }
+
     disconnect(): void {
         const t = this.#transport;
         this.#transport = null;
@@ -326,6 +333,12 @@ export class SessionEngineClient {
                 return;
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
+                return;
+            case 'appInbox.dump':
+                this.appInbox().rebase(payload as AppInboxDump);
+                return;
+            case 'appInbox.event':
+                this.appInbox().apply(payload as AppInboxEvent);
                 return;
             case 'hosting.dump':
                 this.hosting().rebase(payload as HostingDump);
@@ -400,16 +413,10 @@ export class SessionEngineClient {
         }
     }
 
-    /** The host asks the window: a window tool's call, and each process's app-inbox credential. */
+    /** The host asks the window: a window tool's call, and an elevation. */
     async #answer(id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: Record<string, unknown>;
         try {
-            if (method === 'client.appEnvs') {
-                const list = Array.isArray(args[0]) ? (args[0] as Array<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) : [];
-                reply = { kind: 'result', id, ok: true, value: this.#options.appEnvs?.(list) ?? {} };
-                this.#transport?.send(JSON.stringify(reply));
-                return;
-            }
             if (method === 'client.elevate') {
                 if (!this.#options.elevate) throw new Error('this window runs no elevation');
                 reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
@@ -516,6 +523,16 @@ export class SessionEngineClient {
      * genie-host's front door, service engines and site routes (P5a), as this window reads and drives them: the dump
      * arrives before `engine.ready`, so a connected window reads them synchronously.
      */
+    appInbox(): AppInboxReplica {
+        this.#appInbox ??= new AppInboxReplica(async (method, args) => {
+            const reply = await this.call('engine.appInbox', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        });
+        return this.#appInbox;
+    }
+
+    /** genie-host's app door and its keys (P5a.2), as this window reads and changes them. */
     hosting(): HostingReplica {
         this.#hosting ??= new HostingReplica(async (method, args) => {
             const reply = await this.call('engine.hosting', [method, [...args]]);

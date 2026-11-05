@@ -22,7 +22,7 @@ import type { CreateSiteInput, PhpCgiResolution, SiteManager } from './site-mana
 /** The site manager as a window uses it. */
 export type SitesApi = Pick<SiteManager, 'list' | 'get' | 'spec' | 'phpCgiFor' | 'restart' | 'serviceEnvChanged' | 'onChange'>;
 /** The engine registry as a window uses it. */
-export type EnginesApi = Pick<ServiceRegistry, 'list' | 'envFor' | 'choices' | 'add' | 'update' | 'setActive' | 'use' | 'detach' | 'releaseSlice' | 'logs' | 'onChange' | 'onStarted'>;
+export type EnginesApi = Pick<ServiceRegistry, 'list' | 'envFor' | 'choices' | 'add' | 'setActive' | 'use' | 'detach' | 'releaseSlice' | 'logs' | 'onChange' | 'onStarted'>;
 /** The workspaces' declared sites as a window uses them. */
 export type EnvelopeSitesApi = Pick<EnvelopeSites, 'create' | 'update' | 'remove' | 'start' | 'stop' | 'restart' | 'workspaceName' | 'workspacePath' | 'declaredIn'>;
 
@@ -54,6 +54,14 @@ export interface HostingApi {
     hibernationEngines: { toRelease(workspaceId: string): string[]; toResume(workspaceId: string): string[]; stop(id: string): Promise<void>; start(id: string): Promise<void> };
     /** Workspaces currently receiving this engine's env, plus their running sites and processes. */
     engineDependents(id: string): readonly string[];
+    /**
+     * An engine's image update (P5a.2): `consent: false` previews it; with consent the image is pulled and the engine
+     * replaced — refused, with nothing replaced, when its dependents at the moment it is stopped are not all among
+     * `approvedDependents` (what the person reviewed). The check runs where the engine is stopped: in the host.
+     */
+    updateEngine(id: string, options: { consent: boolean; approvedDependents?: readonly string[] }): ReturnType<ServiceRegistry['update']>;
+    /** What this hosting was started without, each with what goes without it (a host's launch inputs, P5a.2); none = []. */
+    hostingProblems(): string[];
     /** `workspaceId` = who a delete-data acts for: refused while any OTHER workspace keeps data in it (core/service-tenancy.ts). */
     removeEngine(id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void>;
     readonly frontDoorPort: number;
@@ -164,6 +172,7 @@ export interface HostingDump {
     /** Per engine; `null` = the host could not say (the read threw). */
     readonly dependents: Readonly<Record<string, readonly string[] | null>>;
     readonly reconcile: ReconcileReport | null;
+    readonly problems: readonly string[];
 }
 
 export type HostingEvent =
@@ -236,6 +245,7 @@ export class HostingService {
             }])),
             dependents: Object.fromEntries(engines.map((e) => [e.id, attempt<readonly string[] | null>(() => s.engineDependents(e.id), null)])),
             reconcile: this.#reconcile,
+            problems: s.hostingProblems(),
         };
     }
 
@@ -257,8 +267,10 @@ export class HostingService {
             case 'sites.restart': return s.sites.restart(str(a[0]), (a[1] ?? {}) as { join?: boolean });
             case 'sites.serviceEnvChanged': return s.sites.serviceEnvChanged(optionalStr(a[0]));
             case 'engines.add': return s.engines.add(a[0] as Parameters<EnginesApi['add']>[0]);
-            // A window's `beforeStop` is a function and cannot cross: the window runs it before it asks (HostingReplica).
-            case 'engines.update': return s.engines.update(str(a[0]), { consent: (a[1] as { consent?: unknown } | undefined)?.consent === true });
+            case 'updateEngine': {
+                const o = (a[1] ?? {}) as { consent?: unknown; approvedDependents?: unknown };
+                return s.updateEngine(str(a[0]), { consent: o.consent === true, ...(Array.isArray(o.approvedDependents) ? { approvedDependents: o.approvedDependents.map(String) } : {}) });
+            }
             case 'engines.setActive': return s.engines.setActive(str(a[0]), str(a[1]), str(a[2]));
             case 'engines.use': return s.engines.use(str(a[0]), str(a[1]));
             case 'engines.detach': return s.engines.detach(str(a[0]), str(a[1]));
@@ -342,7 +354,8 @@ export class HostingReplica implements HostingApi {
         const keys = {
             sites: JSON.stringify([dump.sites, dump.specs, dump.declared]),
             engines: JSON.stringify([dump.engines, dump.workspaces, dump.dependents]),
-            frontDoor: JSON.stringify([dump.externalFrontDoor, dump.routes, dump.configuredHosts, dump.deckItems, dump.browserTrust]),
+            // The port and the CA are part of it (P5a.2): a host that comes back on a new port, or with a new CA, is a change.
+            frontDoor: JSON.stringify([dump.frontDoorPort, dump.browserTrust, dump.externalFrontDoor, dump.routes, dump.configuredHosts, dump.deckItems, dump.problems ?? []]),
         };
         const was = this.#keys;
         this.#keys = keys;
@@ -394,12 +407,6 @@ export class HostingReplica implements HostingApi {
         envFor: (workspaceId: string) => ({ ...(this.#workspace(workspaceId)?.env ?? {}) }),
         choices: (workspaceId: string) => [...(this.#workspace(workspaceId)?.choices ?? [])],
         add: (input) => this.#ask('engines.add', input),
-        update: async (id, options) => {
-            // `beforeStop` is the window's check that the dependents it approved are still all there; a function does not
-            // cross to the host, so it runs here, on the latest dump, just before the host is asked to replace the image.
-            if (options.consent) options.beforeStop?.();
-            return this.#ask('engines.update', id, { consent: options.consent });
-        },
         setActive: (workspaceId, engine, version) => this.#ask('engines.setActive', workspaceId, engine, version),
         use: (workspaceId, id) => this.#ask('engines.use', workspaceId, id),
         detach: (workspaceId, id) => this.#ask('engines.detach', workspaceId, id),
@@ -432,6 +439,9 @@ export class HostingReplica implements HostingApi {
     startEngine(id: string): Promise<void> { return this.#ask('startEngine', id); }
     stopEngine(id: string): Promise<void> { return this.#ask('stopEngine', id); }
     removeEngine(id: string, options: { deleteData: boolean; workspaceId?: string }): Promise<void> { return this.#ask('removeEngine', id, options); }
+    /** The host checks the dependents when it stops the engine; the window only says which it approved. */
+    updateEngine(id: string, options: { consent: boolean; approvedDependents?: readonly string[] }): ReturnType<ServiceRegistry['update']> { return this.#ask('updateEngine', id, options); }
+    hostingProblems(): string[] { return [...(this.#dump?.problems ?? [])]; }
 
     engineDependents(id: string): readonly string[] {
         const known = this.#dump?.dependents[id];
