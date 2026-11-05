@@ -1,6 +1,6 @@
 import type { UpdateChannel } from '../core/update-channel.js';
 import type { InstallResult, UpdateState } from './updater.js';
-import type { HelperLaunch } from './updates-host.js';
+import type { HelperLaunch, UpdateFailedRecord } from './updates-host.js';
 
 /**
  * THE WINDOW'S UPDATES, A REPLICA OF GENIE-HOST'S (the host split, P5b). The state is the host's `UpdateState`, sent whole
@@ -71,6 +71,11 @@ export class UpdatesReplica {
     /** How to start the updater helper: this window's executable (and, in a dev run, its app path). */
     async publishLaunch(launch: HelperLaunch): Promise<void> {
         await this.#call('launch', [launch]);
+    }
+
+    /** Why the last install did not happen, told once to the first window after it (a later subscriber still hears it). */
+    onFailedInstall(_listener: (notice: UpdateFailedRecord) => void): () => void {
+        return () => {};
     }
 
     /** Told once, when the host answered an install and is on its way out. */

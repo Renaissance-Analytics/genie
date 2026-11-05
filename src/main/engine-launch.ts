@@ -140,6 +140,11 @@ export function spawnUpdaterProcess(launch: { readonly file: string; readonly ar
     }
 }
 
+/** Genie's window again, after an install that did not happen (P5b). Not built yet. */
+export function spawnGenieWindow(_launch: { readonly file: string; readonly args: readonly string[] }, _env: NodeJS.ProcessEnv, _spawn: typeof spawnChild = spawnChild): number | null {
+    return null;
+}
+
 export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> {
     const alive = ports.alive ?? pidAlive;
     const read = ports.readFile ?? readOrNull;

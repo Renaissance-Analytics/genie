@@ -1,4 +1,5 @@
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import type { UpdateChannel } from '../src/core/update-channel.js';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -6,13 +7,13 @@ import { entryFor } from '../src/core/entry-mode.js';
 import { memoryPair } from '../src/core/line-transport.js';
 import type { ProcessTree } from '../src/core/process-tree.js';
 import type { ClientTransport } from '../src/core/remote-protocol.js';
-import { spawnUpdaterProcess } from '../src/main/engine-launch.js';
+import { spawnGenieWindow, spawnUpdaterProcess } from '../src/main/engine-launch.js';
 import { SessionEngineClient } from '../src/main/session-engine-client.js';
 import { SessionEngineServer } from '../src/main/session-engine-server.js';
 import { SessionHost } from '../src/main/session-host.js';
 import type { UpdaterPort } from '../src/main/updater.js';
 import { connectUpdaterLink, runUpdaterHelper } from '../src/main/updater-helper.js';
-import { hostDrainAgents, updaterHelperEnv, UpdatesService, type HelperLaunch, type UpdaterConfig } from '../src/main/updates-host.js';
+import { clearUpdateFailed, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterHelperEnv, UpdatesService, writeUpdateFailed, type HelperLaunch, type UpdateFailedRecord, type UpdaterConfig } from '../src/main/updates-host.js';
 import type { RunningProcess } from '../src/main/upgrade.js';
 
 /**
@@ -46,13 +47,16 @@ const PROCS: RunningProcess[] = [
     { pid: 777, executable: '/usr/bin/bash', parentPid: 1 },
 ];
 
-function rig(options: { killFails?: readonly number[] } = {}) {
+function rig(options: { killFails?: readonly number[]; channel?: UpdateChannel; failed?: UpdateFailedRecord | null; clearFailed?: () => void; dropHelperOnDrain?: boolean } = {}) {
     /** Whether a helper the host starts comes up and links; and how to make the linked one go away. */
     const helpers = { comeUp: true, drop: [] as Array<() => void> };
     const order: string[] = [];
     const logs: string[] = [];
     const configured: UpdaterConfig[] = [];
     const calls: string[] = [];
+    /** What the helper recorded for the next window, and the host's own record when the helper was gone. */
+    const failures: string[] = [];
+    const relaunched: HelperLaunch[] = [];
     const machine = { alive: new Set(PROCS.map((p) => p.pid)), t: 0, onSleep: () => {}, quitAt: null as number | null };
     const listed = async () => PROCS.filter((p) => machine.alive.has(p.pid));
     const lib: UpdaterPort = {
@@ -76,6 +80,8 @@ function rig(options: { killFails?: readonly number[] } = {}) {
             sleep: async (ms) => { machine.t += ms; machine.onSleep(); await Promise.resolve(); },
             now: () => machine.t,
             quit: () => { order.push('helper quit'); },
+            recordFailure: (reason) => { order.push('helper records failure'); failures.push(reason); },
+            relaunch: () => { order.push('helper relaunches Genie'); },
             log: (line) => { logs.push(line); },
             caseInsensitive: false,
             // The helper's idle exit never fires in a test: its link stays for the next request.
@@ -95,8 +101,12 @@ function rig(options: { killFails?: readonly number[] } = {}) {
             },
             caseInsensitive: false,
             clock: () => 5,
-            channel: 'stable',
-            agents: { live: () => [{ id: 'a1', name: 'Ada' }], stopAll: async () => { order.push('drain agents'); } },
+            channel: options.channel ?? 'stable',
+            agents: { live: () => [{ id: 'a1', name: 'Ada' }], stopAll: async () => {
+                order.push('drain agents');
+                // The helper vanishes after the install was made ready, and none comes back.
+                if (options.dropHelperOnDrain) { helpers.comeUp = false; for (const drop of helpers.drop) drop(); await tick(); }
+            } },
             stopHosted: async () => { order.push('stop hosted'); },
         },
         startHelper: (launch) => { launches.push(launch); if (helpers.comeUp) startFakeHelper(); },
@@ -107,6 +117,9 @@ function rig(options: { killFails?: readonly number[] } = {}) {
         helperPatienceMs: 50,
         installWaitMs: 30_000,
         log: (line) => { logs.push(line); },
+        failed: options.failed ?? null,
+        ...(options.clearFailed ? { clearFailed: options.clearFailed } : {}),
+        handOverFailed: (reason, launch) => { order.push('host records failure'); failures.push(reason); relaunched.push(launch); order.push('host relaunches Genie'); },
     });
     const home = mkdtempSync(join(tmpdir(), 'p5b-updates-'));
     server = new SessionEngineServer({ token: TOKEN, build: 't', updates: service });
@@ -121,7 +134,7 @@ function rig(options: { killFails?: readonly number[] } = {}) {
         expect(await client.connect(t, TOKEN)).toMatchObject({ ok: true });
         return { client, replica: client.updates(), frames, close: () => t.close() };
     };
-    return { service, server: theServer, window, order, logs, configured, calls, machine, launches, helpers };
+    return { service, server: theServer, window, order, logs, configured, calls, machine, launches, helpers, failures, relaunched };
 }
 
 describe('the contract, over the protocol, with the helper doing the library calls', () => {
@@ -177,29 +190,24 @@ describe('the contract, over the protocol, with the helper doing the library cal
 });
 
 describe('with no window open', () => {
-    it('the host checks AND downloads on its schedule, with no window', async () => {
-        const r = rig();
+    // Downloads follow the channel's own `autoDownload` (updaterConfigFor), window or no window. Both channels are manual
+    // today: the schedule only checks, and downloading stays a person's click — as before P5b. The automatic branch is
+    // driven in p5b-auto-download.test.ts, with a channel whose setting says so.
+    it.each([
+        ['stable', false], ['stable', true], ['dev', false], ['dev', true],
+    ] as const)('channel %s, window open: %s — the schedule checks, and nothing downloads without a person', async (channel, withWindow) => {
+        const r = rig({ channel });
+        if (withWindow) await r.window();
         const fire: Array<() => void> = [];
         r.service.startAutoCheck((fn) => { fire.push(fn); return () => {}; }, { initialMs: 1, intervalMs: 1 });
         fire[0]!();
         await tick();
-        expect(r.server.windowConnected()).toBe(false);
-        expect(r.calls).toEqual(['check', 'download']);
-        expect(r.service.dump()).toMatchObject({ phase: 'downloaded', version: '2.0.1' });
-        // A window that opens now finds it downloaded.
-        const w = await r.window();
-        expect(w.replica.state()).toMatchObject({ phase: 'downloaded', version: '2.0.1' });
-    });
-
-    it('CONTROL: with a window open the schedule only checks — downloading stays the person’s click', async () => {
-        const r = rig();
-        await r.window();
-        const fire: Array<() => void> = [];
-        r.service.startAutoCheck((fn) => { fire.push(fn); return () => {}; }, { initialMs: 1, intervalMs: 1 });
-        fire[0]!();
-        await tick();
+        expect(r.server.windowConnected()).toBe(withWindow);
         expect(r.calls).toEqual(['check']);
-        expect(r.service.dump().phase).toBe('available');
+        expect(r.service.dump()).toMatchObject({ phase: 'available', version: '2.0.1' });
+        // CONTROL: the person's click does download.
+        expect(await r.service.call('download', [], { window: true })).toBe(true);
+        expect(r.calls).toEqual(['check', 'download']);
     });
 
     it('install with no window is refused, in words, and nothing is stopped', async () => {
@@ -241,7 +249,40 @@ describe('the install order', () => {
         expect(r.order).toContain('host exit');
         expect(r.calls).not.toContain('quitAndInstall');
         expect(r.logs.join('\n')).toMatch(new RegExp(`not installed[\\s\\S]*${WINDOW}|${WINDOW}[\\s\\S]*not installed`, 'i'));
-        expect(r.order.at(-1)).toBe('helper quit');
+        // A person who clicked Install is never left with no Genie: why is recorded for the next window, then Genie starts again.
+        expect(r.order.slice(-3)).toEqual(['helper records failure', 'helper relaunches Genie', 'helper quit']);
+        expect(r.failures).toHaveLength(1);
+        expect(r.failures[0]).toMatch(new RegExp(`not installed[\\s\\S]*${WINDOW}`, 'i'));
+    });
+
+    it('CONTROL: an install that goes through records no failure and starts nothing again (the installer relaunches)', async () => {
+        const r = rig();
+        const w = await r.window();
+        await w.replica.check();
+        await w.replica.download();
+        r.machine.onSleep = () => { r.machine.alive.delete(WINDOW); r.machine.alive.delete(RENDERER); };
+        await w.replica.install();
+        await tick(200);
+        expect(r.calls).toContain('quitAndInstall');
+        expect(r.failures).toEqual([]);
+        expect(r.order.filter((o) => /relaunch|failure/.test(o))).toEqual([]);
+    });
+
+    it('the helper went after the drain: the host records why and starts Genie again, from the window’s launch without the updater mode', async () => {
+        const r = rig({ dropHelperOnDrain: true });
+        const w = await r.window();
+        await w.replica.publishLaunch({ file: exe, args: ['/app', '--updater', '--no-sandbox'] });
+        await w.replica.check();
+        await w.replica.download();
+        await w.replica.install();
+        await tick(200);
+        expect(r.calls).not.toContain('quitAndInstall');
+        const at = (step: string) => r.order.indexOf(step);
+        expect(at('host records failure')).toBeGreaterThan(at('drain agents'));
+        expect(at('host relaunches Genie')).toBeGreaterThan(at('host records failure'));
+        expect(at('host exit')).toBeGreaterThan(at('host relaunches Genie'));
+        expect(r.failures[0]).toMatch(/updater/i);
+        expect(r.relaunched).toEqual([{ file: exe, args: ['/app', '--updater', '--no-sandbox'] }]);
     });
 
     it('a browser process the teardown could not end holds the install too: named, and not installed', async () => {
@@ -430,7 +471,12 @@ function graph(entry: string, followDynamic: boolean): { files: Set<string>; pac
     return { files, packages };
 }
 
-describe('electron-updater is the helper’s alone', () => {
+/*
+ * electron-updater is imported by the helper mode. main's STATIC graph and genie-host's WHOLE graph never import it; the
+ * window's emergency path (no host could start) loads it lazily with `import()` until P6 removes that path — the same
+ * exception as compose's in-window hosting.
+ */
+describe('electron-updater: the helper mode imports it; main statically and genie-host never; the window’s emergency path lazily until P6', () => {
     const port = resolve('src/main/electron-updater-port.ts');
 
     it('the helper mode’s import graph reaches it (the control)', () => {
@@ -445,7 +491,7 @@ describe('electron-updater is the helper’s alone', () => {
         expect(host.files.has(port)).toBe(false);
     });
 
-    it('main’s static graph never reaches it', () => {
+    it('main’s static graph never reaches it (its emergency path, no host, loads it lazily until P6)', () => {
         const main = graph('src/main/main.ts', false);
         expect(main.packages.has('electron-updater')).toBe(false);
         expect(main.files.has(port)).toBe(false);
@@ -455,5 +501,81 @@ describe('electron-updater is the helper’s alone', () => {
         const helper = graph('src/main/updater-process.ts', false);
         const naming = [...helper.files].filter((f) => importsOf(f).static.includes('electron-updater'));
         expect(naming).toEqual([port]);
+    });
+});
+
+describe('a failed install, told to the next window once', () => {
+    const record = (home: string): UpdateFailedRecord => ({ at: 42, reason: 'the update was not installed: Genie was still running from its install after 30 s — pid 4242 (Genie).', log: join(home, 'logs', 'genie-updater.log') });
+
+    it('the record round-trips under <home>/runtime/update-failed.json, and clears', () => {
+        const home = mkdtempSync(join(tmpdir(), 'p5b-failed-'));
+        expect(readUpdateFailed(home)).toBeNull();
+        writeUpdateFailed(home, record(home));
+        expect(existsSync(join(home, 'runtime', 'update-failed.json'))).toBe(true);
+        expect(readUpdateFailed(home)).toEqual(record(home));
+        clearUpdateFailed(home);
+        expect(readUpdateFailed(home)).toBeNull();
+    });
+
+    it('the host reads it at start; the FIRST local window is told, with the log’s path; a second window and a restart are not', async () => {
+        const home = mkdtempSync(join(tmpdir(), 'p5b-failed-'));
+        writeUpdateFailed(home, record(home));
+        const r = rig({ failed: readUpdateFailed(home), clearFailed: () => clearUpdateFailed(home) });
+        const first = await r.window();
+        const told: UpdateFailedRecord[] = [];
+        // Subscribed after the link, as main is: the notice waits for it.
+        first.replica.onFailedInstall((n) => { told.push(n); });
+        expect(told).toEqual([record(home)]);
+        expect(readUpdateFailed(home)).toBeNull();
+        const second = await r.window();
+        const toldSecond: UpdateFailedRecord[] = [];
+        second.replica.onFailedInstall((n) => { toldSecond.push(n); });
+        // CONTROL that the second window would hear one: the first did, over the same path.
+        expect(toldSecond).toEqual([]);
+        // A restart: a new host reads the record again, and there is none.
+        const restarted = rig({ failed: readUpdateFailed(home) });
+        const third = await restarted.window();
+        const toldThird: UpdateFailedRecord[] = [];
+        third.replica.onFailedInstall((n) => { toldThird.push(n); });
+        expect(toldThird).toEqual([]);
+    });
+
+    it('a non-local link is never told', async () => {
+        const home = mkdtempSync(join(tmpdir(), 'p5b-failed-'));
+        writeUpdateFailed(home, record(home));
+        const r = rig({ failed: readUpdateFailed(home), clearFailed: () => clearUpdateFailed(home) });
+        const other = await r.window(false);
+        const told: UpdateFailedRecord[] = [];
+        other.replica.onFailedInstall((n) => { told.push(n); });
+        expect(told).toEqual([]);
+        expect(readUpdateFailed(home)).toEqual(record(home));
+    });
+
+    it('relaunch: the installed executable (or the AppImage), the window’s own switches, never the updater mode', () => {
+        expect(relaunchSpec({ file: exe, args: ['/app', '--updater', '--no-sandbox'] }, {})).toEqual({ file: exe, args: ['/app', '--no-sandbox'] });
+        expect(relaunchSpec({ file: '/tmp/.mount_Genie/genie', args: ['--updater'] }, { APPIMAGE: '/home/w/Genie.AppImage' })).toEqual({ file: '/home/w/Genie.AppImage', args: [] });
+    });
+
+    it('Genie is started again DETACHED, as an Electron', () => {
+        const spawned: Array<{ file: string; args: readonly string[]; options: { detached?: boolean; env?: NodeJS.ProcessEnv } }> = [];
+        const fakeSpawn = ((file: string, args: readonly string[], options: { detached?: boolean; env?: NodeJS.ProcessEnv }) => {
+            spawned.push({ file, args, options });
+            return { pid: 5150, on: () => {}, unref: () => {} };
+        }) as never;
+        expect(spawnGenieWindow({ file: exe, args: ['/app'] }, { ELECTRON_RUN_AS_NODE: '1', PATH: '/usr/bin' }, fakeSpawn)).toBe(5150);
+        expect(spawned[0]).toMatchObject({ file: exe, args: ['/app'], options: { detached: true } });
+        expect(spawned[0]!.options.env?.ELECTRON_RUN_AS_NODE).toBeUndefined();
+    });
+
+    it('wired: the helper records and relaunches; the host reads, clears and relaunches; the window says it on the Deck', () => {
+        const helper = strip('src/main/updater-process.ts');
+        expect(helper).toMatch(/recordFailure: \(reason\) => \{ writeUpdateFailed\(home,/);
+        expect(helper).toMatch(/relaunch: \(\) => \{ spawnGenieWindow\(relaunchSpec\(\{ file: process\.execPath, args: process\.argv\.slice\(1\) \}, process\.env\), process\.env\)/);
+        const host = strip('src/main/genie-host.ts');
+        expect(host).toMatch(/failed: readUpdateFailed\(home\),/);
+        expect(host).toMatch(/clearFailed: \(\) => \{ clearUpdateFailed\(home\); \}/);
+        expect(host).toMatch(/handOverFailed: \(reason, launch\) => \{[\s\S]{0,300}writeUpdateFailed\(home,[\s\S]{0,300}spawnGenieWindow\(relaunchSpec\(launch, process\.env\)/);
+        const main = strip('src/main/main.ts');
+        expect(main).toMatch(/onFailedInstall\(\(notice\) => \{[\s\S]{0,300}mainErrors\.record\('update-failed'/);
     });
 });

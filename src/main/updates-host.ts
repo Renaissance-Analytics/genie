@@ -77,6 +77,33 @@ export interface UpdatesServiceOptions {
     readonly installWaitMs?: number;
     readonly defer?: (fn: () => void, ms: number) => void;
     readonly log?: (line: string) => void;
+    /** A failed install's record, read at this host's start (`readUpdateFailed`): told to the first local window, once. */
+    readonly failed?: UpdateFailedRecord | null;
+    /** Clear the record once a window has been told. */
+    readonly clearFailed?: () => void;
+    /** The helper could not be handed the install (it went): record why and start Genie again. */
+    readonly handOverFailed?: (reason: string, launch: HelperLaunch) => void;
+}
+
+/** Why the last install did not happen, for the next window (`<home>/runtime/update-failed.json`). */
+export interface UpdateFailedRecord {
+    readonly at: number;
+    readonly reason: string;
+    /** Where the updater's own log is. */
+    readonly log: string;
+}
+
+export function readUpdateFailed(_home: string): UpdateFailedRecord | null {
+    return null;
+}
+
+export function writeUpdateFailed(_home: string, _record: UpdateFailedRecord): void {}
+
+export function clearUpdateFailed(_home: string): void {}
+
+/** How to start Genie again after an install that did not happen: the installed executable, no updater mode. */
+export function relaunchSpec(launch: HelperLaunch, _env: NodeJS.ProcessEnv): HelperLaunch {
+    return launch;
 }
 
 interface LinkedHelper {

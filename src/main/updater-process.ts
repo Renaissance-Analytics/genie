@@ -40,6 +40,8 @@ async function runUpdaterProcess(): Promise<void> {
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         now: Date.now,
         quit: () => { app.quit(); },
+        recordFailure: () => {},
+        relaunch: () => {},
         log,
     });
 }

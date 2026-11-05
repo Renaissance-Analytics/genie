@@ -105,6 +105,10 @@ export interface UpdaterHelperPorts {
     now(): number;
     /** The helper ends (app.quit). */
     quit(): void;
+    /** An install that did not happen: why, for the next window (update-failed.json). */
+    recordFailure(reason: string): void;
+    /** Start Genie again (the version still installed): a person who clicked Install is never left with no Genie. */
+    relaunch(): void;
     log(line: string): void;
     /** How long with nothing asked before it leaves. Default `HELPER_IDLE_MS`. */
     idleMs?: number;
