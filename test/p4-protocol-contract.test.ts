@@ -63,6 +63,14 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
 };
 
 type Result = { ok: true; value: unknown } | { ok: false; reason: string };
+// Family5 starts local; the owner-family suite supplies positive business ports for every bridge row.
+Object.assign(ROWS, {
+    'appInbox.state': ['work'], 'appInbox.createKey': ['work', 'fixture'], 'appInbox.revokeKey': ['work', 'key_fixture'],
+    'appInbox.source': ['work', 'allow', 'site', 'site_fixture'],
+    'deviceLink.hosts': [], 'deviceLink.forget': ['wss://example.test/genie'], 'deviceLink.adopt': ['wss://example.test/genie', 'synthetic-token'],
+    'tynnNetwork.workstations': [], 'tynnNetwork.setRole': ['ws_fixture', 'pilot', 'synthetic-code'],
+    'tynnNetwork.shares.list': [null], 'tynnNetwork.shares.mint': [{ workspaceId: null, capability: 'readonly', expiresInDays: 7 }], 'tynnNetwork.shares.revoke': ['share_fixture'],
+});
 type ResultFrame = Extract<WireMessage, { kind: 'result' }>;
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 async function directResult(invoke: () => Promise<unknown>): Promise<Result> {

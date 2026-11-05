@@ -1,5 +1,5 @@
 import type { LocalFramePort } from '../core/local-frame.js';
-import type { GenieBridge } from './bridge.js';
+import type { GenieBridge, LocalOwnerBridge } from './bridge.js';
 import { localTransport } from './local-transport.js';
 import { connectRemote, type RemoteClient } from './remote-bridge.js';
 
@@ -31,7 +31,7 @@ const ATTEMPTS = 5;
 const BACKOFF_MS = 250;
 
 /** One session per pageBridge. Only moved calls wait for it; unmoved preload methods remain available. */
-export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents } & HostFamily {
+export function localSession(port: LocalFramePort | undefined): { control: LocalProtocolControl; workspaces: Pick<Workspaces, WorkspaceProtocolKey>; agents: Agents; owner: LocalOwnerBridge } & HostFamily {
     let state: LocalProtocolState = { phase: 'starting', reason: null, revision: 0 };
     const listeners = new Set<() => void>();
     const settingsListeners = new Set<(id: string) => void>();
@@ -107,7 +107,31 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
         if (!client || state.phase !== 'ready') throw new Error(state.reason ?? 'The connection to Genie closed. Retry to reconnect.');
         return call(client.bridge);
     };
+    // The same admitted local client, with the same read/rejection and recovery semantics as the other moved families.
+    const ownerRead = <T>(call: (owner: LocalOwnerBridge) => Promise<T>): Promise<T> => read(() => call(client!.localOwner!));
     return {
+        owner: {
+            appInbox: {
+                state: (id) => ownerRead(b => b.appInbox.state(id)),
+                createKey: (id, name) => ownerRead(b => b.appInbox.createKey(id, name)),
+                revokeKey: (id, key) => ownerRead(b => b.appInbox.revokeKey(id, key)),
+                source: (id, op, kind, source) => ownerRead(b => b.appInbox.source(id, op, kind, source)),
+            },
+            deviceLink: {
+                hosts: () => ownerRead(b => b.deviceLink.hosts()),
+                forget: (url) => ownerRead(b => b.deviceLink.forget(url)),
+                adopt: (url, token) => ownerRead(b => b.deviceLink.adopt(url, token)),
+            },
+            tynnNetwork: {
+                workstations: () => ownerRead(b => b.tynnNetwork.workstations()),
+                setRole: (id, role, code) => ownerRead(b => b.tynnNetwork.setRole!(id, role, code)),
+                shares: {
+                    list: (id) => ownerRead(b => b.tynnNetwork.shares!.list(id)),
+                    mint: (input) => ownerRead(b => b.tynnNetwork.shares!.mint(input)),
+                    revoke: (id) => ownerRead(b => b.tynnNetwork.shares!.revoke(id)),
+                },
+            },
+        },
         control: {
             state: () => state,
             onState: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },

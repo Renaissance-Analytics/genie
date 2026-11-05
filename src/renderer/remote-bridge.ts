@@ -33,6 +33,8 @@ export interface RemoteState {
 }
 
 export interface RemoteClient {
+    /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
+    readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
     readonly bridge: GenieBridge;
     readonly ready: Promise<{ ok: true } | { ok: false; reason: string }>;
     state(): RemoteState;
@@ -227,6 +229,36 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     };
     const watchers = new Map<string, number>();
 
+    // Native type guards can see bigint or cyclic objects. Keep their refusal order on the host,
+    // and send only string slots (or null), without serializing an invalid object's contents.
+    const ownerText = (value: unknown): string | null => typeof value === 'string' ? value : null;
+    const localOwner: import('./bridge.js').LocalOwnerBridge | undefined = local ? {
+        appInbox: {
+            state: (id) => read('appInbox.state', ownerText(id)),
+            createKey: (id, name) => read('appInbox.createKey', ownerText(id), ownerText(name)),
+            revokeKey: (id, key) => read('appInbox.revokeKey', ownerText(id), ownerText(key)),
+            source: (id, op, kind, source) => read('appInbox.source', ownerText(id), ownerText(op), ownerText(kind), ownerText(source)),
+        },
+        deviceLink: {
+            hosts: () => read('deviceLink.hosts'),
+            forget: (url) => read('deviceLink.forget', ownerText(url)),
+            adopt: (url, token) => read('deviceLink.adopt', ownerText(url), ownerText(token)),
+        },
+        tynnNetwork: {
+            workstations: () => read('tynnNetwork.workstations'),
+            setRole: (id, role, code) => read('tynnNetwork.setRole', ownerText(id), ownerText(role), ownerText(code)),
+            shares: {
+                list: (id) => read('tynnNetwork.shares.list', ownerText(id)),
+                mint: (input) => {
+                    // The native handler read exactly these fields; unrelated object contents never reached mintShareLink.
+                    const i = (input ?? {}) as { workspaceId?: unknown; capability?: unknown; expiresInDays?: unknown };
+                    return read('tynnNetwork.shares.mint', { workspaceId: ownerText(i.workspaceId),
+                        capability: i.capability === 'readonly' ? 'readonly' : 'control', expiresInDays: typeof i.expiresInDays === 'number' ? i.expiresInDays : 7 });
+                },
+                revoke: (id) => read('tynnNetwork.shares.revoke', ownerText(id)),
+            },
+        },
+    } : undefined;
     const bridge: GenieBridge = {
         snapshot: () => read<GenieSnapshot>('snapshot'),
         subscribe: (onChange) => on('snapshot', (p) => onChange(p as GenieSnapshot)),
@@ -442,6 +474,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
 
     return {
         bridge,
+        ...(localOwner ? { localOwner } : {}),
         ready,
         state: () => state,
         onState: (l) => { stateListeners.add(l); return () => { stateListeners.delete(l); }; },

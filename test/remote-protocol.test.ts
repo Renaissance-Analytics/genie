@@ -82,7 +82,8 @@ describe('the capability table', () => {
         // 85 since the phone's files (genie#1346): `files.children`, `files.open`, `files.readMedia` (reads) and `files.upload`
         // (a write) — workspace-scoped, through the panel's confined files host.
         // 88 with P4's local-only notes, headroom and account retry; activity interests are connection controls.
-        expect(REMOTE_METHODS.length).toBe(88);
+        // 100 with family5's twelve owner operations; every one starts local.
+        expect(REMOTE_METHODS.length).toBe(100);
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');

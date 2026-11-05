@@ -249,6 +249,11 @@ function useAgentDetail(
     return state;
 }
 
+/** The own window's cached bridge, including local protocol families and retained native window/channel ports. */
+function ownWindowBridge(): GenieBridge | undefined {
+    return typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie);
+}
+
 /**
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
@@ -257,7 +262,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     // THE HOST DIALS OTHER MACHINES AND HOLDS THEIR TOKENS (P3.4 cut e): this window has a channel, and the addresses that are paired.
-    const link = typeof window === 'undefined' ? undefined : window.genie?.deviceLink;
+    const local = ownWindowBridge();
+    const link = local?.deviceLink;
     const pairedNow = useRef<string[]>([]);
     const unmoved = useRef<string[]>([]);
     const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage, {
@@ -280,7 +286,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const [relayConnect, setRelayConnect] = useState<RelayConnect>({ kind: 'working', step: 'tynn' });
     const last = useRef<{ url: string; label: string } | null>(null);
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
-    const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
+    const net = local?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
     // Read Tynn's list again: after a role change (W6), and each time the Connect menu or ⌘K opens (M0 finding 1). The last
     // list stays on screen while it is read; a failure keeps it and says why, with Retry (core/connect-machine.ts).
@@ -1017,7 +1023,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [connectDialog, setConnectDialog] = useState<'link' | 'workstations' | null>(null);
     // A role change (genie#1278 W6) through main, which asks Tynn; then the list is read again, so it shows Tynn's answer.
     const setWorkstationRole = async (w: TynnWorkstationRow, role: 'pilot' | 'drone', code: string): Promise<RoleChange> => {
-        const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
+        const net = ownWindowBridge()?.tynnNetwork;
         if (!net?.setRole) return { ok: false, reason: 'Roles change from Genie on a desktop' };
         const result = await net.setRole(w.id, role, code);
         if (result.ok) remote.reloadTynnWorkstations();
@@ -1199,16 +1205,16 @@ function DesktopApp({ bridge }: AppProps) {
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
-    const shares = !remote.state?.connected && typeof window !== 'undefined' ? window.genie?.tynnNetwork?.shares : undefined;
+    const shares = !remote.state?.connected ? ownWindowBridge()?.tynnNetwork?.shares : undefined;
     const [share, setShare] = useState<{ workspaceId: string; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
     const readShares = (forWorkspace: string) => {
         void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
     };
     /*
-     * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host (preload `appInbox`) — never from a window
+     * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host's local protocol — never from a window
      * driving another machine. Each action shows itself in flight, then its result; a new script key is shown once.
      */
-    const appInboxBridge = !remote.state?.connected && typeof window !== 'undefined' ? window.genie?.appInbox : undefined;
+    const appInboxBridge = !remote.state?.connected ? ownWindowBridge()?.appInbox : undefined;
     const [appInboxView, setAppInboxView] = useState<{ workspaceId: string; state: AppInboxCardState | null; busy: AppInboxCardProps['busy']; revealed: AppInboxCardProps['revealed']; outcome: AppInboxCardProps['outcome'] } | null>(null);
     useEffect(() => {
         if (!appInboxBridge || !workspaceId) { setAppInboxView(null); return; }
