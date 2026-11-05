@@ -165,7 +165,7 @@ describe('wired', () => {
 
     it('the same local client exposes it through the page session', () => {
         expect(preload).not.toContain('genie:tynn-workstation-role');
-        expect(client).toContain("setRole: (id, role, code) => read('tynnNetwork.setRole', id, role, code)");
+        expect(client).toContain("setRole: (id, role, code) => read('tynnNetwork.setRole', ownerText(id), ownerText(role), ownerText(code))");
         expect(session).toContain('setRole: (id, role, code) => ownerRead(b => b.tynnNetwork.setRole!(id, role, code))');
     });
 
