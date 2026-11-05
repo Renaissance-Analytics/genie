@@ -1,3 +1,4 @@
+import type { StreamEvent } from '../core/stream-event.js';
 import { WorkstationReplica } from './workstation-replica.js';
 import { DeviceLinkReplica } from './device-link-replica.js';
 import type { SyncResult } from '../core/integrations.js';
@@ -899,6 +900,11 @@ export class SessionEngineClient {
 
     ended(agentId: AgentId): Promise<StopVerdict | null> {
         return this.#value<StopVerdict | null>('engine.ended', [agentId], null);
+    }
+
+    /** The agent's recorded rows, bounded, as the host reads them from its own store (`SessionHost.historyRows`). */
+    historyRows(agentId: AgentId, options: { limit: number }): Promise<readonly { event: StreamEvent; at: number | null }[]> {
+        return this.#value<readonly { event: StreamEvent; at: number | null }[]>('engine.historyRows', [agentId, { limit: options.limit }], []);
     }
 
     async settled(): Promise<void> {

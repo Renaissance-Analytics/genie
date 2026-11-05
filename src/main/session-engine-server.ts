@@ -496,6 +496,10 @@ export class SessionEngineServer {
                 return host.deliverOwed(id(), (args[1] as { text: string; by: string } | undefined) ?? undefined);
             case 'engine.ended':
                 return host.ended(id());
+            case 'engine.historyRows': {
+                const o = (args[1] ?? {}) as { limit?: unknown };
+                return host.historyRows(id(), { limit: typeof o.limit === 'number' ? o.limit : 0 });
+            }
             case 'engine.settled':
                 await host.settled();
                 return true;

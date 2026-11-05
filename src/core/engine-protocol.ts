@@ -46,6 +46,8 @@ export const ENGINE_METHODS = [
     'engine.resumeLimit',
     'engine.clearDesignLogin',
     'engine.stopAll',
+    // An agent's recorded rows, bounded, for a provider switch's carry-over (Tynn story #380): read by the host from its own store.
+    'engine.historyRows',
     // Subscriptions: an agent's ledger is sent only while the window watches it (cheap, incremental — patches only).
     'engine.watchLedger',
     'engine.unwatchLedger',

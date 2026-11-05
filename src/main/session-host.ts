@@ -1370,6 +1370,25 @@ export class SessionHost {
     }
 
     /**
+     * WHAT A PROVIDER SWITCH CARRIES (Tynn story #380, core/carry-over.ts): the agent's recorded rows, the newest `limit`,
+     * read from THIS host's own store once its writes have landed — the window never reads the thread log itself. Tool
+     * input and output and thinking are left out: the carry-over never uses them, and they are the bulk of a ledger.
+     */
+    async historyRows(agentId: AgentId, options: { limit: number }): Promise<readonly { event: StreamEvent; at: number | null }[]> {
+        await this.settled();
+        const limit = Math.max(0, Math.min(HISTORY_LIMIT, Math.floor(options.limit)));
+        const history = await readHistory(this.#store(), agentId, { limit });
+        return history.rows.flatMap((r): { event: StreamEvent; at: number | null }[] => {
+            if (r.event.kind === 'think') return [];
+            if (r.event.kind === 'tool') {
+                const { rawInput: _input, output: _output, ...tool } = r.event;
+                return [{ event: { ...tool, rawInput: null }, at: r.at }];
+            }
+            return [{ event: r.event, at: r.at }];
+        });
+    }
+
+    /**
      * WHAT THE AGENT VIEW AND THE CHAT SHOW: the agent's recorded history, then this run. Claude resumes a conversation
      * without replaying it, so this run alone showed one turn of an agent holding 740k tokens of context (the owner,
      * beta.21) — and a stopped agent showed nothing at all. The history is read from the thread the session writes,
