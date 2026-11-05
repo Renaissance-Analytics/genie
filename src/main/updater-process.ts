@@ -2,7 +2,7 @@ import { app } from 'electron';
 import { join } from 'node:path';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { linkToRunningHost, pidAlive, spawnGenieWindow } from './engine-launch.js';
-import { genieHome, runtimeDir } from './paths.js';
+import { genieRoot, runtimeDir } from './paths.js';
 import { listProcessesAsync } from './process-list.js';
 import { connectUpdaterLink, runUpdaterHelper } from './updater-helper.js';
 import { relaunchSpec, writeUpdateFailed } from './updates-host.js';
@@ -17,7 +17,7 @@ import { relaunchSpec, writeUpdateFailed } from './updates-host.js';
  * collides with the window's lock or its Chromium profile (the browser process's rule, P2b).
  */
 
-const home = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : genieHome();
+const home = genieRoot();
 app.setPath('userData', join(runtimeDir(home), '.updater'));
 const log = (line: string): void => { console.log(`[genie-updater] ${new Date().toISOString()} ${line}`); };
 

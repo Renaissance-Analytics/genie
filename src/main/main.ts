@@ -119,6 +119,7 @@ import { raisesApprovals, realListModels, SessionHost, providerBinary } from './
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
+import { scheduleScratchSweep, scratchArea } from './scratch-area.js';
 import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
@@ -707,6 +708,8 @@ function issueWatchSummaryFor(workspaceId: string): IssueWatchSummary {
 let terminals: TerminalsApi | null = null;
 /** `Log in to <provider>` (#967): the login window, reached from the Agent view, the chat and the tray. */
 let loginHost: LoginHost | null = null;
+/** Stops the deferred sweep of old scratch folders (scratch-area.ts); called on quit. */
+let scratchSweepStop: (() => void) | null = null;
 let filesHost: FilesHost | null = null;
 /**
  * THE FILE WATCHER'S VIEWS (the host split, P2.2; plan §11b): genie-host's hub over the engine link, or — only when no host
@@ -1170,7 +1173,7 @@ const loginItemPort: LoginItemPort = {
 /** Where an agent runs: its workspace's path. The OS agent runs in the user's data directory. */
 function cwdFor(record: AgentRecord): string {
     // The OSA belongs to the workstation: it runs in its own home, written at boot from its baked-in instructions.
-    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir();
+    if (record.workspaceId === OS_WORKSPACE) return osaHomeDir(genieHome());
     const workspace = registry?.snapshot().workspaces?.find((w) => w.id === record.workspaceId);
     return workspace?.path ?? app.getPath('userData');
 }
@@ -1269,7 +1272,7 @@ let mcpToolList: readonly { name: string; description: string }[] = [];
 const sessionCallers = new CallerBook();
 /** An agent session calling Genie's MCP, by its caller key: the agent and its workspace, now. */
 function sessionCaller(key: string): Caller | null {
-    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir()) : null;
+    return registry ? sessionCallerOf(sessionCallers, key, registry, osaHomeDir(genieHome())) : null;
 }
 const mcpEnv = (): Record<string, string> => { const e = mcpEndpointNow(); return e ? { GENIE_MCP_URL: e.url, GENIE_MCP_TOKEN: e.token } : {}; };
 let browserPane: BrowserPane | null = null;
@@ -1671,7 +1674,7 @@ async function boot(): Promise<void> {
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
     await writeOsaHome({
-        dir: osaHomeDir(),
+        dir: osaHomeDir(genieHome()),
         // On an Omarchy host, Omarchy's own agent skills come with it (main/omarchy-skills.ts); elsewhere, nothing about Omarchy.
         files: osaHomeFiles('normal', { version: app.getVersion(), platform: process.platform, installDir: installDir(process.execPath), genieHome: genieHome(), userData: app.getPath('userData'), omarchy: await omarchyFacts() }),
         fs: {
@@ -2043,7 +2046,12 @@ async function boot(): Promise<void> {
     settingApplier = new SettingApplier(agentOps, (id) => (host ? agentShells(host.rowsFor(id)).count : 0));
     // `Log in to <provider>` (the owner, 2026-10-18): the provider's own login in a scratch folder, in a window of its own.
     // Signed in (its status command exits 0), every agent that login signed out is restarted on its thread and told.
+    // GENIE'S SCRATCH (P7): this process's folder under `<root>/cache/tmp`, made on first use with no process-table read;
+    // the folders of Genies that are gone are swept deferred, and the sweep is stopped on quit.
+    const scratch = scratchArea(genieHome());
+    scratchSweepStop = scheduleScratchSweep(genieHome(), { log: (line) => console.warn(line) });
     const logins = new LoginHost({
+        scratch: () => scratch.directory(),
         terminals: terminalsForTakeOver,
         // A login starts from the tray or the agent view's Log in button only — the person's click (genie#1235).
         openWindow: (route) => openTakeOverWindow(route, 'user-gesture'),
@@ -2412,7 +2420,7 @@ async function boot(): Promise<void> {
     // THE ENVELOPE WIZARD'S DISK (envelope-fs.ts): the same functions test/envelope-build.test.ts drives. Its git goes through
     // workspaceOps.fs above (gitAddSubmodule, gitCommit), so a submodule from a GitHub remote clones with the sign-in, as the clone does.
     // Fork rows (Add workspace parity item 12) fork with the GitHub sign-in, only while it is signed in.
-    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts(), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
+    const envelopePorts: EnvelopePorts = { ...nodeEnvelopePorts({ stagingBase: () => scratch.directory() }), github: () => (githubAccount && githubAccount.view().status === 'signed-in' ? githubAccount : null) };
     // Import from Git's browser (item 8): what the sign-in reaches; signed out says so.
     const githubRepos = (): Promise<RepoListing> => (githubAccount ? githubAccount.repoListing() : Promise.resolve({ status: 'signed-out' }));
     // THE REPO REGISTRY (§6.1): the envelope's repos[], through the same fs ports; the host repo is protected in core.
@@ -4092,6 +4100,8 @@ app.on('before-quit', (event) => {
     if (step === 'close-ui') { event.preventDefault(); closeUi('the quit’s answer'); return; }
     autoCheckStop?.();
     autoCheckStop = null;
+    scratchSweepStop?.();
+    scratchSweepStop = null;
     // §7.6: remember who was running, BEFORE anything is stopped; the write finishes, then the quit resumes.
     if (step === 'record') {
         event.preventDefault();
