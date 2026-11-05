@@ -19,6 +19,8 @@ if (entry === 'doctor') {
     void import('./doctor.js').then((m) => m.runDoctor());
 } else if (entry === 'browser') {
     void import('./browser-process.js');
+} else if (entry === 'updater') {
+    void import('./updater-process.js');
 } else {
     void import('./main.js');
 }

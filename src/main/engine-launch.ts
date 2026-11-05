@@ -120,6 +120,36 @@ export function spawnBrowserProcess(launch: { readonly file: string; readonly ar
     }
 }
 
+/**
+ * THE UPDATER HELPER (P5b), started by genie-host: Genie's own executable in its `--updater` mode, a real Electron (not as
+ * Node), DETACHED. Measured on Windows: a host's non-detached children die with it (libuv's kill-on-close job), and an
+ * install has the host exit before the helper runs the installer. Its output goes to `logs/genie-updater.log`.
+ */
+export function spawnUpdaterProcess(launch: { readonly file: string; readonly args: readonly string[] }, ports: Pick<EngineLaunchPorts, 'logsDir' | 'env'>, spawn: typeof spawnChild = spawnChild): number | null {
+    mkdirSync(ports.logsDir, { recursive: true });
+    const out = openSync(join(ports.logsDir, 'genie-updater.log'), 'a');
+    const env = { ...ports.env };
+    delete env['ELECTRON_RUN_AS_NODE'];
+    try {
+        const child = spawn(launch.file, [...launch.args], { detached: true, windowsHide: true, stdio: ['ignore', out, out], env });
+        child.on('error', () => {});
+        child.unref();
+        return child.pid ?? null;
+    } finally {
+        closeSync(out);
+    }
+}
+
+/** Genie's window again, after an install that did not happen (P5b): detached, a real Electron, nothing held of the caller. */
+export function spawnGenieWindow(launch: { readonly file: string; readonly args: readonly string[] }, env: NodeJS.ProcessEnv, spawn: typeof spawnChild = spawnChild): number | null {
+    const own = { ...env };
+    delete own['ELECTRON_RUN_AS_NODE'];
+    const child = spawn(launch.file, [...launch.args], { detached: true, windowsHide: false, stdio: 'ignore', env: own });
+    child.on('error', () => {});
+    child.unref();
+    return child.pid ?? null;
+}
+
 export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> {
     const alive = ports.alive ?? pidAlive;
     const read = ports.readFile ?? readOrNull;

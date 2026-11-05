@@ -184,12 +184,11 @@ import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
-import { UpdateHost } from './updater.js';
+import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
 import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
-import { realElectronUpdaterPort } from './electron-updater-port.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { RESUME_AFTER_RESTART, relaunchPlan } from '../core/upgrade-drain.js';
 import { recordShutdown, recordThenStopAll } from './shutdown-record.js';
@@ -755,7 +754,8 @@ function activityOf(raw: unknown): Record<string, ActivityFeed> {
 let askerLivenessKnown = false;
 /** A model or tool-setting change waiting for its agent to be free (`SettingApplier`); set where the agent ops are built. */
 let settingApplier: SettingApplier | null = null;
-let updates: UpdateHost | null = null;
+/** The updater as this window reads and drives it: genie-host's, through a replica (P5b); the window's own only on the emergency path. */
+let updates: Pick<UpdateHost, 'state' | 'check' | 'download' | 'install' | 'refreshNotes' | 'onChange' | 'setChannel'> | null = null;
 /**
  * ONE QUIT (core/quit.ts `quitSequence`): asked at most once, the running set recorded at most once (§7.6 — an
  * upgrade's drain records it itself, so the quit does not overwrite it with the empty list it leaves), the shutdown
@@ -1509,6 +1509,9 @@ async function boot(): Promise<void> {
                 handProxyAnswers = () => reportProxies(client, lifecycleLog);
                 void handProxyAnswers();
                 publishBrowserFacts();
+                // How the host starts its updater helper (P5b): this executable, in a dev run this app's path, and the switches this
+                // window was started with that an Electron needs to start at all here (the sandbox, the display, the password store).
+                void client.updates().publishLaunch({ file: process.execPath, args: [...(app.isPackaged ? [] : [app.getAppPath()]), '--updater', ...process.argv.filter((a) => /^--(no-sandbox|ozone-platform=|password-store=)/.test(a))] }).catch(() => {});
                 void client.browserCall('whoami', []).then((id) => { browserConnection = String(id); }, () => {});
                 cookieBridge?.relinked();
                 client.onBrowserEvent((event) => {
@@ -1781,48 +1784,71 @@ async function boot(): Promise<void> {
     theRegistry.setObservedProbe((id) => takeOversNow.probe(id));
 
     /*
-     * UPDATES (§7). The host drives electron-updater; the renderer asks and shows. The install
-     * directory is wherever this executable lives — `%LOCALAPPDATA%\Programs\Genie` when
-     * installed, Electron's own dist in a dev run — and §7.2's teardown scans exactly that.
-     * One check soon after boot and one every few hours (AUTO_CHECK) — v1 checked at boot, and
-     * 2.0.0-beta.5, which never did, could not learn that the next build existed (genie2#91).
-     * Nothing downloads by itself.
+     * UPDATES (§7), GENIE-HOST'S (the host split, P5b; updates-host.ts). The host holds the state, checks on its schedule —
+     * and with no window open downloads what it finds — and runs the install: the agents drained, its hosting stopped, the
+     * teardown scan, then its updater helper (Genie's own executable in its `--updater` mode) waits for every Genie process
+     * to be gone and runs the installer. This window reads the host's state through a replica and sends the person's check,
+     * download, install and channel. When the host answers an install it is on its way out: this window quits, asking
+     * nothing, and records nothing over the record the host's drain wrote.
      */
-    updates = new UpdateHost({
-        port: realElectronUpdaterPort(),
-        // What is in an update (core/update-notes.ts): GitHub's releases, whose bodies are our own Markdown notes. The repo
-        // is public, so no token; 10 s at most, and a failure says "unavailable" in the window, never blocks the update.
-        runningVersion: app.getVersion(),
-        releases: async () => {
-            const res = await net.fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
-                headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' },
-                signal: AbortSignal.timeout(10_000),
-            });
-            if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
-            return (await res.json()) as import('../core/update-notes.js').ReleaseLike[];
-        },
-        installDir: dirname(process.execPath),
-        ownPid: process.pid,
-        // Off the event loop (genie#1201): restart-to-install reads and kills without holding the window.
-        processes: listProcessesAsync,
-        kill: killProcessAsync,
-        // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
-        agents: {
-            live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
-            stopAll: recordThenStopAll({
-                markRecorded: () => quit.markRecorded(),
-                record: () => recordShutdownNow(),
-                // Then the agent host itself, gracefully (the host split): it runs on Genie's binary, so the installer must
-                // not find it running — the orphan scan would end it hard.
-                stopAll: async (onLeft) => { await (host?.stopAll(onLeft) ?? Promise.resolve()); await agentEngineLink?.shutdown(); },
-                onRecordError: (error) => {
-                    const why = error instanceof Error ? error.message : String(error);
-                    lifecycleLog(`shutdown-record failed reason=${why}`);
-                    console.error(`[genie] the agents to start again could not be recorded: ${why}`);
-                },
-            }),
-        },
-    });
+    if (agentEngineLink !== null) {
+        const replica = agentEngineLink.client.updates();
+        replica.onInstalling(() => {
+            lifecycleLog('update: the host is installing; this window quits');
+            quit.markRecorded();
+            quit.choose('shut-down');
+            setTimeout(() => { app.quit(); }, QUIT_DELAY_MS);
+        });
+        // Why the last install did not happen (the host read its record): said on the Deck, in words, with the log's path.
+        replica.onFailedInstall((notice) => {
+            mainErrors.record('update-failed', new Error(`Genie’s update was not installed: ${notice.reason} The details are in ${notice.log}.`));
+        });
+        updates = replica;
+    } else {
+        /*
+         * THE EMERGENCY PATH ONLY (no genie-host could start; plan §4.1): this window drives electron-updater itself, as it did
+         * before P5b, so a broken host can still be updated away from. Loaded lazily — the window's own import graph never
+         * holds the library (the helper mode's does).
+         */
+        const { realElectronUpdaterPort } = await import('./electron-updater-port.js');
+        const own = new UpdateHost({
+            port: realElectronUpdaterPort(),
+            // What is in an update (core/update-notes.ts): GitHub's releases, whose bodies are our own Markdown notes. The repo
+            // is public, so no token; 10 s at most, and a failure says "unavailable" in the window, never blocks the update.
+            runningVersion: app.getVersion(),
+            releases: async () => {
+                const res = await net.fetch('https://api.github.com/repos/Renaissance-Analytics/genie/releases?per_page=100', {
+                    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'Genie' },
+                    signal: AbortSignal.timeout(10_000),
+                });
+                if (!res.ok) throw new Error(`GitHub releases: HTTP ${res.status}`);
+                return (await res.json()) as import('../core/update-notes.js').ReleaseLike[];
+            },
+            installDir: dirname(process.execPath),
+            ownPid: process.pid,
+            // Off the event loop (genie#1201): restart-to-install reads and kills without holding the window.
+            processes: listProcessesAsync,
+            kill: killProcessAsync,
+            // §7.4: every session ends with the upgrade; no agent is asked for a handoff first (the owner, 2026-10-12).
+            agents: {
+                live: () => (registry?.snapshot().agents ?? []).filter((a) => host?.probe(a.id as AgentId)?.running === true).map((a) => ({ id: a.id, name: a.name })),
+                stopAll: recordThenStopAll({
+                    markRecorded: () => quit.markRecorded(),
+                    record: () => recordShutdownNow(),
+                    // Then the agent host itself, gracefully (the host split): it runs on Genie's binary, so the installer must
+                    // not find it running — the orphan scan would end it hard.
+                    stopAll: async (onLeft) => { await (host?.stopAll(onLeft) ?? Promise.resolve()); await agentEngineLink?.shutdown(); },
+                    onRecordError: (error) => {
+                        const why = error instanceof Error ? error.message : String(error);
+                        lifecycleLog(`shutdown-record failed reason=${why}`);
+                        console.error(`[genie] the agents to start again could not be recorded: ${why}`);
+                    },
+                }),
+            },
+        });
+        autoCheckStop = own.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
+        updates = own;
+    }
     updates.onChange(() => { refreshTray(); });
     // Every copy button writes through main (main/clipboard-ipc.ts): in a sandboxed window the page's clipboard can fail silently.
     registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
@@ -1839,7 +1865,6 @@ async function boot(): Promise<void> {
     });
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
-    autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
 
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 

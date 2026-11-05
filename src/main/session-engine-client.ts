@@ -50,6 +50,9 @@ import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './ter
 import type { ForwardedToolCall } from './mcp-host-tools.js';
 import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
+import { UpdatesReplica } from './updates-replica.js';
+import type { UpdateState } from './updater.js';
+import type { UpdateFailedRecord } from './updates-host.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -343,6 +346,14 @@ export class SessionEngineClient {
             case 'hosting.dump':
                 this.hosting().rebase(payload as HostingDump);
                 return;
+            // genie-host's updater (P5b): its whole state, on this window's local link only.
+            case 'updates.dump':
+            case 'updates.event':
+                this.updates().rebase(payload as UpdateState);
+                return;
+            case 'updates.failed':
+                this.updates().failedInstall(payload as UpdateFailedRecord);
+                return;
             case 'hosting.event':
                 this.hosting().apply(payload as HostingEvent);
                 return;
@@ -530,6 +541,18 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#appInbox;
+    }
+
+    #updates: UpdatesReplica | null = null;
+
+    /** genie-host's updater (P5b), as this window reads and drives it. */
+    updates(): UpdatesReplica {
+        this.#updates ??= new UpdatesReplica(async (method, args) => {
+            const reply = await this.call('engine.updates', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        }, process.pid);
+        return this.#updates;
     }
 
     /** genie-host's app door and its keys (P5a.2), as this window reads and changes them. */

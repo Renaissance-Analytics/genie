@@ -37,6 +37,7 @@ import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
+import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -146,6 +147,8 @@ export interface EngineServerOptions {
     readonly flows?: FlowsService;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
+    /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
+    readonly updates?: UpdatesService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     readonly files?: {
@@ -182,6 +185,8 @@ interface Connection {
      * P5d NOTE: a remote or phone path that ever reaches this server must accept as NOT local.
      */
     readonly local: boolean;
+    /** The updater helper's link (P5b): never a window — not counted, sent no dump, open to `engine.updater` alone. */
+    helper: boolean;
 }
 
 export class SessionEngineServer {
@@ -190,6 +195,8 @@ export class SessionEngineServer {
     readonly #records = new Map<string, AgentRecord>();
     readonly #env = new Map<string, Readonly<Record<string, string>>>();
     readonly #connections = new Set<Connection>();
+    /** The updater helper's links (P5b), apart from the windows': nothing a window is sent or counted for reaches them. */
+    readonly #helpers = new Set<Connection>();
     readonly #queue: EngineCallback[] = [];
     readonly #dirty = new Set<string>();
     #cancelFlush: (() => void) | null = null;
@@ -239,6 +246,10 @@ export class SessionEngineServer {
             // A disposable terminal's output and end go to the window that opened it, and no other (Tynn story #378).
             const owner = event.kind === 'list' ? undefined : event.owner;
             for (const conn of this.#connections) if (conn.authed && (owner === undefined || owner === String(conn.id))) this.#event(conn, 'terminals.event', event);
+        });
+        // The updater's state (P5b) travels on LOCAL window links only, as the hosting's does (P4 rules).
+        options.updates?.onEvent((state) => {
+            for (const conn of this.#connections) if (conn.authed && conn.local) this.#event(conn, 'updates.event', state);
         });
     }
 
@@ -318,10 +329,14 @@ export class SessionEngineServer {
 
     /** A connection (a window) arrived: it must say the token before anything else. */
     accept(transport: ClientTransport & { trusted?: () => void }, options: { local?: boolean } = {}): void {
-        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true };
+        const conn: Connection = { id: randomUUID(), transport, authed: false, held: new Map(), watched: new Set(), lastGlobal: '', nextCall: 1, pending: new Map(), local: options.local === true, helper: false };
         this.#connections.add(conn);
         transport.onMessage((text) => this.#onMessage(conn, text));
         transport.onClose(() => {
+            if (this.#helpers.delete(conn)) {
+                this.#options.updates?.helperDropped(conn.id);
+                return;
+            }
             const was = conn.authed;
             this.#connections.delete(conn);
             for (const p of conn.pending.values()) p.reject(new Error('The window closed before it answered.'));
@@ -355,6 +370,13 @@ export class SessionEngineServer {
             conn.authed = true;
             conn.transport.trusted?.();
             conn.transport.send(JSON.stringify({ kind: 'welcome', connectionId: conn.id, host: hostname(), isOwner: true, workspaceId: null, protocol: ENGINE_PROTOCOL, build: this.#options.build, pid: this.#options.pid ?? process.pid }));
+            // THE UPDATER HELPER (P5b), on this host's own endpoint with the token: no dump, never counted as a window.
+            if (message.label === UPDATER_HELPER_LABEL && conn.local) {
+                conn.helper = true;
+                this.#connections.delete(conn);
+                this.#helpers.add(conn);
+                return;
+            }
             this.#dump(conn);
             this.#options.onClients?.(this.clients);
             return;
@@ -387,6 +409,12 @@ export class SessionEngineServer {
         // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
         if (this.#options.hosting && conn.local) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
         if (this.#options.appInbox && conn.local) this.#event(conn, 'appInbox.dump', this.#options.appInbox.dump());
+        if (this.#options.updates && conn.local) {
+            this.#event(conn, 'updates.dump', this.#options.updates.dump());
+            // Why the last install did not happen: the first local window is told, once (P5b).
+            const failed = this.#options.updates.takeFailed();
+            if (failed !== null) this.#event(conn, 'updates.failed', failed);
+        }
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
@@ -413,6 +441,8 @@ export class SessionEngineServer {
     }
 
     async #dispatch(conn: Connection, method: EngineMethod, args: unknown[]): Promise<unknown> {
+        // The updater helper's link calls its own method and nothing else (P5b).
+        if (conn.helper || method === 'engine.updater') return this.#updater(conn, method, args);
         const host = this.#host;
         if (!host) throw new Error('The agent engine is still starting.');
         const id = (i = 0): AgentId => {
@@ -561,6 +591,10 @@ export class SessionEngineServer {
                 if (!this.#options.appInbox) throw new Error('This host runs no app door.');
                 if (!conn.local) throw new Error('The app door’s keys are managed from a local window only.');
                 return this.#options.appInbox.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.updates':
+                if (!this.#options.updates) throw new Error('This host runs no updater.');
+                if (!conn.local) throw new Error('Genie’s updates are driven from a local window only.');
+                return this.#options.updates.call(str(0), Array.isArray(args[1]) ? args[1] : [], { window: true });
             case 'engine.hosting':
                 if (!this.#options.hosting) throw new Error('This host runs no hosting.');
                 if (!conn.local) throw new Error('Genie’s hosting is driven from a local window only.');
@@ -616,6 +650,20 @@ export class SessionEngineServer {
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }
+    }
+
+    /** The updater helper's calls (P5b): `register [pid]`, then its answers. Only a link that said hello as the updater. */
+    #updater(conn: Connection, method: EngineMethod, args: unknown[]): unknown {
+        if (!conn.helper || method !== 'engine.updater') throw new Error('Genie’s updater may call its own method only, and only Genie’s updater may call it.');
+        const updates = this.#options.updates;
+        if (!updates) throw new Error('This host runs no updater.');
+        const name = typeof args[0] === 'string' ? args[0] : '';
+        const rest = Array.isArray(args[1]) ? args[1] as unknown[] : [];
+        if (name === 'register') {
+            const pid = typeof rest[0] === 'number' && Number.isInteger(rest[0]) ? rest[0] : 0;
+            return updates.helperLinked(conn.id, pid, (event) => this.#event(conn, 'updater.event', event));
+        }
+        return updates.helperCall(name, rest, conn.id);
     }
 
     #keychain(): AgentSecrets {
