@@ -174,18 +174,22 @@ export function ChatMailRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMai
 export function ChatDeliveryRow({ m, onOpenMail }: { m: ChatThreadMessage; onOpenMail?: ((messageId: string) => void) | undefined }) {
     return (
         <div data-chat-message={m.id} data-who="delivery" className="flex flex-col gap-1 font-mono text-[11px] text-[var(--fg-3)]">
-            <div className="flex items-center gap-2">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-2">
                 <span className="text-[var(--violet-400)]"><Icon name="mail" size="xs" /></span>
-                <span>{`${m.from} · ${m.text}`}</span>
+                <span className="min-w-0">{`${m.from} · ${m.text}`}</span>
                 {m.at !== null && m.at !== undefined ? <span className="text-[var(--fg-4)]">· <span data-chat-time={m.at}>{clock(m.at)}</span></span> : null}
             </div>
-            <ul className="flex flex-col gap-0.5 pl-5">
+            <ul className="flex min-w-0 flex-col gap-0.5 pl-5">
                 {(m.mail ?? []).map((ref) => {
-                    const body = <><span className="shrink-0 text-[var(--fg-2)]">{`from ${ref.from}`}</span><span className="min-w-0 truncate font-sans text-[12px] text-[var(--fg-2)]">{ref.subject}</span></>;
+                    // Two FLEX ITEMS, so each one-line clip clips: a `truncate` on an inline span keeps its nowrap and
+                    // drops its clip, and the subject ran off the column as one line (the owner, 2026-11-04, Tynn #944).
+                    const body = <><span className="max-w-[45%] shrink-0 truncate text-[var(--fg-2)]">{`from ${ref.from}`}</span><span className="min-w-0 flex-1 truncate font-sans text-[12px] text-[var(--fg-2)]">{ref.subject}</span></>;
                     return (
                         <li key={ref.id} data-delivery-mail={ref.id}>
                             {onOpenMail ? (
-                                <Button size="xs" type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)] justify-start">{body}</Button>
+                                // react-fancy's Button puts its children in ONE label span with no display of its own: made a
+                                // flex row here, so the two spans are flex items inside the button's width.
+                                <Button size="xs" type="button" data-open-mail={ref.id} title="Open this message in the AgentInbox" onClick={() => onOpenMail(ref.id)} labelClassName="flex min-w-0 flex-1 items-baseline gap-2" className="flex w-full min-w-0 items-baseline gap-2 rounded px-1 text-left hover:bg-[var(--bg-2)] justify-start">{body}</Button>
                             ) : (
                                 <div className="flex min-w-0 items-baseline gap-2 px-1">{body}</div>
                             )}
@@ -424,7 +428,22 @@ function ChatFlyoutBody({
         followRef.current = false;
         setLines((n) => n + CHAT_LIVE_LINES);
     };
-    useLayoutEffect(() => { followRef.current = true; setLines(CHAT_LIVE_LINES); }, [thread?.agentId]);
+    /**
+     * JUMP TO LATEST (the owner, 2026-11-04, Tynn #944): whether the thread is at its end, for the button that is there
+     * whenever it is not. Set from the scroll position (`onScroll`), the same test that decides following; its press is
+     * the way back to Following Live — the live 500 lines, the end of the thread, following on.
+     */
+    const [atEnd, setAtEnd] = useState(true);
+    const jumpToLatest = () => {
+        anchorRef.current = null;
+        followRef.current = true;
+        setAtEnd(true);
+        // Paged into history: back to the live window; the layout effect puts the end in view once it is drawn.
+        if (lines > CHAT_LIVE_LINES) setLines(CHAT_LIVE_LINES);
+        const el = scrollRef.current;
+        if (el) el.scrollTop = el.scrollHeight;
+    };
+    useLayoutEffect(() => { followRef.current = true; setAtEnd(true); setLines(CHAT_LIVE_LINES); }, [thread?.agentId]);
     useEffect(() => { onWindowLines?.(lines); }, [lines, onWindowLines]);
     /** History behind what is drawn: messages held but not drawn, or ledger rows not derived yet. */
     const behind = windowStart > 0 || thread?.earlier === true;
@@ -601,13 +620,18 @@ function ChatFlyoutBody({
              * overflow at the start of a scroll container cannot be scrolled to — a long thread lost its top and
              * had no scrollbar. The column is at least as tall as the scroller, so a short thread still sits at the
              * bottom, and a long one grows downward, where scrolling reaches it.
+             *
+             * Both sit in a positioned frame that also holds the Jump to latest layer, so the button floats over the
+             * thread and never moves the layout.
              */}
+            <div data-chat-frame="" className="relative flex min-h-0 flex-1 flex-col">
             <div
                 ref={scrollRef}
                 data-chat-scroll=""
                 onScroll={(e) => {
                     const el = e.currentTarget;
                     followRef.current = atThreadEnd(el.scrollTop, el.scrollHeight, el.clientHeight);
+                    setAtEnd(followRef.current);
                     // Back at the end: Following Live again, so only the live 500 lines stay in the DOM.
                     if (followRef.current && lines > CHAT_LIVE_LINES) setLines(CHAT_LIVE_LINES);
                     // At the top with history behind: the next page comes in.
@@ -619,7 +643,12 @@ function ChatFlyoutBody({
             >
             <div
                 data-chat-log=""
-                className="flex min-h-full flex-col justify-end gap-3 px-3 py-3"
+                // `[overflow-wrap:anywhere]`, inherited by every row (Tynn #944): a long unbroken word, path or URL breaks
+                // inside the column's width rather than widening it, and — unlike `break-word` — it lowers the rows'
+                // min-content width, so a flex row can shrink to the column. Code blocks still scroll in their own box
+                // (react-fancy's `[&_pre]:overflow-x-auto`); `pre` does not wrap. Never an `overflow-x-hidden` here: that
+                // would cut words off unseen.
+                className="flex min-h-full min-w-0 flex-col justify-end gap-3 px-3 py-3 [overflow-wrap:anywhere]"
                 // A file link (`#file:…`) opens the file in the agent's workspace, its tree revealed — never navigates the window.
                 // An agent or workspace pill (genie#1263) opens it. Only on this click: the person's own (genie#1265).
                 onClick={canFile || canAgent || canWorkspace ? (e) => {
@@ -757,6 +786,30 @@ function ChatFlyoutBody({
                     </div>
                 ) : null}
             </div>
+            </div>
+            {/*
+             * JUMP TO LATEST: there whenever the thread is not at its end. A layer over the bottom of the thread, so it
+             * adds no height and moves nothing; the layer lets the wheel and clicks through, the button takes its own.
+             * It never takes focus (genie#1235: nothing here moves it): a press is cancelled before the browser focuses
+             * it, and it is not a tab stop, so the caret stays in the composer. From the keyboard, End scrolls the thread.
+             */}
+            {atEnd ? null : (
+                <div data-chat-jump-layer="" className="pointer-events-none absolute inset-x-0 bottom-2 z-20 flex justify-center">
+                    <Button
+                        type="button"
+                        size="xs"
+                        icon="arrow-down-to-line"
+                        data-chat-jump=""
+                        tabIndex={-1}
+                        title="Jump to the newest message and follow live"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={jumpToLatest}
+                        className="pointer-events-auto rounded-full border border-[var(--border-2)] bg-[var(--surface)] px-3 py-1 text-[11px] text-[var(--fg-2)] shadow-md hover:bg-[var(--bg-2)]"
+                    >
+                        Jump to latest
+                    </Button>
+                </div>
+            )}
             </div>
 
             {/*
