@@ -293,11 +293,6 @@ export class SessionEngineServer {
         return [...this.#connections].some((c) => c.authed && c.local);
     }
 
-    /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
-    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>): Promise<Record<string, Record<string, string>>> {
-        return this.#reverse('client.appEnvs', [processes]) as Promise<Record<string, Record<string, string>>>;
-    }
-
     /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
     records(): AgentRecord[] {
         return [...this.#records.values()];
@@ -604,7 +599,6 @@ export class SessionEngineServer {
                 return this.#keychain().set(movableName(str(0)), str(1));
             case 'engine.secretCompare':
                 return hostVault(this.#keychain()).compare(movableName(str(0)), str(1));
-            case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }

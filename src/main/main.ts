@@ -1467,10 +1467,6 @@ async function boot(): Promise<void> {
         // GENIE'S MCP for every agent session (the owner: it was not available to agents): the live endpoint, the
         // bearer token, and this agent's caller key so the tools know which agent is calling.
         mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
-        // GENIE'S TOOLS THAT STILL NEED THIS WINDOW, forwarded by genie-host's MCP server (P3.1): run here, answered there.
-        // Each kept process's app-inbox credential, for genie-host's process book (P3.3c): minted here, where the server is.
-        // And each SITE's, for genie-host's hosting (P5a): the same door, named as a site.
-        appEnvs: (list: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) => Object.fromEntries(list.map((p) => [p.id, services ? services.appEnv({ kind: p.kind === 'site' ? 'site' : 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) : {}])),
         // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
         // raised them; the host never prompts on its own.
         elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
