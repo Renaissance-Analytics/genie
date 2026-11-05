@@ -62,8 +62,10 @@ describe('(a)+(b) the host’s shutdown', () => {
         const statuses: ProcessStatus[] = ['site:shop', 'genie-front-door', 'proc:queue'].map((id) => ({ id, workspaceId: 'ws', name: id, state: 'running', pid: 1, exitCode: null, restarts: 0, since: 0, reason: null }) as unknown as ProcessStatus);
         const supervisor = { list: () => statuses, stop: (id: string) => { order.push(`stop ${id}`); return true; } } as unknown as SupervisorApi;
         const hosting = { quiesce: () => { order.push('quiesce'); }, shutdown: async () => { order.push('hosting shutdown'); } };
-        await shutDownHosted({ supervisor, hosting, endChildren: async () => { order.push('children end'); } });
-        expect(order).toEqual(['quiesce', 'stop site:shop', 'stop genie-front-door', 'stop proc:queue', 'hosting shutdown', 'children end']);
+        // The host's clocks first (decision 2): no scheduled task or flow starts a process after the stops.
+        const schedulers = [{ stop: () => { order.push('process scheduler stop'); } }, { stop: () => { order.push('flows engine stop'); } }];
+        await shutDownHosted({ supervisor, hosting, endChildren: async () => { order.push('children end'); }, schedulers });
+        expect(order).toEqual(['process scheduler stop', 'flows engine stop', 'quiesce', 'stop site:shop', 'stop genie-front-door', 'stop proc:queue', 'hosting shutdown', 'children end']);
     });
 
     it('stops the sites and the front door under the REAL stack — and never stops or removes an engine’s container', async () => {
