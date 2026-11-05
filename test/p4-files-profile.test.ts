@@ -133,3 +133,15 @@ it('staging measurement preserves filesystem rejection and file-handle results, 
     ]);
     counters.stop(); expect(fs.open).toBe(originalOpen); expect(handle.write).toBe(originalWrite); expect(handle.read).toBe(originalRead);
 });
+
+it('staging measurement times actual worker verification and reports only helper generation and thread', async () => {
+    const { installFilesStageCounters } = await module(); let now = 0;
+    class Worker extends EventEmitter { postMessage(_message: unknown) { now += 1; } }
+    const original = Worker.prototype.postMessage;
+    const scope = { process: { getBuiltinModule: (name: string) => name === 'node:worker_threads' ? { Worker } : {} }, setInterval: () => 1, clearInterval() {} };
+    const counters = installFilesStageCounters(scope, () => now), worker = new Worker();
+    worker.postMessage({ kind: 'staging-acl-request', id: 1, mode: 'file', paths: ['fixture-private-path'] });
+    now = 19; worker.emit('message', { kind: 'staging-acl-result', id: 1, ok: true, helper: { starts: 1, pid: 4242, threadId: 7 } });
+    expect(counters.summary().events).toEqual([{ operation: 'staging.acl', startedMs: 0, syncMs: 1, wallMs: 19, ok: true, helperStarts: 1, threadId: 7 }]);
+    expect(JSON.stringify(counters.summary())).not.toContain('fixture-private-path'); counters.stop(); expect(Worker.prototype.postMessage).toBe(original);
+});

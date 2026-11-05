@@ -439,7 +439,7 @@ jobs:
 
       - name: the native staged-write cost regression before the remedy
         if: github.ref == 'refs/heads/next/p4-files-content-family-7c'
-        run: npx vitest run test/p4-staging-windows-cost.test.ts --testTimeout=30000
+        run: npx vitest run test/p4-staging-windows-cost.test.ts test/p4-staging-permissions.test.ts --testTimeout=30000
 
       # EVERY window this build has opened has been Linux, and the owner works on Windows.
       #
