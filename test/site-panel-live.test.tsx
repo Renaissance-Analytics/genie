@@ -11,7 +11,7 @@ import { SitePanel } from '../src/renderer/components/SitePanel.js';
 
 const noop = () => {};
 const render = (host: string | null, live = true) => renderToStaticMarkup(
-    <SitePanel host={host} onPick={noop} {...(live ? { live: { panelKey: 'ws1:tab-1:0', onBounds: noop, onHide: noop, onReload: noop, onOpenInWindow: noop } } : {})} />,
+    <SitePanel host={host} onPick={noop} {...(live ? { live: { panelKey: 'ws1:tab-1:0', onBounds: noop, onHide: noop, onReload: noop, onBack: noop, onForward: noop, onState: () => noop, onOpenInWindow: noop } } : {})} />,
 );
 
 describe('a site panel with a site', () => {
@@ -19,8 +19,8 @@ describe('a site panel with a site', () => {
         const html = render('moic.gen');
         expect(html).toMatch(/data-site-panel="ws1:tab-1:0"/);
         expect(html).toContain('moic.gen');
-        expect(html).toMatch(/data-site-panel-action="reload"/);
-        expect(html).toMatch(/data-site-panel-action="open-window"[^>]*>[\s\S]*?Open in browser/);
+        expect(html).toMatch(/data-site-action="reload"/);
+        expect(html).toMatch(/data-site-action="pop"[^>]*>[\s\S]*?Pop out/);
         expect(html).toMatch(/data-site-panel-box=""/);
         expect(html).not.toContain('<iframe');
     });

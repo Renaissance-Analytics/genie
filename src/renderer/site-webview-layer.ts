@@ -1,4 +1,5 @@
 import { SitePanelViews, type Bounds, type PanelViewPort } from '../core/site-panel-views.js';
+import type { SiteState } from './components/SingleSiteBar.js';
 
 /**
  * THE LAYER THE PANELS' PAGES LIVE IN (the host split, P2b). A site panel is a <webview>, and moving one in the DOM reloads
@@ -20,12 +21,21 @@ interface LayerElement {
     appendChild(child: never): unknown;
     remove(): void;
     reload?(): void;
+    goBack?(): void;
+    goForward?(): void;
+    canGoBack?(): boolean;
+    canGoForward?(): boolean;
+    addEventListener?(event: string, listener: () => void): void;
 }
 
 export interface SiteWebviewLayer {
     show(panelKey: string, host: string, bounds: Bounds): Promise<Prepared>;
     hide(panelKey: string): void;
     reload(panelKey: string): void;
+    back(panelKey: string): void;
+    forward(panelKey: string): void;
+    /** What the panel's page can do, as it changes. Answers the leaving function. */
+    onState(panelKey: string, listener: (state: SiteState) => void): () => void;
     retainIn(workspaceId: string, keep: ReadonlySet<string>): void;
 }
 
@@ -44,8 +54,24 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
         return layer;
     };
 
-    const createView = (): PanelViewPort => {
+    const listeners = new Map<string, Set<(state: SiteState) => void>>();
+    const pages = new Map<string, { back(): void; forward(): void }>();
+    const safely = (fn: (() => void) | undefined): void => { try { fn?.(); } catch { /* Electron throws until the page's dom-ready */ } };
+
+    const createView = (panelKey: string): PanelViewPort => {
         let element: LayerElement | null = null;
+        let loading = false;
+        const report = (page: LayerElement) => {
+            if (page !== element) return;
+            let canGoBack = false;
+            let canGoForward = false;
+            try { canGoBack = page.canGoBack?.() === true; canGoForward = page.canGoForward?.() === true; } catch { /* not ready */ }
+            for (const listener of [...(listeners.get(panelKey) ?? [])]) listener({ canGoBack, canGoForward, loading });
+        };
+        pages.set(panelKey, {
+            back: () => safely(() => element?.goBack?.()),
+            forward: () => safely(() => element?.goForward?.()),
+        });
         let box: Bounds = { x: 0, y: 0, width: 0, height: 0 };
         let visible = 'hidden';
         const place = () => {
@@ -58,16 +84,19 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
                 element = options.doc.createElement('webview') as LayerElement;
                 Object.assign(element.style, { position: 'fixed', border: '0' });
                 element.setAttribute('src', url);
+                const page = element;
+                loading = false;
+                page.addEventListener?.('did-start-loading', () => { loading = true; report(page); });
+                page.addEventListener?.('did-stop-loading', () => { loading = false; report(page); });
+                page.addEventListener?.('did-navigate', () => report(page));
+                page.addEventListener?.('did-navigate-in-page', () => report(page));
                 place();
                 root().appendChild(element as never);
             },
-            reload() {
-                // Electron throws until the page's dom-ready; there is nothing to reload yet.
-                try { element?.reload?.(); } catch { /* not ready */ }
-            },
+            reload() { safely(() => element?.reload?.()); },
             setBounds(bounds) { box = bounds; place(); },
             setVisible(value) { visible = value ? 'visible' : 'hidden'; place(); },
-            destroy() { element?.remove(); element = null; },
+            destroy() { element?.remove(); element = null; pages.delete(panelKey); },
         };
     };
     const views = new SitePanelViews({ enabledHosts: () => [...allowed], createView });
@@ -87,6 +116,14 @@ export function siteWebviewLayer(options: { readonly doc: LayerDocument; readonl
         },
         hide(panelKey) { ticket(panelKey); views.hide(panelKey); },
         reload(panelKey) { views.reload(panelKey); },
+        back(panelKey) { pages.get(panelKey)?.back(); },
+        forward(panelKey) { pages.get(panelKey)?.forward(); },
+        onState(panelKey, listener) {
+            const set = listeners.get(panelKey) ?? new Set();
+            listeners.set(panelKey, set);
+            set.add(listener);
+            return () => { set.delete(listener); };
+        },
         retainIn(workspaceId, keep) { views.retainIn(workspaceId, keep); },
     };
 }
