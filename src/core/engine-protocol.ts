@@ -76,6 +76,13 @@ export const ENGINE_METHODS = [
     // The host's app door and its keys (P5a.2: app-inbox-host.ts): `[method, args]` — a LOCAL window's change. The keys'
     // state (names, ids, dates — never a secret) is sent as `appInbox.dump` before `engine.ready` and again as `appInbox.event`.
     'engine.appInbox',
+    // The host's updater (P5b: updates-host.ts): `[method, args]` — a LOCAL window's check, download, install, channel and
+    // the helper's launch. Its state is sent as `updates.dump` before `engine.ready` and as `updates.event` on change, to
+    // local windows only.
+    'engine.updates',
+    // The updater helper's own (P5b: updater-helper.ts), on a link that said hello as the updater: `register`, `reply`,
+    // `progress`. The host's requests reach it as `updater.event`. Nothing else is open to that link.
+    'engine.updater',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',
