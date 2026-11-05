@@ -3661,6 +3661,8 @@ async function boot(): Promise<void> {
     };
     const featurePorts: FeaturePorts = {
         ...processPorts(),
+        // Which part of a features snapshot was slow (genie-test-windows, job Q0: an action took 20 s, main mostly free).
+        slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) },
         openInBrowser: openInBrowserFor('user-gesture'),
         // The flow editor's own window (genie#1204): Open, a row's name, Add a flow — the person's click.
         openFlowEditor: (route) => openFlowEditorWindow(route, 'user-gesture'),
