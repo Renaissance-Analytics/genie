@@ -32,7 +32,8 @@ function rig() {
         return { start: () => {}, prompt: () => {}, kill: () => {}, get running() { return true; }, get cliSessionId() { return null; } };
     }) as unknown as SessionDriverFactory;
     const server = new SessionEngineServer({ token: TOKEN, build: 't' });
-    const host = new SessionHost({ userData: dir, driverFor, processTree: tree, ...server.hostOptions() });
+    // No hostOptions: their MCP preparation defers the driver, and this test drives the driver's events at once.
+    const host = new SessionHost({ userData: dir, driverFor, processTree: tree });
     hosts.push(host);
     server.attach(host);
     return { server, host, events: () => events };
