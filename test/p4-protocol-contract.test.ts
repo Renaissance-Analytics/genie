@@ -55,7 +55,8 @@ const ROWS: Partial<Record<RemoteMethod, readonly unknown[]>> = {
     'terminals.attach': ['work', 'missing'], 'terminals.list': ['work'],
     'features.snapshot': [], 'features.act': [{ kind: 'contract' }], 'features.setBrowserBounds': [null],
     'updates.state': [], 'host.listDir': [ROOT], 'host.mkdir': [ROOT, 'invalid/name'],
-    'updates.check': [], 'updates.download': [], 'updates.install': [],
+    'updates.check': [], 'updates.download': [], 'updates.install': [], 'updates.notes': [],
+    headroom: [], accountRetry: ['agent_a'],
     'inbox.sendFile': ['agent_a', 'hello', 'sample.txt', 'b2s='],
     'files.children': ['work', ''], 'files.open': ['work', 'missing.txt'],
     'files.readMedia': ['work', 'missing.png'], 'files.upload': ['work', '', null],
@@ -73,6 +74,7 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
     let dir: string;
     let devices: DeviceStore;
     let remote: ReturnType<typeof connectRemote>;
+    let local: ReturnType<typeof connectRemote>;
     let api: ReturnType<typeof buildHostApi>;
     let wireInvocations: RemoteMethod[];
     let rpc: (method: RemoteMethod | ControlMethod, args: unknown[]) => Promise<Result>;
@@ -89,10 +91,10 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
             pins: new PairingPins({ now: () => 1, random: () => 0.482913 }), confirm: allowEveryPairing,
             transport: { onConnection: (listener) => { accept = listener; return () => {}; } },
         });
-        const pair = inMemoryPair();
+        const pair = inMemoryPair(), localPair = inMemoryPair();
         let nextId = 10_000;
         const pending = new Map<number, (frame: ResultFrame) => void>();
-        pair.client.onMessage((text) => {
+        for (const transport of [pair.client, localPair.client]) transport.onMessage((text) => {
             const frame = JSON.parse(text) as WireMessage;
             if (frame.kind === 'result') pending.get(frame.id)?.(frame);
         });
@@ -103,17 +105,22 @@ describe('P4 every-method contract: direct HostApi versus the received protocol 
                 clearTimeout(timer); pending.delete(id);
                 resolve(frame.ok ? { ok: true, value: frame.value } : { ok: false, reason: frame.reason });
             });
-            pair.client.send(JSON.stringify({ kind: 'call', id, method, args }));
+            const transport = capabilityOf(method as RemoteMethod) === 'local' ? localPair.client : pair.client;
+            transport.send(JSON.stringify({ kind: 'call', id, method, args }));
         });
         accept(pair.server);
         remote = connectRemote(pair.client, { kind: 'pin', code: host.issuePin().code }, 'contract-window');
         expect(await remote.ready).toEqual({ ok: true });
         expect(await remote.takeBaton()).toEqual({ ok: true });
+        accept({ ...localPair.server, preAuth: { kind: 'local', label: 'contract local', isOwner: true, workspaceId: null, readonly: false } });
+        local = connectRemote(localPair.client, { kind: 'local' }, 'contract-local');
+        expect(await local.ready).toEqual({ ok: true });
         await devices.flushed();
     });
 
     afterEach(async () => {
         remote?.close();
+        local?.close();
         await tick();
         await devices?.flushed();
         await rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 });

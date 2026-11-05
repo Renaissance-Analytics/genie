@@ -2,6 +2,7 @@ import type { Baton, PairingPins } from '../core/remote.js';
 import {
     AGENT_SCOPED_METHODS,
     WORKSPACE_SCOPED_METHODS,
+    LOCAL_EVENTS as LOCAL_EVENT_CHANNELS,
     capabilityOf,
     filterSnapshotForWorkspace,
     parseMessage,
@@ -85,13 +86,15 @@ interface Connection {
     local: boolean;
     /** A phone's windows on the agents it watches (core/mobile-wire.ts). */
     readonly watching: Map<string, WindowState<WireRow>>;
+    /** Independent activity views belonging to this admitted local window. */
+    readonly activityViews: Set<string>;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
 const PHONE_REFUSES = (method: string): boolean => method.startsWith('terminals.');
 
 /** Extended only when a family moves. Unmoved local views retain their existing subscriptions. */
-const LOCAL_EVENTS = new Set(['workspace-settings-changed']);
+const LOCAL_EVENTS = new Set<string>(['workspace-settings-changed', ...Object.values(LOCAL_EVENT_CHANNELS)]);
 
 /** A push a connection does not receive. */
 const NOT_SENT = Symbol('not sent');
@@ -176,6 +179,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        connection.activityViews.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
             connection.pendingPair = null;
@@ -267,7 +271,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map() };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set() };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -407,6 +411,15 @@ export class RemoteHost {
                 return this.#watch(connection, String(args[0] ?? ''), (args[1] ?? {}) as WatchOptions).then(ok, (error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
             case 'agent.unwatch':
                 return ok({ unwatched: connection.watching.delete(String(args[0] ?? '')) });
+            case 'activity.watch':
+            case 'activity.unwatch': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                const viewId = args[0];
+                if (typeof viewId !== 'string' || viewId.length === 0) return refuse('An activity view id is required.');
+                if (method === 'activity.unwatch') return ok({ unwatched: connection.activityViews.delete(viewId) });
+                connection.activityViews.add(viewId);
+                return ok({ watching: true });
+            }
             case 'upload.begin': {
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);
                 const input = (args[0] ?? {}) as { name?: unknown; size?: unknown };
@@ -551,6 +564,7 @@ export class RemoteHost {
         for (const c of this.#connections.values()) {
             if (c.auth === null) continue;
             if (c.local ? !LOCAL_EVENTS.has(channel) : LOCAL_EVENTS.has(channel)) continue;
+            if (channel === LOCAL_EVENT_CHANNELS.activity && c.activityViews.size === 0) continue;
             let out: unknown = channel === 'features' ? withoutPairRequests(payload) : payload;
             // Every non-owner, whatever its scope, through ONE deny-by-default filter (pairing vs share link, H2).
             if (!c.auth.isOwner) out = this.#forNonOwner(channel, out, c.auth.workspaceId);

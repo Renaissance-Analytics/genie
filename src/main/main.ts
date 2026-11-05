@@ -528,6 +528,7 @@ function recoverTynnAgents(asked: { secretsMoved?: boolean } = {}): void {
 
 /** Each provider's rate limit as the Dashboard header shows it, buffered (core/headroom-board.ts). */
 const headroomBoard = new HeadroomBoard();
+const headroomListeners = new Set<(room: Readonly<Record<string, Headroom>>) => void>();
 
 /** The desktop notification for a login whose account the provider paused: what it said, and what to do. */
 function alertAccountPaused(provider: string): void {
@@ -1401,7 +1402,10 @@ async function boot(): Promise<void> {
         onAction: (agentId: AgentId, kind: string) => { broadcast('genie:action', { agentId, kind }); if (kind === 'replied') keepalive.turnEnded(agentId); },
         // THE DASHBOARD HEADER'S RATE LIMITS: a reading inside its provider's buffer (the host setting) is ignored here, in
         // main — one comparison, nothing pushed; one that clears it is pushed once, to every window.
-        onHeadroom: (provider: string, room: Headroom) => { if (headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) broadcast('genie:headroom', headroomBoard.view()); },
+        onHeadroom: (provider: string, room: Headroom) => {
+            if (!headroomBoard.offer(provider, room, Date.now(), headroomBufferMs(services?.settings.snapshot() ?? {}))) return;
+            for (const listener of headroomListeners) listener(headroomBoard.view());
+        },
         // A SERVER GENIE GAVE THE AGENT CAME UP UNUSABLE (genie#1202): Tynn's tools/list timed out at a restart and the CLI
         // never asked again. No documented reconnect exists, so the session restarts on the same conversation — spaced,
         // and given up on in words after MCP_RECOVERY_ATTEMPTS, so a server that is really down never makes it loop.
@@ -1781,12 +1785,7 @@ async function boot(): Promise<void> {
             }),
         },
     });
-    updates.onChange((state) => {
-        refreshTray();
-        for (const w of BrowserWindow.getAllWindows()) {
-            if (!w.isDestroyed()) w.webContents.send('genie:updates-changed', state);
-        }
-    });
+    updates.onChange(() => { refreshTray(); });
     // Every copy button writes through main (main/clipboard-ipc.ts): in a sandboxed window the page's clipboard can fail silently.
     registerClipboardIpc(ipcMain, electronClipboardPort(clipboard, ClipboardItem));
     // The native window buttons follow the theme (the owner: "not following color theme"): the renderer sends the
@@ -1802,20 +1801,7 @@ async function boot(): Promise<void> {
     });
     // What the window's buttons were last painted with — read by the real-window smoke and by diagnostics.
     ipcMain.handle('genie:window-overlay-colors-current', (event) => overlayApplied.get(event.sender.id) ?? null);
-    ipcMain.handle('genie:updates-state', () => updates?.state() ?? null);
     autoCheckStop = updates.startAutoCheck((fn, ms) => { const t = setTimeout(fn, ms); return () => clearTimeout(t); });
-    ipcMain.handle('genie:updates-check', () => updates?.check() ?? null);
-    ipcMain.handle('genie:updates-download', () => updates?.download() ?? false);
-    // The update window opening reads the notes again if they were missing (beta.38, 2026-10-22).
-    ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);
-    ipcMain.handle('genie:updates-install', async () => {
-        // The window has its restart screen at once (the `installing` state, genie#1201); the answer waits for the work.
-        const pending = updates?.install() ?? null;
-        if (!pending) return null;
-        const result = await pending;
-        console.log(`[updater] ${result.report}`);
-        return { report: result.report };
-    });
 
     ipcMain.handle('genie:snapshot', () => registry?.snapshot() ?? null);
 
@@ -2020,13 +2006,6 @@ async function boot(): Promise<void> {
             void restartAgent(agentOps, id, 'graceful').then((r) => { if (r.ok) host?.prompt(id, ACCOUNT_BACK, 'genie'); }).finally(() => registry?.touch());
         }
     };
-    ipcMain.handle('genie:headroom', () => headroomBoard.view());
-    ipcMain.handle('genie:account-retry', (_event, raw: unknown) => {
-        const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
-        if (!record) return { ok: false, reason: 'No agent named.' };
-        retryPausedAccount?.(record.provider);
-        return { ok: true };
-    });
     ipcMain.handle('genie:design-login', (_event, raw: unknown) => {
         const record = typeof raw === 'string' ? registry?.find(raw as AgentId) ?? null : null;
         if (!record) return { ok: false, reason: 'No agent named.' };
@@ -2768,6 +2747,11 @@ async function boot(): Promise<void> {
         remoteApi: buildHostApi({
             // The Dashboard's lanes for a remote window: one workspace's feeds, and each as it changes (guests: their own).
             activity: { feeds: (workspaceId) => activityOf(workspaceId), subscribe: (cb) => activityFeeds?.subscribe(cb) ?? (() => {}) },
+            headroom: {
+                view: () => headroomBoard.view(),
+                subscribe: (listener) => { headroomListeners.add(listener); return () => { headroomListeners.delete(listener); }; },
+            },
+            retryPausedAccount: (provider) => { retryPausedAccount?.(provider); },
             snapshot: () => registry!.snapshot(),
             subscribeSnapshot: (cb) => registry!.subscribe(cb),
             subscribeAgentRecords: (cb) => registry!.subscribeAgentRecords(cb),
@@ -2875,7 +2859,11 @@ async function boot(): Promise<void> {
                       state: () => updates!.state(),
                       check: () => updates!.check(),
                       download: () => updates!.download(),
-                      install: () => { const r = updates!.install(); return r ? r.then((done) => ({ report: done.report })) : null; },
+                      install: () => {
+                          const pending = updates!.install();
+                          return pending ? pending.then((done) => { console.log(`[updater] ${done.report}`); return { report: done.report }; }) : null;
+                      },
+                      notes: () => updates!.refreshNotes(),
                       onChange: (cb) => updates!.onChange(cb),
                   }
                 : null,
@@ -3866,8 +3854,6 @@ async function boot(): Promise<void> {
     // EVERY AGENT'S ACTIVITY FEED (beta.33 item 10): built from the session host's own ledgers and pushed to the window as
     // each session changes — what the workspace Dashboard's lanes draw. Never polled; one small feed per agent.
     activityFeeds = new ActivityFeeds({ host });
-    activityFeeds.subscribe((feed) => broadcast('genie:activity-changed', feed));
-    ipcMain.handle('genie:activity', (_event, raw: unknown) => activityOf(raw));
     host.subscribe((agentId) => {
         refreshTray();
         pushAgent(agentId);
