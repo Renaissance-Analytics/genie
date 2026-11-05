@@ -16,6 +16,15 @@ const TSX = import.meta.resolve('tsx');
  * never a window. So:
  *  (2) a window going ("Just close the UI", or a window crash) leaves every one running — the child's parent is alive;
  *  (1) genie-host KILLED (no clean shutdown) leaves none behind: its child's link closes and it ends what it runs.
+ *
+ * WHAT IT DISTINGUISHES, PER PLATFORM (measured with break probes, P5a.3):
+ *  - LINUX: the spawn host's parent-gone ending (src/main/spawn-host.ts `channel.onClose(() => end(0))` → `killAll`).
+ *    With it off (probe 9e3a728d, CI 42065058724; 48e2c399, CI 42069889782) the `supervised` spawn host, its
+ *    fancy-pty-helper and the worker all outlive the killed host, and this test goes red.
+ *  - WINDOWS: only the OUTCOME — nothing is left behind once the host is killed. With the same ending off it stayed
+ *    green (42065058724): another mechanism also ends the worker there, not yet named (a follow-up, measured on its own
+ *    branch). This test does not tell the two apart on Windows.
+ *
  * The gauge reads the supervised program's OWN pid (it writes it), not a shell's — a process left under a dead shell
  * counts. POSITIVE CONTROL in the same run: the gauge sees it alive while the host lives.
  * Docker is not involved: this home has no engine, and (b) in p5a3-hosting-shutdown.test.ts pins that containers are
@@ -77,7 +86,7 @@ afterAll(async () => {
 });
 
 describe('genie-host’s supervised processes live and die with the HOST, not the window', () => {
-    it('(2) a window going leaves the worker running; (1) the host KILLED leaves no worker behind', async () => {
+    it('(2) a window going leaves the worker running; (1) the host KILLED leaves no worker behind (Linux: by the spawn host’s parent-gone ending; Windows: the outcome only)', async () => {
         const first = await window();
         first.client.supervisor().start({ id: 'proc:worker', workspaceId: 'ws', name: 'worker', command: `"${process.execPath}" worker.cjs`, cwd: workspace, restart: 'always' });
         workerPid = await until('the worker’s own pid', async () => { const t = await readText(join(workspace, 'worker.pid')); return t ? Number(t) : null; }, 60_000);
