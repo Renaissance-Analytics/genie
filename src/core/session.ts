@@ -400,8 +400,8 @@ export class AgentSession {
     #stopAskedBy: string | null = null;
     /**
      * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
-     * sent anything since. While set, nothing Genie held is sent at a turn's end and no inbox notice is handed over
-     * (`deliverable`). The person's own message (`deliver`/`prompt` by `you`) or `resumeAfterStop` clears it. A turn the
+     * sent anything since. While set no inbox notice is handed over (`deliverable`); at the stop itself only what the person
+     * queued was kept to send, which, if anything, ends the pause at once (`#keepOnlyYours`). The person's own message (`deliver`/`prompt` by `you`) or `resumeAfterStop` clears it. A turn the
      * provider ended, or one cancelled with nobody here asking, never sets it.
      */
     #stoppedByYou = false;
@@ -926,6 +926,18 @@ export class AgentSession {
         for (const p of waiting) void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
     }
 
+    /**
+     * AFTER THE PERSON'S STOP (genie#1565): what the person queued stays queued; the rest is settled as
+     * `#leaveQueuedAsDrafts` settles it — a Genie notice discarded (its sender tells it again), anything else a draft.
+     */
+    #keepOnlyYours(): void {
+        const waiting = this.#afterTurn;
+        this.#afterTurn = waiting.filter((p) => p.by === 'you');
+        for (const p of waiting) {
+            if (p.by !== 'you') void this.#emitRow({ kind: 'prompt_delivery', id: p.id, status: p.context.retold === true ? 'discarded' : 'undelivered' });
+        }
+    }
+
     start(): void {
         if (this.#driver) return; // Reattach, never a second copy of the same agent.
 
@@ -1124,9 +1136,17 @@ export class AgentSession {
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
                     if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
                     // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
-                    // then at once a new turn for an inbox notice held mid-turn). Nothing held is sent: Genie's notice
-                    // is dropped for its book to tell once the person acts; anything else is left as a draft to send.
-                    else if (stoppedByYou) this.#leaveQueuedAsDrafts();
+                    // then at once a new turn for an inbox notice held mid-turn). Only what the PERSON queued goes on
+                    // (genie#1143: cancelling a turn preserves their queue; Claude runs theirs after the interrupt too),
+                    // and its going is them acting. Genie's notice is dropped for its book to tell once they act;
+                    // anyone else's message is left as a draft for them to send.
+                    else if (stoppedByYou) {
+                        this.#keepOnlyYours();
+                        if (this.#afterTurn.length > 0) {
+                            this.#stoppedByYou = false;
+                            if (!this.#inTurn) this.#flushAfterTurn();
+                        }
+                    }
                     else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
