@@ -108,15 +108,24 @@ function commandLine(pid) {
     if (!WIN) {
         try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim(); } catch (error) { return `(unread: ${error.code ?? error.message})`; }
     }
-    let why = '';
-    for (let attempt = 1; attempt <= 3; attempt++) {
-        try {
-            const line = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8', timeout: 30_000, windowsHide: true }).trim();
-            if (line !== '') return line;
-            why = 'empty';
-        } catch (error) { why = error.code === 'ETIMEDOUT' ? 'PowerShell took over 30 s' : String(error.message).slice(0, 120); }
+    // ONE read of every process, kept for a minute: batch SS's repeat measured a single PowerShell read at over 30 s on the Windows
+    // VM, so one per pid ran the proof into its ceiling before row 9. Read again only for a pid the table hasn't got.
+    if (!table || Date.now() - table.at > 60_000 || !table.lines.has(Number(pid))) table = readTable();
+    return table.lines.get(Number(pid)) ?? `(unread: ${table.error ?? 'not in the process table'})`;
+}
+let table = null;
+function readTable() {
+    const started = Date.now();
+    const script = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }';
+    try {
+        const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+        const lines = new Map();
+        for (const line of out.split(/\r?\n/)) { const i = line.indexOf('|'); if (i > 0 && line.slice(i + 1).trim()) lines.set(Number(line.slice(0, i)), line.slice(i + 1).trim()); }
+        console.log(`  (the process table: ${lines.size} command lines in ${Math.round((Date.now() - started) / 1000)} s)`);
+        return { at: Date.now(), lines, error: null };
+    } catch (error) {
+        return { at: Date.now(), lines: new Map(), error: error.code === 'ETIMEDOUT' ? 'PowerShell took over 120 s' : String(error.message).slice(0, 120) };
     }
-    return `(unread after 3 tries: ${why})`;
 }
 function hostRecord() {
     try { return JSON.parse(readFileSync(HOST_RECORD, 'utf8')); } catch { return null; }
