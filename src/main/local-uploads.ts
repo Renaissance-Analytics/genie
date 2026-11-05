@@ -11,7 +11,8 @@ export const LOCAL_UPLOAD_RULES = Object.freeze([
     { purpose: 'draft-file', subtype: 'text', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
     { purpose: 'file-write', subtype: 'text', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
     { purpose: 'file-write', subtype: 'bytes', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
-    { purpose: 'file-write', subtype: 'repo-args', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
+    // TDD boundary probe: the new subtype's full100MiB row must fail before this one-byte restriction is restored.
+    { purpose: 'file-write', subtype: 'repo-args', maxBytes: LOCAL_UPLOAD_MAX_BYTES - 1 },
     { purpose: 'board-image', subtype: 'comment', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
 ].map(rule => Object.freeze(rule)));
 
