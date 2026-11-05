@@ -63,7 +63,7 @@ const clients: RemoteClient[] = [];
 function serve(deps: HostApiDeps) {
     const api = buildHostApi(deps), invoke = vi.spyOn(api, 'invoke');
     let accept!: (connection: ServerConnection) => void;
-    new RemoteHost({ api, hostName: 'agent-settings-host', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
+    const host = new RemoteHost({ api, hostName: 'agent-settings-host', baton: new Baton(), devices, pins: new PairingPins({ now: Date.now }), confirm: allowEveryPairing,
         transport: { onConnection: (listener) => { accept = listener; return () => {}; } } });
     const pair = inMemoryPair(); close.push(() => pair.client.close());
     const framePort = (): LocalFramePort => {
@@ -77,10 +77,12 @@ function serve(deps: HostApiDeps) {
             else pair.client.close();
         } };
     };
-    return { invoke, framePort, connect: async () => {
-        accept({ ...pair.server, preAuth: { kind: 'local', label: 'settings-window', isOwner: true, workspaceId: null, readonly: false } });
-        const client = connectRemote(pair.client, { kind: 'local' }, 'settings-window'); clients.push(client);
-        expect(await client.ready).toEqual({ ok: true }); return client;
+    return { invoke, framePort, connect: async (remote = false) => {
+        accept(remote ? pair.server : { ...pair.server, preAuth: { kind: 'local', label: 'settings-window', isOwner: true, workspaceId: null, readonly: false } });
+        const client = connectRemote(pair.client, remote ? { kind: 'pin', code: host.issuePin().code } : { kind: 'local' }, 'settings-window'); clients.push(client);
+        expect(await client.ready).toEqual({ ok: true });
+        if (remote) expect(await client.takeBaton()).toEqual({ ok: true });
+        return client;
     } };
 }
 beforeEach(async () => {
@@ -217,6 +219,29 @@ describe('all fifteen agent settings calls use the one protocol', () => {
         const source = serve(deps), client = await source.connect();
         expect(await call(client.bridge.agents, invalid)).toEqual({ ok: false, reason: invalid.reason });
         expect(operation).not.toHaveBeenCalled();
+    });
+    describe.each([false, true])('non-JSON input on a remote=%s client', (remote) => {
+        it.each([
+            { name: 'setModel', args: ['agent_a', undefined], reason: 'a model is a name, or null for the provider default' },
+            { name: 'setBudget', args: ['agent_a', undefined], reason: 'a budget is a finite non-negative number of dollars, or null to clear it' },
+            { name: 'setBudget', args: ['agent_a', NaN], reason: 'a budget is a finite non-negative number of dollars, or null to clear it' },
+            { name: 'setBudget', args: ['agent_a', Infinity], reason: 'a budget is a finite non-negative number of dollars, or null to clear it' },
+            { name: 'setBudget', args: ['agent_a', -Infinity], reason: 'a budget is a finite non-negative number of dollars, or null to clear it' },
+        ] satisfies Array<{ name: AgentKey; args: unknown[]; reason: string }>)('$name refuses $args before serializing it into a valid clear', async (invalid) => {
+            const deps = protocolContractDeps(dir), operation = vi.fn(async () => ({ ok: true, called: true }));
+            Object.assign(deps.agentOps, { [invalid.name]: operation });
+            const source = serve(deps), client = await source.connect(remote); source.invoke.mockClear();
+            expect(await call(client.bridge.agents, invalid)).toEqual({ ok: false, reason: invalid.reason });
+            expect(source.invoke).not.toHaveBeenCalled(); expect(operation).not.toHaveBeenCalled();
+        });
+    });
+    it.each(['setModel', 'setBudget'] satisfies AgentKey[])('a remote caller can still send null to %s as an explicit clear', async (name) => {
+        const result = { ok: true, record }, deps = protocolContractDeps(dir), operation = vi.fn(async () => result);
+        Object.assign(deps.agentOps, { [name]: operation });
+        const source = serve(deps), client = await source.connect(true); source.invoke.mockClear();
+        expect(await call(client.bridge.agents, { name, args: ['agent_a', null] })).toEqual(result);
+        expect(source.invoke).toHaveBeenCalledExactlyOnceWith(`agents.${name}`, ['agent_a', null]);
+        expect(operation).toHaveBeenCalledExactlyOnceWith('agent_a', null);
     });
     // The retired mutations all touched the registry on completion, including refusal/throw.
     // Check the composition root retains that hook on the existing protocol adapters.
