@@ -97,8 +97,9 @@ describe('the panel', () => {
 
 describe('the wiring', () => {
     const src = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
-    it('main records WHEN each entry arrived, and the panel reads it', () => {
-        expect(src('../src/main/main.ts')).toMatch(/issueWatchDelivered\.set\(entry\.projectId, Date\.now\(\)\)/);
+    it('genie-host records WHEN each entry arrived (P5c), and the panel reads it through the replica', () => {
+        expect(src('../src/main/issue-watch-host.ts')).toMatch(/this\.#delivered\.set\(entry\.projectId, this\.#now\(\)\)/);
+        expect(src('../src/main/issue-watch-replica.ts')).toMatch(/deliveredAt: project\.deliveredAt/);
     });
 
     it('the Refresh is a feature action that has Tynn read the workspace now', () => {
