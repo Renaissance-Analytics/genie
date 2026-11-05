@@ -7,8 +7,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { measureArtboardPage } from './artboard-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
+import { installArtboardMainTrace } from './artboard-main-trace.mjs';
 
 const WIN = process.platform === 'win32', BASELINE = process.argv.includes('--baseline'), OUT = resolve('smoke-out'), PORT = 9346, INSPECT = 9347, started = Date.now(), sessions = [], reports = [];
+const TRACE = process.argv.includes('--trace-main');
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const demand = (ok, reason) => { if (!ok) throw new Error(reason); };
 const sha = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -36,11 +38,15 @@ class Cdp {
         sessions.push(c); return c;
     }
     async evaluate(expression) {
+        const result = await this.request('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+        if (result?.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? 'page exception');
+        return result.result.value;
+    }
+    async request(method, params) {
         const id = ++this.next; let timer;
         try {
-            const frame = await Promise.race([new Promise(resolve => { this.pending.set(id, resolve); this.socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } })); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP operation timed out')), 120000); })]);
-            if (frame.error || frame.result?.exceptionDetails) throw new Error(frame.error?.message ?? frame.result.exceptionDetails.exception?.description ?? 'page exception');
-            return frame.result.result.value;
+            const frame = await Promise.race([new Promise(resolve => { this.pending.set(id, resolve); this.socket.send(JSON.stringify({ id, method, params })); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP operation timed out')), 120000); })]);
+            if (frame.error) throw new Error(frame.error.message); return frame.result;
         } finally { clearTimeout(timer); this.pending.delete(id); }
     }
 }
@@ -64,6 +70,24 @@ async function preparePostRunner(repo, workspace, agentId) {
     } catch (error) { await scoped.unregister(); throw error; }
 }
 
+/** Main's existing 16 ms gauge, with the exact span of its worst gap for trace correlation. */
+function startMainMonitor() {
+    const ipc = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').ipcMain, rss = process.memoryUsage().rss;
+    const s = globalThis.__artboardMain = { ticks: 0, ticksBefore: 0, last: performance.now(), gap: 0, worstGap: null, rss, rssBefore: rss, methods: {}, maxCallBytes: 0, oversizedCalls: 0, handles: [], lastMethod: null };
+    s.timer = setInterval(() => {
+        const now = performance.now(), gap = now - s.last;
+        if (gap > s.gap) { s.gap = gap; s.worstGap = { startedMs: s.last, endedMs: now, endedWallMs: Date.now(), lastMethod: s.lastMethod }; }
+        s.last = now; s.ticks++; s.rss = Math.max(s.rss, process.memoryUsage().rss);
+    }, 16);
+    s.listener = (_event, action, handle, text) => {
+        if (action !== 'frame') return; const message = JSON.parse(text);
+        if (message.method) { s.lastMethod = message.method; s.methods[message.method] = (s.methods[message.method] ?? 0) + 1; }
+        if (message.kind === 'call') { const bytes = Buffer.byteLength(text); s.maxCallBytes = Math.max(s.maxCallBytes, bytes); if (bytes > 524288) s.oversizedCalls++; if (!s.handles.includes(handle)) s.handles.push(handle); }
+    };
+    ipc.on('genie:local-frame', s.listener); s.stop = () => { clearInterval(s.timer); ipc.removeListener('genie:local-frame', s.listener); };
+    return ['read', 'review'].map(operation => ipc._invokeHandlers.has('genie:artboard-' + operation));
+}
+
 let app, page, main, root, hostRecord, ownedElectronLog = false, failure = null, code = 1;
 const startup = {};
 try {
@@ -84,14 +108,19 @@ try {
         ...(post.kind === 'image' ? { src: 'data:image/png;base64,' + image.toString('base64') } : { html }) })) };
     const imageHash = sha(image), boardBytes = Buffer.from(JSON.stringify(nativeBoard));
     const fd = openSync(join(OUT, 'artboard-electron.log'), 'w'); ownedElectronLog = true;
-    const electron = resolve('node_modules/electron', WIN ? 'dist/electron.exe' : 'dist/electron'), args = ['.', '--remote-debugging-port=' + PORT, '--inspect=' + INSPECT, '--user-data-dir=' + join(root, 'profile')];
+    const electron = resolve('node_modules/electron', WIN ? 'dist/electron.exe' : 'dist/electron'), args = ['.', '--remote-debugging-port=' + PORT, (TRACE ? '--inspect-brk=' : '--inspect=') + INSPECT, '--user-data-dir=' + join(root, 'profile')];
     if (!WIN) args.push('--no-sandbox');
     if (process.platform === 'linux' && ['wayland', 'x11'].includes(process.env.XDG_SESSION_TYPE)) args.push('--ozone-platform=' + process.env.XDG_SESSION_TYPE);
     const xvfb = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY, launchStarted = Date.now();
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', error => console.error(error.message));
+    if (TRACE) {
+        main = await Cdp.connect((await until('owned paused main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
+        await main.evaluate('globalThis.__artboardTrace=(' + installArtboardMainTrace.toString() + ')(' + JSON.stringify(root) + ');true');
+        await main.request('Runtime.runIfWaitingForDebugger', {}); startup.traceResumeMs = Date.now() - launchStarted;
+    }
     const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return (await targets(PORT)).find(target => target.type === 'page' && /index\.html/.test(target.url)); }, 240000);
     startup.pageTargetMs = Date.now() - launchStarted; page = await Cdp.connect(target.webSocketDebuggerUrl);
-    main = await Cdp.connect((await until('owned main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl); startup.inspectorsConnectedMs = Date.now() - launchStarted;
+    main ??= await Cdp.connect((await until('owned main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl); startup.inspectorsConnectedMs = Date.now() - launchStarted;
     await waitForPageProbe(page); startup.pageBridgeMs = Date.now() - launchStarted;
     await until('ready page connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"')); startup.protocolReadyMs = Date.now() - launchStarted;
     startup.navigation = await page.evaluate('(()=>{const n=performance.getEntriesByType("navigation")[0];return n?{domInteractive:n.domInteractive,domContentLoaded:n.domContentLoadedEventEnd,load:n.loadEventEnd}:null})()');
@@ -99,16 +128,16 @@ try {
     hostRecord ??= json(join(runtime, 'host.json'));
     const setup = await main.evaluate('(' + preparePostRunner.toString() + ')(' + JSON.stringify(resolve('.')) + ',' + JSON.stringify(workspace) + ',' + JSON.stringify(agent.id) + ')');
     reports.push({ label: 'post-probe-setup', ...setup }); console.log('ARTBOARD_SETUP ' + JSON.stringify(reports.at(-1)));
-    const handlers = await main.evaluate('(()=>{const ipc=process.getBuiltinModule("node:module").createRequire(process.execPath)("electron").ipcMain;const rss=process.memoryUsage().rss,s=globalThis.__artboardMain={ticks:0,ticksBefore:0,last:performance.now(),gap:0,rss,rssBefore:rss,methods:{},maxCallBytes:0,oversizedCalls:0,handles:[]};s.timer=setInterval(()=>{const now=performance.now();s.gap=Math.max(s.gap,now-s.last);s.last=now;s.ticks++;s.rss=Math.max(s.rss,process.memoryUsage().rss);},16);s.listener=(_event,action,handle,text)=>{if(action!=="frame")return;const m=JSON.parse(text);if(m.method)s.methods[m.method]=(s.methods[m.method]??0)+1;if(m.kind==="call"){const n=Buffer.byteLength(text);s.maxCallBytes=Math.max(s.maxCallBytes,n);if(n>524288)s.oversizedCalls++;if(!s.handles.includes(handle))s.handles.push(handle);}};ipc.on("genie:local-frame",s.listener);s.stop=()=>{clearInterval(s.timer);ipc.removeListener("genie:local-frame",s.listener);};return ["read","review"].map(op=>ipc._invokeHandlers.has("genie:artboard-"+op));})()');
+    const handlers = await main.evaluate('(' + startMainMonitor.toString() + ')()');
     demand(handlers.every(present => present === BASELINE), 'native ArtBoard handler presence control'); reports.push({ label: 'path-control', baseline: BASELINE, handlers });
     await page.evaluate('(()=>{window.__artboardWire={maxBytes:0,forbidden:0,pages:0,items:0,invalidPages:0,oversizedEvents:0};window.genieLocalProtocol.onFrame((action,_handle,text)=>{if(action!=="frame")return;const m=JSON.parse(text),s=window.__artboardWire,n=new TextEncoder().encode(text).length;s.maxBytes=Math.max(s.maxBytes,n);if(m.kind==="result"&&Array.isArray(m.value?.items)&&m.value.items.some(item=>item.artifact)){s.pages++;s.items+=m.value.items.length;if(m.value.items.length>128||new TextEncoder().encode(JSON.stringify(m.value)).length>524288)s.invalidPages++;}if(m.kind==="event"){if(n>524288)s.oversizedEvents++;if(m.channel==="snapshot"||m.channel==="activity"||m.channel==="local-activity"||m.channel?.startsWith("agent:")||m.channel?.startsWith("terminal-"))s.forbidden++;}});return true;})()');
     const run = input => page.evaluate('(' + measureArtboardPage.toString() + ')(' + JSON.stringify({ workspaceId: 'tynn', ...input }) + ')');
     async function measure(label, input, beforeRead = async () => ({})) {
         await page.evaluate('Object.assign(window.__artboardWire,{maxBytes:0,forbidden:0,pages:0,items:0,invalidPages:0,oversizedEvents:0});true');
-        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.last=performance.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];return true;})()');
+        await main.evaluate('(()=>{const s=globalThis.__artboardMain;s.methods={};s.gap=0;s.worstGap=null;s.lastMethod=null;s.startedMs=s.last=performance.now();s.startedWallMs=Date.now();s.rssBefore=s.rss=process.memoryUsage().rss;s.ticksBefore=s.ticks;s.maxCallBytes=0;s.oversizedCalls=0;s.handles=[];return true;})()');
         await page.evaluate('(()=>{const s=window.__artboardRow={ticks:0,last:performance.now(),maxGapMs:0};s.timer=setInterval(()=>{const now=performance.now();s.maxGapMs=Math.max(s.maxGapMs,now-s.last);s.last=now;s.ticks++;},16);return true;})()');
         const stateBefore = await page.evaluate('window.genieTest.localProtocol.state()'), extra = await beforeRead(), value = await run(input), wire = await page.evaluate('window.__artboardWire');
-        const native = await main.evaluate('((s)=>({ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods,maxCallBytes:s.maxCallBytes,oversizedCalls:s.oversizedCalls,connections:s.handles.length}))(globalThis.__artboardMain)');
+        const native = await main.evaluate('((s)=>({startedMs:s.startedMs,startedWallMs:s.startedWallMs,endedMs:performance.now(),endedWallMs:Date.now(),ticks:s.ticks,ticksBefore:s.ticksBefore,maxGapMs:s.gap,worstGap:s.worstGap,rssBefore:s.rssBefore,rssPeak:Math.max(s.rss,process.memoryUsage().rss),methods:s.methods,maxCallBytes:s.maxCallBytes,oversizedCalls:s.oversizedCalls,connections:s.handles.length}))(globalThis.__artboardMain)');
         const stateAfter = await page.evaluate('window.genieTest.localProtocol.state()');
         const rowClock = await page.evaluate('(()=>{const s=window.__artboardRow;clearInterval(s.timer);return {ticks:s.ticks,maxGapMs:Math.max(s.maxGapMs,performance.now()-s.last)};})()');
         const row = { label, ...value, wire, native, rowClock, ...extra }; reports.push(row); console.log('ARTBOARD ' + JSON.stringify(row));
@@ -134,6 +163,14 @@ try {
     demand(broke, 'deliberate ArtBoard hash mismatch must fail'); reports.push({ label: 'negative-hash-control', passed: true }); code = 0;
 } catch (error) { failure = error.stack ?? String(error); console.error(failure); }
 finally {
+    if (TRACE) {
+        try {
+            const trace = await main?.evaluate('globalThis.__artboardTrace?.snapshot()');
+            if (!trace || trace.events.length === 0 || (WIN && !trace.events.some(event => event.kind === 'private-acl'))) throw new Error('the pre-entry trace missed its profiler/private-ACL positive controls');
+            reports.push({ label: 'main-trace', ...trace }); console.log('ARTBOARD_TRACE ' + JSON.stringify(trace));
+        } catch (error) { code = 1; failure ??= error.stack ?? String(error); }
+        try { await main?.evaluate('globalThis.__artboardTrace?.stop();true'); } catch {}
+    }
     try { await page?.evaluate('clearInterval(window.__artboardRow?.timer);true'); } catch {}
     try { await main?.evaluate('(async()=>{await globalThis.__artboardPost?.stop();delete globalThis.__artboardPost;globalThis.__artboardMain?.stop();return true;})()'); } catch {}
     try { await main?.evaluate('process.getBuiltinModule("node:module").createRequire(process.execPath)("electron").app.quit();true'); } catch {}
@@ -141,8 +178,8 @@ finally {
     const record = root ? json(join(root, '.genie', 'runtime', 'host.json')) : null;
     if (hostRecord && record?.pid === hostRecord.pid && record.startedAt === hostRecord.startedAt && Number.isFinite(record.startedAt) && record.startedAt >= started) { try { process.kill(record.pid, 'SIGTERM'); } catch {} }
     const finalHead = head(); if (initialHead && finalHead && initialHead !== finalHead) { code = 1; failure = 'checkout HEAD changed during the measurement'; }
-    const scriptHashes = {}; for (const path of ['scripts/artboard-cdp.mjs', 'scripts/artboard-measure-page.mjs', 'src/main/official-tools.ts']) { try { scriptHashes[path] = sha(readFileSync(path)); } catch { scriptHashes[path] = null; } }
-    const result = { code, baseline: BASELINE, platform: process.platform, head: finalHead, initialHead, scriptHashes, root, failure, reports, startup,
+    const scriptHashes = {}; for (const path of ['scripts/artboard-cdp.mjs', 'scripts/artboard-measure-page.mjs', 'scripts/artboard-main-trace.mjs', 'src/main/official-tools.ts']) { try { scriptHashes[path] = sha(readFileSync(path)); } catch { scriptHashes[path] = null; } }
+    const result = { code, baseline: BASELINE, traceMain: TRACE, platform: process.platform, head: finalHead, initialHead, scriptHashes, root, failure, reports, startup,
         limits: ['P4 server stays in main', 'startup and one-time scoped native-runner import reported separately', 'direct existing native plugin runner in owned Electron main; MCP/provider dispatch unmeasured', 'oracle hash verification outside transfer latency', '16ms sampled main RSS; transient peak and genie-host peak unmeasured', 'physical VM and installed-ASAR gates remain coordinator-owned'] };
     mkdirSync(OUT, { recursive: true }); writeFileSync(join(OUT, 'artboard-result.json'), JSON.stringify(result, null, 2));
     for (const [name, path] of [['lifecycle', root ? join(root, '.genie', 'runtime', 'lifecycle.log') : null], ['electron', ownedElectronLog ? join(OUT, 'artboard-electron.log') : null]]) {
