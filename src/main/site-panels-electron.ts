@@ -1,4 +1,5 @@
-import { ipcMain, shell, type BrowserWindow, type WebContents } from 'electron';
+import { ipcMain, safeStorage, shell, type BrowserWindow, type WebContents } from 'electron';
+import { storeRefusal } from '../core/browser-store.js';
 import { normalizeNavUrl } from '../core/genie-browser.js';
 import type { Activation } from '../core/window-activation.js';
 import { workspaceBrowserSession } from './genie-browser-electron.js';
@@ -31,6 +32,8 @@ export interface SitePanelsOptions {
     readonly openInWindow: (url: string, activation: Activation) => void;
     /** The host's browser service, for a panel's site in its own window. Null with no host. */
     readonly browserCall: (method: string, args: readonly unknown[]) => Promise<unknown> | null;
+    /** Genie, started again: what lets a store open once the keyring is back. */
+    readonly restart: () => void;
 }
 
 export interface LiveSitePanels {
@@ -49,6 +52,7 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
 
     ipcMain.handle('site-panel:prepare', async (event, raw: unknown) => {
         if (!ours(event)) return { ok: false, error: 'this is not the main window' };
+        if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: storeRefusal(process.platform, process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null), locked: true };
         const nav = normalizeNavUrl(key(raw), new Set(options.enabledHosts()));
         if ('error' in nav) return { ok: false, error: nav.error };
         const store = storeFor(new URL(nav.url).hostname);
@@ -59,13 +63,14 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
     ipcMain.handle('site-panel:pop-out', async (event, panelKey: unknown, host: unknown) => { if (ours(event)) await options.browserCall('popOut', [key(panelKey), key(host)]); });
     ipcMain.handle('site-panel:pop-back', async (event, panelKey: unknown) => { if (ours(event)) await options.browserCall('popBack', [key(panelKey)]); });
     ipcMain.handle('site-panel:popped', async (event) => (ours(event) ? (await options.browserCall('popped', [])) ?? [] : []));
+    ipcMain.handle('site-panel:restart', (event) => { if (ours(event)) options.restart(); });
     ipcMain.handle('site-panel:open-window', (event, host: unknown) => { if (ours(event)) options.openInWindow(`https://${key(host)}/`, 'user-gesture'); });
 
     return {
         attach(window: BrowserWindow): void {
             guardSiteWebviews(window.webContents, {
                 enabledHosts: options.enabledHosts,
-                sessionForHost: (host) => storeFor(host)?.ses ?? null,
+                sessionForHost: (host) => { try { return storeFor(host)?.ses ?? null; } catch { return null; } },
                 openInWindow: options.openInWindow,
                 storeOf: (url) => { try { return options.workspaceOfHost(new URL(url).hostname.toLowerCase()); } catch { return null; } },
                 openExternal: (url) => { void shell.openExternal(url).catch(() => {}); },

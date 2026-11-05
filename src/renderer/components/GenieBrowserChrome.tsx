@@ -23,6 +23,7 @@ export interface GenieBrowserChromeProps {
     readonly onForward: () => void;
     readonly onReload: () => void;
     readonly onPreset: (id: string) => void;
+    readonly onRestart?: () => void;
     /** The page box — its bounds are reported to main, which places the view over it. */
     readonly pageRef?: RefObject<HTMLDivElement | null>;
     readonly isMac?: boolean;
@@ -122,7 +123,7 @@ export function GenieBrowserChrome(p: GenieBrowserChromeProps) {
             ) : null}
 
             {s.notice ? (
-                <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}</div>
+                <div data-browser-notice="" className="shrink-0 border-b border-[var(--border-1)] bg-[var(--bg-1)] px-3 py-1 text-[11px] text-[var(--fg-2)]">{s.notice}{s.noticeRestart ? <Button size="xs" type="button" data-browser-restart="" className="ml-2" onClick={p.onRestart}>Restart</Button> : null}</div>
             ) : null}
             {error ? (
                 <div data-browser-error="" className="shrink-0 border-b border-[var(--danger)] bg-[var(--bg-1)] px-3 py-1 text-xs text-[var(--danger)]">{error}</div>

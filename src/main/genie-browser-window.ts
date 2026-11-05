@@ -46,6 +46,8 @@ export interface TabViewEvents {
 export interface BrowserSnapshot extends BrowserState {
     /** One line on what this browser cannot do now; null when nothing is wrong. */
     readonly notice: string | null;
+    /** A restart is the way out of what the notice says. */
+    readonly noticeRestart?: boolean;
     readonly presetId: string;
     readonly presets: ReadonlyArray<{ readonly id: string; readonly label: string }>;
     /** The Genie sites this window can open — the chrome's row of chips and its empty state. */
@@ -79,6 +81,7 @@ const ABORTED = -3;
 
 export class GenieBrowser {
     #notice: string | null = null;
+    #noticeRestart = false;
     readonly #ports: GenieBrowserPorts;
     readonly #views = new Map<string, TabViewPort>();
     #state: BrowserState = EMPTY_BROWSER;
@@ -180,14 +183,15 @@ export class GenieBrowser {
         this.#layout();
     }
 
-    setNotice(notice: string | null): void {
-        if (notice === this.#notice) return;
+    setNotice(notice: string | null, restart = false): void {
+        if (notice === this.#notice && restart === this.#noticeRestart) return;
         this.#notice = notice;
+        this.#noticeRestart = restart;
         this.#ports.push(this.snapshot());
     }
 
     snapshot(): BrowserSnapshot {
-        return { ...this.#state, notice: this.#notice, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
+        return { ...this.#state, notice: this.#notice, noticeRestart: this.#noticeRestart, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
     }
 
     #openTab(url: string, background = false): void {

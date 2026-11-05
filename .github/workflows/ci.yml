@@ -308,15 +308,18 @@ jobs:
         id: local-door
         continue-on-error: true
         run: |
+          # On a test keyring, as the site panel rows: row 4 opens a real site panel, and its store opens only with the key (P2b store guard).
+          # This step runs before the site panel step, so it installs the keyring itself (apt is idempotent).
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
           set +e
-          timeout 300 node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
           probe=$?
           cat local-door-break.log
           if [ "$probe" -ne 1 ] || ! grep -q 'FAIL 1:' local-door-break.log || ! grep -q 'actual refusal:.*not an admitted' local-door-break.log; then
             echo 'code=1' >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          timeout 300 node scripts/local-door-cdp.mjs > local-door.log 2>&1
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs > local-door.log 2>&1
           code=$?
           cat local-door.log
           echo "code=$code" >> "$GITHUB_OUTPUT"
@@ -352,11 +355,17 @@ jobs:
       # A SITE PANEL IN GENIE'S OWN WINDOW (P2b): its real CSP, its real preload, a real <webview>, main's guard.
       # Its own launch, home and profile. No Caddy here, so the page itself is the VM's to show.
       - name: a site panel in the real window
-        run: timeout 280 node scripts/site-panel-cdp.mjs
+        run: |
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
+          # An unlocked keyring on its own session bus: no store opens without one (core/browser-store.ts).
+          timeout 280 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/site-panel-cdp.mjs
+
+      - name: a site panel with no key opens no store
+        run: SITE_PANEL_LOCKED=1 CDP_PORT=9336 timeout 120 node scripts/site-panel-cdp.mjs
 
       # THE GENIE BROWSER AS ITS OWN PROCESS (P2b): started by the host, outliving the window, ended with the host.
       - name: the Genie browser's own process
-        run: timeout 260 node scripts/browser-process-cdp.mjs
+        run: timeout 260 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/browser-process-cdp.mjs
 
       - name: the spawn host started in the real app
         run: |

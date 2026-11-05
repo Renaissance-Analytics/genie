@@ -1,6 +1,7 @@
-import { app } from 'electron';
+import { app, safeStorage } from 'electron';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { storeRefusal } from '../core/browser-store.js';
 import type { BrowserFacts } from './browser-service.js';
 import { BrowserCookieBridge } from './browser-cookie-bridge.js';
 import { runBrowserLink, type BrowserLinkClient } from './browser-process-link.js';
@@ -36,6 +37,8 @@ export async function runBrowserProcess(): Promise<void> {
     app.on('window-all-closed', () => { app.quit(); });
     await app.whenReady();
 
+    // No store is touched without the key (core/browser-store.ts), and it doesn't come back in a running process.
+    const locked = !safeStorage.isEncryptionAvailable();
     let windows: GenieBrowserWindows | null = null;
     let linkedClient: BrowserLinkClient | null = null;
     let hosts: readonly string[] = [];
@@ -58,10 +61,11 @@ export async function runBrowserProcess(): Promise<void> {
         hosts = facts.hosts;
         workspaceOf = facts.workspaceOf;
         if (windows === null) {
-            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => hosts, genieHome: genieHome(), workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
+            windows = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, enabledHosts: () => (locked ? [] : hosts), genieHome: genieHome(), workspaceOf: (host) => workspaceOf[host] ?? SHARED_STORE, log, onSingleClosed: (panelKey) => { void linkedClient?.browserCall('popBack', [panelKey]).catch(() => {}); } });
         } else {
             rerouteGenieBrowserSession({ frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, log });
         }
+        if (locked) windows.setNotice(storeRefusal(process.platform, process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null), true);
     };
 
     const sayPages = (): void => {
@@ -96,7 +100,7 @@ export async function runBrowserProcess(): Promise<void> {
         },
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         facts: onFacts,
-        door: (up) => { windows?.setNotice(up ? null : DOOR_DOWN); },
+        door: (up) => { if (!locked) windows?.setNotice(up ? null : DOOR_DOWN); },
         open: (url, activation) => {
             opened = true;
             const answer = windows?.open(url ?? undefined, activation);

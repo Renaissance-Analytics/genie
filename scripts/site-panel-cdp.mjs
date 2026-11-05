@@ -19,6 +19,9 @@ import { join } from 'node:path';
 if (process.env.CI !== 'true' && process.env.SITE_PANEL_CDP_ALLOW !== '1') { console.error('refused: this launches Electron, and runs only on CI or a test machine'); process.exit(2); }
 
 const PORT = Number(process.env.CDP_PORT ?? 9333);
+// With no key: nothing may open a store (core/browser-store.ts). A launch of its own, that a keyring can't help.
+const LOCKED = process.env.SITE_PANEL_LOCKED === '1';
+const STORE_ARG = LOCKED ? '--password-store=basic' : '--password-store=gnome-libsecret';
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const failures = [];
 const walk = (dir, found = []) => { let names = []; try { names = readdirSync(dir); } catch { return found; } for (const name of names) { const p = join(dir, name); try { if (statSync(p).isDirectory()) walk(p, found); else found.push(p); } catch { /* gone */ } } return found; };
@@ -70,7 +73,7 @@ mkdirSync(join(home, 'runtime'), { recursive: true });
 writeFileSync(join(home, 'runtime', 'workspaces.json'), JSON.stringify([{ id: WORKSPACE, path: ws }], null, 2));
 
 const log = openSync(join(tmpdir(), 'site-panel-electron.log'), 'a');
-const launcher = process.platform === 'linux' ? ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox']] : ['npx', ['electron', '.']];
+const launcher = process.platform === 'linux' ? ['xvfb-run', ['--auto-servernum', '--server-args=-screen 0 1440x900x24', 'npx', 'electron', '.', '--no-sandbox', STORE_ARG]] : ['npx', ['electron', '.']];
 const app = spawn(launcher[0], [...launcher[1], `--remote-debugging-port=${PORT}`, `--user-data-dir=${data}`], { env: { ...process.env, HOME: user, USERPROFILE: user, GENIE_HOME: home, GENIE_PAGE_PROBE: '1' }, stdio: ['ignore', log, log], detached: process.platform !== 'win32', shell: process.platform === 'win32' });
 const end = (code) => {
     try { if (process.platform !== 'win32') process.kill(-app.pid, 'SIGKILL'); else app.kill(); } catch { /* gone */ }
@@ -88,6 +91,19 @@ try {
     check(ready === true, 'the main window came up, with its preload');
 
     const webviews = async () => (await targets()).filter((t) => t.type === 'webview');
+    if (LOCKED) {
+        const refused = await cdp.evaluate(`window.genie.sitePanels.prepare(${JSON.stringify(HOST)})`);
+        check(refused.ok === false && refused.locked === true, 'no key: a site is refused, and says why', JSON.stringify(refused));
+        // No keyring at all (basic): the words say none is available and what to install, never "unlock it".
+        check(/no system keyring is available/.test(refused.error ?? '') && /GNOME Keyring or KWallet/.test(refused.error ?? '') && !/unlock/i.test(refused.error ?? ''), 'no keyring: the panel’s words say none is there and what to install', JSON.stringify(refused.error));
+        await cdp.evaluate(`(() => { const v = document.createElement('webview'); v.setAttribute('src', 'https://${HOST}/'); document.body.appendChild(v); return true; })()`);
+        await sleep(2500);
+        check((await webviews()).length === 0, 'no key: a webview gets no guest', JSON.stringify((await webviews()).map((t) => t.url)));
+        check(!existsSync(join(home, 'browser', WORKSPACE)), 'no key: no store was opened');
+        cdp.close();
+        console.log(failures.length === 0 ? 'site-panel-cdp locked: all passed' : `site-panel-cdp locked: FAILED ${failures.join('; ')}`);
+        end(failures.length === 0 ? 0 : 1);
+    }
     const addTag = (src) => cdp.evaluate(`(() => { const v = document.createElement('webview'); v.setAttribute('src', ${JSON.stringify(src)}); document.body.appendChild(v); return true; })()`);
 
     // The tag exists at all, in this window: without webviewTag it is an inert element with no getWebContentsId.
