@@ -8,12 +8,14 @@ import { WHATS_NEW_ROUTE } from '../core/whats-new.js';
 import type { CommandItem } from '../core/command-window.js';
 import { parsePromptLibrary, promptForPress, promptPaletteItems, promptTarget, type SavedPrompt } from '../core/prompt-library.js';
 import { FTQ_NUDGE_TEXT, bindingsFrom, hotkeyAction } from '../core/hotkeys.js';
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type Dispatch, type SetStateAction } from 'react';
 import { AlertToasts, type AlertToast } from './components/AlertToasts.js';
 import { slugsFor } from '../core/address.js';
 import { ChatDraftKeeper } from '../core/chat-draft-keeper.js';
 /** How long Genie's own alert toast stays (genie#1211). */
 const ALERT_TOAST_MS = 8_000;
+const noLocalState = () => null;
+const noLocalSubscription = () => () => {};
 import { ROW_EMOJI, ROW_EMOJI_MS, type RowSignalKind } from '../core/agent-signals.js';
 import type { Headroom } from '../core/headroom.js';
 import { mailSignals, type MailSignal } from '../core/mail-signals.js';
@@ -23,7 +25,7 @@ import { DEFAULT_ROUTE, canonicalAgentRoute, carryChat, formatRoute, parseRoute,
 import { chatSubjectFor } from '../core/chat-scope.js';
 import { parseTabs } from '../core/workspace-tabs.js';
 import { addressOf, isInternalRoute, rehomeAddress, routeOfAddress, type AddressContext } from '../core/address.js';
-import { browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
+import { Button, browserPlatformHints, detectPlatform, setThemePreference } from '@particle-academy/react-fancy';
 import { themePreferenceFrom } from '../core/theme.js';
 import { Shell } from './Shell.js';
 import { TakeOverWindow } from './components/TakeOverWindow.js';
@@ -247,6 +249,11 @@ function useAgentDetail(
     return state;
 }
 
+/** The own window's cached bridge, including local protocol families and retained native window/channel ports. */
+function ownWindowBridge(): GenieBridge | undefined {
+    return typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie);
+}
+
 /**
  * DRIVING ANOTHER MACHINE (§6.8). One client at a time; its bridge replaces the local one while
  * connected; the token a PIN pairing mints is remembered per host in this device's own storage.
@@ -255,7 +262,8 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const [client, setClient] = useState<RemoteClient | null>(null);
     const [state, setState] = useState<RemoteState | null>(null);
     // THE HOST DIALS OTHER MACHINES AND HOLDS THEIR TOKENS (P3.4 cut e): this window has a channel, and the addresses that are paired.
-    const link = typeof window === 'undefined' ? undefined : window.genie?.deviceLink;
+    const local = ownWindowBridge();
+    const link = local?.deviceLink;
     const pairedNow = useRef<string[]>([]);
     const unmoved = useRef<string[]>([]);
     const hosts = typeof window === 'undefined' ? null : knownHosts(window.localStorage, {
@@ -278,7 +286,7 @@ function useRemote(): { client: RemoteClient | null; state: RemoteState | null; 
     const [relayConnect, setRelayConnect] = useState<RelayConnect>({ kind: 'working', step: 'tynn' });
     const last = useRef<{ url: string; label: string } | null>(null);
     // THE TYNN NETWORK (Tynn #837): main holds a Tynn workstation's connection; this window has a channel to it.
-    const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
+    const net = local?.tynnNetwork;
     const [tynnWorkstations, setTynnWorkstations] = useState<TynnWorkstationList | null>(null);
     // Read Tynn's list again: after a role change (W6), and each time the Connect menu or ⌘K opens (M0 finding 1). The last
     // list stays on screen while it is read; a failure keeps it and says why, with Retry (core/connect-machine.ts).
@@ -842,6 +850,9 @@ function DesktopApp({ bridge }: AppProps) {
     useEffect(() => (typeof window === 'undefined' ? undefined : window.genie?.remoteWindows?.onReconnectAsked?.(() => reconnectNow.current())), []);
     // The window's own bridge goes through `pageBridge`: an agent's detail crosses the preload as a patch and is rebuilt here.
     const resolvedBridge = remote.state?.connected ? remote.client!.bridge : (bridge ?? (typeof window === 'undefined' || window.genie === undefined ? undefined : pageBridge(window.genie)));
+    const local = resolvedBridge?.localProtocol;
+    const localState = useSyncExternalStore(local?.onState ?? noLocalSubscription, local?.state ?? noLocalState, local?.state ?? noLocalState);
+    const localRevision = localState?.revision ?? 0;
     /**
      * The Tynn tab's host, ONE object per bridge (genie#1295 B4). Built inline it was a new object on every render of this
      * window, and the tab keys its read and its live subscription on it: every render re-read the whole board and signed
@@ -1012,7 +1023,7 @@ function DesktopApp({ bridge }: AppProps) {
     const [connectDialog, setConnectDialog] = useState<'link' | 'workstations' | null>(null);
     // A role change (genie#1278 W6) through main, which asks Tynn; then the list is read again, so it shows Tynn's answer.
     const setWorkstationRole = async (w: TynnWorkstationRow, role: 'pilot' | 'drone', code: string): Promise<RoleChange> => {
-        const net = typeof window === 'undefined' ? undefined : window.genie?.tynnNetwork;
+        const net = ownWindowBridge()?.tynnNetwork;
         if (!net?.setRole) return { ok: false, reason: 'Roles change from Genie on a desktop' };
         const result = await net.setRole(w.id, role, code);
         if (result.ok) remote.reloadTynnWorkstations();
@@ -1063,7 +1074,7 @@ function DesktopApp({ bridge }: AppProps) {
             return [w.id, workspaceFault(r.ok ? r.repos : null, name)] as const;
         })).then((entries) => { if (live) setWorkspaceFaults(Object.fromEntries(entries)); });
         return () => { live = false; };
-    }, [resolvedBridge, faultKey, faultsTick]);
+    }, [resolvedBridge, faultKey, faultsTick, localRevision]);
     const locateRepo = (workspaceId: string, slug: string) => {
         // Opens in the envelope: the repo's folder is inside it (Tynn #835).
         const envelope = snapshot.workspaces?.find((w) => w.id === workspaceId)?.path;
@@ -1092,7 +1103,7 @@ function DesktopApp({ bridge }: AppProps) {
         setRepos(null);
         setWsSettings(null);
         if (resolvedBridge && workspaceId) { reloadRepos(resolvedBridge, workspaceId); reloadWsSettings(resolvedBridge, workspaceId); }
-    }, [resolvedBridge, workspaceId]);
+    }, [resolvedBridge, workspaceId, localRevision]);
     // A workspace setting changed in main — the tabs an agent made (beta.35 item 36): the workspace on screen reloads its
     // settings at once. Pushed, never polled; a window driving another machine has no push and reloads as before.
     useEffect(() => {
@@ -1194,16 +1205,16 @@ function DesktopApp({ bridge }: AppProps) {
     };
     const workspaceRow = workspaceId ? snapshot.workspaces?.find((w) => w.id === workspaceId) ?? null : null;
     // SHARE THROUGH TYNN (Tynn #839): this Genie's own workspaces only — never from a window driving another host.
-    const shares = !remote.state?.connected && typeof window !== 'undefined' ? window.genie?.tynnNetwork?.shares : undefined;
+    const shares = !remote.state?.connected ? ownWindowBridge()?.tynnNetwork?.shares : undefined;
     const [share, setShare] = useState<{ workspaceId: string; name: string; links: ShareLink[] | null; minted: ShareLink | null; problem: string | null; busy: boolean } | null>(null);
     const readShares = (forWorkspace: string) => {
         void shares?.list(forWorkspace).then((r) => setShare((s) => (s && s.workspaceId === forWorkspace ? { ...s, links: r.ok ? r.links : [], problem: r.ok ? s.problem : r.reason } : s)));
     };
     /*
-     * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host (preload `appInbox`) — never from a window
+     * APPS AND SCRIPTS (genie#1345): the workspace's keys, read from THIS host's local protocol — never from a window
      * driving another machine. Each action shows itself in flight, then its result; a new script key is shown once.
      */
-    const appInboxBridge = !remote.state?.connected && typeof window !== 'undefined' ? window.genie?.appInbox : undefined;
+    const appInboxBridge = !remote.state?.connected ? ownWindowBridge()?.appInbox : undefined;
     const [appInboxView, setAppInboxView] = useState<{ workspaceId: string; state: AppInboxCardState | null; busy: AppInboxCardProps['busy']; revealed: AppInboxCardProps['revealed']; outcome: AppInboxCardProps['outcome'] } | null>(null);
     useEffect(() => {
         if (!appInboxBridge || !workspaceId) { setAppInboxView(null); return; }
@@ -1762,6 +1773,12 @@ function DesktopApp({ bridge }: AppProps) {
         <HostPathPickerContext.Provider value={pickHostPath}>
         <PluginEditorsContext.Provider value={pluginEditors}>
         <PanelHostContext.Provider value={panelHost}>
+        {localState?.phase === 'failed' ? (
+            <div role="alert" className="fixed bottom-4 left-1/2 z-50 flex max-w-xl -translate-x-1/2 items-center gap-3 rounded-md border border-[var(--border-1)] bg-[var(--bg-1)] px-4 py-3 text-sm text-[var(--fg-1)] shadow-lg">
+                <span>{localState.reason}</span>
+                <Button size="xs" type="button" className="rounded border border-[var(--border-1)] px-3 py-1 hover:bg-[var(--bg-2)]" onClick={() => local?.retry()}>Retry</Button>
+            </div>
+        ) : null}
         <Shell
             pulsingWorkspaces={pulsingIds(pulses)}
             rowEmoji={rowEmoji}
