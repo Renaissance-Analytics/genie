@@ -194,7 +194,7 @@ probe "tray-probe-is-gated" src/main/main.ts \
 
 # ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first
 probe "tray-always-asks" src/main/main.ts \
-    "onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }" "onShutDown: () => { requestQuit('shut-down'); }" \
+    "onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }" "onShutDown: () => { requestQuit('shut-down'); }" \
     test/quit-keeps-host-wiring.test.ts "offers the host"
 
 probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \

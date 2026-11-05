@@ -36,7 +36,7 @@ describe('main.ts', () => {
 
     it('the shutdown pass runs runQuit; the before-quit handler stops nothing itself', () => {
         const quit = block(main(), "app.on('before-quit'");
-        expect(quit).toMatch(/runQuit\(quitPorts\)/);
+        expect(quit).toMatch(/runQuit\(quitPorts, \{ drainMs: QUIT_WRITES_MS \}\)/);
         expect(quit).not.toMatch(/host\?\.stopAll\(\)/);
         const ports = block(main(), 'const quitPorts: QuitPorts = {', '\n};');
         expect(ports).toMatch(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/);
