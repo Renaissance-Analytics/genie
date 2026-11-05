@@ -2593,7 +2593,6 @@ async function boot(): Promise<void> {
         // GENIE'S HOSTING IS GENIE-HOST'S (P5a): the front door, the engines and the site routes are built there and kept with
         // the UI closed; this window reads them (the front door's port and CA arrived before the link was ready) and drives
         // them through the replica. Built here only on the emergency path.
-        ...(agentEngineLink ? { hosting: agentEngineLink.client.hosting() } : {}),
         // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
         // them through the replica.
         ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),
