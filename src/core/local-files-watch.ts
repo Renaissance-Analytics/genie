@@ -1,4 +1,12 @@
-import type { FilesViewEvent } from '../renderer/bridge.js';
+/** Native Files subscription shapes shared by the host and renderer without a UI import. */
+export interface FilesViewWant { readonly git?: boolean; readonly repos?: readonly string[] }
+export interface FilesViewEvent {
+    readonly paths?: readonly string[];
+    readonly git?: {
+        readonly tree?: Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>;
+        readonly repos?: Readonly<Record<string, { ok: true; value: unknown } | { ok: false; error: string }>>;
+    };
+}
 
 /** These are connection controls: no view id can name another connection's interest. */
 export const FILES_WATCH_METHODS = ['files.watch', 'files.unwatch', 'files.watchState'] as const;

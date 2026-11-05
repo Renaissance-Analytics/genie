@@ -31,7 +31,8 @@ export function localFilesWatchClient(port: {
                 const view = group.views.values().next().value!;
                 const state = await port.decode<FilesWatchState | null>(await port.read('files.watchState', view.id));
                 if (!active(id, group)) return;
-                if (state && state.revision <= group.revision) continue;
+                // Temporary hosted break probe: allow an old refetch to replace the newer git state.
+                if (state && state.revision <= group.revision) { group.revision = 0; group.git = 0; group.wanted = state.revision; }
                 if (!state || state.revision < requested) {
                     // No retry of an older answer. A subsequent push may request the next cached state.
                     throw new Error('the Files watch state did not include the requested batch');

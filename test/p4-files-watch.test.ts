@@ -151,6 +151,8 @@ describe('7D same-client subscriptions and bounded cached refetch', () => {
         f.data.tree = Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`${i}-${'雪'.repeat(100)}.txt`, 'deleted' as const]));
         await f.emit(['old.txt']); await reading;
         f.data.tree = { 'new.txt': 'added' }; await f.emit(['new.txt']); unblock(); await tick();
+        // Wait for the OLD projection's finally/release, not merely for the newer callback.
+        await vi.waitFor(() => expect(f.calls.filter(call => call.method === 'content.release')).toHaveLength(1)); await tick(); await tick();
         await vi.waitFor(() => expect(seen.mock.calls.findLast(([value]) => value.git)?.[0].git.tree).toEqual({ 'new.txt': 'added' }));
         const trees = seen.mock.calls.filter(([value]) => value.git).map(([value]) => value.git.tree);
         expect(trees.every(tree => Object.keys(tree).length === 1 && tree['new.txt'] === 'added')).toBe(true); expect(f.git).toHaveBeenCalledTimes(2);
