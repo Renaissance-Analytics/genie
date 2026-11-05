@@ -100,13 +100,23 @@ function alive(pid) {
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
+/**
+ * A process's command line, or why it couldn't be read: never an empty string that reads as "not that program". Batch SS on Windows
+ * had a live host and live providers read as '' (rows 5 and 8): a cold PowerShell under load can take longer than one try allows.
+ */
 function commandLine(pid) {
-    try {
-        if (WIN) {
-            return execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: SYNC_MS }).trim();
-        }
-        return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim();
-    } catch { return ''; }
+    if (!WIN) {
+        try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim(); } catch (error) { return `(unread: ${error.code ?? error.message})`; }
+    }
+    let why = '';
+    for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+            const line = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${Number(pid)}").CommandLine`], { encoding: 'utf8', timeout: 30_000, windowsHide: true }).trim();
+            if (line !== '') return line;
+            why = 'empty';
+        } catch (error) { why = error.code === 'ETIMEDOUT' ? 'PowerShell took over 30 s' : String(error.message).slice(0, 120); }
+    }
+    return `(unread after 3 tries: ${why})`;
 }
 function hostRecord() {
     try { return JSON.parse(readFileSync(HOST_RECORD, 'utf8')); } catch { return null; }
