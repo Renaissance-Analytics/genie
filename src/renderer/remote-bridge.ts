@@ -481,7 +481,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
     };
 
-    const blobRead = async <T>(method: ControlMethod, ...args: unknown[]): Promise<T> => {
+    const blobRead = async <T>(method: ControlMethod | RemoteMethod, ...args: unknown[]): Promise<T> => {
         const started = await ready;
         if (!started.ok) throw new Error(started.reason);
         if (!state.connected) throw new Error('the blob connection closed');
