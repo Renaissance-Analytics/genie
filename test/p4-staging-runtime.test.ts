@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { runtimeDir } from '../src/main/paths.js';
+import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
 import type { PtyPort } from '../src/main/terminal-host.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { composeTracker } from './support/compose-tracker.js';
@@ -31,14 +32,28 @@ async function homeFixture() {
     return { home, root, start, client };
 }
 async function areaModule() { const path: string = '../src/main/local-staging-area.js'; return import(path); }
+async function heldProcess() {
+    // Hosted test VM only: a plain, owned Node child; never a provider, app, process-tree kill or the owner's machine.
+    const child = spawn(process.execPath, ['-e', "process.stdout.write('ready'); setInterval(() => {}, 1000)"], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+    const ended = new Promise<void>(resolve => { child.once('exit', () => resolve()); child.once('error', () => resolve()); });
+    const stop = async () => { if (child.exitCode === null && child.signalCode === null) child.kill(); await ended; };
+    cleanups.unshift(stop);
+    await new Promise<void>((resolve, reject) => { child.stdout.once('data', () => resolve()); child.once('error', reject); child.once('exit', () => reject(new Error('the fixture child exited before ready'))); });
+    return { child, stop };
+}
 
 describe('7B owned staging at real host composition startup', () => {
     it('removes stale files and nested connection folders at start, while preserving other runtime data', async () => {
-        const f = await homeFixture(); await mkdir(join(f.root, 'old-connection'), { recursive: true });
-        await writeFile(join(f.root, 'stale.bin'), 'earlier process bytes'); await writeFile(join(f.root, 'old-connection', 'unfinished'), 'stale chunk');
+        const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); // same pid, DIFFERENT start time
+        await mkdir(join(stale, 'old-connection'), { recursive: true });
+        await writeFile(join(stale, 'stale.bin'), 'earlier process bytes'); await writeFile(join(stale, 'old-connection', 'unfinished'), 'stale chunk');
+        await writeFile(join(f.root, 'unidentified.txt'), 'no proven process owner');
         const sibling = join(runtimeDir(f.home), 'keep-other-runtime.txt'); await writeFile(sibling, 'unrelated runtime data');
         await f.start();
-        expect(await readdir(f.root)).toEqual([]); expect(await readFile(sibling, 'utf8')).toBe('unrelated runtime data');
+        await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect((await readdir(f.root)).filter(name => name !== 'unidentified.txt')).toEqual([expect.stringMatching(new RegExp(`^${process.pid}-[1-9][0-9]*$`))]);
+        expect(await readFile(join(f.root, 'unidentified.txt'), 'utf8')).toBe('no proven process owner');
+        expect(await readFile(sibling, 'utf8')).toBe('unrelated runtime data');
     });
     it('creates the runtime-owned folder and wires real local uploads into it before accepting calls', async () => {
         const f = await homeFixture(); await f.start(); expect((await stat(f.root)).isDirectory()).toBe(true);
@@ -53,7 +68,7 @@ describe('7B owned staging at real host composition startup', () => {
         const f = await homeFixture(); await f.start(); const c = await f.client();
         const uploaded = await c.uploads!.stage({ purpose: 'draft-file', subtype: 'attachment' }, new Uint8Array([7, 8, 9]));
         const before = await readdir(f.root, { recursive: true }); expect(before.length).toBeGreaterThan(0);
-        await writeFile(join(f.root, 'stale-after-start'), 'unowned');
+        const stale = join(f.root, `${process.pid}-1`); await mkdir(stale); await writeFile(join(stale, 'stale-after-start'), 'dead owner');
         const module = await areaModule(), area = await module.LocalStagingArea.open(f.home);
         const again = await module.LocalStagingArea.open(join(f.home, '.')); expect(again).toBe(area);
         await area.sweep(); expect(await readdir(f.root, { recursive: true })).toEqual(before);
@@ -68,10 +83,32 @@ describe('7B owned staging at real host composition startup', () => {
         await expect(f.start()).rejects.toThrow(); expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
     });
     it('a link left inside staging is removed without following it into another folder', async () => {
-        const f = await homeFixture(), outside = join(f.home, 'other-data'); await mkdir(outside); await mkdir(f.root, { recursive: true });
+        const f = await homeFixture(), outside = join(f.home, 'other-data'), stale = join(f.root, `${process.pid}-1`); await mkdir(outside); await mkdir(stale, { recursive: true });
         await writeFile(join(outside, 'keep.txt'), 'keep');
-        await symlink(outside, join(f.root, 'old-link'), process.platform === 'win32' ? 'junction' : 'dir');
-        await f.start(); expect(await readdir(f.root)).toEqual([]); expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
+        await symlink(outside, join(stale, 'old-link'), process.platform === 'win32' ? 'junction' : 'dir');
+        await f.start(); await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
+    });
+    it('preserves another real live process folder at startup/sweep, with a real dead process as the deletion control', async () => {
+        const f = await homeFixture(), live = await heldProcess(), dead = await heldProcess();
+        const table = await systemProcessTree.read!(); expect(table).not.toBeNull();
+        const a = table!.find(p => p.pid === live.child.pid), b = table!.find(p => p.pid === dead.child.pid);
+        expect(a?.started).toBeGreaterThan(0); expect(b?.started).toBeGreaterThan(0);
+        const liveDir = join(f.root, `${a!.pid}-${a!.started}`), deadDir = join(f.root, `${b!.pid}-${b!.started}`);
+        await mkdir(liveDir, { recursive: true }); await mkdir(deadDir);
+        await writeFile(join(liveDir, 'keep-live'), 'another serving host'); await writeFile(join(deadDir, 'remove-dead'), 'prior process');
+        await dead.stop(); await f.start();
+        await expect(stat(deadDir)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await readFile(join(liveDir, 'keep-live'), 'utf8')).toBe('another serving host');
+        const module = await areaModule(), area = await module.LocalStagingArea.open(f.home); await area.sweep();
+        expect(await readFile(join(liveDir, 'keep-live'), 'utf8')).toBe('another serving host'); expect(live.child.exitCode).toBeNull();
+    });
+    it('a failed process read preserves every folder and refuses the sweep visibly', async () => {
+        const f = await homeFixture(), module = await areaModule();
+        let table: readonly ProcessInfo[] | null = [{ pid: process.pid, ppid: 1, started: 1000, name: 'fixture host' }];
+        const area = await module.LocalStagingArea.open(f.home, { readProcesses: async () => table });
+        const unknown = join(f.root, '12345-67890'); await mkdir(unknown); await writeFile(join(unknown, 'keep'), 'ownership unknown');
+        table = null;
+        await expect(area.sweep()).rejects.toThrow(/process|ownership|read/i);
+        expect(await readFile(join(unknown, 'keep'), 'utf8')).toBe('ownership unknown');
     });
     it('an uncomposed host has no OS-temp fallback for local writes', async () => {
         const f = await resourceDoor(cleanups, { createLocalUploads: undefined }), c = await f.client();
