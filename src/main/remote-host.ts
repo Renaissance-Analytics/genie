@@ -16,6 +16,8 @@ import type { Device, DeviceStore } from './remote-devices.js';
 import { pairRefusal, type PairConfirm } from '../core/pair-confirm.js';
 import { DEVICE_EXPIRY_DAYS } from '../core/device-expiry.js';
 import { UploadStaging, nextWindow, openWindow, type WatchOptions, type WindowState, type WireRow } from '../core/mobile-wire.js';
+import type { BlobOpener } from '../core/local-blobs.js';
+import { LocalBlobs } from './local-blobs.js';
 
 /**
  * THE REMOTE HOST (§6.8) — another machine (or a phone) drives THIS Genie over a transport.
@@ -88,6 +90,7 @@ interface Connection {
     readonly watching: Map<string, WindowState<WireRow>>;
     /** Independent activity views belonging to this admitted local window. */
     readonly activityViews: Set<string>;
+    blobs: LocalBlobs | null;
 }
 
 /** What a phone may never call: it has no terminals (the owner, 2026-10-11; Genie 1 streamed them to the phone). */
@@ -122,6 +125,7 @@ const isAnswerPair = (args: unknown[]): boolean => typeof args[0] === 'object' &
 
 export class RemoteHost {
     readonly #api: HostApi;
+    readonly #openBlob: BlobOpener | undefined;
     readonly #hostName: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
@@ -149,8 +153,9 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener }) {
         this.#api = deps.api;
+        this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
         this.#baton = deps.baton;
         this.#pins = deps.pins;
@@ -179,6 +184,7 @@ export class RemoteHost {
 
     /** A connection left: with no authenticated connection remaining, stop hearing the host API. */
     #drop(connection: Connection): void {
+        connection.blobs?.dispose();
         connection.activityViews.clear();
         if (connection.pendingPair !== null) {
             this.#confirm.cancel(connection.pendingPair);
@@ -271,7 +277,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set() };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), blobs: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -387,6 +393,18 @@ export class RemoteHost {
         if (connection.local && (method === 'baton.take' || method === 'host.lock' || method === 'host.unlock')) return refuse(`${method} is a remote connection control; local windows do not use it`);
 
         switch (method) {
+            case 'blob.open':
+            case 'blob.read':
+            case 'blob.close': {
+                if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
+                if (!this.#connections.has(connection.id)) return refuse('the blob connection closed');
+                const blobs = connection.blobs ??= new LocalBlobs(this.#openBlob);
+                try {
+                    if (method === 'blob.open') return ok(await blobs.open(args[0], args[1]));
+                    if (method === 'blob.read') return ok(await blobs.read(args[0], args[1], args[2]));
+                    return ok(await blobs.close(args[0]));
+                } catch (error) { return refuse(error instanceof Error ? error.message : String(error)); }
+            }
             case 'baton.take': {
                 // Holding the baton would keep everyone who CAN change things from doing so.
                 if (auth.readonly) return refuse(`${auth.label} has read-only access to ${this.#hostName}`);

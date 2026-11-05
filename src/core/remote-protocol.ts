@@ -1,3 +1,5 @@
+import { BLOB_METHODS } from './local-blobs.js';
+
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
  *
@@ -123,8 +125,9 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `agent.watch` / `agent.unwatch` (genie#1346): a phone's window on ONE agent's ledger, then patches (core/mobile-wire.ts).
  * `upload.begin` / `upload.chunk` / `upload.abort`: bytes staged on the connection under the 1 MiB frame cap, taken by
  * `files.upload` or a prompt's attachments.
+ * `blob.*`: connection-owned reads, explicitly local-only in RemoteHost before any content source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
 /** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */

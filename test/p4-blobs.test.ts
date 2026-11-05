@@ -139,7 +139,8 @@ describe('7A standalone local blob controls through the admitted door', () => {
         [-1, 1], [0, CHUNK + 1], [0.5, 1], [0, 1.5], [0, -1], [null, 1], [0, null],
         [Number.MAX_SAFE_INTEGER, 1], [20, 1], [10, 11],
     ])('refuses out-of-range/noninteger read offset=%j length=%j before a source read', async (offset, length) => {
-        const f = await fixture(20), c = await f.raw(), opened = value<{ id: string }>(await c.call('blob.open', ['draft-file', 'ref_fixture']));
+        // The over-chunk case is WITHIN the source size, so only the chunk limit can refuse it.
+        const f = await fixture(length === CHUNK + 1 ? CHUNK + 1 : 20), c = await f.raw(), opened = value<{ id: string }>(await c.call('blob.open', ['draft-file', 'ref_fixture']));
         expect(await c.call('blob.read', [opened.id, offset, length])).toMatchObject({ ok: false, reason: expect.any(String) });
         expect(f.sources[0]!.read).not.toHaveBeenCalled();
     });
