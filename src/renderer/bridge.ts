@@ -640,11 +640,16 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
         subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
+    if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;
     return bridge;
 }
 
 declare global {
     interface Window {
+        /** Immutable preload value supplied by main's GENIE_PAGE_PROBE flag. */
+        readonly genieTestMode?: boolean;
+        /** The app's same local bridge, exposed only for a main-enabled native probe. */
+        genieTest?: GenieBridge;
         /**
          * Present only in the real app. It is optional on purpose: a renderer that assumes a
          * bridge cannot be rendered in a test, and the surfaces are then only ever checked by

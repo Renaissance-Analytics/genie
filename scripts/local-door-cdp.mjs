@@ -244,7 +244,7 @@ try {
     const workspace = join(root, 'workspace'); mkdirSync(workspace);
     server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<!doctype html><title>Local door panel</title><p>door control</p>'); });
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    childEnv = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE2_CODEX_BINARY: resolve('scripts/stub-codex.mjs') };
+    childEnv = { ...process.env, HOME: root, USERPROFILE: root, GENIE_HOME: join(root, '.genie'), GENIE_PAGE_PROBE: '1', GENIE2_CODEX_BINARY: resolve('scripts/stub-codex.mjs') };
     execFileSync(process.execPath, [resolve('scripts/smoke-seed.mjs')], { cwd: workspace, env: childEnv, timeout: 15_000, stdio: 'pipe' });
     // Only the manifest just created in this private workspace is extended; the checkout is untouched.
     const manifest = readJson(join(workspace, 'project.json'));
@@ -497,31 +497,41 @@ try {
         } finally { await rpc('host.unlock').catch(()=>{}); await rpc('baton.release').catch(()=>{}); remote.close(); }
         return 'real remote status held throughout actual local store write';
     });
-    await row(10, 'streaming positive control with zero local protocol frames', async () => {
+    await row(10, 'streaming positive control with zero frames on the app\'s own connection', async () => {
         let marker; try { marker = Number(readFileSync(TICKER,'utf8').trim()); } catch { /* absent */ }
         demand(marker===process.pid, 'this run owns ticker provider mode');
         const added = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-ticker-${process.pid}`)},purpose:'Native local-door streaming check',provider:'codex'})`);
         demand(added?.ok, `agent added: ${added?.reason??'no result'}`); agents.push(added.id);
-        await main.evaluate(`window.genie.agents.restart(${JSON.stringify(added.id)},'graceful')`);
+        // Earlier admission/lifetime probes may replace the app's connection. Restore that
+        // same pageBridge through its own recovery, observed by the existing preload listener.
+        await main.evaluate('window.genieTest.localProtocol.retry()');
+        const restarted = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(added.id)},'graceful')`);
+        demand(restarted?.ok, `start through app bridge: ${restarted?.reason??'no result'}`);
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app owns a ready connection');
         await until('streaming agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
         const prompt = await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
         const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
         const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
         // Positive frame gauge immediately before the silent streaming interval.
-        demand((await call(main,'workspaces.settings',['tynn'])).value?.ok,'frame/result positive control before absence');
+        const gaugeStart = await main.evaluate('window.__doorCdp.total');
+        demand((await main.evaluate("window.genieTest.workspaces.settings('tynn')"))?.ok,'app bridge result positive control before absence');
+        demand(await main.evaluate(`window.__doorCdp.total > ${gaugeStart}`),'the observer sees a result on the app connection');
         await sleep(500);
         const beforeTicks = Math.max(...count(await ticks()));
         const frameStart = await main.evaluate('window.__doorCdp.total');
+        const appWelcome = await welcome(main);
         const nativeStart = await nativeSummary();
         await until('eight more provider ticks',async()=>Math.max(...count(await ticks()))>=beforeTicks+8,20_000);
         const afterTicks = Math.max(...count(await ticks()));
         const frameEnd = await main.evaluate('window.__doorCdp.total');
         const w = await welcome(main), nativeEnd = await nativeSummary();
+        demand(w.connectionId===appWelcome.connectionId, 'the app connection is unchanged throughout streaming');
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app connection stays ready');
         demand(nativeEnd.records.some(r=>r.connectionId===w.connectionId&&!r.closed),'native connection remains live');
         demand(frameEnd===frameStart,'no frame reached connected main preload while ledger grew');
         demand(nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames===nativeStart.records.find(r=>r.connectionId===w.connectionId).frames,'actual server socket also sent no frame');
-        return `ticks ${beforeTicks} → ${afterTicks}; page/native frame deltas=0/0`;
+        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; page/native frame deltas=0/0`;
     });
 } catch (error) {
     if (!reports.some((r) => r.status === 'FAIL')) result(Number.parseInt(phase) || 1, error instanceof Unmeasured ? 'UNMEASURED' : 'FAIL', error.message);

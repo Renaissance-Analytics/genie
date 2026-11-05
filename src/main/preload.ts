@@ -376,6 +376,8 @@ const bridge: PreloadBridge = {
 };
 
 contextBridge.exposeInMainWorld('genie', bridge);
+// contextBridge makes this main-supplied value immutable in the page, including when false.
+contextBridge.exposeInMainWorld('genieTestMode', process.argv.includes('--genie-page-probe'));
 
 // One string frame pair, separate from the bridge families that have not moved yet. Admission belongs to main.
 contextBridge.exposeInMainWorld('genieLocalProtocol', {

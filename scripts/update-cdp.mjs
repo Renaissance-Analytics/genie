@@ -139,7 +139,7 @@ try {
     check(typeof codexId === 'string', '11b. the seed left a codex agent to run', String(codexId));
     if (typeof codexId === 'string') {
         // Start (the one restart): opening an agent starts nothing since q_04ce323c.
-        await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
+        await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
         const end = Date.now() + 30_000;
         let running = null;
         while (Date.now() < end) {

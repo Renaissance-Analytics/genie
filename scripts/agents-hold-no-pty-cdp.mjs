@@ -5,7 +5,7 @@
  *   node scripts/agents-hold-no-pty-cdp.mjs
  *
  * Runs against an app launched with `--remote-debugging-port=9222` after `smoke-seed.mjs`,
- * with `GENIE2_CODEX_BINARY` pointing at the stub app-server (so an agent can actually run).
+ * with GENIE_PAGE_PROBE=1 and `GENIE2_CODEX_BINARY` pointing at the stub app-server (so an agent can actually run).
  * The unit layer (test/no-agent-pty.test.ts) proves the host never ASKS for a pty on an
  * agent's behalf; the type layer makes "agent on a pty" uncompilable; this is the third layer
  * §8.2 asks for — a process scan while agents run:
@@ -123,7 +123,7 @@ try {
 
     // START AN AGENT, the way a person does.
     // Start (the one restart): opening an agent starts nothing since q_04ce323c.
-    await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
+    await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
         running = await cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(codexId)}).then((d) => d?.session?.running ?? null)`);

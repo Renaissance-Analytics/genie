@@ -122,7 +122,7 @@ class Cdp {
     close() { try { this.#ws.close(); } catch { /* gone */ } }
 }
 async function launch(command, args) {
-    const env = { ...process.env, GENIE2_CODEX_BINARY: join(process.cwd(), 'scripts', 'stub-codex.mjs'), XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0' };
+    const env = { ...process.env, GENIE_PAGE_PROBE: '1', GENIE2_CODEX_BINARY: join(process.cwd(), 'scripts', 'stub-codex.mjs'), XDG_SESSION_TYPE: 'x11', DISPLAY: process.env.DISPLAY ?? ':0' };
     delete env.ELECTRON_RUN_AS_NODE;
     window = spawn(command, [...args, '--no-sandbox', '--ozone-platform=x11', `--remote-debugging-port=${PORT}`], { env, stdio: 'ignore' });
     const page = await until('a window on the debugger port', 90_000, async () => {
@@ -134,7 +134,7 @@ async function launch(command, args) {
     return cdp;
 }
 const signedIn = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.tynn?.user?.name ?? null)');
-const start = (cdp, id) => cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(id)}, "graceful"); true`);
+const start = (cdp, id) => cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(id)}, "graceful"); true`);
 const newRun = (seen) => until('a new run of the provider', 60_000, () => records().find((r) => !seen.has(r.pid)) ?? null);
 
 try {
