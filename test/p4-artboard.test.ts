@@ -18,7 +18,7 @@ const tick = () => new Promise<void>(resolve => setImmediate(resolve));
 const methods = ['artboard.read', 'artboard.review'] as const;
 const post = (value: Partial<BoardPost> = {}): BoardPost => ({ id: 'p1', title: 'A mockup', kind: 'html', file: 'p1.html', createdAt: '2026-11-05T01:00:00Z', agentId: 'agent_a', askVerdict: true, ...value });
 interface Ref { ref: string; size: number; sha256: string; type: string }
-interface Metadata { id: string; title: string; kind: string; artifact: Ref; review?: { verdict: string; at: string; comment?: Ref } }
+interface Metadata { id: string; postId: string; title: string; kind: string; artifact: Ref; review?: { verdict: string; at: string; comment?: Ref } }
 interface Envelope { artboardContent: { ref: string; list: string; count: number; error?: string } }
 type Raw = { call(method: string, args: unknown[]): Promise<WireMessage> };
 async function staged(raw: Raw, text: string, purpose = 'board-image', subtype = 'comment'): Promise<string> {
@@ -87,14 +87,14 @@ describe('7F ArtBoard on the admitted local connection', () => {
         await f.index(posts); const raw = await f.raw(), value = await body(f, raw); expect(value.count).toBe(100);
         let page = resultValue<{ items: Metadata[]; cursor: string | null }>(await raw.call('page.open', ['artboard-posts', value.list])), pages = 1; const rows = [...page.items];
         while (page.cursor) { page = resultValue(await raw.call('page.next', [page.cursor])); pages++; rows.push(...page.items); }
-        expect(pages).toBeGreaterThan(1); expect(rows.map(p => p.id)).toEqual([...posts].reverse().map(p => p.id)); expect(rows.every(p => !('html' in p) && !('src' in p))).toBe(true);
+        expect(pages).toBeGreaterThan(1); expect(rows.map(p => p.id)).toEqual(rows.map((_, index) => String(index))); expect(rows.map(p => p.postId)).toEqual([...posts].reverse().map(p => p.id)); expect(rows.every(p => !('html' in p) && !('src' in p))).toBe(true);
         for (const text of f.serialized) { const frame = JSON.parse(text); if (frame.kind === 'result' && Array.isArray(frame.value?.items)) { expect(frame.value.items.length).toBeLessThanOrEqual(128); expect(Buffer.byteLength(JSON.stringify(frame.value))).toBeLessThanOrEqual(512 * 1024); } }
         resultValue(await raw.call('content.release', [value.ref]));
     });
     it('an oversized metadata record is refused visibly instead of silently skipped', async () => {
         const f = await fixture(); await f.index([post({ id: 'oversized-title', title: 'x'.repeat(600 * 1024) })]); const raw = await f.raw(), value = await body(f, raw);
         const first = await raw.call('page.open', ['artboard-posts', value.list]), second = await raw.call('page.open', ['artboard-posts', value.list]);
-        expect(first).toMatchObject({ kind: 'result', ok: false, reason: expect.stringMatching(/oversized-title.*[0-9]/) }); expect(second).toMatchObject({ kind: 'result', ok: false, reason: (first as { reason: string }).reason });
+        expect(first).toMatchObject({ kind: 'result', ok: false, reason: expect.stringMatching(/record 0.*[0-9]/) }); expect(second).toMatchObject({ kind: 'result', ok: false, reason: (first as { reason: string }).reason });
         resultValue(await raw.call('content.release', [value.ref]));
     });
     it('a full 2 MiB image and large HTML survive with complete native bytes and no large call/event', async () => {
@@ -177,6 +177,10 @@ describe('7F ArtBoard on the admitted local connection', () => {
     });
     it('duplicate native post IDs remain ordered entries rather than being silently deduplicated', async () => {
         const f = await fixture(); await f.index([post({ title: 'First' }), post({ title: 'Second' })]); expect(await f.bridge().read('work')).toEqual(await f.native());
+    });
+    it('native Unicode and long post IDs survive the bounded page cursor IDs unchanged', async () => {
+        const f = await fixture(); await f.index([post({ id: '雪 / native id' }), post({ id: 'x'.repeat(2000), title: 'Long native id' })]);
+        expect(await f.bridge().read('work')).toEqual(await f.native());
     });
     it('a native read failure rejects visibly and releases the pending response budget', async () => {
         const f = await fixture(); f.ports.read.mockRejectedValueOnce(new Error('synthetic board disk refusal'));
