@@ -19,5 +19,6 @@ import type { SocketLike } from './issue-watch-client.js';
 type NativeWebSocket = new (url: string, init: { readonly headers: Readonly<Record<string, string>> }) => SocketLike;
 
 export function dialTynnSocket(url: string, tynnHost: string): SocketLike {
-    return new (WebSocket as unknown as NativeWebSocket)(url, { headers: { Origin: new URL(tynnHost).origin } });
+    void tynnHost;
+    return new (WebSocket as unknown as NativeWebSocket)(url, { headers: {} });
 }
