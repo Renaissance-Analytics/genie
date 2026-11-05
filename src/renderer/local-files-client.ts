@@ -4,7 +4,8 @@ import { decodeLocalBase64, encodeLocalBase64 } from './local-base64.js';
 import { FILES_INLINE_BYTES, type FilesContentEnvelope, type FilesProjection, type InvalidFilesArgument, type LocalFilesMethod } from '../core/local-files.js';
 import type { GenieBridge } from './bridge.js';
 
-export type FilesProtocolKey = 'tree' | 'children' | 'open' | 'readMedia' | 'lastCommitted' | 'state' | 'gitStatus' | 'create' | 'rename' | 'duplicate' | 'trash' | 'readBytes' | 'write' | 'writeBytes';
+type FilesContentKey = 'tree' | 'children' | 'open' | 'readMedia' | 'lastCommitted' | 'state' | 'gitStatus' | 'create' | 'rename' | 'duplicate' | 'trash' | 'readBytes' | 'write' | 'writeBytes';
+export type FilesProtocolKey = FilesContentKey | 'subscribe' | 'onChange';
 export type LocalFilesBridge = Pick<GenieBridge['files'], FilesProtocolKey>;
 
 /** Buffer.from(base64)'s legacy acceptance, including unpadded/URL-safe input, for staged editor bytes. */
@@ -30,7 +31,7 @@ function fileArguments(method: LocalFilesMethod, args: unknown[]): unknown[] {
     return safe;
 }
 
-export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): { files: LocalFilesBridge; repo: NonNullable<GenieBridge['repo']> } {
+export function filesContentReader(port: { release(ref: string): Promise<unknown>; blobs: BlobClient; pages: PageClient }) {
     const decode = async (value: FilesProjection): Promise<unknown> => {
         if (!value || typeof value !== 'object') throw new Error('invalid Files metadata projection');
         switch (value.t) {
@@ -55,6 +56,17 @@ export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...ar
             default: throw new Error('unknown Files metadata projection');
         }
     };
+    return async <T>(result: unknown): Promise<T> => {
+        if (!result || typeof result !== 'object' || !('filesContent' in result)) return result as T;
+        const body = (result as FilesContentEnvelope).filesContent;
+        if (!body || typeof body.ref !== 'string') throw new Error('invalid Files response reference');
+        try { return await decode(body.value) as T; }
+        finally { try { await port.release(body.ref); } catch { console.warn('[genie] a Files response could not be released'); } }
+    };
+}
+
+export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...args: unknown[]): Promise<T>; release(ref: string): Promise<unknown>; blobs: BlobClient; uploads: LocalUploadClient; pages: PageClient }): { files: Pick<GenieBridge['files'], FilesContentKey>; repo: NonNullable<GenieBridge['repo']> } {
+    const decodeResult = filesContentReader(port);
     const request = async <T>(method: LocalFilesMethod, rawArgs: unknown[]): Promise<T> => {
         const args = fileArguments(method, rawArgs);
         let staged: string | null = null;
@@ -71,11 +83,7 @@ export function localFilesClient(port: { read<T>(method: LocalFilesMethod, ...ar
             }
             if (new TextEncoder().encode(JSON.stringify(sent)).length > FILES_INLINE_BYTES) throw new Error('these Files arguments are too large for one bounded call');
             const result = await port.read<unknown>(method, ...sent);
-            if (!result || typeof result !== 'object' || !('filesContent' in result)) return result as T;
-            const body = (result as FilesContentEnvelope).filesContent;
-            if (!body || typeof body.ref !== 'string') throw new Error('invalid Files response reference');
-            try { return await decode(body.value) as T; }
-            finally { try { await port.release(body.ref); } catch { console.warn('[genie] a Files response could not be released'); } }
+            return await decodeResult<T>(result);
         } finally { if (staged !== null) { try { await port.uploads.abort(staged); } catch { console.warn('[genie] a Files stage could not be released'); } } }
     };
     return {

@@ -1,4 +1,6 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
+export type { FilesViewEvent, FilesViewWant } from '../core/local-files-watch.js';
 import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
@@ -570,21 +572,6 @@ export const SERVABLE: readonly Surface[] = ['dashboard', 'agent', 'deck', 'work
  * exists. Every call is a no-op and every list is empty, which is the honest answer: nothing
  * is opened, nothing is written, nothing is claimed. Never a fake terminal.
  */
-/** What a files view asks for beside the batches (the host split, P2.2). */
-export interface FilesViewWant {
-    readonly git?: boolean;
-    readonly repos?: readonly string[];
-}
-
-/** A batch (`paths`) or a git result (`git`) for a view's workspace. */
-export interface FilesViewEvent {
-    readonly paths?: readonly string[];
-    readonly git?: {
-        readonly tree?: Readonly<Record<string, 'modified' | 'added' | 'deleted' | 'untracked'>>;
-        readonly repos?: Readonly<Record<string, { ok: true; value: unknown } | { ok: false; error: string }>>;
-    };
-}
-
 export const NO_FILES: GenieBridge['files'] = {
     tree: () => Promise.resolve(null),
     children: () => Promise.resolve(null),

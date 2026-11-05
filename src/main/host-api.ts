@@ -24,6 +24,7 @@ import type { AppInboxCardState } from '../renderer/components/AppInboxCard.js';
 import type { RoleChange, TynnWorkstationList, TynnNetworkBridge } from '../renderer/relay-transport.js';
 import { isLocalFilesMethod } from '../core/local-files.js';
 import { invokeLocalFiles, type LocalFilesDeps } from './local-files-api.js';
+import type { FilesWatchPort } from './local-files-watches.js';
 
 /** Business ports for the own window's keys, device memory and Tynn session. No outgoing channel or window port. */
 export interface LocalOwnerDeps {
@@ -63,6 +64,7 @@ export interface LocalOwnerDeps {
  */
 
 export interface HostApiDeps {
+    filesWatch?: FilesWatchPort;
     localFiles?: LocalFilesDeps;
     localOwner?: LocalOwnerDeps;
     /** The timer and clock the agent events are coalesced on (core/coalesce.ts). Default: the real ones. */
@@ -594,6 +596,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
     const terminalWorkspaces = new Map<string, string>();
     return {
         invoke,
+        ...(deps.filesWatch ? { filesWatch: deps.filesWatch } : {}),
         workspaceOfAgent: (agentId) => deps.find(agentId)?.workspaceId ?? null,
         // A terminal's workspace, remembered once seen: its exit is pushed after it has left the list.
         workspaceOfTerminal: (terminalId) => {
@@ -622,6 +625,7 @@ export function buildHostApi(deps: HostApiDeps): HostApi {
                 deps.updates?.onChange((state) => { listener('updates', state); listener(LOCAL_EVENTS.updates, state); }) ?? (() => {}),
                 deps.activity?.subscribe((feed) => { listener('activity', feed); listener(LOCAL_EVENTS.activity, feed); }) ?? (() => {}),
                 deps.headroom?.subscribe((room) => listener(LOCAL_EVENTS.headroom, room)) ?? (() => {}),
+                deps.filesWatch?.subscribe(event => listener(LOCAL_EVENTS.files, event)) ?? (() => {}),
                 deps.workspaceOps.onSettingsChanged?.((id) => listener('workspace-settings-changed', id)) ?? (() => {}),
             ];
             return () => { for (const off of offs) off(); };

@@ -16,18 +16,17 @@ describe('the window', () => {
         expect(code('src/main/files-host.ts')).not.toMatch(/\bwatch\(/);
     });
 
-    it('main subscribes and unsubscribes per view, and drops a closed window\'s views', () => {
+    it('the protocol owns views and main has no per-view native handlers', () => {
         const main = code('src/main/main.ts');
-        expect(main).toMatch(/ipcMain\.handle\('genie:files-watch'/);
-        expect(main).toMatch(/ipcMain\.handle\('genie:files-unwatch'/);
+        expect(main).not.toMatch(/ipcMain\.handle\('genie:files-watch'/);
+        expect(main).not.toMatch(/ipcMain\.handle\('genie:files-unwatch'/);
         expect(main).not.toMatch(/filesHost\?\.watch\(/);
-        expect(main).toMatch(/dropFilesViewsOf\(/);
+        expect(code('src/main/remote-host.ts')).toMatch(/files\.unwatch/);
     });
 
-    it('the preload\'s subscription unwatches when the view lets go', () => {
+    it('the preload has no native file-watch subscription', () => {
         const preload = code('src/main/preload.ts');
-        expect(preload).toMatch(/subscribe:\s*\(workspaceId, want, listener\)/);
-        expect(preload).toMatch(/'genie:files-unwatch'/);
+        expect(preload).not.toMatch(/'genie:files-watch'|'genie:files-unwatch'|'genie:files-changed'|'genie:files-git'/);
     });
 });
 

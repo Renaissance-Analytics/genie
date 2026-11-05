@@ -11,7 +11,8 @@ import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { localPageClient, localUploadClient } from './local-content-client.js';
-import { localFilesClient } from './local-files-client.js';
+import { filesContentReader, localFilesClient } from './local-files-client.js';
+import { localFilesWatchClient } from './local-files-watch-client.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -107,6 +108,7 @@ interface PhonePush {
 }
 
 export function connectRemote(transport: ClientTransport, auth: AuthRequest, label: string, options: RemoteOptions = {}): RemoteClient {
+    let filesWatches: ReturnType<typeof localFilesWatchClient> | undefined;
     let state: RemoteState = { connected: false, host: null, isOwner: false, workspaceId: null, driver: null, driving: false, locked: false, lastRefusal: null, token: null, pairing: null };
     const stateListeners = new Set<(s: RemoteState) => void>();
     const setState = (patch: Partial<RemoteState>) => {
@@ -158,6 +160,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         }
     });
     transport.onClose(() => {
+        filesWatches?.dispose();
         // A refused handshake arrives as a close with no welcome and no refused frame: say so, once.
         if (!state.connected) resolveReady({ ok: false, reason: 'the connection closed before the host answered — wrong address, or the host is not listening' });
         setState({ connected: false, driving: false });
@@ -412,7 +415,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
                 if (!staged.ok) return staged;
                 return answer('files.upload', workspaceId, dir, { staged: staged.id }) as never;
             },
-        } : NO_FILES,
+        } : { ...NO_FILES },
         // A phone's upload (§6.8): the bytes ride the socket; the host copies them into the inbox and drops the temp file.
         uploads: { sendFile: (to, text, name, base64) => answer<{ ok: true; messageId: string }>('inbox.sendFile', to, text, name, base64) },
         terminals: {
@@ -506,6 +509,8 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
     if (local) {
         const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
         Object.assign(bridge.files, files.files); bridge.repo = files.repo;
+        filesWatches = localFilesWatchClient({ read: blobRead, decode: filesContentReader({ release: ref => blobRead('content.release', ref), blobs: blobs!, pages: pages! }), on: listener => on(LOCAL_EVENTS.files, listener), refusal: reason => setState({ lastRefusal: reason }) });
+        Object.assign(bridge.files, filesWatches.files);
     }
 
     return {

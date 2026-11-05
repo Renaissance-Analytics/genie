@@ -112,6 +112,8 @@ export function localSession(port: LocalFramePort | undefined): { control: Local
     const ownerRead = <T>(call: (owner: LocalOwnerBridge) => Promise<T>): Promise<T> => read(() => call(client!.localOwner!));
     return {
         files: {
+            subscribe: (id, want, listener) => subscribe(b => b.files.subscribe!(id, want, listener)),
+            onChange: listener => subscribe(b => b.files.onChange(listener)),
             tree: id => read(b => b.files.tree(id)), children: (id, dir) => read(b => b.files.children!(id, dir)),
             open: (id, path) => read(b => b.files.open(id, path)), readMedia: (id, path) => read(b => b.files.readMedia!(id, path)),
             lastCommitted: (id, path) => read(b => b.files.lastCommitted!(id, path)), state: id => read(b => b.files.state(id)), gitStatus: id => read(b => b.files.gitStatus!(id)),

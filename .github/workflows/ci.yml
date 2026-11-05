@@ -349,6 +349,17 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Files view watches and oversized cached refetch
+        run: timeout 180 node scripts/files-watch-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: files-watch-linux
+          path: smoke-out/files-watch*
+          if-no-files-found: warn
+          retention-days: 7
+
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
@@ -583,6 +594,18 @@ jobs:
           path: |
             local-door*.log
             smoke-out/local-door*
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Files view watches and oversized cached refetch
+        shell: pwsh
+        run: node scripts/files-watch-cdp.mjs
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: files-watch-windows
+          path: smoke-out/files-watch*
           if-no-files-found: warn
           retention-days: 7
 
