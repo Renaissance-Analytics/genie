@@ -4,7 +4,7 @@
  * the real genie-host and the real OS keychain, in a test VM. Refuses anywhere else.
  *
  *   node scripts/smoke-seed.mjs && node scripts/agent-key-no-window-cdp.mjs seed     # before the app launches
- *   (launch the app with --remote-debugging-port=9222 and GENIE2_CODEX_BINARY=scripts/stub-codex.mjs)
+ *   (launch with GENIE_PAGE_PROBE=1, --remote-debugging-port=9222 and GENIE2_CODEX_BINARY=scripts/stub-codex.mjs)
  *   node scripts/agent-key-no-window-cdp.mjs run
  *
  * `seed` leaves what a window that minted would leave: the binding in the vault, the key in the keychain, the account on disk.
@@ -18,6 +18,7 @@
  * Prints a line per step, then `### agent-key <check>=PASS|FAIL` and `### agent-key=PASS|FAIL`. Every wait has a deadline, the run
  * is capped at 4 min, and every exit ends the providers and the host it found. The key is a test word, never a real one.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -148,7 +149,8 @@ try {
     check(!pgrep('stub-codex').length, '2-no-provider-before-anything-starts');
 
     say('starting A through the window');
-    await cdp.evaluate(`window.genie.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`);
+    await waitForPageProbe(cdp);
+    await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`);
     const first = await until('A\'s provider', 45_000, () => records()[0] ?? null);
     const genie = first?.servers?.genie;
     check(Boolean(genie?.url && genie?.bearer), '3-A-has-the-hosts-genie-server', genie?.url ?? 'none');

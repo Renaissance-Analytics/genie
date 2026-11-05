@@ -34,7 +34,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureInProcessBackend, inProcessBackend, resolveDefaultShell } from '@particle-academy/fancy-term-host';
-import { shellLaunch } from '../../src/core/shell-launch.js';
+import { ptyShellLaunch } from '../../src/core/shell-launch.js';
 import { fancyTermPort } from '../../src/main/fancy-term-port.js';
 import type { PtyPort } from '../../src/main/terminal-host.js';
 
@@ -97,7 +97,7 @@ function run(launch: { command: string; args: string[]; env?: Record<string, str
     });
 }
 
-/** Today's path, exactly: the line through `pty.open({ shell: true })` (shellLaunch → cmd.exe /d /s /c <line>). */
+/** Today's path, exactly: the line through `pty.open({ shell: true })` (ptyShellLaunch: cmd.exe /d /s /c %GENIE_SHELL_LINE%, since genie#1428). */
 function runShellLine(line: string, cwd: string): Promise<{ out: string; code: number }> {
     return new Promise((resolve) => {
         let out = '';
@@ -119,7 +119,7 @@ const SHELL_LINE = '%GENIE_SHELL_LINE%';
 const envLaunch = (line: string) => ({ command: 'cmd.exe', args: ['/d', '/s', '/c', SHELL_LINE], env: { GENIE_SHELL_LINE: line } });
 const expanded = (line: string) => line.replace(/%([^%\s=]+)%/g, (whole, name: string) => process.env[name] ?? whole);
 
-console.log(`today's launch for a line: ${JSON.stringify(shellLaunch('win32', () => ({ command: 'cmd.exe', args: [] }), '<line>'))}`);
+console.log(`the product's launch for a line: ${JSON.stringify(ptyShellLaunch('win32', () => ({ command: 'cmd.exe', args: [] }), '<line>', {}))}`);
 for (const c of lines) {
     const today = await runShellLine(c.line, c.cwd);
     console.log(`${verdict(today.out) ? 'RAN   ' : 'NO RUN'}  today   ${c.name} (exit ${today.code}) — ${clean(today.out)}`);
@@ -132,5 +132,5 @@ for (const c of lines) {
     const remedy = await run(envLaunch(expanded(c.line)), c.cwd);
     console.log(`${verdict(remedy.out) ? 'RAN   ' : 'NO RUN'}  env+vars ${c.name} (exit ${remedy.code}) — ${clean(remedy.out)}`);
 }
-console.log('CMD-S PROBE DONE: read the table. Expected: today, only the lines with no quote run (E2, E3); env runs all but E3; env+vars runs every row.');
+console.log('CMD-S PROBE DONE: read the table. Expected since the genie#1428 fix: today (the product path itself) runs every row, as env+vars does; env runs all but E3.');
 process.exit(0);
