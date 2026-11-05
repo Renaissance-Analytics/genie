@@ -120,6 +120,11 @@ export function spawnBrowserProcess(launch: { readonly file: string; readonly ar
     }
 }
 
+/** The updater helper (P5b). Not built yet. */
+export function spawnUpdaterProcess(_launch: { readonly file: string; readonly args: readonly string[] }, _ports: Pick<EngineLaunchPorts, 'logsDir' | 'env'>, _spawn: typeof spawnChild = spawnChild): number | null {
+    return null;
+}
+
 export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> {
     const alive = ports.alive ?? pidAlive;
     const read = ports.readFile ?? readOrNull;

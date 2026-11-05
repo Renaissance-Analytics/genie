@@ -80,6 +80,11 @@ export interface UpdaterPort {
     download(onProgress: (percent: number) => void): Promise<void>;
     /** Quits and runs the installer. Does not return in the real implementation. */
     quitAndInstall(): void;
+    /**
+     * Make the install ready BEFORE anything is stopped (P5b: the helper has the update in hand). A rejection stops the
+     * install there, in words, with every agent and site still running. Absent = nothing to make ready.
+     */
+    prepareInstall?(): Promise<void>;
 }
 
 /**
@@ -118,6 +123,10 @@ export interface UpdateHostOptions {
     runningVersion?: string;
     /** Genie's published releases (GitHub's releases API); absent = no changelog is fetched. */
     releases?: () => Promise<readonly ReleaseLike[]>;
+    /** What else the install stops, after the agents and before the teardown scan (P5b: genie-host's hosting, P5a.3's order). */
+    stopHosted?: () => Promise<void>;
+    /** Other pids whose trees the teardown scan leaves alone (P5b: the updater helper, the window that asked). */
+    spare?: () => readonly number[];
 }
 
 /**

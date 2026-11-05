@@ -37,6 +37,7 @@ import type { ProcessesService } from './processes-host.js';
 import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
+import type { UpdatesService } from './updates-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -146,6 +147,8 @@ export interface EngineServerOptions {
     readonly flows?: FlowsService;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
     readonly terminals?: TerminalsService;
+    /** The host's updater (P5b: updates-host.ts). Absent = `engine.updates` and `engine.updater` are refused. */
+    readonly updates?: UpdatesService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
     readonly files?: {
