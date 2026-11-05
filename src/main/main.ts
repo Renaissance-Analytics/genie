@@ -115,7 +115,8 @@ import { SpawnLedger } from './spawn-ledger.js';
 import { describeProcesses, systemProcessTree } from '../core/process-tree.js';
 import { randomUUID } from 'node:crypto';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
-import { raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { HISTORY_LIMIT, raisesApprovals, realListModels, SessionHost, providerBinary } from './session-host.js';
+import { openDurableStore, readHistory } from '../core/thread-store.js';
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
@@ -186,7 +187,7 @@ import { FEATURE_CHANNELS } from '../renderer/bridge.js';
 import type { FeatureAction } from '../renderer/features.js';
 import { QUIT_DELAY_MS, UpdateHost } from './updater.js';
 import { channelFrom } from '../core/update-channel.js';
-import { genieHome, installDir, osaHomeDir, runtimeDir } from './paths.js';
+import { genieHome, installDir, osaHomeDir, runtimeDir, sessionsDir } from './paths.js';
 import { osaHomeFiles, writeOsaHome } from '../core/osa-home.js';
 import { omarchyFacts } from './omarchy-skills.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
@@ -1492,6 +1493,8 @@ async function boot(): Promise<void> {
                 if (!result.ok) console.error(`[genie] could not record the thread id: ${result.reason}`);
             });
         },
+        // A provider switch's carry-over went (Tynn story #380): the next prompt does not carry it again.
+        onCarryOverSent: (agentId: AgentId) => { void theRegistry.clearCarryOver(agentId); },
     };
     /*
      * THE AGENT ENGINE IN ITS OWN PROCESS (the host split, phase 1; the owner, 2026-10-31: "the actions agents take should
@@ -2014,6 +2017,8 @@ async function boot(): Promise<void> {
                 return null;
             }
         },
+        // What a provider switch carries (Tynn story #380): the agent's ledger, read as the Doctor reads it (doctor-data.ts).
+        history: async (record) => (await readHistory(openDurableStore(sessionsDir(genieHome())), record.id, { limit: HISTORY_LIMIT })).rows,
         removeDir: (path) => rm(path, { recursive: true, force: true }),
         realPath: async (path) => { try { return await realpath(path); } catch { return null; } },
         // Ask for a handoff before an unmount/delete: Genie asks, the agent's imDone lands in attention; 45 s, as Genie 1.

@@ -1,10 +1,15 @@
-import type { AgentManifest } from './agent-ops.js';
-
 /**
- * THE PERSONA'S OWN WORD (§6.2) — `.agents/<name>/AGENT.md` front matter. `tuis:` is the agent saying
- * which providers may run it; absent means any. Two shapes are read, the ones the envelope actually
- * uses — `tuis: [claude, codex]` and a YAML dash list — with no YAML library behind them.
+ * THE PERSONA'S FRONT MATTER (§6.2) — `.agents/<name>/AGENT.md`, read and never written by Genie. Its `name`, and a
+ * LEGACY `tuis:` line (Tynn story #380): files written before the provider became Genie's own record named one there.
+ * It is only ever a hint — adoption's first guess at a provider — never a gate on a switch, and Genie writes none. Two
+ * shapes are read, `tuis: [claude, codex]` and a YAML dash list, with no YAML library behind them.
  */
+export interface AgentManifest {
+    readonly name: string;
+    /** A legacy `tuis:` line's entries, when the file has one. A hint only. */
+    readonly tuis?: readonly string[];
+}
+
 export function parseAgentManifest(text: string | null, fallbackName: string): AgentManifest {
     if (!text) return { name: fallbackName };
     const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);

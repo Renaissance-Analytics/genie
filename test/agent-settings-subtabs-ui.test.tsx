@@ -97,9 +97,9 @@ describe('Remove from workspace and the provider row (agent-management parity it
         expect(html).toMatch(/<input type="checkbox" name="handoff" checked=""/);
     });
 
-    it('the provider row says a switch starts a NEW conversation — one line, the whole of it on hover', () => {
+    it('the provider row says the conversation comes along on a switch (Tynn story #380) — one line, the whole of it on hover', () => {
         const provider = panel(render('general')).match(/data-rail="provider"[\s\S]*?<\/section>/)?.[0] ?? '';
-        expect(provider).toMatch(/title="Its name, inbox and history stay; it starts a new conversation on the new provider\."/);
+        expect(provider).toMatch(/title="Its conversation comes with it\. Switching back resumes the old one\."/);
         expect(provider).not.toMatch(/next turn runs on the new provider/);
     });
 });

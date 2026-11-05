@@ -12,7 +12,7 @@ describe('agentOpsMenu', () => {
     it('for a declared claude agent: fresh restart (no second Restart), switch to codex, diagnose, unmount, delete (danger)', () => {
         expect(agentOpsMenu({ provider: 'claude', fidelity: 'declared' })).toEqual([
             { id: 'restart-fresh', label: 'Restart fresh', hint: 'discards the conversation on purpose' },
-            { id: 'switch:codex', label: 'Switch driver to codex', hint: 'starts a new conversation; identity, inbox, history and prompt carry across' },
+            { id: 'switch:codex', label: 'Switch provider to codex', hint: 'its conversation comes with it; switching back resumes the old one' },
             { id: 'diagnose', label: 'Diagnose', hint: 'names a cause and the repair that fits' },
             { id: 'delete-unmount', label: 'Unmount from Genie…', hint: 'keeps every .agents/* file' },
             { id: 'delete-delete', label: 'Delete…', hint: 'removes the persona folder too', danger: true },

@@ -3,6 +3,8 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { parseAgentManifest } from '../core/agent-manifest.js';
 import { applyWhen, budgetDecision, deletePlan, restartPlan, RESUME_AFTER_USER_RESTART, switchDriverDecision, type ApplyWhen, type BudgetDecision, type DeletePlan, type SwitchDecision } from '../core/agent-ops.js';
 import { ACP_PROVIDERS, isAcpProvider, type AcpProvider } from '../core/engine.js';
+import { buildCarryOver, type CarryOver } from '../core/carry-over.js';
+import type { StreamEvent } from '../core/stream-event.js';
 import type { AgentPermissions, AgentRecord } from '../core/identity.js';
 import { parseIssueWatchSetting, type IssueWatchSetting } from '../core/issue-watch.js';
 import type { LiveSession } from '../core/roster.js';
@@ -15,8 +17,8 @@ import { diagnoseAgent, type Diagnosis } from '../core/workspace-model.js';
  *
  * RESTART (`restartAgent(…, 'graceful')`) is THE ONE ACTION every Restart and Start control calls (genie#1238): it works
  * from every state and delivers what the agent is owed; `fresh` clears the thread on purpose. Delete is PREVIEWED
- * with its plan before it acts, and the cross-system opt-in travels in the same call. Switch driver
- * reads the persona's own `tuis:`. A budget is set and judged at once — unenforceable when the
+ * with its plan before it acts, and the cross-system opt-in travels in the same call. Switch provider
+ * carries the conversation and keeps each provider's own session (Tynn story #380). A budget is set and judged at once — unenforceable when the
  * provider reports no cost, said rather than silently never firing. Diagnose names a cause and the
  * repair that fits; a never-run agent is dormant, not a fault. Every port is injected; main.ts
  * passes the registry, the session host and the filesystem.
@@ -27,7 +29,7 @@ export interface AgentOpsPorts {
         find(id: string): AgentRecord | null;
         forget(id: AgentRecord['id']): Promise<boolean>;
         clearThread(id: AgentRecord['id']): Promise<AgentRecord | null>;
-        setProvider(id: AgentRecord['id'], provider: AcpProvider, options: { keepModel: boolean }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }>;
+        setProvider(id: AgentRecord['id'], provider: AcpProvider, options: { keepModel: boolean; carryOver?: CarryOver | null }): Promise<{ ok: true; record: AgentRecord } | { ok: false; reason: string }>;
         setBudget(id: AgentRecord['id'], usd: number | null): Promise<AgentRecord | null>;
         setMode(id: AgentRecord['id'], mode: AgentRecord['mode']): Promise<AgentRecord | null>;
         setAccessScope(id: AgentRecord['id'], scope: AgentRecord['accessScope']): Promise<AgentRecord | null>;
@@ -73,6 +75,11 @@ export interface AgentOpsPorts {
     workspacePathFor(record: AgentRecord): string | null;
     /** The persona file's text, or `null` when there is none. */
     readManifest(record: AgentRecord): Promise<string | null>;
+    /**
+     * The agent's recorded conversation (Genie's own ledger, core/thread-store.ts), oldest first: what a switch carries to the
+     * new provider (Tynn story #380). Absent = nothing is carried.
+     */
+    history?(record: AgentRecord): Promise<readonly { readonly event: StreamEvent; readonly at: number | null }[]>;
     removeDir(path: string): Promise<void>;
     /** Where `path` really is on disk, symlinks followed (`fs.realpath`); `null` when nothing is there. */
     realPath(path: string): Promise<string | null>;
@@ -262,22 +269,32 @@ export async function switchDriver(ports: AgentOpsPorts, agentId: string, to: st
     const record = ports.registry.find(agentId);
     if (!record) return UNKNOWN;
     if (!isAcpProvider(to)) return { ok: false, reason: `Genie cannot run a "${to}" agent; the providers it knows are ${ACP_PROVIDERS.join(', ')}` };
+    // The persona is READ (its name), never written: AGENT.md names no provider, and nothing in it refuses a switch (Tynn story #380).
     const manifest = parseAgentManifest(await ports.readManifest(record), record.name);
-    const decision = switchDriverDecision(manifest, record.provider, to, 'user');
+    const decision = switchDriverDecision(record.provider, to);
     if (!decision.ok || decision.noop) return decision;
     /*
-     * A CLEAN START ON THE NEW PROVIDER (the owner, 2026-10-21: "I need to be able to change provider as well as model").
-     * The old provider's conversation and model used to ride along — a Claude session id resumed on Codex, `opus` passed
-     * to Codex. The conversation never carries (the registry drops it); the model carries only when the NEW provider's
-     * own list has it. A provider that cannot say gets its default: Genie does not guess a model name.
+     * THE AGENT GOES, ITS CONVERSATION WITH IT (Tynn story #380; the owner: "I should be able to switch providers and models
+     * without losing context"). A provider's native session is its own — a Claude session id means nothing to Codex — so
+     * the registry PARKS the old one (resumed on switching back) and the new provider's first prompt carries the
+     * conversation from Genie's ledger: only what happened since the agent last left `to`, when it ran there before. The
+     * model carries only when the NEW provider's own list has it; a provider that cannot say gets its default.
      */
     const keepModel = record.model !== undefined && (await providerLists(ports, to, record.model));
     ports.host.stop(record.id);
-    // Answered once the old provider has ended, so "Start it when ready" is true when it is said (not refused "still stopping").
+    // Answered once the old provider has ended: its last rows are in the ledger the carry-over is built from.
     await ports.host.ended(record.id);
-    const switched = await ports.registry.setProvider(record.id, to, { keepModel });
+    const since = record.leftAt?.[to] !== undefined ? Date.parse(record.leftAt[to]!) : null;
+    const rows = ports.history ? await ports.history(record).catch(() => []) : [];
+    const carryOver = buildCarryOver({ from: record.provider, to, agentName: manifest.name, rows, plan: record.plan ?? [], since: since !== null && Number.isFinite(since) ? since : null });
+    const switched = await ports.registry.setProvider(record.id, to, { keepModel, carryOver });
     if (!switched.ok) return switched;
-    return { ...decision, discarded: record.threadId, droppedModel: record.model !== undefined && !keepModel ? record.model : null };
+    return {
+        ...decision,
+        carried: carryOver ? { turns: carryOver.turns, of: carryOver.of, plan: carryOver.plan } : null,
+        left: record.threadId,
+        droppedModel: record.model !== undefined && !keepModel ? record.model : null,
+    };
 }
 
 /** Whether `provider`'s own model list (asked of its CLI) names `model`. No list, or no way to ask, is `false`. */

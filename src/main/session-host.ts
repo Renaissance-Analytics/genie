@@ -464,6 +464,7 @@ export class SessionHost {
     /** A previous run's processes that a stop could not end: no new run starts beside them. */
     readonly #leftovers = new Map<AgentId, readonly ProcessInfo[]>();
     readonly #onThreadId: ((agentId: AgentId, threadId: string) => void) | undefined;
+    readonly #onCarryOverSent: ((agentId: AgentId) => void) | undefined;
     readonly #comms: ((agentId: AgentId, since: number) => Comms | null) | undefined;
     readonly #heldElsewhere: ((record: AgentRecord) => string | null) | undefined;
 
@@ -493,6 +494,8 @@ export class SessionHost {
          * test about resume passes.
          */
         onThreadId?: (agentId: AgentId, threadId: string) => void;
+        /** A provider switch's carry-over went with a turn that replied (Tynn story #380): the record's is cleared. */
+        onCarryOverSent?: (agentId: AgentId) => void;
         /**
          * The agent's record AS IT IS NOW (the registry's), for what is decided per call rather than at start — a Claude
          * agent's tool setting (genie#1188). Absent = the record the session started with.
@@ -570,6 +573,7 @@ export class SessionHost {
         this.#stopGraceMs = options.stopGraceMs ?? STOP_GRACE_MS;
         this.#lifecycle = options.lifecycle;
         this.#onThreadId = options.onThreadId;
+        this.#onCarryOverSent = options.onCarryOverSent;
         this.#currentRecord = options.currentRecord;
         this.#comms = options.comms;
         this.#heldElsewhere = options.heldElsewhere;
@@ -863,6 +867,8 @@ export class SessionHost {
             runId,
             clock: () => this.#clock(),
             ...(record.threadId ? { resumeSessionId: record.threadId } : {}),
+            // A provider switch's carry-over, attached once to this run's first prompt that goes (Tynn story #380).
+            ...(record.carryOver ? { carryOver: record.carryOver, onCarryOverSent: () => this.#onCarryOverSent?.(record.id) } : {}),
             ...(this.#processTree ? { processTree: this.#processTree } : {}),
             onSpawned: (processes) => this.#lifecycle?.spawned(record.id, entry.run, processes),
             onReadingFailed: (pids) => this.#lifecycle?.readingFailed?.(record.id, entry.run, pids),
