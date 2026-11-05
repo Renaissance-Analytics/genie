@@ -206,9 +206,7 @@ const bridge: PreloadBridge = {
     },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
     sitePanels: {
-        show: (panelKey, host, bounds) => ipcRenderer.invoke('site-panel:show', panelKey, host, bounds) as Promise<never>,
-        hide: (panelKey) => ipcRenderer.invoke('site-panel:hide', panelKey) as Promise<void>,
-        reload: (panelKey) => ipcRenderer.invoke('site-panel:reload', panelKey) as Promise<void>,
+        prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
         openWindow: (host) => ipcRenderer.invoke('site-panel:open-window', host) as Promise<void>,
     },
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.

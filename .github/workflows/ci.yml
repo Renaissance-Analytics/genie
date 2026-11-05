@@ -349,6 +349,11 @@ jobs:
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397): main creates no processes on its own thread; the child it
       # forks at boot does. A child that could not start falls back to in-process silently for the person, so it is
       # checked here, in the lifecycle log the app itself writes.
+      # A SITE PANEL IN GENIE'S OWN WINDOW (P2b): its real CSP, its real preload, a real <webview>, main's guard.
+      # Its own launch, home and profile. No Caddy here, so the page itself is the VM's to show.
+      - name: a site panel in the real window
+        run: timeout 280 node scripts/site-panel-cdp.mjs
+
       - name: the spawn host started in the real app
         run: |
           grep -h "spawn host" ~/.genie/runtime/lifecycle.log | tail -5 || true

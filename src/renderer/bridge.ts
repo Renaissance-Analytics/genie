@@ -161,9 +161,8 @@ export interface GenieBridge {
      */
     activity?: ActivityBridge;
     sitePanels?: {
-        show(panelKey: string, host: string, bounds: { x: number; y: number; width: number; height: number }): Promise<{ ok: true } | { ok: false; error: string }>;
-        hide(panelKey: string): Promise<void>;
-        reload(panelKey: string): Promise<void>;
+        /** May this site load, with its store routed? The page itself is a <webview> the window holds (site-webview-layer.ts). */
+        prepare(host: string): Promise<{ ok: true } | { ok: false; error: string }>;
         openWindow(host: string): Promise<void>;
     };
     /** The Genie browser window (beta.35 item 36): this machine's Genie sites. Host-only: absent on a remote bridge. */

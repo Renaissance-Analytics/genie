@@ -161,9 +161,9 @@ describe('the Electron half, from source', () => {
         // CONTROL: this machine's session keeps Genie's own CA and front door.
         expect(win).toMatch(/guardSession\(ses, \(\) => options\.caPem\)/);
         expect(win).toMatch(/routeSession\(ses, options\.frontDoorPort, log\)/);
-        // One place each rule is written: both sessions go through it.
+        // One place each rule is written: every session goes through it (this machine's, a remote's, a workspace's store).
         expect(count(win, /setCertificateVerifyProc\(/g)).toBe(1);
-        expect(count(win, /guardSession\(ses,/g)).toBe(2);
+        expect(count(win, /guardSession\(ses,/g)).toBe(3);
     });
 
     it('main decides by the window that asked: the sender’s remote URL and its relay channels, never an argument', () => {
