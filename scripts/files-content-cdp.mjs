@@ -10,12 +10,16 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { SourceMap } from 'node:module';
 import { measureFilesPage } from './files-content-measure-page.mjs';
 import { waitForPageProbe } from './page-probe-cdp.mjs';
 
 const WIN = process.platform === 'win32', started = Date.now(), OUT = resolve('smoke-out');
 const PORT = 9344, INSPECT = 9345, reports = [], sessions = [];
+const PROFILE = process.argv.includes('--profile'), profiles = [], sourceMaps = new Map();
+let profileTools, profiled = false, sample = 0;
 let root, app, page, main, hostRecord;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const demand = (value, why) => { if (!value) throw new Error(why); };
@@ -38,23 +42,53 @@ class Cdp {
         finally { clearTimeout(timer); }
         sessions.push(c); return c;
     }
-    async evaluate(expression, ms = 30000) {
+    async command(method, params = {}, ms = 30000) {
         const id = ++this.next; let timer;
         try {
-            const f = await Promise.race([new Promise(resolve => { this.pending.set(id, resolve); this.socket.send(JSON.stringify({ id, method: 'Runtime.evaluate', params: { expression, returnByValue: true, awaitPromise: true } })); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP operation timed out')), ms); })]);
-            if (f.error || f.result?.exceptionDetails) throw new Error(f.error?.message ?? f.result.exceptionDetails.exception?.description ?? f.result.exceptionDetails.text);
-            return f.result.result.value;
+            const f = await Promise.race([new Promise(resolve => { this.pending.set(id, resolve); this.socket.send(JSON.stringify({ id, method, params })); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP operation timed out')), ms); })]);
+            if (f.error) throw new Error(f.error.message); return f.result;
         } finally { clearTimeout(timer); this.pending.delete(id); }
     }
+    async evaluate(expression, ms = 30000) {
+        const result = await this.command('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, ms);
+        if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
+        return result.result.value;
+    }
+}
+function cpuSummary(profile) {
+    // Map only this checkout's own built files. No paths from a profile can escape dist.
+    for (const node of profile.nodes) {
+        const frame = node.callFrame; if (!frame.url?.startsWith('file:')) continue;
+        const path = fileURLToPath(frame.url); if (!path.startsWith(resolve('dist') + sep) || !existsSync(path + '.map')) continue;
+        let map = sourceMaps.get(path); if (!map) { map = new SourceMap(json(path + '.map')); sourceMaps.set(path, map); }
+        const entry = map.findEntry(frame.lineNumber, frame.columnNumber);
+        if (entry.originalSource) { frame.url = entry.originalSource; frame.lineNumber = entry.originalLine; }
+    }
+    return profileTools.summarizeCpuProfile(profile);
 }
 async function measure(label, input) {
     await page.evaluate('window.__filesMeasure.reset()'); await main.evaluate('globalThis.__filesMeasure.reset()');
-    const value = await page.evaluate(`(${measureFilesPage.toString()})(${JSON.stringify({ ...input, returnContent: false })})`, 60000);
+    if (profiled) {
+        await main.evaluate('globalThis.__filesCounters.reset();globalThis.__filesCounters.resume();true');
+        await page.evaluate('window.__filesCounters.reset();window.__filesCounters.pause();true');
+        await Promise.all([main.command('Profiler.start'), page.command('Profiler.start')]);
+    }
+    const value = await page.evaluate(`(${measureFilesPage.toString()})(${JSON.stringify({ ...input, returnContent: false, profile: profiled })})`, 60000);
+    let profile;
+    if (profiled) {
+        await main.evaluate('globalThis.__filesCounters.pause();true');
+        const [hostCpu, pageCpu] = await Promise.all([main.command('Profiler.stop'), page.command('Profiler.stop')]);
+        const hostCounters = await main.evaluate('({counters:globalThis.__filesCounters.summary(),calls:globalThis.__filesCounters.calls()})');
+        const pageCounters = await page.evaluate('({counters:window.__filesCounters.summary(),calls:window.__filesCounters.calls()})');
+        profile = { main: { ...hostCounters, cpu: cpuSummary(hostCpu.profile) }, renderer: { ...pageCounters, cpu: cpuSummary(pageCpu.profile) } };
+        profiles.push({ label, sample, ...profile });
+        for (const side of ['main', 'renderer']) console.log(`FILES_PROFILE ${JSON.stringify({ label, sample, side, counters: profile[side].counters, calls: profile[side].calls, cpu: profile[side].cpu.frames.slice(0, 20) })}`);
+    }
     const renderer = await page.evaluate('window.__filesMeasure.summary()'), native = await main.evaluate('globalThis.__filesMeasure.summary()');
     demand(value.heartbeat.before > 0 && value.heartbeat.after > 0, 'heartbeat before/after positive controls');
     demand(value.concurrentSettings.ok, 'same page connection settings control');
     demand(renderer.maxBytes <= 1048576 && native.maxBytes <= 1048576, 'actual local frames exceed1MiB');
-    const row = { label, ...value, localFrames: { toPage: renderer, toHost: native }, mainRssPeak: native.rssPeak };
+    const row = { label, ...value, ...(PROFILE ? { sample, profiled } : {}), localFrames: { toPage: renderer, toHost: native }, mainRssPeak: native.rssPeak };
     reports.push(row); console.log(`FILES ${label} ${JSON.stringify(row)}`); return row;
 }
 const textAt = suffix => `${'雪'.repeat(Math.floor(2 * 1024 * 1024 / 3))}${suffix}\n`;
@@ -62,6 +96,7 @@ const textAt = suffix => `${'雪'.repeat(Math.floor(2 * 1024 * 1024 / 3))}${suff
 let code = 1, failure = null;
 try {
     demand(process.env.CI === 'true' || process.env.GENIE_FILES_MEASURE_ALLOW === '1' || (process.platform === 'linux' && process.env.USER === 'genie'), 'refused: Electron launches only in CI or an explicitly allowed test VM');
+    if (PROFILE) profileTools = await import('./files-content-profile.mjs');
     demand(existsSync('dist/main/entry.js'), 'run from a built checkout');
     for (const port of [PORT, INSPECT]) {
         let occupied = false; try { await targets(port); occupied = true; } catch (e) { if (e.name === 'TimeoutError') occupied = true; }
@@ -109,6 +144,16 @@ try {
     // Same hash gauge must reject a corrupted expected result before normal rows may count.
     let rejected = false; try { await measure('intentional-hash-break', { method: 'open', args: ['tynn', 'text.txt'], expect: { sha256: '0'.repeat(64) } }); } catch (e) { rejected = /hash differs/.test(e.message); }
     demand(rejected, 'negative hash control must fail for the intended reason'); reports.push({ label: 'hash-break-control', passed: true });
+    if (PROFILE) console.log(`FILES_APIS ${JSON.stringify(await page.evaluate('({toBase64:typeof Uint8Array.prototype.toBase64,fromBase64:typeof Uint8Array.fromBase64})'))}`);
+    for (sample = 0; sample < (PROFILE ? 6 : 1); sample++) {
+    profiled = PROFILE && sample >= 3;
+    if (profiled && sample === 3) {
+        for (const connection of [main, page]) {
+            await connection.command('Profiler.enable'); await connection.command('Profiler.setSamplingInterval', { interval: 1000 });
+            await connection.evaluate(`globalThis.__filesCounters=(${profileTools.installFilesCounters.toString()})(globalThis);globalThis.__filesCounters.pause();true`);
+        }
+    }
+    writeFileSync(join(workspace, 'text.txt'), changed);
     await measure('text2MiB', { method: 'open', args: ['tynn', 'text.txt'], expect: { sha256: sha(changed) } });
     await measure('media2MiB', { method: 'readMedia', args: ['tynn', 'image.png'], expect: { sha256: sha(image) } });
     await measure('committed2MiB', { method: 'lastCommitted', args: ['tynn', 'text.txt'], expect: { sha256: sha(original) } });
@@ -118,10 +163,13 @@ try {
     const conflict = await measure('text-conflict2MiB', { method: 'write', args: ['tynn', 'text.txt', original, 'stale-sha'], expect: { sha256: sha(changed) } }); demand(!conflict.ok, 'stale SHA remains a conflict');
     const saved = await measure('text-write2MiB', { method: 'write', args: ['tynn', 'text.txt', original, sha(changed)] }); demand(saved.ok && saved.nativeSha === sha(original), 'write SHA is exact');
     demand(sha(readFileSync(join(workspace, 'text.txt'))) === sha(original), 'actual disk bytes match write');
+    }
     reports.push({ label: 'later-gates', unmeasured: ['100MiB draft consumer', 'ArtBoard image consumer', 'draft paste responsiveness', 'per-view watch changes', 'host-process peak RSS'], reason: '7E/7F and7D consumers are outside7C; P4 server is Electron main' });
     code = 0;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); }
 finally {
+    try { await page?.evaluate('window.__filesCounters?.stop();true', 3000); } catch {}
+    try { await main?.evaluate('globalThis.__filesCounters?.stop();true', 3000); } catch {}
     try { await main?.evaluate('globalThis.__filesMeasure?.stop();true', 3000); } catch {}
     try { await main?.evaluate("process.getBuiltinModule('node:module').createRequire(process.execPath)('electron').app.quit();true", 3000); } catch {}
     for (const session of sessions) session.socket.close();
@@ -131,6 +179,7 @@ finally {
     if (hostRecord && ownedRecord?.pid === hostRecord.pid && ownedRecord.startedAt === hostRecord.startedAt && Number.isFinite(ownedRecord.startedAt) && ownedRecord.startedAt >= started) { try { process.kill(ownedRecord.pid, 'SIGTERM'); } catch {} }
     mkdirSync(OUT, { recursive: true });
     writeFileSync(join(OUT, 'files-content-result.json'), JSON.stringify({ code, platform: process.platform, head: (() => { try { return execFileSync('git', ['rev-parse', 'HEAD'], { encoding:'utf8' }).trim(); } catch { return null; } })(), root, failure, reports }, null, 2));
+    if (PROFILE) writeFileSync(join(OUT, 'files-content-profiles.json'), JSON.stringify({ note: 'Counters exclude renderer gauge hashing; CPU samples also include the harness before/after heartbeat and gauge. Inclusive call times overlap; do not sum them as CPU.', profiles }, null, 2));
     // Preserve this run's isolated files and logs for review; no recursive deletion is needed.
     process.exitCode = code;
 }

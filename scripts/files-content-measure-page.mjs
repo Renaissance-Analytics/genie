@@ -25,7 +25,8 @@ export async function measureFilesPage(input) {
         await new Promise(resolve => setTimeout(resolve, 60));
         const beforeTicks = ticks, started = performance.now();
         let completedAt = null, probeAt = null;
-        const operation = invoke().then(result => { completedAt = performance.now(); return result; });
+        if (input.profile) window.__filesCounters.resume();
+        const operation = invoke().then(result => { completedAt = performance.now(); if (input.profile) window.__filesCounters.pause(); return result; });
         const probe = bridge.workspaces.settings(input.workspaceId ?? 'tynn').then(result => { probeAt = performance.now(); return result; });
         const [value, during] = await Promise.all([operation, probe]);
         const elapsedMs = completedAt - started, duringTicks = ticks - beforeTicks;

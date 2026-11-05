@@ -333,6 +333,16 @@ jobs:
             echo 'Native local door: **all rows measured and passed**; admission break control failed as expected.' >> "$GITHUB_STEP_SUMMARY"
           fi
 
+      # Temporary measured-performance probe for this contribution; removed after attribution/fix.
+      - name: profile Files on the existing app connection
+        if: github.event_name == 'pull_request' && github.event.pull_request.number == 1572
+        run: |
+          set +e
+          timeout 300 node scripts/files-content-cdp.mjs --profile > files-content-profile.log 2>&1
+          code=$?
+          cat files-content-profile.log
+          exit "$code"
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -340,6 +350,8 @@ jobs:
           path: |
             local-door*.log
             smoke-out/local-door*
+            files-content-profile.log
+            smoke-out/files-content*
           if-no-files-found: warn
           retention-days: 7
 
