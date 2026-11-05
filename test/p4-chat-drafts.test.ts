@@ -74,10 +74,10 @@ describe('7E chat drafts through the admitted local door', () => {
         expect(pages.length).toBeGreaterThanOrEqual(3); expect(pages.flatMap(p => p.items)).toHaveLength(301);
         for (const p of pages) {
             expect(p.items.length).toBeLessThanOrEqual(128); expect(Buffer.byteLength(JSON.stringify(p))).toBeLessThanOrEqual(512 * 1024);
-            for (const item of p.items) { expect(item).toMatchObject({ id: expect.any(String), name: expect.any(String), size: expect.any(Number), type: expect.any(String), sha256: expect.stringMatching(/^[0-9a-f]{64}$/), ref: expect.any(String) }); expect(Object.keys(item).some(k => ['text', 'pills', 'attachments', 'content', 'value'].includes(k))).toBe(false); }
+            for (const item of p.items) { expect(item).toMatchObject({ id: expect.any(String), name: expect.any(String), size: expect.any(Number), type: expect.any(String), sha256: expect.stringMatching(/^[0-9a-f]{64}$/), ref: expect.any(String), offset: expect.any(Number), length: expect.any(Number) }); expect(Object.keys(item).some(k => ['text', 'pills', 'attachments', 'content', 'value'].includes(k))).toBe(false); expect(item.length).toBe(item.size); }
         }
         expect(f.calls.some(c => c.method === 'page.open' && c.args[0] === 'chat-drafts')).toBe(true);
-        const blobs = f.calls.filter(c => c.method === 'blob.open'); expect(blobs.length).toBeGreaterThan(0); expect(blobs.every(c => c.args[0] === 'draft-file')).toBe(true);
+        const blobs = f.calls.filter(c => c.method === 'blob.open'); expect(blobs).toHaveLength(1); expect(blobs.every(c => c.args[0] === 'draft-file')).toBe(true);
         expect(f.calls.some(c => c.method === 'content.release')).toBe(true);
     });
     it('serialised metadata bytes cut a page before its count limit', async () => {
@@ -86,6 +86,29 @@ describe('7E chat drafts through the admitted local door', () => {
         const pages = f.serialized.map(s => JSON.parse(s)).filter(m => m.kind === 'result' && m.value?.items?.length).map(m => m.value);
         expect(pages.length).toBeGreaterThan(1); expect(pages[0].items.length).toBeLessThan(80);
         expect(pages.every(p => Buffer.byteLength(JSON.stringify(p)) <= 512 * 1024)).toBe(true);
+    });
+    it('one oversized metadata record reports its id and size and leaves the existing cursor stationary', async () => {
+        const f = await fixture(); const all = Object.fromEntries(Array.from({ length: 128 }, (_, i) => [`agent_${i}`, draft()]));
+        all[`oversized_${'x'.repeat(512 * 1024)}`] = draft(); f.ports.all.mockReturnValue(all); const raw = await f.raw();
+        const body = resultValue<{ draftsContent: { ref: string; list: string } }>(await raw.call('chatDrafts.load', [])).draftsContent;
+        const first = resultValue<{ items: unknown[]; cursor: string }>(await raw.call('page.open', ['chat-drafts', body.list])); expect(first.items).toHaveLength(128); expect(first.cursor).toEqual(expect.any(String));
+        const refused = await raw.call('page.next', [first.cursor]); expect(refused).toMatchObject({ kind: 'result', ok: false, reason: expect.stringMatching(/record 128.*\d+ bytes.*524288/) });
+        expect(await raw.call('page.next', [first.cursor])).toEqual({ ...refused, id: expect.any(Number) });
+        expect(resultValue(await raw.call('page.close', [first.cursor]))).toEqual({ closed: true }); await raw.call('content.release', [body.ref]);
+    });
+    it.each([
+        { offset: -1, length: 1 }, { offset: 0.5, length: 1 }, { offset: 0, length: -1 }, { offset: 0, length: 0.5 },
+        { offset: 10, length: 1 }, { offset: 9, length: 2 }, { offset: Number.MAX_SAFE_INTEGER + 1, length: 0 },
+    ])('the host rejects an out-of-bounds snapshot range $offset/$length before publishing it', async range => {
+        const path: string = '../src/core/local-drafts.js'; const { validateDraftRanges } = await import(path);
+        expect(() => validateDraftRanges([{ id: 'bad', ...range }], 10)).toThrow(/bad.*10/);
+        expect(() => validateDraftRanges([{ id: 'empty', offset: 10, length: 0 }, { id: 'whole', offset: 0, length: 10 }], 10)).not.toThrow();
+    });
+    it('every sliced entry is hash checked even when the aggregate blob hash remains correct', async () => {
+        const f = await fixture(); await f.store.save('agent_a', draft()); let changed = false;
+        f.rewrite.frame = text => { const m = JSON.parse(text); if (!changed && m.kind === 'result' && m.value?.items?.length) { changed = true; m.value.items[0].sha256 = '0'.repeat(64); return JSON.stringify(m); } return text; };
+        await expect(f.drafts.load()).rejects.toThrow(/hash/i); expect(changed).toBe(true); expect(f.calls.filter(c => c.method === 'blob.open')).toHaveLength(1);
+        expect(f.calls.some(c => c.method === 'content.release')).toBe(true); expect(await f.drafts.load()).toEqual({ agent_a: draft() });
     });
     it('a 2 MiB paste and large text pills stage their complete body, not one large call', async () => {
         const f = await fixture(), value = { ...draft('雪'.repeat(700_000)), pills: [{ kind: 'text' as const, id: 'large', text: 'paste'.repeat(140_000), label: 'kept' }] };
