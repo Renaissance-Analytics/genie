@@ -7,6 +7,8 @@ import type { FeatureData } from './features.js';
 import { bytesToBase64 } from '../core/mobile.js';
 import { UPLOAD_CHUNK_BYTES, WindowReceiver, type WindowCursor, type WindowRows } from '../core/mobile-wire.js';
 import type { TimedEvent } from '../core/stream-view.js';
+import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
+import { verifiedBlobClient } from './blob-reader.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -33,6 +35,8 @@ export interface RemoteState {
 }
 
 export interface RemoteClient {
+    /** Local connection resources, not yet consumed by a family bridge. */
+    readonly blobs?: BlobClient;
     /** Only a local-auth client offers these partial groups, composed with native window ports by pageBridge. */
     readonly localOwner?: import('./bridge.js').LocalOwnerBridge;
     readonly bridge: GenieBridge;
@@ -166,7 +170,7 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         });
 
     /** A read: the host's value, or a rejection with its reason. */
-    const read = async <T>(method: RemoteMethod, ...args: unknown[]): Promise<T> => {
+    const read = async <T>(method: RemoteMethod | ControlMethod, ...args: unknown[]): Promise<T> => {
         const r = await call(method, ...args);
         if (!r.ok) throw new Error(r.reason);
         return r.value as T;
@@ -472,8 +476,22 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         return r.ok ? { ok: true } : { ok: false, reason: r.reason };
     };
 
+    const blobRead = async <T>(method: ControlMethod, ...args: unknown[]): Promise<T> => {
+        const started = await ready;
+        if (!started.ok) throw new Error(started.reason);
+        if (!state.connected) throw new Error('the blob connection closed');
+        return read<T>(method, ...args);
+    };
+    const blobs = local ? verifiedBlobClient({
+        open: (kind, ref) => blobRead<BlobInfo>('blob.open', kind, ref),
+        read: (id, offset, length) => blobRead<BlobChunk>('blob.read', id, offset, length),
+        // Disconnect already releases the server's resources; never wait on a closed frame stream.
+        close: id => state.connected ? blobRead<{ closed: boolean }>('blob.close', id) : Promise.resolve({ closed: false }),
+    }) : undefined;
+
     return {
         bridge,
+        ...(blobs ? { blobs } : {}),
         ...(localOwner ? { localOwner } : {}),
         ready,
         state: () => state,
