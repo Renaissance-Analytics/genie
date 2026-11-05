@@ -70,7 +70,7 @@ describe('main.ts', () => {
         const ask = block(main(), 'async function confirmTray(', '\n}\n');
         // The busy marks come from a table read OFF main, and only for as long as the question can wait (ss-repeat5,
         // 2026-11-05: a synchronous read froze the window 30 s before the question came).
-        expect(ask).toMatch(/const table = await tableWithin\(\(\) => systemProcessTree\.snapshotAsync\(\), TRAY_TABLE_MS\);/);
+        expect(ask).toMatch(/const table = await tableWithin\(\(\) => systemProcessTree\.read\?\.\(\) \?\? Promise\.resolve\(null\), TRAY_TABLE_MS\);/);
         expect(ask).toMatch(/const q = trayConfirm\(action, stoppingNow\(table\)\);/);
         expect(block(main(), 'function stoppingNow(', '\n}\n')).not.toMatch(/systemProcessTree\.snapshot\(/);
         expect(ask).toMatch(/return trayConfirmed\(dialog\.showMessageBoxSync\(\{ type: 'question', title: q\.title, message: q\.message, buttons: \[\.\.\.q\.buttons\], defaultId: q\.defaultId, cancelId: q\.cancelId \}\)\);/);

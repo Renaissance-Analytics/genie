@@ -146,7 +146,7 @@ import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
 import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
-import { terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
+import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -429,9 +429,8 @@ function closeUi(reason: string): void {
  * terminal (marked when a command runs in it — read from the process table), the kept processes, the active services and
  * the sites.
  */
-function stoppingNow(): Stopping {
+function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : [];
-    const table = systemProcessTree.snapshot();
     const workspaces = registry?.snapshot().workspaces ?? [];
     const seen = new Map<string, number>();
     const terminalsOpen = (terminals?.list() ?? []).map((t) => {
@@ -448,13 +447,17 @@ function stoppingNow(): Stopping {
     return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
 }
 
+/** How long the tray's question waits for the busy marks' process table (read off main) before it is asked without them. */
+const TRAY_TABLE_MS = 1_500;
+
 /**
  * ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time — what will stop,
  * named; Cancel the default and the cancel; only the confirm button goes on. Not asked anywhere else: the quit dialog's own
  * answer, the tray-only exit, the OS ending the session, the upgrade.
  */
-function confirmTray(action: TrayAction): boolean {
-    const q = trayConfirm(action, stoppingNow());
+async function confirmTray(action: TrayAction): Promise<boolean> {
+    const table = await tableWithin(() => systemProcessTree.read?.() ?? Promise.resolve(null), TRAY_TABLE_MS);
+    const q = trayConfirm(action, stoppingNow(table));
     return trayConfirmed(dialog.showMessageBoxSync({ type: 'question', title: q.title, message: q.message, buttons: [...q.buttons], defaultId: q.defaultId, cancelId: q.cancelId }));
 }
 
@@ -3892,7 +3895,7 @@ async function boot(): Promise<void> {
         onQuit: () => { requestQuit(); },
         // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
         // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { if (confirmTray('restart')) restartGenie(); }, onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
@@ -4054,10 +4057,11 @@ app.on('before-quit', (event) => {
     // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes when runQuit is done, as a 'pass'.
     // "Just close the UI" (P1b) stops no agent, closes no terminal and never ends the host: core/quit.ts runQuit.
     event.preventDefault();
-    let bound: ReturnType<typeof setTimeout> | undefined;
-    const done = runQuit(quitPorts).catch(() => { /* an unwritten row never blocks a quit */ });
-    void Promise.race([done, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
-        .finally(() => { clearTimeout(bound); app.quit(); });
+    // runQuit runs to its end: the drain bounded inside it, then the host ended, itself bounded (agent-engine.ts). A race
+    // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
+    void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
+        .catch(() => { /* an unwritten row never blocks a quit */ })
+        .finally(() => { app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
