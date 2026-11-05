@@ -147,16 +147,26 @@ describe('wired', () => {
     const preload = strip(readFileSync(new URL('../src/main/preload.ts', import.meta.url), 'utf8'));
     const app = strip(readFileSync(new URL('../src/renderer/App.tsx', import.meta.url), 'utf8'));
     const account = strip(readFileSync(new URL('../src/main/tynn-account.ts', import.meta.url), 'utf8'));
+    const api = strip(readFileSync(new URL('../src/main/host-api.ts', import.meta.url), 'utf8'));
+    const client = strip(readFileSync(new URL('../src/renderer/remote-bridge.ts', import.meta.url), 'utf8'));
+    const session = strip(readFileSync(new URL('../src/renderer/local-session.ts', import.meta.url), 'utf8'));
 
-    it('main asks Tynn, refusing first on a drone (the role it read from Tynn), then re-reads this machine’s role', () => {
-        const handler = /ipcMain\.handle\('genie:tynn-workstation-role'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
-        expect(handler).toContain('droneRefusal(workstationRoleNow)');
-        expect(handler).toContain('setWorkstationRole(');
-        expect(handler.indexOf('droneRefusal')).toBeLessThan(handler.indexOf('setWorkstationRole('));
+    it('the host API refuses a drone before asking Tynn through main, then re-reads this machine’s role', () => {
+        const handler = /case 'tynnNetwork\.setRole': \{([^]*?)\n {12}\}/.exec(api)?.[1] ?? '';
+        const port = /setRole: \(id, role, code\) => \{([^]*?)\n {20}\},/.exec(main)?.[1] ?? '';
+        expect(handler).toContain('droneRefusal(network.role())');
+        expect(main).toContain('role: () => workstationRoleNow');
+        expect(handler).toContain('network.setRole(workstationId, role, code)');
+        expect(handler.indexOf('droneRefusal')).toBeLessThan(handler.indexOf('network.setRole('));
+        expect(handler).toContain('if (result.ok) network.rereadRole()');
+        expect(main).toContain('rereadRole: () => { void readWorkstationRoleNow?.(); }');
+        expect(port).toContain('setWorkstationRole((path, init) => account.request(path, init), id, role, code)');
     });
 
-    it('preload exposes it', () => {
-        expect(preload).toMatch(/setRole: \(workstationId, role, code\) => ipcRenderer\.invoke\('genie:tynn-workstation-role', workstationId, role, code\)/);
+    it('the same local client exposes it through the page session', () => {
+        expect(preload).not.toContain('genie:tynn-workstation-role');
+        expect(client).toContain("setRole: (id, role, code) => read('tynnNetwork.setRole', ownerText(id), ownerText(role), ownerText(code))");
+        expect(session).toContain('setRole: (id, role, code) => ownerRead(b => b.tynnNetwork.setRole!(id, role, code))');
     });
 
     it('the window offers the switch only when Tynn says this machine is a pilot', () => {
