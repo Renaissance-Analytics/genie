@@ -1152,6 +1152,8 @@ export class SessionHost {
             if (action === 'send') {
                 if (!session?.running) return { ok: false, reason: 'Restart the agent before sending this draft.' };
                 if (session.hasQueuedPrompt(id)) return { ok: false, reason: 'This message is already queued for the current turn.' };
+                // The person's Send is the person acting, whoever wrote the draft: a Stop's pause ends (genie#1565).
+                session.resumeAfterStop();
                 try {
                     session.deliver(row.text, row.speaker === 'you' ? 'you' : row.peerName,
                         row.pending.content ? { content: row.pending.content, attachments: row.attachments ?? [] } : null,
@@ -1257,6 +1259,7 @@ export class SessionHost {
     /**
      * The agent's RUN when a message handed over now reaches it at its next step, as typed input does
      * (`AgentSession.deliverable`; mid-turn included), else `null` — not running, still starting, held on a limit, broken,
+     * paused by the person's Stop until they act (genie#1565),
      * stopped. What the inbox push asks before it sends a notice (genie#1411).
      */
     deliverable(agentId: AgentId): number | null {
