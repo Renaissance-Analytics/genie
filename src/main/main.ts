@@ -2037,52 +2037,6 @@ async function boot(): Promise<void> {
         const started = logins.start(record.provider);
         return started.ok ? { ok: true } : started;
     });
-    ipcMain.handle('genie:agent-restart', (_event, raw: unknown, kind: unknown) => {
-        if (typeof raw !== 'string' || (kind !== 'graceful' && kind !== 'fresh')) return { ok: false, reason: 'a restart names an agent and a kind: graceful or fresh' };
-        return restartAgent(agentOps, raw, kind).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-preview-delete', (_event, raw: unknown, outcome: unknown, also: unknown) => {
-        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return previewDelete(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : []);
-    });
-    ipcMain.handle('genie:agent-delete', (_event, raw: unknown, outcome: unknown, also: unknown, handoff: unknown) => {
-        if (typeof raw !== 'string' || (outcome !== 'unmount' && outcome !== 'delete')) return { ok: false, reason: 'a delete names an agent and an outcome: unmount or delete' };
-        return deleteAgent(agentOps, raw, outcome, Array.isArray(also) ? also.map(String) : [], { handoff: handoff === true }).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-switch-driver', (_event, raw: unknown, to: unknown) => {
-        if (typeof raw !== 'string' || typeof to !== 'string') return { ok: false, reason: 'a switch names an agent and a provider' };
-        return switchDriver(agentOps, raw, to).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-set-mode', (_event, raw: unknown, mode: unknown) =>
-        (typeof raw === 'string' && (mode === 'automated' || mode === 'manual') ? setMode(agentOps, raw, mode).finally(() => registry?.touch()) : { ok: false, reason: 'mode is automated or manual' }));
-    ipcMain.handle('genie:agent-set-permissions', (_event, raw: unknown, permissions: unknown) =>
-        (typeof raw === 'string' && (permissions === 'all' || permissions === 'edits' || permissions === 'ask') ? setPermissions(agentOps, raw, permissions).finally(() => registry?.touch()) : { ok: false, reason: 'permissions are all, ask or edits' }));
-    // The provider's own model list for the agent's picker (the owner, 2026-10-21: "using actual available options from
-    // the providers"); `refresh` = ask the provider again.
-    ipcMain.handle('genie:agent-models', (_event, raw: unknown, refresh: unknown) =>
-        (typeof raw === 'string' ? listModels(agentOps, raw, refresh === true) : { ok: false, reason: 'unknown agent' }));
-    ipcMain.handle('genie:agent-set-model', (_event, raw: unknown, model: unknown) =>
-        (typeof raw === 'string' && (model === null || typeof model === 'string') ? setModel(agentOps, raw, model).finally(() => registry?.touch()) : { ok: false, reason: 'a model is a name, or null for the provider default' }));
-    // Autonomous or asked (Tynn #801): its next gated action reads it; nothing restarts.
-    ipcMain.handle('genie:agent-set-auto-approve', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setAutoApprove(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'autonomy is on or off' }));
-    // May manage the workspace's tabs (beta.35 item 36): the workspaceTabs tool is in its next tools/list.
-    ipcMain.handle('genie:agent-set-manage-tabs', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setManageTabs(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'managing tabs is on or off' }));
-    // May drive pages (browser rebuild step 7): the page tool is in its next tools/list.
-    ipcMain.handle('genie:agent-set-drive-pages', (_event, raw: unknown, on: unknown) =>
-        (typeof raw === 'string' && typeof on === 'boolean' ? setDrivePages(agentOps, raw, on).finally(() => registry?.touch()) : { ok: false, reason: 'driving pages is on or off' }));
-    // What it hears from IssueWatch (Tynn #806): the setting is checked in setIssueWatch, which says why it refuses one.
-    ipcMain.handle('genie:agent-set-issue-watch', (_event, raw: unknown, setting: unknown) =>
-        (typeof raw === 'string' ? setIssueWatch(agentOps, raw, setting).finally(() => registry?.touch()) : { ok: false, reason: 'unknown agent' }));
-    ipcMain.handle('genie:agent-set-access-scope', (_event, raw: unknown, scope: unknown) =>
-        (typeof raw === 'string' && (scope === 'none' || scope === 'self' || scope === 'all') ? setAccessScope(agentOps, raw, scope).finally(() => registry?.touch()) : { ok: false, reason: 'scope is none, self or all' }));
-    ipcMain.handle('genie:agent-set-budget', (_event, raw: unknown, usd: unknown) => {
-        if (typeof raw !== 'string' || (usd !== null && !(typeof usd === 'number' && usd >= 0))) return { ok: false, reason: 'a budget is a non-negative number of dollars, or null to clear it' };
-        return setBudget(agentOps, raw, usd as number | null).finally(() => registry?.touch());
-    });
-    ipcMain.handle('genie:agent-diagnose', (_event, raw: unknown) => (typeof raw === 'string' ? diagnose(agentOps, raw) : { ok: false, reason: 'diagnose names an agent' }));
-
     ipcMain.handle('genie:restart-with-handoff', async (_event, raw: unknown, finishedId: unknown) => {
         const record = agentFromRenderer(raw);
         if (!record || !host || !services || typeof finishedId !== 'string') return { ok: false, reason: 'unknown agent or finish' };
@@ -2893,19 +2847,19 @@ async function boot(): Promise<void> {
                 setColor: (id, color) => setWorkspaceColor(id, color),
             },
             agentOps: {
-                restart: (id, kind) => restartAgent(agentOps, id, kind),
+                restart: (id, kind) => restartAgent(agentOps, id, kind).finally(() => registry?.touch()),
                 previewDelete: (id, outcome, also) => previewDelete(agentOps, id, outcome, also),
-                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }),
-                switchDriver: (id, to) => switchDriver(agentOps, id, to),
-                setBudget: (id, usd) => setBudget(agentOps, id, usd),
-                setMode: (id, mode) => setMode(agentOps, id, mode),
-                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope),
-                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on),
-                setManageTabs: (id, on) => setManageTabs(agentOps, id, on),
-                setDrivePages: (id, on) => setDrivePages(agentOps, id, on),
-                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting),
-                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions),
-                setModel: (id, model) => setModel(agentOps, id, model),
+                delete: (id, outcome, also, handoff) => deleteAgent(agentOps, id, outcome, also, { handoff }).finally(() => registry?.touch()),
+                switchDriver: (id, to) => switchDriver(agentOps, id, to).finally(() => registry?.touch()),
+                setBudget: (id, usd) => setBudget(agentOps, id, usd).finally(() => registry?.touch()),
+                setMode: (id, mode) => setMode(agentOps, id, mode).finally(() => registry?.touch()),
+                setAccessScope: (id, scope) => setAccessScope(agentOps, id, scope).finally(() => registry?.touch()),
+                setAutoApprove: (id, on) => setAutoApprove(agentOps, id, on).finally(() => registry?.touch()),
+                setManageTabs: (id, on) => setManageTabs(agentOps, id, on).finally(() => registry?.touch()),
+                setDrivePages: (id, on) => setDrivePages(agentOps, id, on).finally(() => registry?.touch()),
+                setIssueWatch: (id, setting) => setIssueWatch(agentOps, id, setting).finally(() => registry?.touch()),
+                setPermissions: (id, permissions) => setPermissions(agentOps, id, permissions).finally(() => registry?.touch()),
+                setModel: (id, model) => setModel(agentOps, id, model).finally(() => registry?.touch()),
                 models: (id, refresh) => listModels(agentOps, id, refresh),
                 diagnose: (id) => diagnose(agentOps, id),
             },
