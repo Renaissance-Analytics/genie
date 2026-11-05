@@ -74,6 +74,7 @@ export const ENGINE_METHODS = [
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
+    'engine.browser',
     'engine.flows',
     // The host's terminals (P3.3e): `[method, args]`. Their list and scrollback are sent as `terminals.dump` before
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.

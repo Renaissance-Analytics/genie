@@ -28,6 +28,7 @@ import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
+import { BrowserService } from './browser-service.js';
 import { hostIdleStep } from '../core/host-idle.js';
 import { onTheClock } from '../core/tray-only.js';
 import { ProcessScheduler } from './process-scheduler.js';
@@ -372,6 +373,7 @@ async function main(): Promise<void> {
         ...(hostingService ? { hosting: hostingService } : {}),
         processes: processesService,
         flows: flowsService,
+        browser: new BrowserService(),
         stores,
         keychain,
         // THE TYNN ACCOUNT (P3.4 cut c). Opening asks Tynn who it is, so it is not awaited here: the host's boot does not wait on the network.
