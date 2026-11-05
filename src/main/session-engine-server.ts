@@ -404,7 +404,12 @@ export class SessionEngineServer {
         // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
         if (this.#options.hosting && conn.local) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
         if (this.#options.appInbox && conn.local) this.#event(conn, 'appInbox.dump', this.#options.appInbox.dump());
-        if (this.#options.updates && conn.local) this.#event(conn, 'updates.dump', this.#options.updates.dump());
+        if (this.#options.updates && conn.local) {
+            this.#event(conn, 'updates.dump', this.#options.updates.dump());
+            // Why the last install did not happen: the first local window is told, once (P5b).
+            const failed = this.#options.updates.takeFailed();
+            if (failed !== null) this.#event(conn, 'updates.failed', failed);
+        }
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());

@@ -52,6 +52,7 @@ import type { HostMcp, WindowView } from './host-mcp.js';
 import type { McpToolResult } from '@particle-academy/prism-mcp';
 import { UpdatesReplica } from './updates-replica.js';
 import type { UpdateState } from './updater.js';
+import type { UpdateFailedRecord } from './updates-host.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -349,6 +350,9 @@ export class SessionEngineClient {
             case 'updates.dump':
             case 'updates.event':
                 this.updates().rebase(payload as UpdateState);
+                return;
+            case 'updates.failed':
+                this.updates().failedInstall(payload as UpdateFailedRecord);
                 return;
             case 'hosting.event':
                 this.hosting().apply(payload as HostingEvent);

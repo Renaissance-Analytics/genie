@@ -31,8 +31,8 @@ import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
 import { BrowserService } from './browser-service.js';
-import { spawnBrowserProcess, spawnUpdaterProcess } from './engine-launch.js';
-import { hostDrainAgents, updaterHelperEnv, UpdatesService } from './updates-host.js';
+import { spawnBrowserProcess, spawnGenieWindow, spawnUpdaterProcess } from './engine-launch.js';
+import { clearUpdateFailed, hostDrainAgents, readUpdateFailed, relaunchSpec, updaterHelperEnv, UpdatesService, writeUpdateFailed } from './updates-host.js';
 import { killProcessAsync, listProcessesAsync } from './process-list.js';
 import { channelFrom } from '../core/update-channel.js';
 import type { ReleaseLike } from '../core/update-notes.js';
@@ -403,6 +403,14 @@ async function main(): Promise<void> {
         windowConnected: () => engineRef?.windowConnected() ?? false,
         exit: () => { void shutdown('an update is installing'); },
         log: (line) => { say(line); lifecycleLog(line); },
+        // A failed install's reason, for the first window after it, once.
+        failed: readUpdateFailed(home),
+        clearFailed: () => { clearUpdateFailed(home); },
+        // The helper went after the drain: why recorded, and Genie started again from the window's launch.
+        handOverFailed: (reason, launch) => {
+            writeUpdateFailed(home, { at: Date.now(), reason, log: join(home, 'logs', 'genie-host.log') });
+            spawnGenieWindow(relaunchSpec(launch, process.env), process.env);
+        },
     });
     settings.onChange((key, value, workspaceId) => { if (key === 'update_channel' && workspaceId === undefined) updatesService.setChannel(channelFrom(value)); });
     updatesService.onEvent(() => { lastBusy = Date.now(); });

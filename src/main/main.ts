@@ -1802,6 +1802,10 @@ async function boot(): Promise<void> {
             quit.choose('shut-down');
             setTimeout(() => { app.quit(); }, QUIT_DELAY_MS);
         });
+        // Why the last install did not happen (the host read its record): said on the Deck, in words, with the log's path.
+        replica.onFailedInstall((notice) => {
+            mainErrors.record('update-failed', new Error(`Genie’s update was not installed: ${notice.reason} The details are in ${notice.log}.`));
+        });
         updates = replica;
     } else {
         /*

@@ -22,6 +22,8 @@ export class UpdatesReplica {
     readonly #listeners = new Set<(state: UpdateState) => void>();
     readonly #installing = new Set<() => void>();
     #told = false;
+    readonly #failedListeners = new Set<(notice: UpdateFailedRecord) => void>();
+    #failedPending: UpdateFailedRecord | null = null;
 
     constructor(call: (method: string, args: readonly unknown[]) => Promise<unknown>, pid: number) {
         this.#call = call;
@@ -74,8 +76,17 @@ export class UpdatesReplica {
     }
 
     /** Why the last install did not happen, told once to the first window after it (a later subscriber still hears it). */
-    onFailedInstall(_listener: (notice: UpdateFailedRecord) => void): () => void {
-        return () => {};
+    onFailedInstall(listener: (notice: UpdateFailedRecord) => void): () => void {
+        this.#failedListeners.add(listener);
+        const pending = this.#failedPending;
+        if (pending !== null) { this.#failedPending = null; listener(pending); }
+        return () => { this.#failedListeners.delete(listener); };
+    }
+
+    /** The host's `updates.failed`: to the listeners now, or held for the first. */
+    failedInstall(notice: UpdateFailedRecord): void {
+        if (this.#failedListeners.size === 0) { this.#failedPending = notice; return; }
+        for (const l of [...this.#failedListeners]) l(notice);
     }
 
     /** Told once, when the host answered an install and is on its way out. */
