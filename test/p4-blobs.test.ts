@@ -105,6 +105,7 @@ describe('7A standalone local blob controls through the admitted door', () => {
         expect(parseMessage(JSON.stringify({ kind: 'call', id: 1, method, args: [] }))).toMatchObject({ ok: true, message: { method } });
     });
     it.each<Kind>(['draft-file', 'artboard-post', 'workspace-file'])('%s resolves a host reference and reads exact bounded bytes', async kind => {
+        const started = performance.now();
         const f = await fixture(), c = await f.raw();
         const opened = value<{ id: string; size: number; sha256: string }>(await c.call('blob.open', [kind, 'ref_fixture']));
         expect(opened).toEqual({ id: expect.any(String), size: f.bytes.length, sha256: hash(f.bytes) });
@@ -115,7 +116,10 @@ describe('7A standalone local blob controls through the admitted door', () => {
             const r = value<{ base64: string }>(await c.call('blob.read', [opened.id, offset, length]));
             const part = Buffer.from(r.base64, 'base64'); expect(part.length).toBe(length); parts.push(part);
         }
+        const comparisonStart = performance.now();
+        console.info(`[p4-blob-fixture] ${kind} complete wire read: ${Math.round(comparisonStart - started)} ms`);
         expect(new Uint8Array(Buffer.concat(parts))).toEqual(f.bytes);
+        console.info(`[p4-blob-fixture] ${kind} deep byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
         expect(value(await c.call('blob.close', [opened.id]))).toEqual({ closed: true });
         expect(f.sources[0]!.close).toHaveBeenCalledOnce(); expect(f.invoke).not.toHaveBeenCalled();
         expect(Math.max(...f.serialized.map(text => Buffer.byteLength(text, 'utf8')))).toBeLessThanOrEqual(LOCAL_FRAME_LIMIT_BYTES);
@@ -207,7 +211,10 @@ describe('7A standalone local blob controls through the admitted door', () => {
 describe('the verified reader uses the local client’s existing frame stream', () => {
     it('reassembles more than one frame, verifies SHA-256, closes, and leaves the connection usable', async () => {
         const f = await fixture(), c = await f.client(), port = blobs(c);
-        expect(await port.readAll('artboard-post', 'ref_fixture')).toEqual(f.bytes);
+        const started = performance.now(), actual = await port.readAll('artboard-post', 'ref_fixture'), comparisonStart = performance.now();
+        console.info(`[p4-blob-fixture] reader transfer/hash/close: ${Math.round(comparisonStart - started)} ms`);
+        expect(actual).toEqual(f.bytes);
+        console.info(`[p4-blob-fixture] reader deep byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
         expect(f.calls.map(call => call.method)).toEqual(['blob.open', ...Array(5).fill('blob.read'), 'blob.close']);
         expect(f.sources[0]!.close).toHaveBeenCalledOnce(); expect(c.state().connected).toBe(true);
         await c.bridge.workspaces.settings('work'); expect(f.invoke).toHaveBeenCalledWith('workspaces.settings', ['work']);
