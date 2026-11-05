@@ -1700,7 +1700,8 @@ async function boot(): Promise<void> {
         const link = agentEngineLink.client;
         link.onFilesEvent(onFilesEvent);
         filesWatch = {
-            watch: (viewId, workspace, want) => link.filesWatch(viewId, workspace, want),
+            // A known view is retained by the engine client even while offline, then replayed on reconnect.
+            watch: (viewId, workspace, want) => { void link.filesWatch(viewId, workspace, want); return true; },
             unwatch: (viewId) => { void link.filesUnwatch(viewId); },
             close: () => {},
         };
