@@ -121,6 +121,37 @@ describe('family5 owner methods and real recorded bridge calls', () => {
 });
 
 describe('native guards, null and refusal remain visible', () => {
+    const cycle: { self?: unknown } = {}; cycle.self = cycle;
+    const nonJsonRows: Array<{ method: string; call: (b: Owner) => Promise<unknown>; value: unknown }> = [
+        { method: 'appInbox.state', call: b => b.appInbox.state(9n as never), value: { ok: false, reason: 'name a workspace' } },
+        { method: 'appInbox.createKey', call: b => b.appInbox.createKey('work', 9n as never), value: { ok: false, reason: 'name a workspace and the key' } },
+        { method: 'appInbox.revokeKey', call: b => b.appInbox.revokeKey('work', cycle as never), value: { ok: false, reason: 'name a workspace and the key' } },
+        { method: 'appInbox.source', call: b => b.appInbox.source('work', 'rotate', 'site', cycle as never), value: { ok: false, reason: 'rotate, revoke or allow a site or a process' } },
+        { method: 'deviceLink.forget', call: b => b.deviceLink.forget(cycle as never), value: false },
+        { method: 'deviceLink.adopt', call: b => b.deviceLink.adopt('host', 9n as never), value: false },
+        { method: 'tynnNetwork.setRole', call: b => b.tynnNetwork.setRole!('ws', 9n as never, 'code'), value: { ok: false, reason: 'not a role change' } },
+        { method: 'tynnNetwork.shares.list', call: b => b.tynnNetwork.shares!.list(cycle as never), value: { ok: true, links: [listedShare] } },
+        { method: 'tynnNetwork.shares.mint', call: b => b.tynnNetwork.shares!.mint(9n as never), value: { ok: true, link: share } },
+        { method: 'tynnNetwork.shares.revoke', call: b => b.tynnNetwork.shares!.revoke(9n as never), value: { ok: false, reason: 'not a link' } },
+        { method: 'mint ignores unrelated cyclic properties', call: b => b.tynnNetwork.shares!.mint({ workspaceId: null, capability: 'readonly', expiresInDays: 3, ignored: cycle } as never), value: { ok: true, link: share } },
+    ];
+    for (const target of ['client', 'page'] as const) {
+        it.each(nonJsonRows)(`${target} $method preserves native non-JSON input results before serialization`, async row => {
+            const f = setup(); let owner: Owner;
+            if (target === 'client') owner = (await f.client() as unknown as { localOwner: Owner }).localOwner;
+            else { vi.stubGlobal('window', { genieLocalProtocol: f.port() }); owner = pageBridge({ subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge) as Owner; }
+            expect(await row.call(owner)).toEqual(row.value);
+            expect(f.ports.createKey).not.toHaveBeenCalled(); expect(f.ports.revokeKey).not.toHaveBeenCalled(); expect(f.ports.rotate).not.toHaveBeenCalled(); expect(f.ports.forget).not.toHaveBeenCalled(); expect(f.ports.adopt).not.toHaveBeenCalled(); expect(f.ports.setRole).not.toHaveBeenCalled(); expect(f.ports.revoke).not.toHaveBeenCalled();
+            if (row.method.includes('mint')) expect(f.ports.mint).toHaveBeenCalledExactlyOnceWith({ workspaceId: null, capability: row.method.startsWith('mint') ? 'readonly' : 'control', expiresInDays: row.method.startsWith('mint') ? 3 : 7 });
+            if (row.method === 'tynnNetwork.shares.list') expect(f.ports.list).toHaveBeenCalledExactlyOnceWith(null);
+        });
+        it(`${target} keeps the native drone refusal ahead of invalid non-JSON role arguments`, async () => {
+            const f = setup(); f.ports.role.mockReturnValue('drone'); let owner: Owner;
+            if (target === 'client') owner = (await f.client() as unknown as { localOwner: Owner }).localOwner;
+            else { vi.stubGlobal('window', { genieLocalProtocol: f.port() }); owner = pageBridge({ subscribeAgentWire: () => () => {}, workspaces: {} } as unknown as PreloadBridge) as Owner; }
+            expect(await owner.tynnNetwork.setRole!(cycle as never, 9n as never, cycle as never)).toEqual({ ok: false, reason: droneRefusal('drone') }); expect(f.ports.setRole).not.toHaveBeenCalled();
+        });
+    }
     const bad = [undefined, null, false, 42, {}, [], ''];
     it.each(bad.map(v => [v]))('app inbox rejects invalid workspace %j without touching keys', async raw => {
         const f = setup();
