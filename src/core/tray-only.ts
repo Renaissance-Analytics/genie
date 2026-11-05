@@ -19,12 +19,24 @@ export interface HostActivity {
     readonly processes: number;
     /** Service engines running (databases, Redis, mail…). */
     readonly services: number;
+    /** Armed flows: nothing runs between firings, and with no host they would never fire. */
+    readonly armedFlows: number;
+    /** Scheduled tasks still wanted; the same. */
+    readonly scheduledTasks: number;
+}
+
+/** What waits on the host's clock, from the host's own lists. A paused task and a plain kept process are not on it. */
+export function onTheClock(
+    flows: ReadonlyArray<{ readonly armed: boolean }>,
+    kept: ReadonlyArray<{ readonly wanted: boolean; readonly schedule?: unknown }>,
+): { readonly armedFlows: number; readonly scheduledTasks: number } {
+    return { armedFlows: flows.filter((f) => f.armed).length, scheduledTasks: kept.filter((p) => p.wanted && p.schedule).length };
 }
 
 export const TRAY_ONLY_GRACE_MS = 60_000;
 
 export function activityTotal(a: HostActivity): number {
-    return a.agents + a.terminals + a.processes + a.services;
+    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks;
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -36,6 +48,8 @@ export function activityWords(a: HostActivity): string {
     if (a.terminals > 0) parts.push(count(a.terminals, 'terminal', 'terminals'));
     if (a.processes > 0) parts.push(count(a.processes, 'process', 'processes'));
     if (a.services > 0) parts.push(count(a.services, 'service', 'services'));
+    if (a.armedFlows > 0) parts.push(count(a.armedFlows, 'armed flow', 'armed flows'));
+    if (a.scheduledTasks > 0) parts.push(count(a.scheduledTasks, 'scheduled task', 'scheduled tasks'));
     return parts.join(', ');
 }
 

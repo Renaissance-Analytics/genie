@@ -161,7 +161,7 @@ probe "shut-down-ends-the-host" src/core/quit.ts \
     test/quit-sequence.test.ts "calls stopAll and then engine.shutdown"
 
 probe "quit-asks-two-answers" src/core/quit.ts \
-    "    if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses);" "" \
+    "    if (input.host) return hostPlan(input.runningAgents, input.liveTerminals, input.host.keptProcesses, input.host.armedFlows, input.host.scheduledTasks);" "" \
     test/quit-plan.test.ts "the two answers, Cancel by default"
 
 probe "tray-only-exits-after-the-grace" src/core/tray-only.ts \
@@ -179,6 +179,14 @@ probe "tray-only-has-no-close-ui" src/main/tray.ts \
 probe "tray-says-what-runs" src/main/tray.ts \
     "    const hostPart = words === null ? [] : [words ? \`host running: \${words}\` : 'host running'];" "    const hostPart: string[] = [];" \
     test/tray.test.ts "WHAT it runs"
+
+probe "armed-flow-keeps-the-tray" src/core/tray-only.ts \
+    "    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks;" "    return a.agents + a.terminals + a.processes + a.services + a.scheduledTasks;" \
+    test/tray-only.test.ts "and nothing running: stays"
+
+probe "scheduled-task-keeps-the-host" src/core/host-idle.ts \
+    "    if (holds.agents + holds.windows + holds.ptys + holds.armedFlows + holds.scheduledTasks > 0) return { lastBusy: now, exit: false };" "    if (holds.agents + holds.windows + holds.ptys + holds.armedFlows > 0) return { lastBusy: now, exit: false };" \
+    test/host-idle.test.ts "alone holds the host"
 
 probe "tray-probe-is-gated" src/main/main.ts \
     "    if (trayProbeEnabled(process.env)) {" "    if (true) {" \

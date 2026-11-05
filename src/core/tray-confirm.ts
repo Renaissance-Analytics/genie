@@ -17,6 +17,8 @@ export interface Stopping {
     readonly processes: readonly string[];
     readonly services: readonly string[];
     readonly sites: readonly string[];
+    readonly flows: readonly string[];
+    readonly scheduled: readonly string[];
 }
 
 export interface TrayQuestion {
@@ -41,6 +43,8 @@ export function trayConfirm(action: TrayAction, stopping: Stopping): TrayQuestio
     add(stopping.processes, 'kept process', 'kept processes');
     add(stopping.services, 'service', 'services');
     add(stopping.sites, 'site', 'sites');
+    add(stopping.flows, 'armed flow', 'armed flows');
+    add(stopping.scheduled, 'scheduled task', 'scheduled tasks');
     if (lines.length === 0) {
         const verb = action === 'restart' ? 'Restart' : 'Shut down';
         return { ...base, title: `${verb} Genie?`, message: `Nothing is running. ${verb} Genie?` };

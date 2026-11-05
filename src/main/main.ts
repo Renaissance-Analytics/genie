@@ -145,7 +145,7 @@ import { needsYouCount } from '../core/deck.js';
 import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
-import { trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
+import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
 import { terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -399,7 +399,13 @@ function hostActivityNow(): HostActivity {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).length : 0;
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).length;
-    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp };
+    return { agents, terminals: terminals?.count ?? 0, processes, services: servicesUp, ...onTheClockNow() };
+}
+
+/** What waits on the host's clock, from the host's own lists (core/tray-only.ts). With no host, nothing here outlives the window. */
+function onTheClockNow(): { armedFlows: number; scheduledTasks: number } {
+    if (agentEngineLink?.live !== true) return { armedFlows: 0, scheduledTasks: 0 };
+    return onTheClock(agentEngineLink.client.flows().list(), agentEngineLink.client.processBook().kept());
 }
 
 /**
@@ -437,7 +443,9 @@ function stoppingNow(): Stopping {
     const processes = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').map((p) => p.name);
     const servicesUp = (services?.engines.list() ?? []).filter((e) => e.active).map((e) => `${e.engine} ${e.version}`);
     const sites = (services?.routes() ?? []).map((r) => r.host);
-    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites };
+    const clockFlows = agentEngineLink?.live === true ? agentEngineLink.client.flows().list().filter((f) => f.armed).map((f) => f.name) : [];
+    const clockTasks = agentEngineLink?.live === true ? agentEngineLink.client.processBook().kept().filter((p) => p.wanted && p.schedule).map((p) => p.name) : [];
+    return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
 }
 
 /**
@@ -4025,7 +4033,7 @@ app.on('before-quit', (event) => {
             // QUIT KEEPS THE HOST (P1b): while genie-host runs them, the agents, terminals and kept processes can outlive this
             // window — the question then has two answers. After an upgrade's drain the host is gone: nothing is kept, as before.
             const kept = (services?.supervisor.list() ?? []).filter((p) => p.state === 'running' || p.state === 'restarting').length;
-            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept } : null });
+            return quitPlan({ runningAgents: running, liveTerminals: terminals?.count ?? 0, detachedTerminals: (services?.settings.snapshot() ?? {}).detached_terminals === true, host: agentEngineLink?.live === true ? { keptProcesses: kept, ...onTheClockNow() } : null });
         },
         ask: (plan) => quitAnswer(plan, dialog.showMessageBoxSync({ type: 'question', title: plan.title, message: plan.message, buttons: [...plan.buttons], defaultId: 0, cancelId: 0 })),
     });
