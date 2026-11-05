@@ -24,7 +24,10 @@ afterEach(async () => {
     for (const r of rigs.splice(0)) await r.close();
 });
 
-const agents = (url: string, token: string) => fetch(`${url}/v1/agents`, { headers: { authorization: `Bearer ${token}` } });
+const agents = (url: string | null, token: string) => {
+    if (url === null) throw new Error('the host’s door is not listening');
+    return fetch(`${url}/v1/agents`, { headers: { authorization: `Bearer ${token}` } });
+};
 
 async function door(home: string, logs: string[] = []): Promise<AppInboxHost> {
     const stores = await openAgentStores(home, () => new Date().toISOString());
