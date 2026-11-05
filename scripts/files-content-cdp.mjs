@@ -18,7 +18,8 @@ import { waitForPageProbe } from './page-probe-cdp.mjs';
 
 const WIN = process.platform === 'win32', started = Date.now(), OUT = resolve('smoke-out');
 const PORT = 9344, INSPECT = 9345, reports = [], sessions = [];
-const PROFILE = process.argv.includes('--profile'), profiles = [], sourceMaps = new Map();
+const STAGE_PROFILE = process.argv.includes('--stage-profile');
+const PROFILE = process.argv.includes('--profile') || STAGE_PROFILE, profiles = [], sourceMaps = new Map();
 let profileTools, profiled = false, sample = 0;
 let root, app, page, main, hostRecord;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -68,6 +69,7 @@ function cpuSummary(profile) {
 }
 async function measure(label, input) {
     await page.evaluate('window.__filesMeasure.reset()'); await main.evaluate('globalThis.__filesMeasure.reset()');
+    if (STAGE_PROFILE) for (const connection of [main, page]) await connection.evaluate('globalThis.__filesStageCounters.reset();true');
     if (profiled) {
         await main.evaluate('globalThis.__filesCounters.reset();globalThis.__filesCounters.resume();true');
         await page.evaluate('window.__filesCounters.reset();window.__filesCounters.pause();true');
@@ -85,10 +87,20 @@ async function measure(label, input) {
         for (const side of ['main', 'renderer']) console.log(`FILES_PROFILE ${JSON.stringify({ label, sample, side, counters: profile[side].counters, calls: profile[side].calls, cpu: profile[side].cpu.frames.slice(0, 20) })}`);
     }
     const renderer = await page.evaluate('window.__filesMeasure.summary()'), native = await main.evaluate('globalThis.__filesMeasure.summary()');
+    let staging;
+    if (STAGE_PROFILE) {
+        staging = {};
+        for (const [side, connection] of [['main', main], ['renderer', page]]) {
+            staging[side] = await connection.evaluate('globalThis.__filesStageCounters.summary()');
+            demand(staging[side].ticks > 0, `${side} staging heartbeat positive control`);
+            console.log(`FILES_STAGING ${JSON.stringify({ label, sample, side, ...staging[side] })}`);
+        }
+        if (input.method === 'write') demand(staging.main.events.some(event => event.operation === 'file.write'), 'staged-write native filesystem instrumentation positive control');
+    }
     demand(value.heartbeat.before > 0 && value.heartbeat.after > 0, 'heartbeat before/after positive controls');
     demand(value.concurrentSettings.ok, 'same page connection settings control');
     demand(renderer.maxBytes <= 1048576 && native.maxBytes <= 1048576, 'actual local frames exceed1MiB');
-    const row = { label, ...value, ...(PROFILE ? { sample, profiled } : {}), localFrames: { toPage: renderer, toHost: native }, mainRssPeak: native.rssPeak };
+    const row = { label, ...value, ...(PROFILE ? { sample, profiled } : {}), ...(staging ? { staging } : {}), localFrames: { toPage: renderer, toHost: native }, mainRssPeak: native.rssPeak };
     reports.push(row); console.log(`FILES ${label} ${JSON.stringify(row)}`); return row;
 }
 const textAt = suffix => `${'雪'.repeat(Math.floor(2 * 1024 * 1024 / 3))}${suffix}\n`;
@@ -123,6 +135,7 @@ try {
     page = await Cdp.connect(target.webSocketDebuggerUrl); main = await Cdp.connect((await until('owned app inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
     await waitForPageProbe(page); await until('ready app connection', () => page.evaluate('window.genieTest.localProtocol.state().phase === "ready"'));
     hostRecord = json(join(root, '.genie', 'runtime', 'host.json'));
+    if (STAGE_PROFILE) for (const connection of [main, page]) await connection.evaluate(`globalThis.__filesStageCounters=(${profileTools.installFilesStageCounters.toString()})(globalThis);true`);
     await page.evaluate(`(() => {
         const s = window.__filesMeasure = { count:0,maxBytes:0,handles:new Set(),kinds:{} };
         s.reset = () => { s.count=0;s.maxBytes=0;s.handles.clear();s.kinds={}; };
@@ -168,6 +181,8 @@ try {
     code = 0;
 } catch (e) { failure = e.stack ?? String(e); console.error(failure); }
 finally {
+    try { await page?.evaluate('window.__filesStageCounters?.stop();true', 3000); } catch {}
+    try { await main?.evaluate('globalThis.__filesStageCounters?.stop();true', 3000); } catch {}
     try { await page?.evaluate('window.__filesCounters?.stop();true', 3000); } catch {}
     try { await main?.evaluate('globalThis.__filesCounters?.stop();true', 3000); } catch {}
     try { await main?.evaluate('globalThis.__filesMeasure?.stop();true', 3000); } catch {}

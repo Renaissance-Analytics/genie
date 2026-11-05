@@ -56,3 +56,69 @@ export function installFilesCounters(scope, now = () => performance.now()) {
         stop() { active = false; for (const restore of undo.splice(0)) restore(); },
     };
 }
+
+/** CI/VM only: fs/launch spans contain no paths, arguments, environment or content. */
+export function installFilesStageCounters(scope, now = () => performance.now()) {
+    const builtin = name => scope.process?.getBuiltinModule?.(name) ?? {};
+    const undo = [], seen = new WeakSet();
+    let events = [], gaps = [], dropped = 0, ticks = 0, maxGapMs = 0, epoch = now(), last = epoch, generation = 0;
+    const record = (value, ownGeneration) => {
+        if (ownGeneration !== generation) return;
+        if (events.length < 1000) events.push(value); else dropped++;
+    };
+    const replace = (owner, key, wrapped) => {
+        const original = owner[key], descriptor = Object.getOwnPropertyDescriptor(owner, key);
+        owner[key] = wrapped;
+        undo.push(() => { if (owner[key] === wrapped) { if (descriptor) Object.defineProperty(owner, key, descriptor); else delete owner[key]; } });
+        return original;
+    };
+    const instrument = (owner, key, operation, complete = value => value) => {
+        const original = owner?.[key]; if (typeof original !== 'function') return;
+        replace(owner, key, function (...args) {
+            const start = now(), ownEpoch = epoch, ownGeneration = generation;
+            let value;
+            try { value = original.apply(this, args); }
+            catch (error) { record({ operation, startedMs: start - ownEpoch, syncMs: now() - start, wallMs: now() - start, ok: false }, ownGeneration); throw error; }
+            const syncMs = now() - start;
+            const finish = (result, ok) => { record({ operation, startedMs: start - ownEpoch, syncMs, wallMs: now() - start, ok }, ownGeneration); return result; };
+            if (value && typeof value.then === 'function') return value.then(result => complete(finish(result, true)), error => { finish(null, false); throw error; });
+            return complete(finish(value, true));
+        });
+    };
+    const handle = file => {
+        if (!file || seen.has(file)) return file;
+        seen.add(file);
+        for (const key of ['read', 'write', 'close']) instrument(file, key, `file.${key}`);
+        return file;
+    };
+    const fs = builtin('node:fs/promises');
+    for (const key of ['mkdir', 'lstat', 'readFile', 'writeFile', 'rename', 'rm']) instrument(fs, key, `fs.${key}`);
+    instrument(fs, 'open', 'fs.open', handle);
+    const prototype = builtin('node:child_process').ChildProcess?.prototype, originalSpawn = prototype?.spawn;
+    if (typeof originalSpawn === 'function') replace(prototype, 'spawn', function (...args) {
+        const start = now(), ownEpoch = epoch, ownGeneration = generation;
+        const executable = /(?:^|[\\/])powershell(?:\.exe)?$/i.test(args[0]?.file ?? '') ? 'powershell' : 'other';
+        let syncMs = 0, finished = false;
+        const finish = ok => {
+            if (finished) return; finished = true;
+            this.off('close', close); this.off('error', error);
+            record({ operation: 'child.spawn', executable, startedMs: start - ownEpoch, syncMs, wallMs: now() - start, ok }, ownGeneration);
+        };
+        const close = code => finish(code === 0), error = () => finish(false);
+        this.once('close', close); this.once('error', error);
+        try { const value = originalSpawn.apply(this, args); syncMs = now() - start; return value; }
+        catch (failure) { syncMs = now() - start; finish(false); throw failure; }
+    });
+    builtin('node:module').syncBuiltinESMExports?.();
+    const timer = scope.setInterval(() => {
+        const at = now(), ms = at - last;
+        maxGapMs = Math.max(maxGapMs, ms); ticks++;
+        if (ms >= 100) { if (gaps.length < 100) gaps.push({ startedMs: last - epoch, ms }); else dropped++; }
+        last = at;
+    }, 20);
+    return {
+        reset() { events = []; gaps = []; dropped = 0; ticks = 0; maxGapMs = 0; epoch = now(); last = epoch; generation++; },
+        summary() { return { events: events.map(event => ({ ...event })), gaps: gaps.map(gap => ({ ...gap })), dropped, ticks, maxGapMs }; },
+        stop() { scope.clearInterval(timer); generation++; for (const restore of undo.splice(0).reverse()) restore(); builtin('node:module').syncBuiltinESMExports?.(); },
+    };
+}

@@ -557,6 +557,26 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # Temporary PR1572-only Windows measurement; no product flags or ACL policy change.
+      - name: measure Files staging and synchronous Windows launches
+        if: github.ref == 'refs/heads/next/p4-files-content-family-7c'
+        shell: pwsh
+        run: |
+          node scripts/files-content-cdp.mjs --stage-profile *> files-staging.log
+          $code = $LASTEXITCODE
+          Get-Content files-staging.log
+          exit $code
+
+      - uses: actions/upload-artifact@v4
+        if: always() && github.ref == 'refs/heads/next/p4-files-content-family-7c'
+        with:
+          name: files-staging-windows
+          path: |
+            files-staging.log
+            smoke-out/files-content-*
+          if-no-files-found: error
+          retention-days: 7
+
       # THE SPAWN HOST STARTED INSIDE THE REAL APP (genie#1397), as on Linux above.
       - name: the spawn host started in the real app
         shell: pwsh
