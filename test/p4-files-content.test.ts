@@ -129,6 +129,54 @@ describe('7C local Files and repository content over the admitted door', () => {
         expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('mine');
         expect(await c.bridge.files.create!('work', 'a.txt', 'file')).toMatchObject({ ok: false });
     });
+    it('pages large git/state/repository metadata without dropping paths or embedding content', async () => {
+        const paths = Array.from({ length: 1201 }, (_, i) => `${i}/${'nested/'.repeat(20)}${'雪'.repeat(100)}.txt`);
+        const git = Object.fromEntries(paths.map(path => [path, 'modified']));
+        const largeState = { ...state, unreported: paths, diskChanges: paths.map((path, at) => ({ path, at })) };
+        const repo = { ok: true, value: { branch: 'work', ahead: 0, behind: 0, staged: paths.map(path => ({ path, status: 'M' })), unstaged: [], untracked: [] } };
+        const f = await fixture({ gitStatus: git, state: largeState, repo });
+        expect(await f.c.bridge.files.gitStatus!('work')).toEqual(git);
+        expect(await f.c.bridge.files.state('work')).toEqual(largeState);
+        expect(await f.c.bridge.repo!.call('status', 'work', '')).toEqual(repo);
+        expect(f.calls.some(call => call.method === 'page.next')).toBe(true);
+        expect(Math.max(...f.serialized.map(s => Buffer.byteLength(s)))).toBeLessThanOrEqual(1024 * 1024);
+    });
+    it('lazily resolves one oversized metadata field and complete repository diff/error text', async () => {
+        const long = '雪'.repeat(700_000), one = [{ id: 'a', label: long, type: 'file' }];
+        const f = await fixture({ children: one, repo: { ok: true, value: long } });
+        expect(await f.c.bridge.files.children!('work', '')).toEqual(one);
+        expect(await f.c.bridge.repo!.call('diff', 'work', '', 'a.txt', false)).toEqual({ ok: true, value: long });
+        f.ports.repo!.mockResolvedValue({ ok: false, error: long });
+        expect(await f.c.bridge.repo!.call('diff', 'work', '', 'missing', false)).toEqual({ ok: false, error: long });
+        expect(f.calls.filter(c => c.method === 'blob.open').length).toBeGreaterThanOrEqual(3);
+        expect(Math.max(...f.serialized.map(s => Buffer.byteLength(s)))).toBeLessThanOrEqual(1024 * 1024);
+        expect(f.c.state().connected).toBe(true);
+    });
+    it('refuses foreign, incomplete and wrong-purpose/subtype staged writes before the API is invoked', async () => {
+        const f = await fixture(), raw = await f.raw();
+        const foreign = await f.c.uploads!.stage({ purpose: 'file-write', subtype: 'text' }, new TextEncoder().encode('mine'));
+        f.invoke.mockClear();
+        expect(await raw.call('files.write', ['work', 'a.txt', { staged: foreign.id }, null])).toMatchObject({ kind: 'result', ok: false });
+        expect(f.invoke).not.toHaveBeenCalled();
+        const wrong = await raw.call('localUpload.begin', [{ purpose: 'draft-file', subtype: 'text', size: 0 }]);
+        const wrongId = (wrong as { value: { id: string } }).value.id;
+        expect(await raw.call('files.write', ['work', 'a.txt', { staged: wrongId }, null])).toMatchObject({ kind: 'result', ok: false });
+        const incomplete = await raw.call('localUpload.begin', [{ purpose: 'file-write', subtype: 'text', size: 1 }]);
+        expect(await raw.call('files.write', ['work', 'a.txt', { staged: (incomplete as { value: { id: string } }).value.id }, null])).toMatchObject({ kind: 'result', ok: false });
+        expect(f.invoke).not.toHaveBeenCalled();
+        await f.c.uploads!.abort(foreign.id);
+    });
+    it('a rejected or throwing consumer releases its own stage and a write above the read cap is accepted', async () => {
+        const f = await fixture({ write: vi.fn(async () => { throw new Error('disk unavailable'); }) });
+        await expect(f.c.bridge.files.write('work', 'a.txt', 'mine'.repeat(200_000), null)).rejects.toThrow('disk unavailable');
+        const staged = f.calls.filter(c => c.method === 'localUpload.begin'); expect(staged).toHaveLength(1);
+        // Repeated complete writes cannot leak the three-resource upload quota on a refused/error result.
+        for (let i = 0; i < 4; i++) await expect(f.c.bridge.files.write('work', 'a.txt', 'mine'.repeat(200_000), null)).rejects.toThrow('disk unavailable');
+        const bytes = Buffer.alloc(9 * 1024 * 1024, 0xa9), base64 = bytes.toString('base64');
+        expect(await f.c.bridge.files.writeBytes!('work', 'sheets', 'a.xlsx', base64, null)).toEqual(rows.find(row => row.method === 'files.writeBytes')!.value);
+        expect(f.ports.writeBytes).toHaveBeenCalledWith('work', 'a.xlsx', base64, null);
+        expect(f.c.state().connected).toBe(true);
+    });
     it('removes all fifteen moved native paths and retains watch and window ports', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         for (const name of ['files-tree', 'files-children', 'files-open', 'files-read-media', 'files-last-committed', 'files-state', 'files-git-status', 'files-create', 'files-rename', 'files-duplicate', 'files-trash', 'files-read-bytes', 'files-write', 'files-write-bytes', 'repo']) {
