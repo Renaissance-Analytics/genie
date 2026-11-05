@@ -315,7 +315,7 @@ const localDoor = localProtocolDoor(ipcMain);
  */
 let stallLog: ((line: string) => void) | null = null;
 /** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
-let stallProfiler: { capture(ms: number): void } | null = null;
+let stallProfiler: { capture(ms: number): void; stop(): void } | null = null;
 /**
  * THE SPAWN HOST (genie#1397): the child that creates every process main used to create on its own thread — the Docker
  * CLI (600 s of the owner's main in one beta.54 session, up to 18.3 s at a time), every other `execFileRunner` command,
@@ -4074,6 +4074,9 @@ const quitPorts: QuitPorts = {
     // The stops' readings and reaps run off main (genie#1201); the drain below waits for them too, bounded.
     stopAgents: () => { host?.stopAll(); },
     closeWindow: () => {
+        // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
+        // (genie-test-windows, job Q0), and a quit needs main for its own steps.
+        stallProfiler?.stop();
         // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
         keepaliveNow?.stop();
         // Every supervised process, the front door, an in-flight flow run, the knowledge database.
