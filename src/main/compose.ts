@@ -58,6 +58,7 @@ import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { PtyPort } from './terminal-host.js';
 import { composeHosting, type HostingOptions } from './hosting-compose.js';
+import { composeStageDiagnostics, type ComposeStageSample } from './compose-stage-diagnostics.js';
 import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
 import type { SiteManager } from './site-manager.js';
 import type { EnvelopeSites } from './envelope-sites-host.js';
@@ -78,7 +79,7 @@ import type { GenRouterServer } from './gen-router-server.js';
 
 export interface ComposeInput extends HostingOptions {
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
-    readonly onComposeStage?: (sample: { stage: string; elapsedMs: number; totalMs: number }) => void;
+    readonly onComposeStage?: (sample: ComposeStageSample) => void;
     readonly userData: string;
     readonly pty: PtyPort;
     /**
@@ -300,39 +301,38 @@ export async function composeWindowServices(input: ComposeInput & { readonly age
 }
 
 async function composeWith(input: ComposeInput): Promise<WindowServices> {
-    const compositionStarted = input.onComposeStage ? performance.now() : 0;
-    let lastStage = compositionStarted;
-    const stage = async <T>(name: string, action: () => T | Promise<T>): Promise<T> => {
-        if (!input.onComposeStage) return action();
-        const started = performance.now();
-        input.onComposeStage({ stage: `${name}:begin`, elapsedMs: 0, totalMs: started - compositionStarted });
-        try { return await action(); }
-        finally { lastStage = performance.now(); input.onComposeStage({ stage: name, elapsedMs: lastStage - started, totalMs: lastStage - compositionStarted }); }
-    };
+    const stage = input.onComposeStage ? composeStageDiagnostics(input.onComposeStage) : null;
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
-    await stage('runtime-directory', () => mkdir(runtimeDir(input.userData), { recursive: true }));
-    const localStaging = await stage('local-staging', () => LocalStagingArea.open(input.userData));
+    stage?.begin('runtime-directory');
+    await mkdir(runtimeDir(input.userData), { recursive: true });
+    stage?.end(); stage?.begin('local-staging');
+    const localStaging = await LocalStagingArea.open(input.userData);
+    stage?.end();
 
     // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
     // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
     let ownSettings: SettingsStore | null = null;
+    stage?.begin('settings');
     if (!input.agentStores?.settings) {
-        ownSettings = await stage('settings', () => SettingsStore.open(input.userData, iso));
-        await stage('settings-carry-over', () => ownSettings!.carryOverFromV1(input.v1Settings()));
+        ownSettings = await SettingsStore.open(input.userData, iso);
+        stage?.end(); stage?.begin('settings-carry-over');
+        await ownSettings.carryOverFromV1(input.v1Settings());
     }
+    stage?.end();
     const settings: S_Settings = input.agentStores?.settings ?? ownSettings!;
 
     // THE STORES AGENTS WRITE TO (the host split, P3.1): genie-host's, through this window's replicas — or, only when no
     // host could start, this window's own, opened here with Genie 1's history taken once.
     let ownStores: Awaited<ReturnType<typeof openAgentStores>> | null = null;
+    stage?.begin('agent-stores');
     if (!input.agentStores) {
-        ownStores = await stage('agent-stores', () => openAgentStores(input.userData, iso));
-        await stage('agent-store-imports', async () => {
-            importV1Knowledge(ownStores!.knowledge, input.v1Knowledge);
-            await importV1Inbox(ownStores!.inbox, input.v1Inbox, input.roster?.() ?? [], now());
-        });
+        ownStores = await openAgentStores(input.userData, iso);
+        stage?.end(); stage?.begin('agent-store-imports');
+        importV1Knowledge(ownStores.knowledge, input.v1Knowledge);
+        await importV1Inbox(ownStores.inbox, input.v1Inbox, input.roster?.() ?? [], now());
     }
+    stage?.end();
     const inbox: WindowAgentStores['inbox'] = input.agentStores?.inbox ?? ownStores!.inbox;
     const attention: WindowAgentStores['attention'] = input.agentStores?.attention ?? ownStores!.attention;
     const knowledge: WindowAgentStores['knowledge'] = input.agentStores?.knowledge ?? ownStores!.knowledge;
@@ -341,11 +341,13 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // Genie's tools as flow steps (genie#1204): their kinds before the store reads any document that holds one.
     ensureFlowToolKinds();
     let ownFlows: FlowStore | null = null;
+    stage?.begin('flows');
     if (!input.flowsEngine) {
-        ownFlows = await stage('flows', () => FlowStore.open(input.userData, now));
+        ownFlows = await FlowStore.open(input.userData, now);
         // Genie 1's FLOWS (genie#1204), once, DISARMED — before the scheduler plans, which arms nothing they bring.
         if (input.v1Flows) await runV1FlowImport(ownFlows, { database: input.v1Flows.database, workspaces: input.workspaces?.() ?? [] }).catch((error: unknown) => console.error(`[genie] v1 flows import failed: ${error instanceof Error ? error.message : String(error)}`));
     }
+    stage?.end();
     const flows: FlowsApi = input.flowsEngine?.flows ?? ownFlows!;
 
     // THE PROCESS SUPERVISOR (P3.3b): genie-host's when it runs — its restart policy keeps sites and workers alive with the
@@ -376,8 +378,11 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // §6.7: plugins live beside the rest of Genie's state; signed by default, unsigned only under developer mode.
     const pluginsDir = join(input.userData, 'plugins');
     const openPlugins = () => PluginHost.open({ dir: pluginsDir, keys: PUBLISHER_KEYS, developerMode: settings.snapshot().developer_mode === true, official: OFFICIAL_PLUGINS });
-    let plugins = await stage('plugins', openPlugins);
-    const remoteDevices = await stage('remote-devices', () => DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') }));
+    stage?.begin('plugins');
+    let plugins = await openPlugins();
+    stage?.end(); stage?.begin('remote-devices');
+    const remoteDevices = await DeviceStore.open(input.userData, { now, random: () => randomBytes(24).toString('base64url') });
+    stage?.end();
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
     const remote = new RemoteHost({
@@ -395,7 +400,9 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // THE FRONT DOOR, THE SERVICE ENGINES AND THE SITE ROUTES (the host split, P5a): genie-host's when it runs, through this
     // window's replica — this window then starts no Caddy, opens no engine registry and makes no CA. Its own
     // (hosting-compose.ts) only on the emergency path, built exactly as it always was.
-    const ownHosting = input.hosting ? null : await stage('hosting', () => composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf }));
+    stage?.begin('hosting');
+    const ownHosting = input.hosting ? null : await composeHosting({ ...input, supervisor, settings, appEnv: appEnvOf });
+    stage?.end();
     const hosting: HostingApi = input.hosting ?? ownHosting!;
     const workspacesNow = (): readonly WorkspaceRef[] => input.workspaces?.() ?? [];
     const roster = (): readonly AgentRecord[] => input.roster?.() ?? [];
@@ -477,7 +484,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const stopLiveness = supervisor.watchLiveness();
     let down: Promise<void> | null = null;
 
-    if (input.onComposeStage) { const ready = performance.now(); input.onComposeStage({ stage: 'ready', elapsedMs: ready - lastStage, totalMs: ready - compositionStarted }); }
+    stage?.ready();
     return {
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
         ownFlows,
