@@ -140,9 +140,14 @@ export function spawnUpdaterProcess(launch: { readonly file: string; readonly ar
     }
 }
 
-/** Genie's window again, after an install that did not happen (P5b). Not built yet. */
-export function spawnGenieWindow(_launch: { readonly file: string; readonly args: readonly string[] }, _env: NodeJS.ProcessEnv, _spawn: typeof spawnChild = spawnChild): number | null {
-    return null;
+/** Genie's window again, after an install that did not happen (P5b): detached, a real Electron, nothing held of the caller. */
+export function spawnGenieWindow(launch: { readonly file: string; readonly args: readonly string[] }, env: NodeJS.ProcessEnv, spawn: typeof spawnChild = spawnChild): number | null {
+    const own = { ...env };
+    delete own['ELECTRON_RUN_AS_NODE'];
+    const child = spawn(launch.file, [...launch.args], { detached: true, windowsHide: false, stdio: 'ignore', env: own });
+    child.on('error', () => {});
+    child.unref();
+    return child.pid ?? null;
 }
 
 export async function linkToHost(ports: EngineLaunchPorts): Promise<EngineLink> {

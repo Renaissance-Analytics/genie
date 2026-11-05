@@ -1,10 +1,11 @@
 import { app } from 'electron';
 import { join } from 'node:path';
 import { realElectronUpdaterPort } from './electron-updater-port.js';
-import { linkToRunningHost, pidAlive } from './engine-launch.js';
+import { linkToRunningHost, pidAlive, spawnGenieWindow } from './engine-launch.js';
 import { genieHome, runtimeDir } from './paths.js';
 import { listProcessesAsync } from './process-list.js';
 import { connectUpdaterLink, runUpdaterHelper } from './updater-helper.js';
+import { relaunchSpec, writeUpdateFailed } from './updates-host.js';
 
 /**
  * THE UPDATER HELPER (the host split, P5b). `--updater` (core/entry-mode.ts), started by genie-host, detached, when a check,
@@ -40,8 +41,9 @@ async function runUpdaterProcess(): Promise<void> {
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
         now: Date.now,
         quit: () => { app.quit(); },
-        recordFailure: () => {},
-        relaunch: () => {},
+        recordFailure: (reason) => { writeUpdateFailed(home, { at: Date.now(), reason, log: join(home, 'logs', 'genie-updater.log') }); },
+        // This executable as the window started it (a dev run's app path, its switches), without the updater mode.
+        relaunch: () => { spawnGenieWindow(relaunchSpec({ file: process.execPath, args: process.argv.slice(1) }, process.env), process.env); },
         log,
     });
 }

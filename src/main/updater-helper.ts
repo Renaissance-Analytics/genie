@@ -182,11 +182,21 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
             }
             await client.call('reply', [event.id, true, value]).catch(() => {});
         } catch (error) {
-            await client.call('reply', [event.id, false, error instanceof Error ? error.message : String(error)]).catch(() => {});
+            const why = error instanceof Error ? error.message : String(error);
+            await client.call('reply', [event.id, false, why]).catch(() => {});
+            // An install that fails here comes after the host's drain: Genie is started again, and the next window told why.
+            if (event.op === 'install') giveUp(`the update was not installed: ${why}`);
         } finally {
             busy -= 1;
             if (!installing && !ended) armIdle();
         }
+    };
+
+    /** After the drain, an install that does not happen: why recorded for the next window, Genie started again, then leave. */
+    const giveUp = (reason: string): void => {
+        try { ports.recordFailure(reason); } catch (error) { ports.log(`updater: why could not be recorded: ${error instanceof Error ? error.message : String(error)}`); }
+        try { ports.relaunch(); } catch (error) { ports.log(`updater: Genie could not be started again: ${error instanceof Error ? error.message : String(error)}`); }
+        end('the update was not installed; Genie was started again');
     };
 
     const install = async (wait: InstallWait): Promise<void> => {
@@ -201,7 +211,7 @@ export function runUpdaterHelper(ports: UpdaterHelperPorts): { readonly done: Pr
         });
         if (!gone.gone) {
             ports.log(gone.words);
-            end('the update was not installed');
+            giveUp(gone.words.replace(/^updater: /, ''));
             return;
         }
         ports.log('updater: no Genie process maps the install any more; running the installer');
