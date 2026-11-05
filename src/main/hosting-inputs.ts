@@ -78,8 +78,9 @@ export async function hostHostingOptions(paths: HostMachinePaths, log: (line: st
     let caddyBin: string | null = null;
     for (const problem of paths.problems) log(problem);
     const bundled = paths.resources ? caddyBinPath(paths.resources, platform) : null;
-    if (bundled === null && paths.resources) log(`no bundled Caddy under ${paths.resources}`);
-    else {
+    if (bundled === null) {
+        if (paths.resources) log(`no bundled Caddy under ${paths.resources}`);
+    } else {
         const copy = await userCaddyCopy(bundled, join(runtimeDir(paths.home), 'caddy-bin'));
         if (copy.error) log(`[caddy] ${copy.error}`);
         caddyBin = copy.path;
