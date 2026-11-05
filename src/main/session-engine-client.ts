@@ -272,6 +272,13 @@ export class SessionEngineClient {
     }
 
     /** End the link from this side (a quit): no reconnect is asked for. */
+    /** The window's environment NOW, to the host (P5a.2): after a Check and repair, what the host starts next reads it. */
+    async pushEnv(): Promise<void> {
+        const env = Object.fromEntries(Object.entries((this.#options.env ?? (() => process.env))()).filter((e): e is [string, string] => typeof e[1] === 'string'));
+        const reply = await this.call('engine.windowEnv', [env]);
+        if (!reply.ok) throw new Error(reply.reason);
+    }
+
     disconnect(): void {
         const t = this.#transport;
         this.#transport = null;

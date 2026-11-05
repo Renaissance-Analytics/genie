@@ -31,10 +31,10 @@ export interface GenieBrowserWindowOptions {
     /** The main bundle's directory (the renderer's files are beside it). */
     readonly here: string;
     readonly preload: string;
-    /** The in-app front door's loopback port (compose `frontDoorPort`). */
-    readonly frontDoorPort: number;
-    /** Genie's CA, PEM, or `null` (then every `.gen` certificate is refused). */
-    readonly caPem: string | null;
+    /** The in-app front door's loopback port NOW (compose `frontDoorPort`): read again when the front door moves (P5a.2). */
+    readonly frontDoorPort: () => number;
+    /** Genie's CA NOW, PEM, or `null` (then every `.gen` certificate is refused). */
+    readonly caPem: () => string | null;
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
     readonly log?: (line: string) => void;
@@ -71,15 +71,29 @@ function routeSession(ses: Session, port: number, log: (line: string) => void): 
  * signed it for that name, every request a page makes cancelled unless it travels secure. Its routing is awaited by every
  * page load (a `.gen` load before it would go to DNS).
  */
-let sharedSession: { ses: Session; routed: Promise<void> } | null = null;
-export function genieBrowserSession(options: { frontDoorPort: number; caPem: string | null; log?: (line: string) => void }): { ses: Session; routed: Promise<void> } {
+let sharedSession: { ses: Session; routed: () => Promise<void> } | null = null;
+export function genieBrowserSession(options: { frontDoorPort: () => number; caPem: () => string | null; log?: (line: string) => void }): { ses: Session; routed: () => Promise<void> } {
     if (sharedSession) return sharedSession;
     const log = options.log ?? ((line: string) => console.log(line));
     const ses = session.fromPartition('persist:genie-browser-window');
-    guardSession(ses, () => options.caPem);
-    const routed = routeSession(ses, options.frontDoorPort, log);
-    sharedSession = { ses, routed };
+    guardSession(ses, options.caPem);
+    // Routed to the front door's port NOW, and again when it moved (genie-host came back on another port, P5a.2).
+    const live = { port: options.frontDoorPort(), routed: Promise.resolve() };
+    live.routed = routeSession(ses, live.port, log);
+    sharedSession = {
+        ses,
+        routed: () => {
+            const port = options.frontDoorPort();
+            if (port !== live.port) { live.port = port; live.routed = routeSession(ses, port, log); }
+            return live.routed;
+        },
+    };
     return sharedSession;
+}
+
+/** The front door's port changed: the shared session routes to it now, not at its next page load. */
+export function followFrontDoorInBrowser(): void {
+    void sharedSession?.routed().catch(() => {});
 }
 
 /**
@@ -171,8 +185,7 @@ export function genieBrowserWindows(options: GenieBrowserWindowOptions): GenieBr
     };
     const sessionFor = (key: string): { ses: Session; routed: () => Promise<void> } => {
         if (key !== LOCAL) return remoteSession(key);
-        const { ses, routed } = genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
-        return { ses, routed: () => routed };
+        return genieBrowserSession({ frontDoorPort: options.frontDoorPort, caPem: options.caPem, log });
     };
     const hostsOf = (key: string): readonly string[] => (key === LOCAL ? options.enabledHosts() : remotes.get(key)?.hosts ?? []);
 

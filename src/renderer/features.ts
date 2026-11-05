@@ -301,7 +301,7 @@ export interface FeatureData {
      * in a pushed snapshot: the flow it saved (and whether the save disarmed it), or the problems, each on its node.
      */
     readonly flows: { flows: readonly FlowRecord[]; adding: FlowAdding | null; saved?: FlowSaved | null; toolKinds?: readonly import('@particle-academy/fancy-flow/engine').NodeKindDefinition[] } | null;
-    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus } | null;
+    readonly hosting: { sites: readonly HostedSite[]; processes: readonly HostedProcess[]; adding: SiteAdding | null; editing?: SiteEditing | null; frontDoor: FrontDoorStatus; /** What the hosting was started without (genie-host's launch inputs), each with its reason. */ problems?: readonly string[] } | null;
     /** `logs`: the one engine log the person opened, or null/absent when none is open. */
     readonly services: { instances: readonly ServiceView[]; adding: ServiceAdding | null; logs?: ServiceLogs | null; updating?: { serviceId: string; image: string; note: string; dependents: readonly string[] } | null } | null;
     readonly toolchain: ToolchainSection | null;

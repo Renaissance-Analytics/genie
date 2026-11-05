@@ -22,7 +22,10 @@ const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
 
 describe('the pane’s session (electron-browser-view.ts)', () => {
     it('routes with the PAC from core — ses.setProxy(genProxyConfig(<front door port>)) — once', () => {
-        expect(count(view, /ses\.setProxy\(genProxyConfig\(options\.frontDoorPort\)\)/g)).toBe(1);
+        expect(count(view, /ses\.setProxy\(genProxyConfig\(port\)\)/g)).toBe(1);
+        // At the port NOW, and again when the front door moved (P5a.2: genie-host can come back on another port).
+        expect(view).toMatch(/let routedPort = options\.frontDoorPort\(\);\s*let routed = route\(routedPort\);/);
+        expect(view).toMatch(/following\.add\(\(\) => \{ const port = options\.frontDoorPort\(\); if \(port !== routedPort\) \{ routedPort = port; routed = route\(port\); \} \}\);/);
     });
 
     it('sets its certificate check once, answering ONLY with the verifier’s verdict — no literal 0 / -2 / -3 anywhere', () => {
@@ -46,7 +49,10 @@ describe('main and compose', () => {
     it('main hands the pane the in-app front door’s port and Genie’s CA — once', () => {
         // Through mountMainWindow (P1b: the main window can be built again), from boot's front door and CA.
         expect(count(main, /electronBrowserView\(window, \{ frontDoorPort: deps\.frontDoorPort, caPem: deps\.caPem \}\)/g)).toBe(1);
-        expect(count(main, /mainWindowDeps = \{ frontDoorPort: composed\.frontDoorPort, caPem: browserTrust\.caPem,/g)).toBe(1);
+        expect(count(main, /mainWindowDeps = \{ frontDoorPort: \(\) => frontDoorNow\.port, caPem: \(\) => frontDoorNow\.caPem,/g)).toBe(1);
+        // The front door as it is now, from boot's composition, and every browser session told when it moves (P5a.2).
+        expect(count(main, /frontDoorNow = \{ port: composed\.frontDoorPort, caPem: browserTrust\.caPem \};/g)).toBe(1);
+        expect(main).toMatch(/composed\.onFrontDoorChange\(\(\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*followFrontDoorInBrowser\(\);/);
     });
 
     it('main applies back / forward / reload to the pane, and pushes what the pane reports', () => {

@@ -21,8 +21,9 @@ import type { Activation } from '../core/window-activation.js';
 export interface SitePanelsOptions {
     /** The main window now; null while there is none (tray-only Genie). */
     readonly window: () => BrowserWindow | null;
-    readonly frontDoorPort: number;
-    readonly caPem: string | null;
+    /** The front door's port and Genie's CA NOW — read again when they change (P5a.2). */
+    readonly frontDoorPort: () => number;
+    readonly caPem: () => string | null;
     readonly enabledHosts: () => readonly string[];
     /**
      * The Genie browser window, for a page's new window and the panel's "Open in browser". `activation` (genie#1235): the
@@ -58,7 +59,7 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
             if (/^https?:/i.test(url)) void shell.openExternal(url).catch(() => {});
         });
         return {
-            load: (url) => { void (async () => { await routed; await wc.loadURL(url); })().catch(() => {}); },
+            load: (url) => { void (async () => { await routed(); await wc.loadURL(url); })().catch(() => {}); },
             reload: () => wc.reload(),
             setBounds: (bounds) => view.setBounds(bounds),
             setVisible: (visible) => view.setVisible(visible),

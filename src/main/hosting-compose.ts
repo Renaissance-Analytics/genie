@@ -68,6 +68,10 @@ export type FrontDoorStatus =
 
 /** What the hosting is built with, beyond the supervisor and the settings: the same options compose has always taken. */
 export interface HostingOptions {
+    /** Why there is no bundled Caddy, when the caller knows (genie-host: the launch input it lacks); the generic reason otherwise. */
+    readonly noCaddyReason?: string;
+    /** What this hosting was started without, each with what goes without it — shown in Hosting (genie-host's launch inputs). */
+    readonly problems?: readonly string[];
     /**
      * `docker events` as a stream of lines, so engine states are read on change instead of on every look (genie#1397).
      * Absent with no `docker` given = the real one, created where `execFileRunner`'s commands are; absent with a `docker`
@@ -211,6 +215,7 @@ function openGenCa(input: { caDir: string; v1CaDirs: readonly string[]; issuer: 
 
 function startExternalFrontDoor(input: {
     caddyBin: string | null;
+    noCaddyReason?: string | undefined;
     caddyDir: string;
     /** Opens the shared CA on first call (main: once, for both doors). */
     genCa: () => { ca: GenCa; error: null } | { ca: null; error: string };
@@ -247,7 +252,7 @@ function startExternalFrontDoor(input: {
         deckItems: () => [],
         close: () => {},
     });
-    if (caddyBin === null) return off(NO_CADDY);
+    if (caddyBin === null) return off(input.noCaddyReason ?? NO_CADDY);
     // Without a CA there is no certificate to serve: say so, and start nothing that would serve a broken one.
     const opened = input.genCa();
     if (opened.ca === null) return off(`Genie’s certificate authority could not be set up (${opened.error}); https://<name>.gen is off in external browsers and in the in-app browser`);
@@ -635,6 +640,7 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     const elevationRun = (plan: { command: string; args: readonly string[] }) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 });
     const frontDoorCtl = startExternalFrontDoor({
         caddyBin: input.caddyBin,
+        noCaddyReason: input.noCaddyReason,
         caddyDir: join(runtimeDir(input.userData), 'caddy'),
         genCa,
         // Read-only: one PowerShell Test-Path per Root store on Windows, the System keychain on macOS, the bundles on Linux.
@@ -685,6 +691,23 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
     const drainEnvFiles = () => envFiles.close();
     const closeFrontDoor = () => new Promise<void>((r) => frontDoor.close(r));
     const settled = async () => { await portAllocator?.settled(); };
+    const engineDependents = (id: string): string[] => {
+        const i = engines.list().find((x) => x.id === id);
+        if (!i) throw new Error(`no service ${id}`);
+        const workspaceIds = new Set([
+            ...(input.workspaces?.() ?? []).map((w) => w.id),
+            ...(i.scope.kind === 'dedicated' ? [i.scope.workspaceId] : []),
+            ...Object.keys(i.slices ?? {}),
+            ...sites.list().map((x) => x.workspaceId),
+            ...supervisor.list().map((x) => x.workspaceId),
+        ]);
+        const using = new Set([...workspaceIds].filter((ws) => (i.engine === 'custom' && i.scope.kind === 'dedicated' && i.scope.workspaceId === ws) || engines.choices(ws).some((c) => c.chosen?.id === id)));
+        return [
+            ...[...using].map((ws) => `workspace ${ws}`),
+            ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'starting', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
+            ...supervisor.list().filter((x) => using.has(x.workspaceId) && ['running', 'restarting'].includes(x.state)).map((x) => `process ${x.name} (workspace ${x.workspaceId})`),
+        ];
+    };
     let down: Promise<void> | null = null;
 
     return {
@@ -694,23 +717,16 @@ export async function composeHosting(input: HostingComposeInput): Promise<Hostin
         engineReconcile,
         envFiles,
         engineStatuses: () => engineStatusesOf(enginePorts),
-        engineDependents: (id) => {
-            const i = engines.list().find((x) => x.id === id);
-            if (!i) throw new Error(`no service ${id}`);
-            const workspaceIds = new Set([
-                ...(input.workspaces?.() ?? []).map((w) => w.id),
-                ...(i.scope.kind === 'dedicated' ? [i.scope.workspaceId] : []),
-                ...Object.keys(i.slices ?? {}),
-                ...sites.list().map((x) => x.workspaceId),
-                ...supervisor.list().map((x) => x.workspaceId),
-            ]);
-            const using = new Set([...workspaceIds].filter((ws) => (i.engine === 'custom' && i.scope.kind === 'dedicated' && i.scope.workspaceId === ws) || engines.choices(ws).some((c) => c.chosen?.id === id)));
-            return [
-                ...[...using].map((ws) => `workspace ${ws}`),
-                ...sites.list().filter((x) => using.has(x.workspaceId) && ['running', 'starting', 'external'].includes(x.state)).map((x) => `site ${x.host} (workspace ${x.workspaceId})`),
-                ...supervisor.list().filter((x) => using.has(x.workspaceId) && ['running', 'restarting'].includes(x.state)).map((x) => `process ${x.name} (workspace ${x.workspaceId})`),
-            ];
-        },
+        engineDependents: (id) => engineDependents(id),
+        updateEngine: (id, options) => engines.update(id, {
+            consent: options.consent,
+            // At the moment the engine is stopped — after the image downloaded — the LIVE dependents against the reviewed ones.
+            beforeStop: () => {
+                const now = engineDependents(id);
+                if (now.some((d) => !(options.approvedDependents ?? []).includes(d))) throw new Error('The engine’s dependents changed while its image was downloading; nothing was replaced. Review them and try again.');
+            },
+        }),
+        hostingProblems: () => [...(input.problems ?? [])],
         startEngine: async (id) => {
             // The person wants it running: no longer stopped by them, even if Docker refuses (the refusal is the answer).
             if (engineStopped.delete(id)) await saveEngineStopped();

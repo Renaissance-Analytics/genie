@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { Platform } from '../core/toolchain.js';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -16,7 +16,10 @@ import { execFileRunner } from './toolchain-runner.js';
  * emergency path — the bundled Caddy (run from the per-user copy), the site readiness probe, PHP's workers, pins and trust
  * bundle, and Genie 1's CA and database — computed here with no Electron. What only Electron knows (Genie 1's userData,
  * the app data folder, the resources folder) the window passed in the host's environment when it started it
- * (main.ts `hostEnv`); a host started without one goes without that input, and says so.
+ * (main.ts `hostEnv`); a host started without one goes without that input, and SAYS SO in Hosting (`problems`).
+ *
+ * P6 NOTE: the host copied to `~/.genie/host/<hash>/` (#1545) must be started with the same three inputs — they are the
+ * window's to pass at every spawn, whoever spawns it.
  */
 export interface HostMachinePaths {
     /** Genie 2's own home (`GENIE_HOME`). */
@@ -27,12 +30,37 @@ export interface HostMachinePaths {
     readonly appData: string | null;
     /** The install's resources folder, where the bundled Caddy is (`GENIE_RESOURCES`). */
     readonly resources: string | null;
+    /** Each input the host was started without (or that is not a folder), with what goes without it. The Caddy one first. */
+    readonly problems: readonly string[];
+    /** Why there is no bundled Caddy, when it is because of a launch input; null otherwise. */
+    readonly noCaddyReason: string | null;
 }
 
 /** The paths, from the host's environment (engine-launch.ts sets them from main.ts's `hostEnv`). */
-export function hostMachinePaths(env: NodeJS.ProcessEnv, home: string): HostMachinePaths {
-    const named = (key: string): string | null => (env[key] && env[key]!.length > 0 ? env[key]! : null);
-    return { home, v1UserData: named('GENIE_V1_USERDATA'), appData: named('GENIE_APPDATA'), resources: named('GENIE_RESOURCES') };
+export function hostMachinePaths(env: NodeJS.ProcessEnv, home: string, isDir: (path: string) => boolean = realIsDir): HostMachinePaths {
+    const problems: string[] = [];
+    let noCaddyReason: string | null = null;
+    const input = (key: string, what: string, without: string): string | null => {
+        const value = env[key];
+        if (!value) {
+            problems.push(`genie-host was started without ${what} (${key}): ${without}. Quit Genie and start it again to start a host that has it.`);
+            return null;
+        }
+        if (!isDir(value)) {
+            problems.push(`genie-host was given ${key}=${value}, which is not a folder: ${without}.`);
+            return null;
+        }
+        return value;
+    };
+    const resources = input('GENIE_RESOURCES', 'the install’s resources folder', 'there is no bundled Caddy, so https://<name>.gen in external browsers is off — the in-app browser still works');
+    if (resources === null) noCaddyReason = problems[0]!;
+    const v1UserData = input('GENIE_V1_USERDATA', 'Genie 1’s folder', 'Genie 1’s certificate authority, service engines and toolchain PHP are not taken over or found');
+    const appData = input('GENIE_APPDATA', 'the app data folder', 'Genie 1’s mirror of its certificate authority is not looked for');
+    return { home, v1UserData, appData, resources, problems, noCaddyReason };
+}
+
+function realIsDir(path: string): boolean {
+    try { return statSync(path).isDirectory(); } catch { return false; }
 }
 
 export async function hostHostingOptions(paths: HostMachinePaths, log: (line: string) => void): Promise<HostingOptions> {
@@ -48,8 +76,9 @@ export async function hostHostingOptions(paths: HostMachinePaths, log: (line: st
         toolchainPhp: { path: process.env['PATH'] ?? '', genieRoots: [...(paths.v1UserData ? [join(paths.v1UserData, 'toolchain')] : []), toolchainDataDir], cacheDir: join(toolchainDataDir, 'php-opcache') },
     });
     let caddyBin: string | null = null;
+    for (const problem of paths.problems) log(problem);
     const bundled = paths.resources ? caddyBinPath(paths.resources, platform) : null;
-    if (bundled === null) log(paths.resources ? `no bundled Caddy under ${paths.resources}` : 'no resources folder was passed (GENIE_RESOURCES): no bundled Caddy');
+    if (bundled === null && paths.resources) log(`no bundled Caddy under ${paths.resources}`);
     else {
         const copy = await userCaddyCopy(bundled, join(runtimeDir(paths.home), 'caddy-bin'));
         if (copy.error) log(`[caddy] ${copy.error}`);
@@ -65,5 +94,8 @@ export async function hostHostingOptions(paths: HostMachinePaths, log: (line: st
         v1CaDirs: [...new Set([...(paths.v1UserData ? [join(paths.v1UserData, 'host-gen')] : []), ...(paths.appData ? [join(paths.appData, 'Genie', 'host-gen')] : [])])],
         ...(paths.v1UserData ? { v1Services: { database: join(paths.v1UserData, 'genie.db') } } : {}),
         frontDoorPort: 0,
+        ...(paths.noCaddyReason ? { noCaddyReason: paths.noCaddyReason } : {}),
+        // The Caddy one is Hosting's front-door line already; the others are lines of their own.
+        problems: paths.problems.filter((p) => p !== paths.noCaddyReason),
     };
 }

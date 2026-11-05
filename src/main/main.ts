@@ -173,8 +173,8 @@ import { moveScheduledTasksOutOfFlows } from './scheduled-tasks-move.js';
 import { osPidAlive } from './process-supervisor.js';
 import type { FeatureData } from '../renderer/features.js';
 import { BrowserPane } from './browser-pane.js';
-import { electronBrowserView } from './electron-browser-view.js';
-import { genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
+import { electronBrowserView, followFrontDoorInPanes } from './electron-browser-view.js';
+import { followFrontDoorInBrowser, genieBrowserWindows, type GenieBrowserWindows } from './genie-browser-electron.js';
 import { sitePanels, type LiveSitePanels } from './site-panels-electron.js';
 import { parseTabs, sitePanelKeys } from '../core/workspace-tabs.js';
 import { FEATURE_CHANNELS } from '../renderer/bridge.js';
@@ -3663,7 +3663,13 @@ async function boot(): Promise<void> {
                 const plan = planInstall({ tool, platform: process.platform as Platform, packageManager: await packageManager() });
                 return 'refused' in plan ? { refused: plan.refused } : { label: plan.label, elevated: plan.elevated };
             },
-            repair: () => checkAndRepair(toolchainOps()),
+            // Repaired here, in the window's environment — and pushed to genie-host's, so a site's php-cgi it starts next reads
+            // the new PHP_INI_SCAN_DIR and PATH with no host restart (P5a.2; config is hot-swappable).
+            repair: async () => {
+                const report = await checkAndRepair(toolchainOps());
+                await agentEngineLink?.client.pushEnv().catch((error: unknown) => console.error(`[toolchain] genie-host did not take the repaired environment: ${error instanceof Error ? error.message : String(error)}`));
+                return report;
+            },
             // T4: managed PHP versions (main/php-versions.ts) — the installer's progress is the same pushed busy line.
             php: {
                 list: (pins) => listPhpVersions(phpVersionsPorts(), pins),
@@ -3831,13 +3837,24 @@ async function boot(): Promise<void> {
     // Genie's CA for .gen hosts only (electron-browser-view.ts). Without a CA, .gen pages are refused and the reason logged.
     const browserTrust = composed.browserTrust();
     if (browserTrust.caPem === null) console.error(`[genie] browser: .gen sites cannot open in the Genie Browser: ${browserTrust.reason}`);
+    // THE FRONT DOOR AS IT IS NOW (P5a.2): genie-host's, so it can come back on another port or with another CA. Every
+    // browser session reads these, and is routed again when they change.
+    frontDoorNow = { port: composed.frontDoorPort, caPem: browserTrust.caPem };
+    composed.onFrontDoorChange(() => {
+        const trust = composed.browserTrust();
+        if (frontDoorNow.port === composed.frontDoorPort && frontDoorNow.caPem === trust.caPem) return;
+        frontDoorNow = { port: composed.frontDoorPort, caPem: trust.caPem };
+        console.log(`[genie] browser: the front door is on :${frontDoorNow.port} now${trust.caPem === null ? ` with no CA (${trust.reason})` : ''}`);
+        followFrontDoorInPanes();
+        followFrontDoorInBrowser();
+    });
     // LIVE SITE PANELS (beta.35 item 36, step 5): each workspace tab's site panel is a page in the browser's session, placed
     // over its box in the MAIN window — whichever window that is now (P1b: it can be closed and built again).
-    livePanels = sitePanels({ window: () => window, frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
+    livePanels = sitePanels({ window: () => window, frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, enabledHosts: () => composed.routes().map((r) => r.host), openInWindow: (url, activation) => { genieBrowserWindow?.open(url, activation); } });
     composed.settings.onChange((key, value, workspaceId) => {
         if (key === 'workspace_tabs' && workspaceId && typeof value === 'string') livePanels?.retainIn(workspaceId, sitePanelKeys(workspaceId, parseTabs(value)));
     });
-    mainWindowDeps = { frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
+    mainWindowDeps = { frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, routes: () => composed.routes(), settings: composed.settings, pushFeatures: () => { pushFeatures(); } };
     mountMainWindow(showOnBoot({ startMinimized: composed.settings.snapshot().start_minimized === true, argv: process.argv }));
     // LAUNCH AT SIGN-IN: adopt Genie 1's entry, apply at boot, follow every change.
     void wireLoginItem(composed.settings, loginItemPort, {
@@ -3907,14 +3924,16 @@ async function boot(): Promise<void> {
         onReportIssue: () => { void shell.openExternal(`https://github.com/Renaissance-Analytics/genie/issues/new?title=${encodeURIComponent(`[v${app.getVersion()}] `)}`); },
     })));
     // THE GENIE BROWSER WINDOW (beta.35 item 36): the same front door and CA, its own session; the sites read at each use.
-    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: composed.frontDoorPort, caPem: browserTrust.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
+    genieBrowserWindow = genieBrowserWindows({ here, preload: join(here, 'browser-preload.cjs'), frontDoorPort: () => frontDoorNow.port, caPem: () => frontDoorNow.caPem, enabledHosts: () => composed.routes().map((r) => r.host), ledger: activationLedger });
     // TRAY-ONLY (P1b): while genie-host runs, one look every few seconds — what the tray says, and whether a tray-only
     // Genie with nothing left running ends (core/tray-only.ts).
     if (agentEngineLink) setInterval(watchTrayOnly, 5_000).unref?.();
 }
 
 /** What a (re)built main window needs from boot: set once the services are composed. */
-let mainWindowDeps: { readonly frontDoorPort: number; readonly caPem: string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
+/** The front door's port and Genie's CA as the browser sessions use them now (P5a.2); set once the services are composed. */
+let frontDoorNow: { port: number; caPem: string | null } = { port: 0, caPem: null };
+let mainWindowDeps: { readonly frontDoorPort: () => number; readonly caPem: () => string | null; readonly routes: ConstructorParameters<typeof BrowserPane>[1]; readonly settings: Parameters<typeof wireCloseToTray>[1]['settings']; readonly pushFeatures: () => void } | null = null;
 /** The live site panels (once per process); each main window attached as it is built. */
 let livePanels: LiveSitePanels | null = null;
 

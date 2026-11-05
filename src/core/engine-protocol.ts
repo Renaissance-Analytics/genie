@@ -70,6 +70,9 @@ export const ENGINE_METHODS = [
     // The host's hosting (P5a: hosting-host.ts): `[method, args]` — a window's write. Its whole readable state is sent as
     // `hosting.dump` before `engine.ready` (the front door's port and CA with it), and again as `hosting.event` on change.
     'engine.hosting',
+    // The window's environment NOW (P5a.2): `[env]`, pushed after a Check and repair so what the host starts next (a site's
+    // php-cgi, an agent) reads it with no restart. Also carried with every start, as before.
+    'engine.windowEnv',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',

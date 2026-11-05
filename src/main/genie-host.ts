@@ -223,7 +223,7 @@ async function main(): Promise<void> {
      * waits (WindowElevation) and the next window is told.
      */
     const hostingElevation = new WindowElevation({
-        connected: () => engineRef?.windowConnected() ?? false,
+        connected: () => engineRef?.localWindowConnected() ?? false,
         ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
     });
     /** Each site's app-inbox credential, as a window minted it (the app-inbox server is the window's until P5b). */
@@ -635,7 +635,9 @@ async function main(): Promise<void> {
         onPtys: writePtys,
     });
 
-    server.on('connection', (socket) => engine.accept(lineTransport(socket)));
+    // This host's OWN endpoint (a local socket or pipe, token-checked): every window here is local — the only kind sent the
+    // hosting, whose dump carries each workspace's service variables (P5a.2). P5d: a remote path accepts as not local.
+    server.on('connection', (socket) => engine.accept(lineTransport(socket), { local: true }));
 
     // The token first, then the record that points at it: a window that reads the record can always read the token.
     await writeTextPrivate(tokenFile, token);
