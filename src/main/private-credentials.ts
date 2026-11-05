@@ -124,13 +124,14 @@ interface NativeAcl {
  */
 let helper: WindowsHelper | null | undefined;
 export function useAclHelper(chosen: WindowsHelper | null | undefined): void { helper = chosen; }
-export function windowsHelper(options: Partial<Pick<WindowsHelperOptions, 'deadlineMs' | 'log'>> = {}): WindowsHelper {
+export function windowsHelper(options: Partial<Pick<WindowsHelperOptions, 'deadlineMs' | 'log'>> & { onStart?: (pid: number | null) => void } = {}): WindowsHelper {
     return new WindowsHelper({
         ...options,
         // Its reasons are a host's log line: paths and secrets never reach these words.
         log: options.log ?? ((line) => sayDiagnostic(line)),
         spawn: (file, args, env) => {
             const child = spawn(file, [...args], { env, windowsHide: true, stdio: ['pipe', 'pipe', 'ignore'] });
+            try { options.onStart?.(child.pid ?? null); } catch { /* An observer cannot change private verification. */ }
             // Idle, it must not hold its owner open. While a request runs, the helper refs it again.
             child.unref();
             for (const pipe of [child.stdin, child.stdout] as Array<{ unref?: () => void } | null>) pipe?.unref?.();
@@ -335,6 +336,22 @@ export async function restrictPrivateFile(file: string): Promise<void> {
     const target = { path: resolve(file), directory: false };
     if (!await inspect(target)) throw new Error(REFUSED);
     await withHelperOrALaunch(() => restrict([target]));
+}
+
+/** Dedicated host-owned directories, using the same owner-only ACL and read-back as private files. */
+export async function restrictPrivateDirectories(directories: readonly string[]): Promise<void> {
+    const targets = directories.map(directory => ({ path: resolve(directory), directory: true }));
+    for (const target of targets) if (!await inspect(target)) throw new Error(REFUSED);
+    await withHelperOrALaunch(() => restrict(targets));
+}
+
+/** Staging's worker keeps this exact owner/DACL read-back, without the credential path's launch fallback. */
+export async function restrictPrivateStagingTargets(targets: readonly Target[], through: WindowsHelper): Promise<void> {
+    for (const target of targets) if (!await inspect(target)) throw new Error(REFUSED);
+    if (process.platform !== 'win32') { await restrict(targets); return; }
+    const began = performance.now();
+    try { await through.run(windowsAcl(targets)).completed; }
+    catch (error) { recordNativeFailure(error, began); throw new Error(REFUSED); }
 }
 
 /** Restrict existing storage before reading it or issuing a credential. Final links are refused. */

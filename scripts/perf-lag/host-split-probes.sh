@@ -17,7 +17,7 @@ probe() {
     fi
     cp "$file" "/tmp/probe-$$.orig"
     node -e "const fs=require('fs');const p=process.argv[1];let s=fs.readFileSync(p,'utf8').split('\r\n').join('\n');if(!s.includes(process.argv[2])){console.error('anchor missing');process.exit(2)}fs.writeFileSync(p,s.replace(process.argv[2],process.argv[3]))" "$file" "$anchor" "$replacement" || { echo "PROBE $name: anchor missing in $file"; fail=1; cp "/tmp/probe-$$.orig" "$file"; return; }
-    if npx vitest run test/windows-helper-backoff.test.ts test/migration-holds.test.ts test/keychain-migration-finishes.test.ts $tests > "/tmp/probe-$$.log" 2>&1; then
+    if npx vitest run test/windows-helper-backoff.test.ts test/shell-line-callers.test.ts test/migration-holds.test.ts test/keychain-migration-finishes.test.ts $tests > "/tmp/probe-$$.log" 2>&1; then
         echo "PROBE $name: STAYED GREEN with the fix removed (the test is vacuous)"; fail=1
     elif grep -q "$expect" "/tmp/probe-$$.log"; then
         echo "PROBE $name: red as expected ($expect)"
@@ -194,7 +194,7 @@ probe "tray-probe-is-gated" src/main/main.ts \
 
 # ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first
 probe "tray-always-asks" src/main/main.ts \
-    "onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }" "onShutDown: () => { requestQuit('shut-down'); }" \
+    "onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }" "onShutDown: () => { requestQuit('shut-down'); }" \
     test/quit-keeps-host-wiring.test.ts "offers the host"
 
 probe "only-the-confirm-button-goes-on" src/core/tray-confirm.ts \
@@ -726,6 +726,15 @@ probe "an-answer-ends-the-count" src/main/windows-helper.ts \
     "            this.#losses = 0;
 " "" \
     test/windows-helper-backoff.test.ts "one loss is forgiven by the next answer"
+
+# What may reach a shell line
+probe "a-hostile-path-is-refused" src/main/login-host.ts \
+    "        if (binary !== null && !quotable(binary)) return" "        if (false) return" \
+    test/shell-line-callers.test.ts "a quote that closes them"
+
+probe "a-hostile-provider-is-refused" src/main/login-host.ts \
+    "        if (!design && !PLAIN_NAME.test(provider)) return" "        if (false) return" \
+    test/shell-line-callers.test.ts "refused, and no terminal opens"
 
 echo "=== restored: every probed test file (green expected)"
 if npx vitest run test/acl-guard.test.ts test/acl-guard-stalled-worker.test.ts test/acl-guard-left-fake-timers.test.ts test/session-engine.test.ts test/agent-engine.test.ts test/genie-host-no-electron.test.ts test/spawn-relay.test.ts test/process-supervisor-adopt.test.ts test/spawn-host-link.test.ts test/terminal-open-ready.test.ts test/files-watch-hub.test.ts test/engine-files-tunnel.test.ts test/engine-cooling-replica.test.ts test/mcp-host-tools.test.ts test/agent-stores-contract.test.ts test/settings-drafts-contract.test.ts test/registry-host-contract.test.ts test/host-mail-wake.test.ts test/supervisor-host-contract.test.ts test/process-book-host-contract.test.ts test/flows-host-contract.test.ts test/terminals-host-contract.test.ts test/quit-sequence.test.ts test/quit-plan.test.ts test/tray-only.test.ts test/tray.test.ts test/quit-keeps-host-wiring.test.ts test/tray-confirm.test.ts test/runtime-file-modes.test.ts test/no-saved-scrollback.test.ts test/keychain.test.ts test/keychain-migration.test.ts test/host-agent-keys.test.ts test/tynn-account-host.test.ts test/host-https-fetch.test.ts test/host-proxy.test.ts test/host-prepares-agents.test.ts test/host-tynn-recovery.test.ts test/github-account-host.test.ts test/keyring-host.test.ts test/workstation-host.test.ts > "/tmp/probe-$$.log" 2>&1; then

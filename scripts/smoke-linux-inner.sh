@@ -48,6 +48,7 @@ echo "=== launching Electron under Xvfb ==="
 # on screen in a container with no codex in it.
 export SMOKE_APPROVAL="${SMOKE_APPROVAL:-1}"
 export GENIE2_CODEX_BINARY="$(pwd)/scripts/stub-codex.mjs"
+export GENIE_PAGE_PROBE=1
 chmod +x scripts/stub-codex.mjs
 
 xvfb-run --auto-servernum --server-args='-screen 0 1440x900x24' \

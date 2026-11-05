@@ -67,6 +67,7 @@ import { HostsSync, type HostsIo, type HostsSyncResult } from './hosts-file.js';
 import type { OwnAgentStores, WindowAgentStores } from './agent-stores-api.js';
 import { importV1Inbox, importV1Knowledge, openAgentStores } from './agent-stores-open.js';
 import { runtimeDir } from './paths.js';
+import { LocalStagingArea } from './local-staging-area.js';
 import { ProcessSupervisor, type SupervisorApi } from './process-supervisor.js';
 import type { ListedPty } from './spawn-host-protocol.js';
 import { DeviceStore } from './remote-devices.js';
@@ -739,6 +740,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const now = input.now ?? Date.now;
     const iso = () => new Date(now()).toISOString();
     await mkdir(runtimeDir(input.userData), { recursive: true });
+    const localStaging = await LocalStagingArea.open(input.userData);
 
     // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
     // whoever, fires the listeners below with the new value readable. Opened here only on the emergency path.
@@ -970,6 +972,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
     const remote = new RemoteHost({
+        createLocalUploads: () => localStaging.createConnection(now),
         api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
         hostName,
         baton: new Baton(),

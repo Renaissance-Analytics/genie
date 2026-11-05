@@ -6,8 +6,11 @@
  *   npm ci && node node_modules/electron/install.js && npm run build
  *   node scripts/github-live-cdp.mjs sign-in     # A1 and A2. Prints the code; a person types it at github.com/login/device. Then SNAPSHOT THE VM: restoring `base` wipes the keychain.
  *   GITHUB_CLONE_URL=https://github.com/<owner>/<private-repo>.git GITHUB_PUSH_URL=https://github.com/<owner>/<empty-repo>.git node scripts/github-live-cdp.mjs run
+ *   ... node scripts/github-live-cdp.mjs install-check     # only what the App's installation can see: `### github-live install=READY`, or NEEDS-THE-OWNER and what to do
  *
- * `run` works from the snapshot, and needs nobody:
+ * Both URLs are needed for sign-in too: straight after it, the installation is read and `### github-live install=` printed. Nothing is touched but those two repositories. Reading the installation asks GitHub for the list only.
+ *
+ * `run` works from the snapshot, and needs nobody. GITHUB_STEPS picks from a2,a3,a4,a5 (all, by default). A4 uses up the snapshot's refresh token and A5 ends the sign-in, so after either the snapshot's tokens may no longer work:
  * - A2: still signed in after a restart, with real token shapes.
  * - A3 and S12: a real clone, submodule add and push, through the window's own calls. While they run every process is read from /proc: the window and everything under it must carry no token, and
  *   the host's git must, which is the control that the reading can see one. Nothing else under the host may.
@@ -27,7 +30,7 @@ import { homedir, tmpdir, userInfo } from 'node:os';
 import { join } from 'node:path';
 
 const MODE = process.argv[2];
-if (MODE !== 'sign-in' && MODE !== 'run') { console.error('usage: github-live-cdp.mjs sign-in|run'); process.exit(2); }
+if (MODE !== 'sign-in' && MODE !== 'run' && MODE !== 'install-check') { console.error('usage: github-live-cdp.mjs sign-in|run|install-check'); process.exit(2); }
 if (userInfo().username !== "genie") { console.error('refusing: test machines only'); process.exit(2); }
 process.env.XDG_RUNTIME_DIR ??= `/run/user/${userInfo().uid}`;
 process.env.DBUS_SESSION_BUS_ADDRESS ??= `unix:path=${process.env.XDG_RUNTIME_DIR}/bus`;
@@ -165,17 +168,89 @@ const gitWith = (token, ...args) => execFileSync('git', args, {
 });
 const githubAnswers = async (token) => (await fetch('https://api.github.com/user', { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'genie-acceptance' } })).status;
 
+const INSTALL_URL = 'https://github.com/apps/genie-aos/installations/new';
+const repoOf = (url) => {
+    const m = /^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/.exec(url ?? '');
+    if (!m) throw new Error('GITHUB_CLONE_URL and GITHUB_PUSH_URL must each be https://github.com/<owner>/<repo>.git');
+    return { owner: m[1], name: m[2] };
+};
+/** What the App can see, from the token's own answer. Prints only ids, names and counts. True when both repositories are in a selected installation. */
+async function installState(token) {
+    const wanted = [repoOf(process.env.GITHUB_CLONE_URL), repoOf(process.env.GITHUB_PUSH_URL)];
+    const owner = wanted[0].owner;
+    const needs = (what) => { console.log(`### github-live install=NEEDS-THE-OWNER  ${what}`); return false; };
+    const get = async (path) => {
+        const r = await fetch(`https://api.github.com${path}`, { headers: { authorization: `Bearer ${token}`, accept: 'application/vnd.github+json', 'user-agent': 'genie-acceptance' } });
+        return { status: r.status, body: r.status === 200 ? await r.json() : null };
+    };
+    const list = await get('/user/installations?per_page=100');
+    if (list.status !== 200) return needs(`GitHub answered ${list.status} to /user/installations`);
+    const rows = list.body.installations ?? [];
+    for (const row of rows) say(`installation id=${row.id} account=${row.account?.login} selection=${row.repository_selection}`);
+    if (rows.length === 0) say('no installation of this App is visible to this account');
+    const mine = rows.find((row) => row.account?.login === owner);
+    if (!mine) return needs(`the App is not installed on ${owner}: at ${INSTALL_URL} choose ${owner}, then "Only select repositories", then ${wanted.map((w) => w.name).join(' and ')}`);
+    console.log(`### github-live install-id=${mine.id}`);
+    if (mine.repository_selection !== 'selected') return needs(`the App can see every repository on ${owner}: at https://github.com/settings/installations/${mine.id} choose "Only select repositories", then ${wanted.map((w) => w.name).join(' and ')}`);
+    const seen = new Map();
+    for (let page = 1; page <= 20; page += 1) {
+        const r = await get(`/user/installations/${mine.id}/repositories?per_page=100&page=${page}`);
+        if (r.status !== 200) return needs(`GitHub answered ${r.status} listing installation ${mine.id}`);
+        for (const repo of r.body.repositories ?? []) seen.set(repo.full_name, repo.id);
+        if ((r.body.repositories ?? []).length < 100) break;
+    }
+    let missing = [];
+    for (const w of wanted) {
+        const id = seen.get(`${w.owner}/${w.name}`);
+        say(`repository ${w.name}: ${id ? `the App can see it, id ${id}` : 'the App cannot see it'}`);
+        if (!id) missing.push(w.name);
+    }
+    say(`and ${seen.size - (wanted.length - missing.length)} other repositories in that installation (not named, not touched)`);
+    if (missing.length > 0) return needs(`add ${missing.join(' and ')} to installation ${mine.id}: https://github.com/settings/installations/${mine.id}`);
+    console.log('### github-live install=READY');
+    return true;
+}
+
+async function installCheck() {
+    const cdp = await launch();
+    const signed = await signedInAs(cdp);
+    check(Boolean(signed), 'still-signed-in');
+    const token = await held(ACCESS);
+    cdp.close();
+    await stopApp();
+    if (!token) throw new Error('nothing in the keychain: restore the snapshot taken after sign-in');
+    await installState(token);
+}
+
 async function signIn() {
+    repoOf(process.env.GITHUB_CLONE_URL);
+    repoOf(process.env.GITHUB_PUSH_URL);
     const cdp = await launch();
     await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignIn' }).then(() => true)`);
     const device = await until('a device code', 60_000, async () => (await githubView(cdp))?.device ?? null);
     if (!device) throw new Error(`no device code: ${JSON.stringify(await githubView(cdp))}`);
-    console.log(`### github-live CODE ${device.userCode} at ${device.verificationUri}  (type it there and approve; this waits 15 minutes)`);
-    const signed = await until('the person to approve', 900_000, async () => { const g = await githubView(cdp); return g?.status === 'signed-in' ? g : null; });
-    check(Boolean(signed), 'A1-signed-in', signed ? String(signed.user?.login ?? '') : JSON.stringify(await githubView(cdp)));
+    const lasts = Math.max(0, Math.round((device.expiresAt - Date.now()) / 1000));
+    console.log(`### github-live CODE ${device.userCode} at ${device.verificationUri} lasts ${lasts} s, until ${new Date(device.expiresAt).toISOString()}`);
+    // Watched for as long as GitHub says the code lasts, and a little longer. A flow that ended early says why, in Genie's words.
+    let ended = null;
+    const signed = await until('the person to approve', device.expiresAt - Date.now() + 30_000, async () => {
+        const g = await githubView(cdp);
+        if (g?.status === 'signed-in') return g;
+        if (!g?.device) { ended = g; return g ?? {}; }
+        return null;
+    });
+    if (signed?.status !== 'signed-in') {
+        const words = ended ? `the sign-in ended: ${String(ended.message ?? ended.status ?? 'no words')}` : `nobody approved the code in its ${lasts} s`;
+        check(false, 'A1-signed-in', `${words}. Nothing is saved; run sign-in again for a new code`);
+        cdp.close();
+        return;
+    }
+    check(true, 'A1-signed-in', String(signed.user?.login ?? ''));
     cdp.close();
     await stopApp();
     await a2();
+    const token = await held(ACCESS);
+    if (token) await installState(token);
     say('now snapshot this VM: everything after this works from it');
 }
 
@@ -197,14 +272,24 @@ async function run() {
     const cloneUrl = process.env.GITHUB_CLONE_URL;
     const pushUrl = process.env.GITHUB_PUSH_URL;
     if (!cloneUrl || !pushUrl) throw new Error('GITHUB_CLONE_URL and GITHUB_PUSH_URL are required');
-    await a2();
+    repoOf(cloneUrl);
+    repoOf(pushUrl);
+    const steps = new Set((process.env.GITHUB_STEPS ?? 'a2,a3,a4,a5').split(',').map((step) => step.trim()));
+    for (const step of steps) if (!['a2', 'a3', 'a4', 'a5'].includes(step)) throw new Error(`no step ${step}: a2, a3, a4 or a5`);
+    if (steps.has('a2')) await a2();
+    if (steps.has('a3')) await a3(cloneUrl, pushUrl);
+    if (steps.has('a4')) await a4();
+    if (steps.has('a5')) await a5();
+}
+
+async function a3(cloneUrl, pushUrl) {
+    say('A3 and S12: a real clone, submodule add and push, with every process read while they run');
+    const cdp = await launch();
+    await signedInAs(cdp);
     const token = await held(ACCESS);
     if (!token) throw new Error('nothing in the keychain: restore the snapshot taken after sign-in');
+    if (!(await installState(token))) throw new Error('the App cannot see both repositories, so nothing was cloned or pushed');
     const needles = [token, Buffer.from(`x-access-token:${token}`).toString('base64')];
-
-    say('A3 and S12: a real clone, submodule add and push, with every process read while they run');
-    let cdp = await launch();
-    await signedInAs(cdp);
     const emptyBefore = gitWith(token, 'ls-remote', pushUrl).trim() === '';
     check(emptyBefore, 'A3.0-the-push-repository-is-empty', emptyBefore ? '' : 'an existing main refuses the push: give an empty repository');
     const parent = join(work, 'made');
@@ -235,13 +320,16 @@ async function run() {
     check(!carries(window.pid, needles) && !carries(host, needles), 'S12.3-the-window-and-the-host-themselves-carry-none');
     cdp.close();
     await stopApp();
+}
 
+async function a4() {
     say('A4: a real renewal, if this App issues expiring tokens');
     const row = json(githubFile);
+    const token = await held(ACCESS);
     const oldRefresh = await held(REFRESH);
     if (typeof row.accessExpiresAt === 'number' && oldRefresh) {
         writeFileSync(githubFile, JSON.stringify({ ...row, accessExpiresAt: Date.now() - 60_000 }, null, 2), { mode: 0o600 });
-        cdp = await launch();
+        const cdp = await launch();
         const renewed = await until('the tokens to rotate', 90_000, async () => { const now = await held(ACCESS); return now && now !== token ? now : null; });
         check(Boolean(renewed), 'A4.1-the-access-token-rotated-in-the-keychain');
         const newRefresh = await held(REFRESH);
@@ -252,11 +340,13 @@ async function run() {
     } else {
         say('A4 does not apply: this App issued non-expiring tokens, so there is nothing to renew');
     }
+}
 
+async function a5() {
     say('A5: sign out');
-    const finalToken = await held(ACCESS);
-    cdp = await launch();
+    const cdp = await launch();
     await signedInAs(cdp);
+    const finalToken = await held(ACCESS);
     await cdp.evaluate(`window.genie.features.act({ kind: 'integrations.githubSignOut' }).then(() => true)`);
     const out = await until('the sign-out to reach the file', 30_000, () => { try { return json(githubFile).state === 'signed-out'; } catch { return false; } });
     check(Boolean(out), 'A5.1-signed-out-is-on-disk');
@@ -271,7 +361,7 @@ try {
     const resolved = execFileSync('getent', ['hosts', 'tynn.ai'], { encoding: 'utf8' }).trim().split(/\s+/)[0];
     if (resolved !== '127.0.0.1' && resolved !== '::1') throw new Error(`tynn.ai resolves to ${resolved}: the alias is not up, and this would reach production`);
     check(true, '0-tynn-ai-is-the-alias', resolved);
-    if (MODE === 'sign-in') await signIn(); else await run();
+    if (MODE === 'sign-in') await signIn(); else if (MODE === 'install-check') await installCheck(); else await run();
 } catch (error) {
     check(false, 'the-check-threw', error instanceof Error ? error.message : String(error));
 }

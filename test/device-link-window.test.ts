@@ -172,7 +172,10 @@ describe('source guards: the desktop path', () => {
 
     it('the bridge offers no way to read a token', () => {
         const device = preload.slice(preload.indexOf('deviceLink:'), preload.indexOf('}', preload.indexOf('deviceLink:')));
-        expect(device).toContain('adopt');
+        const remote = readFileSync('src/renderer/remote-bridge.ts', 'utf8');
+        const owner = remote.slice(remote.indexOf('const localOwner:'), remote.indexOf('const bridge:', remote.indexOf('const localOwner:')));
+        expect(owner).toContain("'deviceLink.adopt'");
         expect(device).not.toMatch(/tokenFor|\bread\b|\bget\b/);
+        expect(owner).not.toMatch(/tokenFor|\bgetToken\b/);
     });
 });

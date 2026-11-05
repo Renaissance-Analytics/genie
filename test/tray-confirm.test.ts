@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { terminalBusy, trayConfirm, trayConfirmed, type Stopping } from '../src/core/tray-confirm.js';
+import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping } from '../src/core/tray-confirm.js';
 
 /**
  * THE TRAY ALWAYS ASKS (the owner, 2026-11-02: "Always ask"). Restart and Shut down everything, chosen from the tray,
@@ -75,5 +75,28 @@ describe('terminalBusy (a command running in it)', () => {
 
     it('nothing known about the process table: not marked (never guessed busy)', () => {
         expect(terminalBusy(40, null)).toBe(false);
+    });
+});
+
+/**
+ * THE QUESTION COMES AT ONCE (genie-test-windows, ss-repeat5, 2026-11-05): the tray read the process table SYNCHRONOUSLY on
+ * the window's main thread to mark busy terminals, and on that machine the read took 30 s; the window froze, and the
+ * question came 30 s after the click. The table is now read off main, and only for as long as the question can wait:
+ * past the bound the question is asked without the marks.
+ */
+describe('tableWithin: the busy marks never hold the question', () => {
+    it('a table that never comes is null once the bound is over', async () => {
+        const started = Date.now();
+        expect(await tableWithin(() => new Promise(() => {}), 50)).toBeNull();
+        expect(Date.now() - started).toBeLessThan(1_000);
+    });
+
+    it('a table that fails is null', async () => {
+        expect(await tableWithin(() => Promise.reject(new Error('no table')), 50)).toBeNull();
+    });
+
+    it('positive control: a table read in time is the table', async () => {
+        const table = [{ pid: 1, ppid: 0, name: 'bash' }];
+        expect(await tableWithin(async () => table, 1_000)).toBe(table);
     });
 });

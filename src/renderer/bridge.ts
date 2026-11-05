@@ -1,4 +1,5 @@
 import type { ApplyWhen, BudgetDecision, DeletePlan, SwitchDecision } from '../core/agent-ops.js';
+import { localSession, type LocalProtocolControl, type WorkspaceProtocolKey } from './local-session.js';
 import type { BoardActionInput, BoardLiveSignal, BoardScope, TynnBoardHost } from '../core/tynn-board.js';
 import type { Headroom } from '../core/headroom.js';
 import type { WorkspacePulse } from '../core/view-requests.js';
@@ -17,12 +18,18 @@ import type { TynnNetworkBridge } from './relay-transport.js';
 import type { DeviceLinkBridge } from './remote-session.js';
 import type { AppInboxCardState } from './components/AppInboxCard.js';
 
-/** The workspace card's door to the host's app keys (main.ts `genie:app-inbox-*`). */
+/** The workspace card's local-only door to the host's app keys. */
 export interface AppInboxBridge {
     state(workspaceId: string): Promise<{ ok: true; state: AppInboxCardState } | { ok: false; reason: string }>;
     createKey(workspaceId: string, name: string): Promise<{ ok: true; id: string; name: string; token: string; state: AppInboxCardState } | { ok: false; reason: string }>;
     revokeKey(workspaceId: string, keyId: string): Promise<{ ok: true; state: AppInboxCardState } | { ok: false; reason: string }>;
     source(workspaceId: string, op: 'rotate' | 'revoke' | 'allow', kind: 'site' | 'process', id: string): Promise<{ ok: true; text: string; state: AppInboxCardState } | { ok: false; reason: string }>;
+}
+/** The migrated owner operations; outgoing channel and window capabilities remain native until P5. */
+export interface LocalOwnerBridge {
+    appInbox: AppInboxBridge;
+    deviceLink: Pick<DeviceLinkBridge, 'hosts' | 'forget' | 'adopt'>;
+    tynnNetwork: Pick<TynnNetworkBridge, 'workstations' | 'setRole' | 'shares'>;
 }
 import type { LiveSession } from '../core/roster.js';
 import type { TakeOverProbe } from '../core/observed.js';
@@ -137,6 +144,8 @@ export interface ActivityBridge {
 }
 
 export interface GenieBridge {
+    /** This window's local connection status; absent when connected to another host. */
+    localProtocol?: LocalProtocolControl;
     /** A known remote host in its own window (Genie 1's remote.open, Tynn #819). Host-only: absent on a remote bridge. */
     remoteWindows?: { open(url: string, name?: string | null): Promise<void>; onReconnectAsked?(listener: () => void): () => void };
     /**
@@ -597,12 +606,16 @@ export const NO_TERMINALS: GenieBridge['terminals'] = {
 };
 
 /**
- * WHAT THE PRELOAD EXPOSES: the bridge, except an agent's live detail, which crosses as main's PATCH
+ * WHAT THE PRELOAD EXPOSES: unmoved bridge families and an agent's live detail as main's PATCH
  * (`subscribeAgentWire`) and is rebuilt on the page's side by {@link pageBridge}. Whatever crosses `contextBridge` is
  * copied into the page on the renderer's one thread; a whole detail is the agent's whole ledger, and it crossed on every
  * push (the owner, 2026-10-22: "the whole UI freezes for a few seconds").
  */
-export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent'> & {
+export type PreloadBridge = Omit<GenieBridge, 'subscribeAgent' | 'workspaces' | 'agents' | 'localProtocol' | 'updates' | 'activity' | 'onHeadroom' | 'accountRetry' | 'appInbox' | 'deviceLink' | 'tynnNetwork' | 'files' | 'repo'> & {
+    files: Omit<GenieBridge['files'], import('./local-files-client.js').FilesProtocolKey>;
+    deviceLink?: Omit<DeviceLinkBridge, keyof LocalOwnerBridge['deviceLink']>;
+    tynnNetwork?: Omit<TynnNetworkBridge, keyof LocalOwnerBridge['tynnNetwork']>;
+    workspaces: Omit<GenieBridge['workspaces'], WorkspaceProtocolKey>;
     subscribeAgentWire: AgentWireSubscribe<Omit<AgentDetail, 'rows'>, TimedEvent>;
 };
 
@@ -635,14 +648,26 @@ export function pageBridge(preload: PreloadBridge): GenieBridge {
     const known = pageBridges.get(preload);
     if (known !== undefined) return known;
     const views = new AgentDetailViews<Omit<AgentDetail, 'rows'>, TimedEvent>(preload.subscribeAgentWire);
+    const local = localSession(typeof window === 'undefined' ? undefined : window.genieLocalProtocol);
     const { subscribeAgentWire: _wire, ...rest } = preload;
-    const bridge: GenieBridge = { ...rest, subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
+    const bridge: GenieBridge = { ...rest, workspaces: { ...preload.workspaces, ...local.workspaces }, agents: local.agents, localProtocol: local.control,
+        updates: local.updates, activity: local.activity, onHeadroom: local.onHeadroom, accountRetry: local.accountRetry,
+        appInbox: local.owner.appInbox,
+        deviceLink: { ...preload.deviceLink!, ...local.owner.deviceLink },
+        tynnNetwork: { ...preload.tynnNetwork!, ...local.owner.tynnNetwork },
+        files: { ...preload.files, ...local.files }, repo: local.repo,
+        subscribeAgent: (agentId, onChange) => views.subscribe(agentId, onChange) };
     pageBridges.set(preload, bridge);
+    if (typeof window !== 'undefined' && window.genieTestMode === true) window.genieTest = bridge;
     return bridge;
 }
 
 declare global {
     interface Window {
+        /** Immutable preload value supplied by main's GENIE_PAGE_PROBE flag. */
+        readonly genieTestMode?: boolean;
+        /** The app's same local bridge, exposed only for a main-enabled native probe. */
+        genieTest?: GenieBridge;
         /**
          * Present only in the real app. It is optional on purpose: a renderer that assumes a
          * bridge cannot be rendered in a test, and the surfaces are then only ever checked by
