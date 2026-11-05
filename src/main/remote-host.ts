@@ -104,6 +104,7 @@ interface Connection {
     filesViews: LocalFilesWatches | null;
     blobs: LocalBlobs | null;
     uploads: LocalUploads | null;
+    uploadOpening: Promise<LocalUploads> | null;
     pages: LocalPages | null;
     content: LocalFilesContent | null;
 }
@@ -142,7 +143,7 @@ export class RemoteHost {
     readonly #api: HostApi;
     readonly #openBlob: BlobOpener | undefined;
     readonly #openPage: PageOpener | undefined;
-    readonly #createLocalUploads: (() => LocalUploads) | undefined;
+    readonly #createLocalUploads: (() => LocalUploads | Promise<LocalUploads>) | undefined;
     readonly #hostName: string;
     readonly #baton: Baton;
     readonly #pins: PairingPins;
@@ -170,7 +171,7 @@ export class RemoteHost {
      * `confirm`: the desktop's "Pair this device?" (core/pair-confirm.ts). Required — a correct PIN pairs nothing until the
      * person presses Allow on this machine (q_8c07b142; Genie 1's confirmPair).
      */
-    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads }) {
+    constructor(deps: { api: HostApi; hostName: string; baton: Baton; pins: PairingPins; devices: DeviceStore; confirm: PairConfirm; transport: ServerTransport; now?: () => number; openBlob?: BlobOpener; openPage?: PageOpener; createLocalUploads?: () => LocalUploads | Promise<LocalUploads> }) {
         this.#api = deps.api;
         this.#openBlob = deps.openBlob;
         this.#hostName = deps.hostName;
@@ -301,7 +302,7 @@ export class RemoteHost {
     }
 
     #accept(socket: ServerConnection): void {
-        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, pages: null, content: null };
+        const connection: Connection = { id: `conn_${++this.#next}`, socket, auth: null, deviceId: null, pendingPair: null, profile: null, local: false, watching: new Map(), activityViews: new Set(), filesViews: null, blobs: null, uploads: null, uploadOpening: null, pages: null, content: null };
         this.#connections.set(connection.id, connection);
         socket.onMessage((text) => { void this.#onFrame(connection, text); });
         socket.onClose(() => {
@@ -309,6 +310,26 @@ export class RemoteHost {
             this.#staging.dropOwner(connection.id);
             this.#drop(connection);
         });
+    }
+
+    /** One first-use preparation per connection; a registry that arrives after close never gets to stage bytes. */
+    async #uploads(connection: Connection): Promise<LocalUploads> {
+        if (connection.uploads) return connection.uploads;
+        if (connection.uploadOpening) return connection.uploadOpening;
+        const create = this.#createLocalUploads;
+        if (!create) throw new Error('local staging is not configured on this host');
+        const opening = (async () => {
+            const uploads = await create();
+            if (this.#connections.get(connection.id) !== connection) {
+                await uploads.dispose();
+                throw new Error('the local upload connection closed');
+            }
+            connection.uploads = uploads;
+            return uploads;
+        })();
+        connection.uploadOpening = opening;
+        try { return await opening; }
+        finally { if (connection.uploadOpening === opening) connection.uploadOpening = null; }
     }
 
     #send(connection: Connection, message: WireMessage): void {
@@ -440,7 +461,7 @@ export class RemoteHost {
                 if (!this.#connections.has(connection.id)) return refuse('the local upload connection closed');
                 if (!this.#createLocalUploads) return refuse('local staging is not configured on this host');
                 try {
-                    const uploads = connection.uploads ??= this.#createLocalUploads();
+                    const uploads = await this.#uploads(connection);
                     if (method === 'localUpload.begin') return ok(await uploads.begin(args[0]));
                     if (method === 'localUpload.chunk') return ok(await uploads.chunk(args[0], args[1], args[2]));
                     return ok(await uploads.abort(args[0]));

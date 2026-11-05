@@ -3,7 +3,7 @@ import { chmod, mkdir, mkdtemp, readFile, readdir, rm, stat, symlink, writeFile 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { inMemoryPair, type ServerConnection } from '../src/core/remote-protocol.js';
 import { runtimeDir } from '../src/main/paths.js';
 import { systemProcessTree, type ProcessInfo } from '../src/core/process-tree.js';
@@ -11,9 +11,10 @@ import type { PtyPort } from '../src/main/terminal-host.js';
 import { connectRemote } from '../src/renderer/remote-bridge.js';
 import { composeTracker } from './support/compose-tracker.js';
 import { resourceDoor } from './support/local-resource-door.js';
+import { StagingPermissionsClient } from '../src/main/staging-permissions.js';
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
 const pty: PtyPort = { open: () => { throw new Error('this test opens no terminal'); }, write: () => true, resize: () => true, kill: () => true, scrollback: () => '', onData: () => () => {}, onExit: () => () => {} };
 async function homeFixture() {
     const home = await mkdtemp(join(tmpdir(), 'genie-p4-staging-home-')), tracker = composeTracker();
@@ -22,14 +23,21 @@ async function homeFixture() {
     cleanups.push(async () => { for (const close of clients) close(); await tracker.shutdownAll(); await rm(home, { recursive: true, force: true }); });
     const root = join(runtimeDir(home), 'local-staging');
     let accept!: (connection: ServerConnection) => void;
-    const start = () => tracker.compose({ userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, remoteTransport: { onConnection: listener => { accept = listener; return () => {}; } } });
+    let scheduledSweep: (() => Promise<void>) | undefined;
+    const start = () => {
+        const input = { userData: home, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0,
+            remoteTransport: { onConnection: (listener: (connection: ServerConnection) => void) => { accept = listener; return () => {}; } },
+            scheduleStagingSweep: (work: () => Promise<void>) => { scheduledSweep = work; return () => { if (scheduledSweep === work) scheduledSweep = undefined; }; } };
+        return tracker.compose(input);
+    };
+    const sweepAfterStartup = async () => { expect(scheduledSweep).toBeTypeOf('function'); const work = scheduledSweep!; scheduledSweep = undefined; await work(); };
     const client = async () => {
         const pair = inMemoryPair();
         accept({ ...pair.server, preAuth: { kind: 'local', label: 'composition fixture', isOwner: true, workspaceId: null, readonly: false } });
         const c = connectRemote(pair.client, { kind: 'local' }, 'composition fixture'); clients.push(() => c.close());
         expect(await c.ready).toEqual({ ok: true }); return c;
     };
-    return { home, root, start, client };
+    return { home, root, start, client, sweepAfterStartup, hasScheduledSweep: () => !!scheduledSweep };
 }
 async function areaModule() { const path: string = '../src/main/local-staging-area.js'; return import(path); }
 async function heldProcess() {
@@ -54,20 +62,25 @@ describe('7B owned staging at real host composition startup', () => {
         await area.sweep();
         expect((await stat(area.directory)).isDirectory()).toBe(true);
     });
-    it('removes stale files and nested connection folders at start, while preserving other runtime data', async () => {
+    it('defers removal of stale files until after startup, while preserving other runtime data', async () => {
         const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); // same pid, DIFFERENT start time
         await mkdir(join(stale, 'old-connection'), { recursive: true });
         await writeFile(join(stale, 'stale.bin'), 'earlier process bytes'); await writeFile(join(stale, 'old-connection', 'unfinished'), 'stale chunk');
         await writeFile(join(f.root, 'unidentified.txt'), 'no proven process owner');
         const sibling = join(runtimeDir(f.home), 'keep-other-runtime.txt'); await writeFile(sibling, 'unrelated runtime data');
         await f.start();
+        expect(await readFile(join(stale, 'stale.bin'), 'utf8')).toBe('earlier process bytes');
+        await f.sweepAfterStartup();
         await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
-        expect((await readdir(f.root)).filter(name => name !== 'unidentified.txt')).toEqual([expect.stringMatching(new RegExp(`^${process.pid}-[1-9][0-9]*$`))]);
+        expect((await readdir(f.root)).filter(name => name !== 'unidentified.txt')).toEqual([]);
         expect(await readFile(join(f.root, 'unidentified.txt'), 'utf8')).toBe('no proven process owner');
         expect(await readFile(sibling, 'utf8')).toBe('unrelated runtime data');
+        const c = await f.client(), uploaded = await c.uploads!.begin({ purpose: 'draft-file', subtype: 'attachment', size: 0 });
+        expect((await readdir(f.root)).filter(name => name !== 'unidentified.txt')).toEqual([expect.stringMatching(new RegExp(`^${process.pid}-[1-9][0-9]*$`))]);
+        await c.uploads!.abort(uploaded.id);
     });
-    it('creates the runtime-owned folder and wires real local uploads into it before accepting calls', async () => {
-        const f = await homeFixture(); await f.start(); expect((await stat(f.root)).isDirectory()).toBe(true);
+    it('creates no staging root at compose; the first real upload creates the verified runtime-owned folder', async () => {
+        const f = await homeFixture(); await f.start(); await expect(stat(f.root)).rejects.toMatchObject({ code: 'ENOENT' });
         const c = await f.client(), bytes = Uint8Array.from([2, 4, 6, 8]);
         const uploaded = await c.uploads!.stage({ purpose: 'draft-file', subtype: 'attachment' }, bytes);
         const entries = await readdir(f.root, { recursive: true }); expect(entries.length).toBeGreaterThan(0);
@@ -87,17 +100,19 @@ describe('7B owned staging at real host composition startup', () => {
         expect((await readFile(join(f.root, String(liveFile)))).equals(Buffer.from([7, 8, 9]))).toBe(true);
         expect(await c.uploads!.abort(uploaded.id)).toEqual({ aborted: true });
     });
-    it('refuses a linked staging root before deleting or changing anything outside it', async () => {
+    it('a linked staging root does not block compose, but first use refuses it without changing anything outside', async () => {
         const f = await homeFixture(), outside = join(f.home, 'other-data'); await mkdir(outside); await mkdir(runtimeDir(f.home));
         await writeFile(join(outside, 'keep.txt'), 'keep');
         await symlink(outside, f.root, process.platform === 'win32' ? 'junction' : 'dir');
-        await expect(f.start()).rejects.toThrow(); expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
+        await f.start(); const c = await f.client();
+        await expect(c.uploads!.begin({ purpose: 'draft-file', subtype: 'attachment', size: 0 })).rejects.toThrow(/staging|root|directory/i);
+        expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
     });
     it('a link left inside staging is removed without following it into another folder', async () => {
         const f = await homeFixture(), outside = join(f.home, 'other-data'), stale = join(f.root, `${process.pid}-1`); await mkdir(outside); await mkdir(stale, { recursive: true });
         await writeFile(join(outside, 'keep.txt'), 'keep');
         await symlink(outside, join(stale, 'old-link'), process.platform === 'win32' ? 'junction' : 'dir');
-        await f.start(); await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
+        await f.start(); await f.sweepAfterStartup(); await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await readFile(join(outside, 'keep.txt'), 'utf8')).toBe('keep');
     });
     it('preserves another real live process folder at startup/sweep, with a real dead process as the deletion control', async () => {
         const f = await homeFixture(), live = await heldProcess(), dead = await heldProcess();
@@ -108,6 +123,8 @@ describe('7B owned staging at real host composition startup', () => {
         await mkdir(liveDir, { recursive: true }); await mkdir(deadDir);
         await writeFile(join(liveDir, 'keep-live'), 'another serving host'); await writeFile(join(deadDir, 'remove-dead'), 'prior process');
         await dead.stop(); await f.start();
+        expect(await readFile(join(deadDir, 'remove-dead'), 'utf8')).toBe('prior process');
+        await f.sweepAfterStartup();
         await expect(stat(deadDir)).rejects.toMatchObject({ code: 'ENOENT' }); expect(await readFile(join(liveDir, 'keep-live'), 'utf8')).toBe('another serving host');
         const module = await areaModule(), area = await module.LocalStagingArea.open(f.home); await area.sweep();
         expect(await readFile(join(liveDir, 'keep-live'), 'utf8')).toBe('another serving host'); expect(live.child.exitCode).toBeNull();
@@ -134,7 +151,32 @@ describe('7B owned staging at real host composition startup', () => {
         expect((await stat(f.root)).mode & 0o777).toBe(0o755);
         const sibling = join(runtimeDir(f.home), 'sibling'); await writeFile(sibling, 'untouched', { mode: 0o644 });
         const mode = (await stat(sibling)).mode & 0o777; await f.start();
+        expect((await stat(f.root)).mode & 0o777).toBe(0o755);
+        const c = await f.client(), uploaded = await c.uploads!.begin({ purpose: 'draft-file', subtype: 'attachment', size: 0 });
         expect((await stat(f.root)).mode & 0o777).toBe(0o700); expect((await stat(sibling)).mode & 0o777).toBe(mode);
+        await c.uploads!.abort(uploaded.id);
+    });
+    it('shutdown cancels a deferred sweep; the next composition can still perform it', async () => {
+        const f = await homeFixture(), stale = join(f.root, `${process.pid}-1`); await mkdir(stale, { recursive: true }); await writeFile(join(stale, 'keep-until-sweep'), 'old bytes');
+        const services = await f.start(); expect(f.hasScheduledSweep()).toBe(true); await services.shutdown(); expect(f.hasScheduledSweep()).toBe(false);
+        expect(await readFile(join(stale, 'keep-until-sweep'), 'utf8')).toBe('old bytes');
+        await f.start(); await f.sweepAfterStartup(); await expect(stat(stale)).rejects.toMatchObject({ code: 'ENOENT' });
+    });
+    it.skipIf(process.platform !== 'win32')('Windows compose makes no permission-helper call; first stage verifies directories and even an empty file', async () => {
+        const directories = vi.spyOn(StagingPermissionsClient.prototype, 'directories'), file = vi.spyOn(StagingPermissionsClient.prototype, 'file');
+        const f = await homeFixture(); await f.start(); expect(directories).not.toHaveBeenCalled(); expect(file).not.toHaveBeenCalled();
+        const c = await f.client(), uploaded = await c.uploads!.begin({ purpose: 'draft-file', subtype: 'attachment', size: 0 });
+        expect(directories).toHaveBeenCalled(); expect(file).toHaveBeenCalledOnce(); expect((await readdir(f.root, { recursive: true })).some(name => String(name).endsWith(uploaded.id))).toBe(true);
+        await c.uploads!.abort(uploaded.id);
+    });
+    it.skipIf(process.platform !== 'win32')('a denied first-use ACL refuses in words with no staged file; verified retry works on the same connection', async () => {
+        const denied = vi.spyOn(StagingPermissionsClient.prototype, 'directories').mockRejectedValue(new Error('synthetic private ACL refusal'));
+        const f = await homeFixture(); await f.start(); const c = await f.client();
+        await expect(c.uploads!.begin({ purpose: 'draft-file', subtype: 'attachment', size: 0 })).rejects.toThrow(/private|ACL|permission|secure/i);
+        const entries = await readdir(f.root, { recursive: true });
+        expect((await Promise.all(entries.map(name => stat(join(f.root, String(name)))))).filter(entry => entry.isFile())).toHaveLength(0);
+        denied.mockRestore(); const uploaded = await c.uploads!.begin({ purpose: 'draft-file', subtype: 'attachment', size: 0 });
+        expect((await readdir(f.root, { recursive: true })).some(name => String(name).endsWith(uploaded.id))).toBe(true); await c.uploads!.abort(uploaded.id);
     });
     it.skipIf(process.platform !== 'win32')('the real Windows ACL protects the folder and new bytes with only this user, with a broad sibling control', async () => {
         const f = await homeFixture(), broad = join(f.home, 'broad-sibling'); await mkdir(broad); await f.start();
