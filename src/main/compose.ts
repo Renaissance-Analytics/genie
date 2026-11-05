@@ -80,6 +80,8 @@ import type { GenRouterServer } from './gen-router-server.js';
 export interface ComposeInput extends HostingOptions {
     /** Optional numeric diagnostics. The hosting fixture logs these only on Windows CI; production leaves it absent. */
     readonly onComposeStage?: (sample: ComposeStageSample) => void;
+    /** Internal scheduling port: maintenance runs after ready, and the returned callback cancels a pending sweep. */
+    readonly scheduleStagingSweep?: (work: () => Promise<void>) => () => void;
     readonly userData: string;
     readonly pty: PtyPort;
     /**
@@ -307,7 +309,8 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     stage?.begin('runtime-directory');
     await mkdir(runtimeDir(input.userData), { recursive: true });
     stage?.end(); stage?.begin('local-staging');
-    const localStaging = await LocalStagingArea.open(input.userData);
+    // No process discovery, staging directories or permission helper on the ready path. First use still verifies all of them.
+    const createLocalUploads = async () => (await LocalStagingArea.open(input.userData)).createConnection(now);
     stage?.end();
 
     // THE SETTINGS (the host split, P3.2): genie-host's, through this window's replica — hot-swap kept: every change, by
@@ -386,7 +389,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     // A correct PIN raises "Pair this device?" here; only Allow pairs (q_8c07b142; Genie 1's confirmPair).
     const pairing = new PairApprovals({ host: hostName, now });
     const remote = new RemoteHost({
-        createLocalUploads: () => localStaging.createConnection(now),
+        createLocalUploads,
         api: input.remoteApi ?? { invoke: async () => { throw new Error(`${hostName} has no remote host API wired in this build`); }, onEvent: () => () => {}, workspaceOfAgent: () => null },
         hostName,
         baton: new Baton(),
@@ -484,6 +487,14 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
     const stopLiveness = supervisor.watchLiveness();
     let down: Promise<void> | null = null;
 
+    const stagingSweep = new AbortController();
+    let sweeping: Promise<void> | null = null;
+    const sweepOldStaging = (): Promise<void> => sweeping ??= LocalStagingArea.sweepOld(input.userData, { signal: stagingSweep.signal })
+        .catch(() => { if (!stagingSweep.signal.aborted) console.warn('[genie] old local staging could not be swept'); });
+    const stopStagingSweep = input.scheduleStagingSweep ? input.scheduleStagingSweep(sweepOldStaging) : (() => {
+        const timer = setTimeout(() => { void sweepOldStaging(); }, 0); timer.unref();
+        return () => clearTimeout(timer);
+    })();
     stage?.ready();
     return {
         own: ownStores ? { ...ownStores, approvals: ownApprovals! } : null,
@@ -625,6 +636,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         workspaceIds: () => workspacesNow().map((w) => w.id),
         shutdown: () => {
             down ??= (async () => {
+                stagingSweep.abort(); stopStagingSweep();
                 ownApprovals?.cancelAll('Genie is shutting down');
                 stopLiveness();
                 // No flow fires from here: its timer is cancelled for good, so nothing starts after `settled()` answers (genie#1351).
@@ -650,6 +662,7 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 await ownFlows?.flushed();
                 await remoteDevices.flushed();
                 await ownHosting?.settled();
+                await sweeping;
                 ownStores?.knowledge.close();
             })();
             return down;
