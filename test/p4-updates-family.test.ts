@@ -182,9 +182,11 @@ describe('update CDP callers use the actual cached page bridge', () => {
     it('only the actual extracted beta56 read keeps that historical binary interface (coordinator5189)', () => {
         const source = readFileSync('scripts/upgrade-acceptance-cdp.mjs', 'utf8').replace(/\r\n/g, '\n');
         const oldRead = "const version = await before.evaluate('window.genie.updates?.state?.().then((s) => s?.currentVersion ?? s?.version ?? null).catch(() => null)');";
-        expect(source).toContain("releases/download/v2.0.0-beta.56/Genie-2.0.0-beta.56.AppImage");
+        // #1524 (the Windows runs) builds the URL from RELEASE and picks the root per OS; the Linux read is the same AppImage.
+        expect(source).toContain("const RELEASE = 'https://github.com/Renaissance-Analytics/genie/releases/download/v2.0.0-beta.56';");
+        expect(source).toContain('`${RELEASE}/Genie-2.0.0-beta.56.AppImage`');
         expect(source).toContain("execFileSync(image, ['--appimage-extract']");
-        expect(source).toContain("const root = join(work, 'squashfs-root');");
+        expect(source).toContain("root = join(work, 'squashfs-root');");
         expect(source).toContain("const before = await launch(binaryIn(root), []);\n    " + oldRead);
         expect(/window\.genie\.updates\b/.test(source.replace(oldRead, ''))).toBe(false);
     });
