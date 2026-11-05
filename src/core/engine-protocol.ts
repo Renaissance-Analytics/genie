@@ -64,6 +64,10 @@ export const ENGINE_METHODS = [
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',
+    // Host-owned draft files: only bounded ranges cross to the window. Handles belong to this engine connection.
+    'engine.drafts.fileOpen',
+    'engine.drafts.fileRead',
+    'engine.drafts.fileClose',
     // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
     // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
     'engine.supervisor',

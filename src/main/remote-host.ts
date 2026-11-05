@@ -431,7 +431,7 @@ export class RemoteHost {
             }
             case 'content.release': {
                 if (!connection.local) return refuse(`${method} is available only in ${this.#hostName}'s own Genie window`);
-                return ok(connection.content?.release(args[0]) ?? { released: false });
+                return ok(await connection.content?.releaseAndWait(args[0]) ?? { released: false });
             }
             case 'localUpload.begin':
             case 'localUpload.chunk':
@@ -568,7 +568,7 @@ export class RemoteHost {
             if (files) { await files.close(); files = null; }
             if (drafts) { await drafts.close(); drafts = null; }
             if (isLocalFilesMethod(method)) return ok(this.#content(connection).result(response!, value, method === 'files.localChildren' ? 'folder-children' : 'workspace-tree', method === 'files.localReadMedia' || method === 'files.readBytes'));
-            if (isLocalDraftMethod(method) && response !== null) return ok(this.#content(connection).draftResult(response, method, value));
+            if (isLocalDraftMethod(method) && response !== null) return ok(await connection.content!.draftResult(response, method, value));
             if (method === 'snapshot' && auth.workspaceId !== null) return ok(filterSnapshotForWorkspace(value as Parameters<typeof filterSnapshotForWorkspace>[0], auth.workspaceId));
             // SECURITY (genie#872): the feature snapshot carries the LIVE pairing PIN (enough to pair as an owner), the
             // paired devices and the connections. Only an owner sees them.

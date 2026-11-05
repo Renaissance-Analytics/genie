@@ -128,6 +128,7 @@ import type { ActivityFeed } from '../core/activity-feed.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
 import { ChatDraftStore } from './chat-draft-store.js';
+import { engineDraftsPort } from './engine-draft-files-client.js';
 import { composeServices, composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
@@ -2752,7 +2753,7 @@ async function boot(): Promise<void> {
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
             localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
-            chatDrafts: drafts,
+            chatDrafts: engineDraftsPort(drafts, (method, args) => agentEngineLink?.client.call(method, args) ?? Promise.resolve({ ok: false, reason: 'The draft host is not connected.' })),
             files: {
                 children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
                 open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),

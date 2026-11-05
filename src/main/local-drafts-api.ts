@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { BLOB_READ_BYTES } from '../core/local-blobs.js';
+import { BLOB_READ_BYTES, type BlobSource } from '../core/local-blobs.js';
 import type { ChatDrafts } from '../core/chat-drafts.js';
 import { DRAFT_CALL_BYTES, type LocalDraftMethod } from '../core/local-drafts.js';
 import { MAX_DRAFT_FILE_BYTES } from './chat-draft-store.js';
@@ -10,7 +10,7 @@ export interface LocalDraftsStore {
     all(): ChatDrafts | Promise<ChatDrafts>;
     save(agentId: string, raw: unknown): Promise<void>;
     putFile(bytes: Uint8Array): Promise<string>;
-    readFile(ref: unknown): Promise<Uint8Array | null>;
+    readFile(ref: unknown): Promise<Uint8Array | BlobSource | null>;
     release(refs: readonly unknown[]): Promise<void>;
 }
 export function invokeLocalDrafts(store: LocalDraftsStore | undefined, find: (id: string) => unknown, method: LocalDraftMethod, args: unknown[]): unknown {
