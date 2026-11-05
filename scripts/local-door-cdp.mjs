@@ -192,6 +192,23 @@ async function observeDoor(refs) {
     demand(r.result?.value === true, 'actual socket observer installed');
 }
 const nativeSummary = () => inspector.evaluate('globalThis.__doorNative.summary()');
+const frameMetadata = (from, to) => main.evaluate(`window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null}))`);
+async function quietFrames(label, from, to, nativeDelta) {
+    const frames = await frameMetadata(from, to);
+    demand(frames.length===to-from,`${label}: metadata retained every observed frame`);
+    const unexpected = frames.filter(frame=>frame.action!=='frame'||frame.kind!=='event'||!['local-updates','local-headroom'].includes(frame.channel));
+    demand(unexpected.length===0,`${label}: zero agent/activity/snapshot/terminal or unknown frames; unexpected ${JSON.stringify(unexpected)}`);
+    demand(nativeDelta===frames.length,`${label}: actual native socket and page counts agree on the recorded update/headroom frames`);
+    return { channels: frames.map(frame=>frame.channel), page: to-from, native: nativeDelta };
+}
+const forceUpdateCheck = () => inspector.evaluate(`(() => {
+    const { Menu, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
+    const find = (items) => { for (const item of items) { if (item.label === 'Check for updates') return item; const nested = find(item.submenu?.items ?? []); if (nested) return nested; } return null; };
+    const item = find(Menu.getApplicationMenu()?.items ?? []);
+    if (!item) return false;
+    item.click(item, BrowserWindow.getAllWindows().find(w=>w.webContents.id===${mainId}), {});
+    return true;
+})()`);
 
 async function cleanup() {
     if (cleaned) return; cleaned = true;
@@ -219,7 +236,7 @@ let exiting = false;
 async function finish() {
     if (exiting) return; exiting = true;
     clearTimeout(watchdog); await cleanup();
-    for (let n = 1; n <= 10; n++) if (!reports.some((r) => r.number === n)) result(n, 'UNMEASURED', `not reached after ${phase}`);
+    for (let n = 1; n <= 11; n++) if (!reports.some((r) => r.number === n)) result(n, 'UNMEASURED', `not reached after ${phase}`);
     const code = reports.some((r) => r.status === 'FAIL') ? 1 : reports.some((r) => r.status === 'UNMEASURED') ? 2 : 0;
     mkdirSync(OUT, { recursive: true });
     writeFileSync(join(OUT, BREAK ? 'local-door-break-result.json' : 'local-door-result.json'), JSON.stringify({ code, breakAdmission: BREAK, reports }, null, 2));
@@ -498,7 +515,7 @@ try {
         } finally { await rpc('host.unlock').catch(()=>{}); await rpc('baton.release').catch(()=>{}); remote.close(); }
         return 'real remote status held throughout actual local store write';
     });
-    await row(10, 'streaming positive control with zero frames on the app\'s own connection', async () => {
+    await row(10, 'streaming without agent/activity/snapshot/terminal frames on the app\'s own connection', async () => {
         let marker; try { marker = Number(readFileSync(TICKER,'utf8').trim()); } catch { /* absent */ }
         demand(marker===process.pid, 'this run owns ticker provider mode');
         const added = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-ticker-${process.pid}`)},purpose:'Native local-door streaming check',provider:'codex'})`);
@@ -516,8 +533,10 @@ try {
         const prompt = await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
         const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
         const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
-        const frameMetadata = (from, to) => main.evaluate(`window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null}))`);
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
+        // Automatic update checks are independent of activity interest. Let the first check
+        // and any notes finish; permitted later update/headroom pushes are recorded by name.
+        await until('first automatic update check and notes settled',()=>main.evaluate('window.genieTest.updates.state().then(s=>s&&typeof s.checkedAt==="number"&&s.phase!=="checking"&&s.changelog!==null)'),30_000);
         // Positive frame gauge immediately before the silent streaming interval.
         const gaugeStart = await main.evaluate('window.__doorCdp.total');
         demand((await main.evaluate("window.genieTest.workspaces.settings('tynn')"))?.ok,'app bridge result positive control before absence');
@@ -534,8 +553,7 @@ try {
         demand(w.connectionId===appWelcome.connectionId, 'the app connection is unchanged throughout streaming');
         demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app connection stays ready');
         demand(nativeEnd.records.some(r=>r.connectionId===w.connectionId&&!r.closed),'native connection remains live');
-        demand(frameEnd===frameStart,`no frame reached connected main preload while ledger grew${frameEnd===frameStart?'':`; observed ${JSON.stringify(await frameMetadata(frameStart,frameEnd))}`}`);
-        demand(nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames===nativeStart.records.find(r=>r.connectionId===w.connectionId).frames,'actual server socket also sent no frame');
+        const beforeWatch = await quietFrames('unwatched streaming',frameStart,frameEnd,nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames-nativeStart.records.find(r=>r.connectionId===w.connectionId).frames);
         // Positive activity gauge on that SAME app connection, then a second absence interval.
         const activityAgent = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-activity-${process.pid}`)},purpose:'Native activity subscription positive control',provider:'codex'})`);
         demand(activityAgent?.ok, `activity control agent added: ${activityAgent?.reason??'no result'}`); agents.push(activityAgent.id);
@@ -556,23 +574,27 @@ try {
         } finally { await main.evaluate('window.__doorActivityOff?.(); delete window.__doorActivityOff; true'); }
         await sleep(500);
         const unwatchTicks = Math.max(...count(await ticks())), unwatchStart = await main.evaluate('window.__doorCdp.total'), unwatchNative = await nativeSummary();
-        // Coordinator5200/5202 probe: deliberately overlap a real check with this interval.
-        // Keep strict zero until the actual unexpected channel has been measured on CI.
-        demand(await inspector.evaluate(`(() => {
-            const { Menu, BrowserWindow } = process.getBuiltinModule('node:module').createRequire(process.execPath)('electron');
-            const find = (items) => { for (const item of items) { if (item.label === 'Check for updates') return item; const nested = find(item.submenu?.items ?? []); if (nested) return nested; } return null; };
-            const item = find(Menu.getApplicationMenu()?.items ?? []);
-            if (!item) return false;
-            item.click(item, BrowserWindow.getAllWindows().find(w=>w.webContents.id===${mainId}), {});
-            return true;
-        })()`), 'probe fired the real application-menu update check inside the zero interval');
         await until('eight more unwatched provider ticks',async()=>Math.max(...count(await ticks()))>=unwatchTicks+8,20_000);
         const unwatchEnd = await nativeSummary();
         const unwatchFrameEnd = await main.evaluate('window.__doorCdp.total');
-        demand(unwatchFrameEnd===unwatchStart,`unwatched app receives zero frames again${unwatchFrameEnd===unwatchStart?'':`; observed ${JSON.stringify(await frameMetadata(unwatchStart,unwatchFrameEnd))}`}`);
-        demand(unwatchEnd.records.find(r=>r.connectionId===w.connectionId).frames===unwatchNative.records.find(r=>r.connectionId===w.connectionId).frames,'native socket also sends zero frames after unwatch');
+        const afterWatch = await quietFrames('streaming after unwatch',unwatchStart,unwatchFrameEnd,unwatchEnd.records.find(r=>r.connectionId===w.connectionId).frames-unwatchNative.records.find(r=>r.connectionId===w.connectionId).frames);
         demand((await welcome(main)).connectionId===w.connectionId,'unwatch keeps the same app connection');
-        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; page/native frame deltas=0/0; watched local-activity positive; unwatched page/native=0/0`;
+        return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; forbidden frames=0 before/after watch; watched local-activity positive; permitted before=${JSON.stringify(beforeWatch)} after=${JSON.stringify(afterWatch)}`;
+    });
+    await row(11, 'a forced update check reaches the same unwatched app connection', async () => {
+        const w = await welcome(main);
+        demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'),'app owns its ready connection');
+        await main.evaluate('window.__doorUpdateStates=[]; window.__doorUpdateOff=window.genieTest.updates.subscribe(s=>window.__doorUpdateStates.push({phase:s.phase,checkedAt:s.checkedAt,notesPending:s.changelog===null})); true');
+        try {
+            const start = await main.evaluate('window.__doorCdp.total'), nativeStart = await nativeSummary();
+            demand(await forceUpdateCheck(),'real application-menu update check fired');
+            await until('forced check pushed checking then a settled state',()=>main.evaluate('window.__doorUpdateStates.some(s=>s.phase==="checking")&&window.__doorUpdateStates.at(-1)?.phase!=="checking"&&typeof window.__doorUpdateStates.at(-1)?.checkedAt==="number"&&!window.__doorUpdateStates.at(-1)?.notesPending'),30_000);
+            const end = await main.evaluate('window.__doorCdp.total'), nativeEnd = await nativeSummary();
+            const observed = await quietFrames('forced update',start,end,nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames-nativeStart.records.find(r=>r.connectionId===w.connectionId).frames);
+            demand(observed.channels.includes('local-updates'),'forced check produced an actual local-updates frame');
+            demand((await welcome(main)).connectionId===w.connectionId,'forced check used the unchanged app connection');
+            return `app connection ${w.connectionId}; actual menu check; forbidden frames=0; permitted ${JSON.stringify(observed)}`;
+        } finally { await main.evaluate('window.__doorUpdateOff?.(); delete window.__doorUpdateOff; delete window.__doorUpdateStates; true'); }
     });
 } catch (error) {
     if (!reports.some((r) => r.status === 'FAIL')) result(Number.parseInt(phase) || 1, error instanceof Unmeasured ? 'UNMEASURED' : 'FAIL', error.message);
