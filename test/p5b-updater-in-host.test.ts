@@ -374,6 +374,13 @@ describe('the helper process', () => {
         expect(unref).toBe(1);
     });
 
+    it('the window says how to start the helper: its executable, a dev run’s app path, and the switches it needs to start at all', () => {
+        // Measured on CI (run 42079934150): the app runs with --no-sandbox there; a helper started without it never linked,
+        // and the window's automatic and forced checks never settled.
+        const main = strip('src/main/main.ts');
+        expect(main).toMatch(/publishLaunch\(\{ file: process\.execPath, args: \[\.\.\.\(app\.isPackaged \? \[\] : \[app\.getAppPath\(\)\]\), '--updater', \.\.\.process\.argv\.filter\(\(a\) => \/\^--\(no-sandbox\|ozone-platform=\|password-store=\)\/\.test\(a\)\)\] \}\)/);
+    });
+
     it('APPIMAGE: the variable and the AppImage’s environment reach the helper from the host’s', () => {
         const env = updaterHelperEnv({ PATH: '/usr/bin', APPIMAGE: '/home/w/Genie.AppImage', APPDIR: '/tmp/.mount_Genie', ARGV0: 'Genie.AppImage', OWD: '/home/w', ELECTRON_RUN_AS_NODE: '1' }, '/home/w/.genie');
         expect(env).toMatchObject({ APPIMAGE: '/home/w/Genie.AppImage', APPDIR: '/tmp/.mount_Genie', ARGV0: 'Genie.AppImage', OWD: '/home/w', GENIE_HOME: '/home/w/.genie', PATH: '/usr/bin' });
