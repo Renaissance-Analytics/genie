@@ -22,11 +22,13 @@ describe('P5a: the entry points are wired to the host’s hosting', () => {
     });
 
     it('genie-host shuts the hosting’s own part down AFTER the supervised processes', () => {
+        // P5a.3: the order — quiesce, stop every supervised process, the hosting's shutdown, then the children end — is
+        // host-shutdown.ts's, pinned by p5a3-hosting-shutdown.test.ts; here, that the host's shutdown runs it, after the agents.
         const fn = host.slice(host.indexOf('async function shutdown('));
-        const relay = fn.indexOf('await relay?.stop()');
-        const hosting = fn.indexOf('await hostingStack?.shutdown()');
-        expect(relay).toBeGreaterThan(-1);
-        expect(hosting).toBeGreaterThan(relay);
+        const agents = fn.indexOf('host.stopAll()');
+        const hosted = fn.search(/await shutDownHosted\(\{\s*supervisor: processSupervisor,\s*hosting: hostingStack,\s*endChildren: async \(\) => \{ await relay\?\.stop\(\); \},/);
+        expect(agents).toBeGreaterThan(-1);
+        expect(hosted).toBeGreaterThan(agents);
     });
 
     it('a linked window hands compose the host’s hosting, runs the host’s elevations, and passes what only Electron knows', () => {

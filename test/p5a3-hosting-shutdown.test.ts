@@ -59,7 +59,7 @@ async function hostWithEngine() {
 describe('(a)+(b) the host’s shutdown', () => {
     it('stops every supervised process it owns, THEN the hosting’s own shutdown, then its children end — in that order', async () => {
         const order: string[] = [];
-        const statuses: ProcessStatus[] = ['site:shop', 'genie-front-door', 'proc:queue'].map((id) => ({ id, workspaceId: 'ws', name: id, state: 'running', pid: 1, exitCode: null, restarts: 0, since: 0, reason: null }) as ProcessStatus);
+        const statuses: ProcessStatus[] = ['site:shop', 'genie-front-door', 'proc:queue'].map((id) => ({ id, workspaceId: 'ws', name: id, state: 'running', pid: 1, exitCode: null, restarts: 0, since: 0, reason: null }) as unknown as ProcessStatus);
         const supervisor = { list: () => statuses, stop: (id: string) => { order.push(`stop ${id}`); return true; } } as unknown as SupervisorApi;
         const hosting = { quiesce: () => { order.push('quiesce'); }, shutdown: async () => { order.push('hosting shutdown'); } };
         await shutDownHosted({ supervisor, hosting, endChildren: async () => { order.push('children end'); } });
@@ -112,7 +112,7 @@ describe('(c)+(e) the window’s quit', () => {
 
     function hostSupervisor() {
         const stops: string[] = [];
-        const listed: ProcessStatus[] = [{ id: 'site:shop', workspaceId: 'ws', name: 'shop', state: 'running', pid: 1, exitCode: null, restarts: 0, since: 0, reason: null } as ProcessStatus];
+        const listed: ProcessStatus[] = [{ id: 'site:shop', workspaceId: 'ws', name: 'shop', state: 'running', pid: 1, exitCode: null, restarts: 0, since: 0, reason: null } as unknown as ProcessStatus];
         const supervisor = {
             list: () => listed, status: (id: string) => listed.find((p) => p.id === id) ?? null, stop: (id: string) => { stops.push(id); return true; },
             start: (spec: ProcessSpec) => ({ ...listed[0]!, id: spec.id }), restart: () => null, forget: () => false, command: () => undefined, log: () => undefined, readLog: () => null,

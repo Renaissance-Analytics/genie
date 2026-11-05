@@ -613,8 +613,10 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
                 ownHosting?.quiesce();
                 // EVERYTHING SUPERVISED STOPS FIRST, before anything is waited on (hosting fixes 2.2): behind the `.env`
                 // pass below, a slow or stuck git kept every dev server, worker and the front door running — and a quit
-                // that does not wait that long left them running for good.
-                for (const p of supervisor.list()) supervisor.stop(p.id);
+                // that does not wait that long left them running for good. Only what THIS window runs: genie-host's
+                // supervised processes (its sites, its front door, its kept workers) are the host's to stop, at "Shut down
+                // everything" (host-shutdown.ts), and "Just close the UI" keeps them (P5a.3).
+                if (!input.supervisor) for (const p of supervisor.list()) supervisor.stop(p.id);
                 // Then the `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short.
                 await ownHosting?.drainEnvFiles();
                 await ownHosting?.closeFrontDoor();
