@@ -100,6 +100,20 @@ function blobs(client: RemoteClient): Blobs {
 }
 function value<T>(r: WireMessage): T { expect(r).toMatchObject({ kind: 'result', ok: true }); return (r as { value: T }).value; }
 
+// Full byte equality without Vitest walking millions of typed-array properties.
+function expectExactBytes(actual: Uint8Array, expected: Uint8Array): void {
+    expect(actual).toBeInstanceOf(Uint8Array);
+    expect(actual.byteLength).toBe(expected.byteLength);
+    expect(Buffer.from(actual).equals(Buffer.from(expected))).toBe(true);
+}
+
+it('CONTROL: full-byte equality rejects a changed last byte at the same length', () => {
+    const original = new Uint8Array(2 * 1024 * 1024 + 17), changed = original.slice();
+    expectExactBytes(changed, original);
+    changed[changed.length - 1] = 1;
+    expect(() => expectExactBytes(changed, original)).toThrow();
+});
+
 describe('7A standalone local blob controls through the admitted door', () => {
     it.each(['blob.open', 'blob.read', 'blob.close'])('%s is a recognized protocol control', method => {
         expect(parseMessage(JSON.stringify({ kind: 'call', id: 1, method, args: [] }))).toMatchObject({ ok: true, message: { method } });
@@ -118,8 +132,8 @@ describe('7A standalone local blob controls through the admitted door', () => {
         }
         const comparisonStart = performance.now();
         console.info(`[p4-blob-fixture] ${kind} complete wire read: ${Math.round(comparisonStart - started)} ms`);
-        expect(new Uint8Array(Buffer.concat(parts))).toEqual(f.bytes);
-        console.info(`[p4-blob-fixture] ${kind} deep byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
+        expectExactBytes(new Uint8Array(Buffer.concat(parts)), f.bytes);
+        console.info(`[p4-blob-fixture] ${kind} native byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
         expect(value(await c.call('blob.close', [opened.id]))).toEqual({ closed: true });
         expect(f.sources[0]!.close).toHaveBeenCalledOnce(); expect(f.invoke).not.toHaveBeenCalled();
         expect(Math.max(...f.serialized.map(text => Buffer.byteLength(text, 'utf8')))).toBeLessThanOrEqual(LOCAL_FRAME_LIMIT_BYTES);
@@ -213,8 +227,8 @@ describe('the verified reader uses the local client’s existing frame stream', 
         const f = await fixture(), c = await f.client(), port = blobs(c);
         const started = performance.now(), actual = await port.readAll('artboard-post', 'ref_fixture'), comparisonStart = performance.now();
         console.info(`[p4-blob-fixture] reader transfer/hash/close: ${Math.round(comparisonStart - started)} ms`);
-        expect(actual).toEqual(f.bytes);
-        console.info(`[p4-blob-fixture] reader deep byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
+        expectExactBytes(actual, f.bytes);
+        console.info(`[p4-blob-fixture] reader native byte equality: ${Math.round(performance.now() - comparisonStart)} ms`);
         expect(f.calls.map(call => call.method)).toEqual(['blob.open', ...Array(5).fill('blob.read'), 'blob.close']);
         expect(f.sources[0]!.close).toHaveBeenCalledOnce(); expect(c.state().connected).toBe(true);
         await c.bridge.workspaces.settings('work'); expect(f.invoke).toHaveBeenCalledWith('workspaces.settings', ['work']);

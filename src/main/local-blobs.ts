@@ -37,8 +37,7 @@ export class LocalBlobs {
     async read(id: unknown, offset: unknown, length: unknown): Promise<{ base64: string }> {
         const entry = typeof id === 'string' ? this.#opened.get(id) : undefined;
         if (this.#closed || !entry?.source) throw new Error('no such open blob on this connection');
-        // CI mutation: restore the exact limit after reading the one-byte size-guard failure. This candidate stays draft.
-        if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0 || length > BLOB_READ_BYTES + 1 || offset > entry.size || length > entry.size - offset)
+        if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0 || length > BLOB_READ_BYTES || offset > entry.size || length > entry.size - offset)
             throw new Error(`a blob read must be within its size and at most ${BLOB_READ_BYTES} bytes`);
         if (length === 0) return { base64: '' };
         const bytes = await entry.source.read(offset, length);
