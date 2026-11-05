@@ -129,6 +129,13 @@ export interface TerminalOptions {
      * `false` for Genie's own system terminals: a Take Over of an agent, a provider login, the OS scratch shell.
      */
     limited?: boolean | undefined;
+    /**
+     * A THROWAWAY TERMINAL (Tynn story #378; the workspace header's Terminal button): it lives only while its window does.
+     * Not listed (no tab, no panel row, not in the workspace's terminals, not handed to a new window), its working
+     * directory never the workspace's last one, its pty tagged so it is never adopted, and once it is closed or ends
+     * nothing of it is kept — no output, no ended record.
+     */
+    disposable?: boolean | undefined;
 }
 
 /** The workspace's limits a host enforces, read live (the workspace's settings can change at any moment). */
@@ -179,6 +186,8 @@ export class TerminalHost {
     #cwdClock = 0;
     /** Each live terminal's latest output (its tail), kept here: the engine forgets a process's scrollback when it ends. */
     readonly #tails = new Map<string, string>();
+    /** Live disposable terminals (`TerminalOptions.disposable`): never in the list, nothing kept once they are gone. */
+    readonly #disposable = new Map<string, Terminal>();
     /** Terminals that ended: their last output and exit code, for a `read` after the fact — the newest FINISHED_KEPT. */
     readonly #finished = new Map<string, { workspaceId: string; exitCode: number; text: string }>();
 
@@ -197,6 +206,8 @@ export class TerminalHost {
 
         // A pty made elsewhere (the spawn host under genie-host) says its pid and shell after `open` answered: kept here.
         this.#pty.onPid?.((id, pid, shell) => {
+            const scratch = this.#disposable.get(id);
+            if (scratch) { this.#disposable.set(id, { ...scratch, pid, ...(shell ? { shell } : {}) }); return; }
             this.#terminals = this.#terminals.map((t) => (t.id === id ? { ...t, pid, ...(shell ? { shell } : {}) } : t));
         });
 
@@ -215,6 +226,12 @@ export class TerminalHost {
              * listeners run means a listener that asks `list()` sees the truth rather than the
              * state from a moment ago.
              */
+            // A disposable terminal leaves nothing behind: no output, no ended record (Tynn story #378).
+            if (this.#disposable.delete(id)) {
+                this.#tails.delete(id);
+                fanOut(this.#exitListeners, [id, exitCode], 'terminal exit');
+                return;
+            }
             // Its output and exit code stay readable (an agent's command that finished before it could look).
             const ended = this.#terminals.find((t) => t.id === id);
             if (ended) {
@@ -268,14 +285,17 @@ export class TerminalHost {
             ...(options.cols === undefined ? {} : { cols: options.cols }),
             ...(options.rows === undefined ? {} : { rows: options.rows }),
             ...(options.env === undefined ? {} : { env: options.env }),
-            // What it is to the window: the NEXT window adopts it by this (the host split, P2.1).
-            tag: { kind: 'terminal', workspaceId: options.workspaceId, shell: options.command ?? '' },
+            // What it is to the window: the NEXT window adopts it by this (the host split, P2.1) — never a disposable one.
+            tag: { kind: 'terminal', workspaceId: options.workspaceId, shell: options.command ?? '', ...(options.disposable ? { disposable: true as const } : {}) },
         });
 
-        this.#terminals = [
-            ...this.#terminals,
-            { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell, ...(options.limited === false ? { unlimited: true as const } : {}) },
-        ];
+        const terminal: Terminal = { id: opened.id, workspaceId: options.workspaceId, pid: opened.pid, shell: opened.shell, ...(options.limited === false ? { unlimited: true as const } : {}) };
+        if (options.disposable) {
+            this.#disposable.set(opened.id, terminal);
+            return opened;
+        }
+
+        this.#terminals = [...this.#terminals, terminal];
         return opened;
     }
 
@@ -341,7 +361,7 @@ export class TerminalHost {
 
     /** JOIN a running terminal (§6.5 multi-attach): what it has shown so far, and whose it is. Null for an id this host does not have. */
     attach(id: string): { id: string; pid: number; shell: string; workspaceId: string; scrollback: string } | null {
-        const t = this.#terminals.find((x) => x.id === id);
+        const t = this.#terminals.find((x) => x.id === id) ?? this.#disposable.get(id);
         if (!t) return null;
         return { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#pty.scrollback(id) ?? this.#tails.get(id) ?? '' };
     }
@@ -352,6 +372,8 @@ export class TerminalHost {
      */
     adopt(pty: ListedPty): void {
         if (pty.tag?.kind !== 'terminal') return;
+        // A disposable terminal is never taken back (Tynn story #378): it ended with its window.
+        if (pty.tag.disposable) return;
         if (this.#has(pty.id)) return;
         this.#terminals = [...this.#terminals, { id: pty.id, workspaceId: pty.tag.workspaceId, pid: pty.pid, shell: pty.shell || pty.tag.shell || 'shell' }];
         this.#tails.set(pty.id, pty.scrollback.length > TAIL_MAX ? pty.scrollback.slice(-TAIL_MAX) : pty.scrollback);
@@ -360,6 +382,11 @@ export class TerminalHost {
     close(id: string): boolean {
         if (!this.#has(id)) return false;
 
+        if (this.#disposable.delete(id)) {
+            this.#tails.delete(id);
+            this.#pty.kill(id);
+            return true;
+        }
         this.#pty.kill(id);
         this.#terminals = this.#terminals.filter((t) => t.id !== id);
         return true;
@@ -373,6 +400,7 @@ export class TerminalHost {
      * running a dozen agents, the difference is stopping one thing or stopping the room.
      */
     closeWorkspace(workspaceId: string): number {
+        for (const scratch of [...this.#disposable.values()]) if (scratch.workspaceId === workspaceId) this.close(scratch.id);
         const mine = this.#terminals.filter((t) => t.workspaceId === workspaceId);
         for (const terminal of mine) this.#pty.kill(terminal.id);
         this.#terminals = this.#terminals.filter((t) => t.workspaceId !== workspaceId);
@@ -386,6 +414,7 @@ export class TerminalHost {
      * at all, because nothing reaped what the app had spawned.
      */
     closeAll(): number {
+        for (const id of [...this.#disposable.keys()]) this.close(id);
         const all = this.#terminals;
         for (const terminal of all) this.#pty.kill(terminal.id);
         this.#terminals = [];
@@ -405,6 +434,6 @@ export class TerminalHost {
     }
 
     #has(id: string): boolean {
-        return this.#terminals.some((t) => t.id === id);
+        return this.#disposable.has(id) || this.#terminals.some((t) => t.id === id);
     }
 }

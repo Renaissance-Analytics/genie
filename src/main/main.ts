@@ -119,7 +119,7 @@ import { raisesApprovals, realListModels, SessionHost, providerBinary } from './
 import { connectAgentEngine, type AgentEngine, type AgentEngineLink } from './agent-engine.js';
 import { hostBuild } from './engine-launch.js';
 import { LoginHost } from './login-host.js';
-import { openScratchTerminal } from './scratch-terminal.js';
+import { ScratchTerminals, openScratchTerminal } from './scratch-terminal.js';
 import { ACCOUNT_BACK, SIGNED_IN_AGAIN } from '../core/provider-login.js';
 import { DESIGN_LOGIN, tellDesignLoginRan } from '../core/design-login.js';
 import { PlanKeepalive } from '../core/plan-keepalive.js';
@@ -716,6 +716,8 @@ let filesHost: FilesHost | null = null;
 let filesWatch: { watch(viewId: string, workspace: { id: string; path: string }, want: FilesWant): boolean | Promise<boolean>; unwatch(viewId: string): void; close(): void } | null = null;
 const filesEventListeners = new Set<(event: FilesHubEvent) => void>();
 let takeOvers: TakeOverHost | null = null;
+/** The workspace header's throwaway terminals (Tynn story #378): each in its own window, closed with it. */
+let scratchTerminals: ScratchTerminals | null = null;
 let filesWindows: FilesWindows | null = null;
 let host: AgentEngine | null = null;
 /** The link to `genie-host` when agents run there (the host split, phase 1); `null` = the engine runs in this process. */
@@ -794,7 +796,10 @@ function openTakeOverWindow(route: string, activation: Activation): void {
     localDoor.admit(win.webContents);
     guardWindowLinks(win.webContents, (url) => { void shell.openExternal(url).catch(() => {}); });
     onceShowable(win, process.platform, () => showWhenReady(win, request));
-    win.on('closed', () => takeOvers?.windowClosed(terminalId));
+    win.on('closed', () => {
+        takeOvers?.windowClosed(terminalId);
+        scratchTerminals?.windowClosed(terminalId);
+    });
     void win.loadFile(join(here, '../renderer/index.html'), { hash: route });
 }
 
@@ -1764,6 +1769,7 @@ async function boot(): Promise<void> {
      * the host's probe to draw the Observed row. Nothing here manages the TUI.
      */
     const terminalsForTakeOver = terminals;
+    scratchTerminals = new ScratchTerminals({ terminals: terminalsForTakeOver, openWindow: (route) => openTakeOverWindow(route, 'user-gesture') });
     takeOvers = new TakeOverHost({
         terminals: terminalsForTakeOver,
         // Take Over is a button the person pressed (genie:take-over); nothing else starts one (genie#1235).
@@ -2101,6 +2107,14 @@ async function boot(): Promise<void> {
             console.error(`[terminal] open failed in ${workspace.path}: ${error instanceof Error ? error.message : String(error)}`);
             throw error;
         }
+    });
+    // THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace's folder, with the workspace's
+    // environment (the same `terminalEnvFor` as a workspace terminal), in a window of its own; closing it ends it.
+    ipcMain.handle('genie:scratch-terminal-open', (_event, rawWorkspaceId: unknown) => {
+        if (!scratchTerminals) return { ok: false, reason: 'Terminals are not ready yet.' };
+        const workspace = typeof rawWorkspaceId === 'string' ? registry?.snapshot().workspaces?.find((w) => w.id === rawWorkspaceId) ?? null : null;
+        if (!workspace) return { ok: false, reason: 'That workspace is not open in Genie.' };
+        return scratchTerminals.open({ workspaceId: workspace.id, cwd: workspace.path, env: terminalEnvFor(services, workspace.id, mcpEnv()) });
     });
     ipcMain.handle('genie:terminal-write', (_event, id: unknown, data: unknown) =>
         typeof id === 'string' && typeof data === 'string' ? (terminals?.write(id, data) ?? false) : false);

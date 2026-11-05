@@ -236,7 +236,9 @@ export class SessionEngineServer {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'flows.event', event);
         });
         options.terminals?.onEvent((event) => {
-            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'terminals.event', event);
+            // A disposable terminal's output and end go to the window that opened it, and no other (Tynn story #378).
+            const owner = event.kind === 'list' ? undefined : event.owner;
+            for (const conn of this.#connections) if (conn.authed && (owner === undefined || owner === String(conn.id))) this.#event(conn, 'terminals.event', event);
         });
     }
 
@@ -327,6 +329,8 @@ export class SessionEngineServer {
             if (was) this.#options.onClients?.(this.clients);
             if (was) this.#options.spawn?.windowGone?.();
             if (was) this.#options.browser?.dropped(String(conn.id));
+            // Its disposable terminals end with it: nothing re-attaches one (Tynn story #378).
+            if (was) this.#options.terminals?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
             if (was) void this.#options.stores?.dropDraftFiles(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
@@ -543,7 +547,7 @@ export class SessionEngineServer {
                 return this.#options.mcp?.status() ?? null;
             case 'engine.terminals':
                 if (!this.#options.terminals) throw new Error('This host runs no terminals.');
-                return this.#options.terminals.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+                return this.#options.terminals.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));
             case 'engine.browser':
                 if (!this.#options.browser) throw new Error('This host has no browser service.');
                 return this.#options.browser.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));

@@ -120,9 +120,11 @@ describe('main wires both paths to the one function', () => {
     // Comment lines dropped by LINE, CRLF-safe: a guard that matched a comment would pass on prose.
     const code = (file: string) => readFileSync(file, 'utf8').split(/\r?\n/).filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
 
-    it('the Terminals tab and the agents’ tools both call terminalEnvFor — counted', () => {
+    it('the Terminals tab, the header’s throwaway Terminal and the agents’ tools all call terminalEnvFor — counted', () => {
         const main = code('src/main/main.ts');
-        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(2);
+        expect(main.match(/terminalEnvFor\(/g) ?? []).toHaveLength(3);
+        // The header's Terminal button (Tynn story #378): a workspace terminal's environment, in a window of its own.
+        expect(main).toMatch(/scratchTerminals\.open\(\{ workspaceId: workspace\.id, cwd: workspace\.path, env: terminalEnvFor\(services, workspace\.id, mcpEnv\(\)\) \}\)/);
         expect(main).toMatch(/terminalEnv: \(workspaceId\) => terminalEnvFor\(composed, workspaceId, mcpEnv\(\)\)/);
         expect(main).toMatch(/const env = terminalEnvFor\(services, workspace\.id, mcpEnv\(\)\);/);
         // The env is no longer assembled by hand anywhere in main.

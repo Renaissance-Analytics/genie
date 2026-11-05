@@ -159,6 +159,11 @@ const bridge: PreloadBridge = {
             { ok: true; terminalId: string } | { ok: false; reason: string }
         >,
 
+    scratchTerminal: (workspaceId) =>
+        ipcRenderer.invoke('genie:scratch-terminal-open', workspaceId) as Promise<
+            { ok: true; terminalId: string } | { ok: false; reason: string }
+        >,
+
     terminals: {
         open: (workspaceId, options) =>
             ipcRenderer.invoke('genie:terminal-open', workspaceId, options) as Promise<{

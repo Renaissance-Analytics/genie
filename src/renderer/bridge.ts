@@ -284,6 +284,12 @@ export interface GenieBridge {
      */
     takeOver(agentId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
 
+    /**
+     * THE HEADER'S TERMINAL BUTTON (Tynn story #378): a throwaway shell in the workspace, in a NEW window; closing the
+     * window ends it and nothing of it is kept. Absent = this window cannot open one (a remote window).
+     */
+    scratchTerminal?(workspaceId: string): Promise<{ ok: true; terminalId: string } | { ok: false; reason: string }>;
+
     /** WORKSPACE OPERATIONS (§6.1). Add is preview-then-confirm: nothing is written before the plan was shown. */
     workspaces: {
         /** The folder picker on the host, then the classification and plan. Writes nothing. */

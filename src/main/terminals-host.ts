@@ -17,10 +17,14 @@ export interface TerminalsDump {
     readonly limits: Readonly<Record<string, number>>;
 }
 
+/**
+ * `owner`: the window connection a DISPOSABLE terminal's output and end go to, and only that one (Tynn story #378) — no
+ * other window keeps any of it. Absent = every window.
+ */
 export type TerminalsEvent =
     | { readonly kind: 'list'; readonly terminals: readonly Terminal[]; readonly limits: Readonly<Record<string, number>> }
-    | { readonly kind: 'data'; readonly id: string; readonly data: string }
-    | { readonly kind: 'exit'; readonly id: string; readonly code: number };
+    | { readonly kind: 'data'; readonly id: string; readonly data: string; readonly owner?: string }
+    | { readonly kind: 'exit'; readonly id: string; readonly code: number; readonly owner?: string };
 
 const WINDOW_CALLS = new Set(['open', 'openReady', 'write', 'resize', 'close']);
 /** How much of a terminal's output a window keeps for a pane that joins it. */
@@ -29,12 +33,28 @@ const TAIL_MAX = 262_144;
 export class TerminalsService {
     readonly #terminals: TerminalHost;
     readonly #listeners = new Set<(event: TerminalsEvent) => void>();
+    /** Each live DISPOSABLE terminal's window connection (Tynn story #378): it ends when that connection goes. */
+    readonly #owners = new Map<string, string>();
 
     constructor(terminals: TerminalHost) {
         this.#terminals = terminals;
         terminals.onChange(() => this.#emit({ kind: 'list', terminals: terminals.list(), limits: this.#limits() }));
-        terminals.onData((id, data) => this.#emit({ kind: 'data', id, data }));
-        terminals.onExit((id, code) => this.#emit({ kind: 'exit', id, code }));
+        terminals.onData((id, data) => { const owner = this.#owners.get(id); this.#emit({ kind: 'data', id, data, ...(owner === undefined ? {} : { owner }) }); });
+        terminals.onExit((id, code) => {
+            const owner = this.#owners.get(id);
+            this.#owners.delete(id);
+            this.#emit({ kind: 'exit', id, code, ...(owner === undefined ? {} : { owner }) });
+        });
+    }
+
+    /**
+     * A window's connection closed: every disposable terminal it opened is closed with it — the window that was its only
+     * way in is gone, and nothing re-attaches one (Tynn story #378). Answers how many.
+     */
+    dropped(owner: string): number {
+        const mine = [...this.#owners].filter(([, o]) => o === owner).map(([id]) => id);
+        for (const id of mine) { this.#owners.delete(id); this.#terminals.close(id); }
+        return mine.length;
     }
 
     get terminals(): TerminalHost {
@@ -51,12 +71,23 @@ export class TerminalsService {
         return () => { this.#listeners.delete(listener); };
     }
 
-    async call(method: string, args: readonly unknown[]): Promise<unknown> {
+    /** A window's call; `owner` is its connection, which a disposable terminal it opens belongs to. */
+    async call(method: string, args: readonly unknown[], owner?: string): Promise<unknown> {
         if (!WINDOW_CALLS.has(method)) throw new Error(`a window cannot call terminals.${method}`);
         const t = this.#terminals;
         switch (method) {
-            case 'open': return t.open(args[0] as TerminalOptions);
-            case 'openReady': return t.openReady(args[0] as TerminalOptions);
+            case 'open':
+            case 'openReady': {
+                const options = args[0] as TerminalOptions;
+                // Owned BEFORE it opens, so its first output already goes to its window alone.
+                if (options.disposable && owner !== undefined && typeof options.id === 'string') this.#owners.set(options.id, owner);
+                try {
+                    return method === 'open' ? t.open(options) : await t.openReady(options);
+                } catch (error) {
+                    if (typeof options.id === 'string') this.#owners.delete(options.id);
+                    throw error;
+                }
+            }
             case 'write': return t.write(String(args[0]), String(args[1]));
             case 'resize': return t.resize(String(args[0]), Number(args[1]), Number(args[2]));
             default: return t.close(String(args[0]));
@@ -90,6 +121,8 @@ export class TerminalsReplica {
     readonly #tails = new Map<string, string>();
     /** Opened here and not listed by the host yet: typed into already (the pane opened at once). */
     readonly #pending = new Set<string>();
+    /** This window's live DISPOSABLE terminals (never listed), id to workspace: forgotten, output and all, when they go. */
+    readonly #disposable = new Map<string, string>();
     readonly #dataListeners = new Set<(id: string, data: string) => void>();
     readonly #exitListeners = new Set<(id: string, code: number) => void>();
     readonly #call: (method: string, args: readonly unknown[]) => Promise<unknown>;
@@ -120,6 +153,7 @@ export class TerminalsReplica {
         }
         this.#list = this.#list.filter((t) => t.id !== event.id);
         this.#pending.delete(event.id);
+        if (this.#disposable.delete(event.id)) this.#tails.delete(event.id);
         for (const l of [...this.#exitListeners]) l(event.id, event.code);
     }
 
@@ -142,8 +176,10 @@ export class TerminalsReplica {
         }
         const id = options.id ?? `term_${randomUUID()}`;
         this.#pending.add(id);
+        if (options.disposable) this.#disposable.set(id, options.workspaceId);
         void this.#call('open', [{ ...options, id }]).catch((error: unknown) => {
             this.#pending.delete(id);
+            if (this.#disposable.delete(id)) this.#tails.delete(id);
             // Refused in the host (its limit, a shell that cannot start): said in the pane, and the pane ends.
             const why = error instanceof Error ? error.message : String(error);
             for (const l of [...this.#dataListeners]) l(id, `[genie] the terminal did not open: ${why}\r\n`);
@@ -158,7 +194,19 @@ export class TerminalsReplica {
             const refused = this.refusal(options.workspaceId);
             if (refused) throw new Error(refused);
         }
-        return (await this.#call('openReady', [{ ...options, id: options.id ?? `term_${randomUUID()}` }])) as PtyOpened;
+        const id = options.id ?? `term_${randomUUID()}`;
+        if (!options.disposable) return (await this.#call('openReady', [{ ...options, id }])) as PtyOpened;
+        // Known here before it opens: never listed, its output is joined by its own window alone.
+        this.#pending.add(id);
+        this.#disposable.set(id, options.workspaceId);
+        try {
+            return (await this.#call('openReady', [{ ...options, id }])) as PtyOpened;
+        } catch (error) {
+            this.#pending.delete(id);
+            this.#disposable.delete(id);
+            this.#tails.delete(id);
+            throw error;
+        }
     }
 
     #known(id: string): boolean {
@@ -181,15 +229,19 @@ export class TerminalsReplica {
         if (!this.#known(id)) return false;
         this.#list = this.#list.filter((t) => t.id !== id);
         this.#pending.delete(id);
+        if (this.#disposable.delete(id)) this.#tails.delete(id);
         void this.#call('close', [id]).catch(() => {});
         return true;
     }
 
     scrollback(id: string): string | undefined {
-        return this.#list.some((t) => t.id === id) ? this.#tails.get(id) ?? '' : undefined;
+        return this.#list.some((t) => t.id === id) || this.#disposable.has(id) ? this.#tails.get(id) ?? '' : undefined;
     }
 
     attach(id: string): { id: string; pid: number; shell: string; workspaceId: string; scrollback: string } | null {
+        // This window's own disposable terminal: its window joins it (and nothing else lists it).
+        const scratch = this.#disposable.get(id);
+        if (scratch !== undefined) return { id, pid: 0, shell: '', workspaceId: scratch, scrollback: this.#tails.get(id) ?? '' };
         const t = this.#list.find((x) => x.id === id);
         return t ? { id: t.id, pid: t.pid, shell: t.shell, workspaceId: t.workspaceId, scrollback: this.#tails.get(id) ?? '' } : null;
     }
