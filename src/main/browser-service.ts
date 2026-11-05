@@ -9,6 +9,8 @@ export interface BrowserFacts {
     readonly frontDoorPort: number;
     readonly caPem: string | null;
     readonly hosts: readonly string[];
+    /** Each site's workspace: its logins are in that workspace's store. */
+    readonly workspaceOf: Readonly<Record<string, string>>;
     /** How to start the browser's process: the window knows the install; the host may run from a copy of it (P6). */
     readonly launch: { readonly file: string; readonly args: readonly string[] };
 }
@@ -47,7 +49,7 @@ const PAGE_CALL_LIMIT_MS = 30_000;
 function isFacts(value: unknown): value is BrowserFacts {
     if (typeof value !== 'object' || value === null) return false;
     const f = value as Partial<BrowserFacts>;
-    return Number.isInteger(f.frontDoorPort) && (f.caPem === null || typeof f.caPem === 'string') && Array.isArray(f.hosts) && f.hosts.every((h) => typeof h === 'string') && typeof f.launch?.file === 'string' && Array.isArray(f.launch.args) && f.launch.args.every((a) => typeof a === 'string');
+    return Number.isInteger(f.frontDoorPort) && (f.caPem === null || typeof f.caPem === 'string') && Array.isArray(f.hosts) && f.hosts.every((h) => typeof h === 'string') && typeof f.workspaceOf === 'object' && f.workspaceOf !== null && typeof f.launch?.file === 'string' && Array.isArray(f.launch.args) && f.launch.args.every((a) => typeof a === 'string');
 }
 
 export interface BrowserServicePorts {

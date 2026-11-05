@@ -91,6 +91,21 @@ describe('once attached', () => {
         expect(openExternal).toHaveBeenCalledWith('https://example.com/');
     });
 
+    it('a link to another workspace\u2019s site goes to the browser: this guest keeps its store for life', () => {
+        const contents = new EventEmitter();
+        const openInWindow = vi.fn();
+        guardSiteWebviews(contents, { enabledHosts: () => ['moic.gen', 'shop.gen'], sessionForHost: () => STORE_A, openInWindow, openExternal: vi.fn(), onGuest: vi.fn(), storeOf: (url) => (url.includes('shop') ? 'b' : 'a') });
+        const g = Object.assign(new EventEmitter(), { setWindowOpenHandler: vi.fn(), stop: vi.fn(), getURL: () => 'https://moic.gen/' });
+        contents.emit('did-attach-webview', {}, g);
+        const across = { preventDefault: vi.fn() };
+        g.emit('will-navigate', across, 'https://shop.gen/');
+        expect(across.preventDefault).toHaveBeenCalled();
+        expect(openInWindow).toHaveBeenCalledWith('https://shop.gen/', 'user-gesture');
+        const same = { preventDefault: vi.fn() };
+        g.emit('will-navigate', same, 'https://moic.gen/x');
+        expect(same.preventDefault).not.toHaveBeenCalled();
+    });
+
     it('a non-web link off them opens nothing', () => {
         const { guest, openExternal } = setup();
         const off = { preventDefault: vi.fn() };

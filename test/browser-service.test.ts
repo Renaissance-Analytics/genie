@@ -7,7 +7,7 @@ import { BrowserService, type BrowserEvent, type BrowserFacts } from '../src/mai
  * browser needs and what to open; the host holds it until a browser is linked. The front door is the window's until P5.
  */
 
-const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
+const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' }, launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
 
 function setup(ports: ConstructorParameters<typeof BrowserService>[0] = {}) {
     const service = new BrowserService(ports);

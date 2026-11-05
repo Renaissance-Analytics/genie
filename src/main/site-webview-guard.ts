@@ -14,6 +14,7 @@ interface Emits {
 }
 
 export interface SiteGuest extends Emits {
+    getURL?(): string;
     setWindowOpenHandler(handler: (details: { url: string }) => { action: 'deny' }): void;
     stop(): void;
 }
@@ -25,6 +26,8 @@ export interface SiteWebviewPorts<Store, Guest> {
     readonly openInWindow: (url: string, activation: Activation) => void;
     readonly openExternal: (url: string) => void;
     readonly onGuest: (guest: Guest) => void;
+    /** Which store a site's logins are in. A guest keeps its session for life, so another store goes to the browser. */
+    readonly storeOf?: (url: string) => string | null;
 }
 
 export function guardSiteWebviews<Store, Guest extends SiteGuest>(contents: Emits, ports: SiteWebviewPorts<Store, Guest>): void {
@@ -44,7 +47,13 @@ export function guardSiteWebviews<Store, Guest extends SiteGuest>(contents: Emit
             return { action: 'deny' };
         });
         guest.on('will-navigate', (event: { preventDefault(): void }, url: string) => {
-            if (withinTheSites(url)) return;
+            if (withinTheSites(url)) {
+                if (ports.storeOf && guest.getURL && ports.storeOf(url) !== ports.storeOf(guest.getURL())) {
+                    event.preventDefault();
+                    ports.openInWindow(url, 'user-gesture');
+                }
+                return;
+            }
             event.preventDefault();
             if (/^https?:/i.test(url)) ports.openExternal(url);
         });

@@ -56,7 +56,10 @@ export interface GenieBrowserPorts {
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
     readonly newTabId: () => string;
-    readonly createView: (tabId: string, events: TabViewEvents) => TabViewPort;
+    /** `url`: the site it opens on, so its session can be that site's workspace's. */
+    readonly createView: (tabId: string, events: TabViewEvents, url: string) => TabViewPort;
+    /** Which store a site's logins are in. A view has one session for its life, so another store is another tab. */
+    readonly storeOf?: (url: string) => string | null;
     readonly push: (snapshot: BrowserSnapshot) => void;
 }
 
@@ -130,6 +133,8 @@ export class GenieBrowser {
         if (active === null) return this.open(input);
         const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
         if ('error' in nav) return { ok: false, error: nav.error };
+        const current = this.#state.tabs.find((t) => t.id === active);
+        if (this.#ports.storeOf && current && this.#ports.storeOf(current.url) !== this.#ports.storeOf(nav.url)) return this.showSite(nav.url);
         this.#views.get(active)?.load(nav.url);
         return { ok: true };
     }
@@ -187,7 +192,7 @@ export class GenieBrowser {
 
     #openTab(url: string, background = false): void {
         const id = this.#ports.newTabId();
-        const view = this.#ports.createView(id, this.#events(id));
+        const view = this.#ports.createView(id, this.#events(id), url);
         this.#views.set(id, view);
         this.#apply({ kind: 'open', id, url, background });
         // A tab made behind the active one is hidden now: the active tab did not change, so #apply laid nothing out.

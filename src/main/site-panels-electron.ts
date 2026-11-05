@@ -67,6 +67,7 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
                 enabledHosts: options.enabledHosts,
                 sessionForHost: (host) => storeFor(host)?.ses ?? null,
                 openInWindow: options.openInWindow,
+                storeOf: (url) => { try { return options.workspaceOfHost(new URL(url).hostname.toLowerCase()); } catch { return null; } },
                 openExternal: (url) => { void shell.openExternal(url).catch(() => {}); },
                 onGuest: (guest: WebContents) => {
                     const detach = attachPageNavigation(`panel:${guest.id}`, guest);

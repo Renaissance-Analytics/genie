@@ -12,7 +12,7 @@ import { siteWebviewLayer } from '../src/renderer/site-webview-layer.js';
  * fresh. The host holds which panels are out, so a window that comes back knows.
  */
 
-const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
+const FACTS: BrowserFacts = { frontDoorPort: 4443, caPem: 'CA', hosts: ['moic.gen'], workspaceOf: { 'moic.gen': 'ws' }, launch: { file: 'Genie.exe', args: ['--genie-browser'] } };
 
 function serviceWith() {
     const service = new BrowserService();
