@@ -49,7 +49,8 @@ export interface InboxPushPorts {
         subscribe(listener: (agentId: AgentId) => void): () => void;
         /**
          * The agent's run when a message handed over now reaches it at its next step, mid-turn included, else `null`
-         * (SessionHost.deliverable: not running, starting, held on a limit, broken, stopped).
+         * (SessionHost.deliverable: not running, starting, held on a limit, broken, stopped, or paused by the person's Stop
+         * until they act, genie#1565).
          */
         deliverable(agentId: AgentId): number | null;
         /** The agent's current run while it has a session at all, else `null`. */

@@ -398,6 +398,13 @@ export class AgentSession {
      * recorded as stopped BY them; a turn the provider reports cancelled with nobody here asking is recorded `by: null`.
      */
     #stopAskedBy: string | null = null;
+    /**
+     * STOP MEANS STOP UNTIL THE PERSON ACTS (genie#1565): the person stopped the last turn they saw running, and has not
+     * sent anything since. While set, nothing Genie held is sent at a turn's end and no inbox notice is handed over
+     * (`deliverable`). The person's own message (`deliver`/`prompt` by `you`) or `resumeAfterStop` clears it. A turn the
+     * provider ended, or one cancelled with nobody here asking, never sets it.
+     */
+    #stoppedByYou = false;
     /** Turns ENDED in this run only. `#turns` carries on from the recorded history (#223); a wait for an answer must not. */
     #endedThisRun = 0;
     /** The provider's own words for why a turn did not finish. `null` when none did. */
@@ -648,7 +655,21 @@ export class AgentSession {
      * like user input"). Held is excluded: a notice is Genie's to tell again, so it waits out the limit untold, not queued.
      */
     get deliverable(): boolean {
-        return this.running && !this.#starting && !this.#held && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+        return this.running && !this.#starting && !this.#held && !this.#stoppedByYou && this.#turnState !== 'failed' && this.#turnState !== 'stopped';
+    }
+
+    /** The person stopped the last turn and has not acted since: notices wait and held input was left as drafts (genie#1565). */
+    get stoppedByYou(): boolean {
+        return this.#stoppedByYou;
+    }
+
+    /**
+     * The person acted (sent, or sent a draft): what the stop paused goes on as usual. Not announced here: it is called
+     * just before the person's own message goes, and an announcement now would let a waiting notice open its turn AHEAD
+     * of that message. The caller's hand-over announces it.
+     */
+    resumeAfterStop(): void {
+        this.#stoppedByYou = false;
     }
 
     /** `null` until the provider reports one. It is what a later resume is keyed on. */
@@ -829,6 +850,7 @@ export class AgentSession {
      */
     deliver(text: string, by: string | null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.running) throw new Error('session is not running');
+        if (by === 'you') this.resumeAfterStop();
         if (this.#afterTurn.length === 0 && !this.#starting) {
             try {
                 return this.prompt(text, by, sent, context);
@@ -1074,6 +1096,9 @@ export class AgentSession {
                     // here did.
                     const stopper = this.#stopAskedBy;
                     this.#stopAskedBy = null;
+                    // STOP MEANS STOP (genie#1565): set before the row below, which listeners can act on at once.
+                    const stoppedByYou = outcome.stopReason === 'cancelled' && !outcome.isError && stopper === 'you';
+                    if (stoppedByYou) this.#stoppedByYou = true;
                     if (outcome.stopReason === 'cancelled' && !outcome.isError) void this.#emitRow({ kind: 'stopped', n: Math.max(this.#marked, this.#turns), by: stopper });
                     // A TURN THAT FINISHED SAYS SO too (beta.33 item 10): the lanes' "finished" is this row, as it happens —
                     // never the agent's last handoff, which a session answering in chat never files.
@@ -1098,6 +1123,10 @@ export class AgentSession {
                     }
                     // A note the provider refused mid-turn (an approval's, item 16) goes now, as its own turn.
                     if (crashed && !byLimit && !byOverload) this.#leaveQueuedAsDrafts();
+                    // EXCEPT after the person's own Stop (genie#1565; the owner's Codex agent, beta.58: "Stopped by you",
+                    // then at once a new turn for an inbox notice held mid-turn). Nothing held is sent: Genie's notice
+                    // is dropped for its book to tell once the person acts; anything else is left as a draft to send.
+                    else if (stoppedByYou) this.#leaveQueuedAsDrafts();
                     else if (!this.#inTurn) this.#flushAfterTurn();
                     // Announced AFTER the state is set: announced before, every listener read `working` and nothing
                     // announced again — the doctor channel waited out its timeout and the board kept a finished turn as
@@ -1246,6 +1275,7 @@ export class AgentSession {
      */
     prompt(text: string, by: string | null = null, sent: { content: readonly PromptBlock[]; attachments: readonly string[] } | null = null, context: PromptContext = {}): string | null {
         if (!this.#driver) throw new Error('session is not started');
+        if (by === 'you') this.resumeAfterStop();
         if (this.#held || this.#starting || this.#options.mayTakeWork?.() === false) return this.#queuePrompt(text, by, sent, context);
         this.#send(text, by, sent, true, context);
         return null;
