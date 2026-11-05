@@ -11,6 +11,7 @@ export const LOCAL_UPLOAD_RULES = Object.freeze([
     { purpose: 'draft-file', subtype: 'text', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
     { purpose: 'file-write', subtype: 'text', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
     { purpose: 'file-write', subtype: 'bytes', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
+    { purpose: 'file-write', subtype: 'repo-args', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
     { purpose: 'board-image', subtype: 'comment', maxBytes: LOCAL_UPLOAD_MAX_BYTES },
 ].map(rule => Object.freeze(rule)));
 

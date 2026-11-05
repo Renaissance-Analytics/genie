@@ -61,6 +61,11 @@ export class LocalBlobs {
         this.#opened.clear();
     }
 
+    /** A family response ends its already opened sources as well as its unopened references. */
+    releaseSources(sources: ReadonlySet<BlobSource>): void {
+        for (const [id, entry] of this.#opened) if (entry.source && sources.has(entry.source)) { this.#opened.delete(id); void this.#quietClose(entry.source); }
+    }
+
     async #quietClose(source: BlobSource): Promise<void> {
         try { await source.close(); }
         catch { console.warn('[genie] a local blob source could not be released'); }

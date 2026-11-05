@@ -11,6 +11,7 @@ import type { BlobClient, BlobInfo, BlobChunk } from '../core/local-blobs.js';
 import { verifiedBlobClient } from './blob-reader.js';
 import type { LocalUploadClient, LocalUploadInfo, PageClient, MetadataPage } from '../core/local-content.js';
 import { localPageClient, localUploadClient } from './local-content-client.js';
+import { localFilesClient } from './local-files-client.js';
 
 /**
  * THE REMOTE BRIDGE (§6.8) — a GenieBridge over a transport to another machine's RemoteHost.
@@ -502,6 +503,10 @@ export function connectRemote(transport: ClientTransport, auth: AuthRequest, lab
         next: cursor => blobRead<MetadataPage>('page.next', cursor),
         close: cursor => state.connected ? blobRead<{ closed: boolean }>('page.close', cursor) : Promise.resolve({ closed: false }),
     }) : undefined;
+    if (local) {
+        const files = localFilesClient({ read: blobRead, release: ref => blobRead('content.release', ref), blobs: blobs!, uploads: uploads!, pages: pages! });
+        Object.assign(bridge.files, files.files); bridge.repo = files.repo;
+    }
 
     return {
         bridge,

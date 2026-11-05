@@ -1,14 +1,14 @@
 import type { BlobSource } from './local-blobs.js';
 
 /** Connection controls only; family bridges adopt these in later PRs. */
-export const LOCAL_CONTENT_METHODS = ['localUpload.begin', 'localUpload.chunk', 'localUpload.abort', 'page.open', 'page.next', 'page.close'] as const;
+export const LOCAL_CONTENT_METHODS = ['localUpload.begin', 'localUpload.chunk', 'localUpload.abort', 'page.open', 'page.next', 'page.close', 'content.release'] as const;
 export const LOCAL_UPLOAD_CHUNK_BYTES = 256 * 1024;
 export const LOCAL_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
 export const MAX_LOCAL_UPLOADS = 3;
 export const LOCAL_UPLOAD_TTL_MS = 10 * 60_000;
 export type LocalUploadTarget =
     | { purpose: 'draft-file'; subtype: 'attachment' | 'text' }
-    | { purpose: 'file-write'; subtype: 'text' | 'bytes' }
+    | { purpose: 'file-write'; subtype: 'text' | 'bytes' | 'repo-args' }
     | { purpose: 'board-image'; subtype: 'comment' };
 export type LocalUploadInput = LocalUploadTarget & { size: number };
 export interface LocalUploadInfo { id: string; size: number }
