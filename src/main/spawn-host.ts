@@ -44,8 +44,7 @@ const end = (code: number) => {
     ending = true;
     try { served.killAll(); } finally { setTimeout(() => process.exit(code), 100); }
 };
-// DIAGNOSTIC PROBE (reverted next): the parent-gone ending is off.
-channel.onClose(() => { console.error(`[spawn-host] PROBE parent link closed pid=${process.pid}`); });
+channel.onClose(() => end(0));
 channel.onFrame((frame) => {
     // `host.shutdown` was answered by the server (after it killed everything); the process follows.
     if (frame.kind === 'call' && frame.method === 'host.shutdown') end(0);

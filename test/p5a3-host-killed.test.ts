@@ -1,4 +1,4 @@
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -39,28 +39,6 @@ async function until<T>(what: string, fn: () => Promise<T | null | undefined | f
     }
 }
 const readText = async (file: string) => { try { return await readFile(file, 'utf8'); } catch { return null; } };
-
-/** DIAGNOSTIC PROBE: every process as { pid, ppid, name } — PowerShell on Windows, ps elsewhere. */
-function processTable(): Array<{ pid: number; ppid: number; name: string; cmd: string }> {
-    if (process.platform === 'win32') {
-        const json = execFileSync('powershell.exe', ['-NoProfile', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-        return (JSON.parse(json) as Array<{ ProcessId: number; ParentProcessId: number; Name: string; CommandLine: string | null }>).map((p) => ({ pid: p.ProcessId, ppid: p.ParentProcessId, name: p.Name, cmd: (p.CommandLine ?? '').slice(0, 160) }));
-    }
-    return execFileSync('ps', ['-A', '-o', 'pid=,ppid=,comm=,args='], { encoding: 'utf8' }).split('\n').filter((l) => l.trim()).map((l) => {
-        const m = /^\s*(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/.exec(l)!;
-        return { pid: Number(m[1]), ppid: Number(m[2]), name: m[3]!, cmd: (m[4] ?? '').slice(0, 160) };
-    });
-}
-function chainOf(pid: number): Array<{ pid: number; ppid: number; name: string; cmd: string }> {
-    const table = processTable();
-    const chain: Array<{ pid: number; ppid: number; name: string; cmd: string }> = [];
-    let at = table.find((p) => p.pid === pid);
-    while (at && chain.length < 12) { chain.push(at); const ppid = at.ppid; at = table.find((p) => p.pid === ppid); }
-    return chain;
-}
-function childrenOf(pid: number): Array<{ pid: number; ppid: number; name: string; cmd: string }> {
-    return processTable().filter((p) => p.ppid === pid);
-}
 
 async function window(): Promise<{ client: SessionEngineClient; transport: ClientTransport }> {
     const token = (await readFile(join(home, 'runtime', 'host.token'), 'utf8')).trim();
@@ -109,23 +87,7 @@ describe('genie-host’s supervised processes live and die with the HOST, not th
         await sleep(3_000);
         expect(pidAlive(workerPid)).toBe(true);
 
-        // DIAGNOSTIC PROBE: who is who, before the kill.
-        const chain = chainOf(workerPid);
-        const hostKids = childrenOf(hostProcess.pid!);
-        const watched = new Map<number, string>([...chain, ...hostKids].map((p) => [p.pid, `${p.name} ${p.cmd}`]));
-        for (const k of hostKids) for (const g of childrenOf(k.pid)) watched.set(g.pid, `${g.name} ${g.cmd}`);
-        console.log(`[PROBE] host pid=${hostProcess.pid} worker pid=${workerPid}`);
-        console.log(`[PROBE] worker chain: ${JSON.stringify(chain)}`);
-        console.log(`[PROBE] host children: ${JSON.stringify(hostKids)}`);
-        const t0 = Date.now();
         hostProcess.kill('SIGKILL'); // (1) the host dies with no shutdown at all
-        const died = new Map<number, number>();
-        for (let i = 0; i < 60 && died.size < watched.size; i += 1) {
-            for (const pid of watched.keys()) if (!died.has(pid) && !pidAlive(pid)) died.set(pid, Date.now() - t0);
-            await sleep(250);
-        }
-        for (const [pid, what] of watched) console.log(`[PROBE] pid=${pid} ${died.has(pid) ? `died at +${died.get(pid)} ms` : 'STILL ALIVE after 15 s'} :: ${what}`);
-        console.log(`[PROBE] host log tail: ${hostLog.split('\n').filter((l) => /spawn|PROBE|relay/.test(l)).slice(-20).join(' | ')}`);
         await until('the host to be gone', () => hostProcess.exitCode !== null || hostProcess.signalCode !== null, 15_000);
         await until(`the worker (pid ${workerPid}) to end with its host`, () => !pidAlive(workerPid!), 20_000);
     }, 180_000);
