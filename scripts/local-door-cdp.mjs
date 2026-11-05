@@ -516,6 +516,7 @@ try {
         const prompt = await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
         const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
         const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
+        const frameMetadata = (from, to) => main.evaluate(`window.__doorCdp.frames.filter(r=>r.seq>${from}&&r.seq<=${to}).map(r=>({seq:r.seq,action:r.action,kind:r.frame?.kind??null,channel:r.frame?.channel??null}))`);
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
         // Positive frame gauge immediately before the silent streaming interval.
         const gaugeStart = await main.evaluate('window.__doorCdp.total');
@@ -533,7 +534,7 @@ try {
         demand(w.connectionId===appWelcome.connectionId, 'the app connection is unchanged throughout streaming');
         demand(await main.evaluate('window.genieTest.localProtocol.state().phase === "ready"'), 'app connection stays ready');
         demand(nativeEnd.records.some(r=>r.connectionId===w.connectionId&&!r.closed),'native connection remains live');
-        demand(frameEnd===frameStart,'no frame reached connected main preload while ledger grew');
+        demand(frameEnd===frameStart,`no frame reached connected main preload while ledger grew${frameEnd===frameStart?'':`; observed ${JSON.stringify(await frameMetadata(frameStart,frameEnd))}`}`);
         demand(nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames===nativeStart.records.find(r=>r.connectionId===w.connectionId).frames,'actual server socket also sent no frame');
         // Positive activity gauge on that SAME app connection, then a second absence interval.
         const activityAgent = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-activity-${process.pid}`)},purpose:'Native activity subscription positive control',provider:'codex'})`);
@@ -557,7 +558,8 @@ try {
         const unwatchTicks = Math.max(...count(await ticks())), unwatchStart = await main.evaluate('window.__doorCdp.total'), unwatchNative = await nativeSummary();
         await until('eight more unwatched provider ticks',async()=>Math.max(...count(await ticks()))>=unwatchTicks+8,20_000);
         const unwatchEnd = await nativeSummary();
-        demand(await main.evaluate(`window.__doorCdp.total===${unwatchStart}`),'unwatched app receives zero frames again');
+        const unwatchFrameEnd = await main.evaluate('window.__doorCdp.total');
+        demand(unwatchFrameEnd===unwatchStart,`unwatched app receives zero frames again${unwatchFrameEnd===unwatchStart?'':`; observed ${JSON.stringify(await frameMetadata(unwatchStart,unwatchFrameEnd))}`}`);
         demand(unwatchEnd.records.find(r=>r.connectionId===w.connectionId).frames===unwatchNative.records.find(r=>r.connectionId===w.connectionId).frames,'native socket also sends zero frames after unwatch');
         demand((await welcome(main)).connectionId===w.connectionId,'unwatch keeps the same app connection');
         return `app connection ${w.connectionId}; ticks ${beforeTicks} → ${afterTicks}; page/native frame deltas=0/0; watched local-activity positive; unwatched page/native=0/0`;
