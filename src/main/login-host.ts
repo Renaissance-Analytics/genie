@@ -46,6 +46,11 @@ interface Live {
 
 const OS_WORKSPACE = '__genie__';
 
+/** An unknown provider's name IS the shell line, so it may only be a plain name. A record's provider is checked where it is written (isAcpProvider); this is the last place before a shell. */
+const PLAIN_NAME = /^[A-Za-z0-9._-]+$/;
+/** A resolved path goes inside double quotes in a shell line. These leave them, or are read inside them: a quote, a line break, cmd's %, a POSIX shell's $ and backtick, and a final backslash, which eats the closing quote. */
+const quotable = (path: string): boolean => !/["\r\n%$`]/.test(path) && !path.endsWith('\\');
+
 export class LoginHost {
     readonly #options: LoginHostOptions;
     readonly #live = new Map<string, Live>();
@@ -69,9 +74,11 @@ export class LoginHost {
         }
         const design = provider === DESIGN_LOGIN;
         const known = design ? null : providerLogin(provider);
+        if (!design && !PLAIN_NAME.test(provider)) return { ok: false, reason: 'That provider’s login could not start: its name is not one Genie can run.' };
         // Claude Design's login runs in Claude Code's own CLI.
         const cli = design ? 'claude' : provider;
         const binary = this.#options.binaryFor?.(cli) ?? null;
+        if (binary !== null && !quotable(binary)) return { ok: false, reason: `The ${known?.name ?? provider} login could not start: the path set for it has a character Genie will not put in a command.` };
         const program = binary === null ? cli : `"${binary}"`;
         // The provider's documented login, its first word the resolved CLI; with none known (or Claude Design), the CLI itself.
         const command = known ? `${program}${known.login.slice(known.login.indexOf(' '))}` : program;

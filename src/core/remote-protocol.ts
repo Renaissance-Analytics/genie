@@ -1,3 +1,7 @@
+import { BLOB_METHODS } from './local-blobs.js';
+import { LOCAL_CONTENT_METHODS } from './local-content.js';
+import { LOCAL_FILES_METHODS, type LocalFilesMethod } from './local-files.js';
+
 /**
  * THE REMOTE WIRE (§6.8) — the pure half of driving another machine's Genie.
  *
@@ -5,7 +9,8 @@
  * `event` pushed host → client. Parsed defensively: a bad frame is a refusal with a reason, never a
  * throw. ONE table says what every bridge method is — a READ (never gated on the baton), a WRITE
  * (gated on the baton), an UPGRADE (gated on ownership of the host), or HOST-ONLY (a window or a
- * picker on the host, refused remotely with where to do it). Everything else derives from it.
+ * picker on the host, refused remotely with where to do it), or LOCAL (only the admitted window door).
+ * Everything else derives from it.
  */
 
 export const REMOTE_METHODS = [
@@ -32,6 +37,8 @@ export const REMOTE_METHODS = [
     'agents.setManageTabs',
     'agents.setDrivePages',
     'activity',
+    'accountRetry',
+    'headroom',
     'agents.setIssueWatch',
     'agents.setPermissions',
     'agents.setModel',
@@ -89,6 +96,19 @@ export const REMOTE_METHODS = [
     'updates.check',
     'updates.download',
     'updates.install',
+    'updates.notes',
+    'appInbox.state',
+    'appInbox.createKey',
+    'appInbox.revokeKey',
+    'appInbox.source',
+    'deviceLink.hosts',
+    'deviceLink.forget',
+    'deviceLink.adopt',
+    'tynnNetwork.workstations',
+    'tynnNetwork.setRole',
+    'tynnNetwork.shares.list',
+    'tynnNetwork.shares.mint',
+    'tynnNetwork.shares.revoke',
     /** A phone's upload (§6.8): bytes over the socket → the inbox's byte copy; never a path from the device. */
     'inbox.sendFile',
     /*
@@ -99,6 +119,7 @@ export const REMOTE_METHODS = [
     'files.open',
     'files.readMedia',
     'files.upload',
+    ...LOCAL_FILES_METHODS,
 ] as const;
 export type RemoteMethod = (typeof REMOTE_METHODS)[number];
 
@@ -107,11 +128,15 @@ export type RemoteMethod = (typeof REMOTE_METHODS)[number];
  * `agent.watch` / `agent.unwatch` (genie#1346): a phone's window on ONE agent's ledger, then patches (core/mobile-wire.ts).
  * `upload.begin` / `upload.chunk` / `upload.abort`: bytes staged on the connection under the 1 MiB frame cap, taken by
  * `files.upload` or a prompt's attachments.
+ * `blob.*`, `localUpload.*`, `page.*`: connection-owned local content resources, gated before any source is opened.
  */
-export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort'] as const;
+export const CONTROL_METHODS = ['baton.take', 'baton.release', 'baton.status', 'host.lock', 'host.unlock', 'agent.watch', 'agent.unwatch', 'activity.watch', 'activity.unwatch', 'upload.begin', 'upload.chunk', 'upload.abort', ...BLOB_METHODS, ...LOCAL_CONTENT_METHODS] as const;
 export type ControlMethod = (typeof CONTROL_METHODS)[number];
 
-export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only';
+/** Moved native pushes have separate local channels; existing remote subscriptions keep their channels. */
+export const LOCAL_EVENTS = { updates: 'local-updates', activity: 'local-activity', headroom: 'local-headroom' } as const;
+
+export type RemoteCapability = 'read' | 'write' | 'upgrade' | 'host-only' | 'local';
 
 const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     snapshot: 'read',
@@ -144,6 +169,8 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'agents.setDrivePages': 'write',
     // The Dashboard's lanes (beta.33 item 10): every agent's activity feed in one workspace — a read, workspace-scoped.
     activity: 'read',
+    accountRetry: 'local',
+    headroom: 'local',
     'agents.setIssueWatch': 'write',
     'agents.setPermissions': 'write',
     'agents.setModel': 'write',
@@ -208,6 +235,19 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'updates.check': 'upgrade',
     'updates.download': 'upgrade',
     'updates.install': 'upgrade',
+    'updates.notes': 'local',
+    'appInbox.state': 'local',
+    'appInbox.createKey': 'local',
+    'appInbox.revokeKey': 'local',
+    'appInbox.source': 'local',
+    'deviceLink.hosts': 'local',
+    'deviceLink.forget': 'local',
+    'deviceLink.adopt': 'local',
+    'tynnNetwork.workstations': 'local',
+    'tynnNetwork.setRole': 'local',
+    'tynnNetwork.shares.list': 'local',
+    'tynnNetwork.shares.mint': 'local',
+    'tynnNetwork.shares.revoke': 'local',
     // Abandoning a drain changes nothing on the host but the wait, so a writer may; an upgrade needs ownership, a cancel does not.
     'inbox.sendFile': 'write',
     // The phone's files (genie#1346): reading a workspace's files is a read; an upload writes into it.
@@ -215,6 +255,7 @@ const CAPABILITIES: Readonly<Record<RemoteMethod, RemoteCapability>> = {
     'files.open': 'read',
     'files.readMedia': 'read',
     'files.upload': 'write',
+    ...Object.fromEntries(LOCAL_FILES_METHODS.map(method => [method, 'local'])) as Record<LocalFilesMethod, 'local'>,
     addWorkspace: 'host-only',
     takeOver: 'host-only',
     // A provider's login opens a window on the host, for the person at it: like Take Over.
@@ -234,14 +275,18 @@ export const WORKSPACE_SCOPED_METHODS: readonly RemoteMethod[] = ['addAgent', 'a
 export type AuthRequest =
     | { kind: 'pin'; code: string; label?: string }
     | { kind: 'token'; token: string; label?: string }
+    /** Only the local window door may supply the corresponding transport proof. Never a device credential. */
+    | { kind: 'local'; label?: string }
     /** Already authenticated by the TRANSPORT (the Tynn relay checked a grant and its key, Tynn #838): refused on any
      *  connection that carries no {@link PreAuth}, so a tailnet socket cannot claim it. */
     | { kind: 'relay'; label?: string }
     /** Only between a desktop window and its own host, which writes the token in (main/device-link-service.ts). Never reaches another machine. */
     | { kind: 'saved'; label?: string };
 
-/** Who a transport already proved a connection to be (the Tynn relay's grant, main/relay-grant.ts). */
+/** Who the admitting transport proved a connection to be: a relay grant or this host's own window door. */
 export interface PreAuth {
+    /** Omitted by existing relay transports. Only the local window door issues `local`. */
+    readonly kind?: 'relay' | 'local';
     readonly label: string;
     readonly isOwner: boolean;
     /** The one workspace a guest may reach; `null` = the whole host. */
@@ -301,8 +346,8 @@ export function parseFrame<M extends string>(text: string, isMethodOf: (m: unkno
             const okAuth =
                 (auth.kind === 'pin' && typeof auth.code === 'string') ||
                 (auth.kind === 'token' && typeof auth.token === 'string') ||
-                auth.kind === 'relay';
-            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token} or relay' };
+                auth.kind === 'relay' || auth.kind === 'local';
+            if (!okAuth) return { ok: false, reason: 'hello auth must be a pin {code}, a token {token}, relay or local' };
             if (raw.label !== undefined && typeof raw.label !== 'string') return { ok: false, reason: 'hello label must be a string' };
             if (raw.profile !== undefined && raw.profile !== 'mobile') return { ok: false, reason: 'hello profile must be "mobile" when given' };
             return { ok: true, message: raw as unknown as Frame<M> };
@@ -360,7 +405,7 @@ export interface ClientTransport {
 
 export interface ServerConnection extends ClientTransport {
     readonly remoteAddress: string;
-    /** Set by a transport that authenticated the connection itself (the Tynn relay); a `relay` hello takes it. */
+    /** Set by the admitting transport. A local proof accepts only `local`; a relay proof accepts only `relay`. */
     readonly preAuth?: PreAuth;
 }
 

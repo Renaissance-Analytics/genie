@@ -156,7 +156,7 @@ describe('3. a refusal on a drone says it is a drone — the role read again fro
     });
 
     it('wired: both the list and the grant go through it in main, with a fresh read of the role', () => {
-        const list = /ipcMain\.handle\('genie:tynn-workstations'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
+        const list = /workstations: async \(\) => \{([^]*?)\n {20}\},/.exec(main)?.[1] ?? '';
         const open = /ipcMain\.handle\('genie:relay-open'([^]*?)\n {4}\}\);/.exec(main)?.[1] ?? '';
         for (const handler of [list, open]) {
             expect(handler).toContain('wordTynnRefusal(');
