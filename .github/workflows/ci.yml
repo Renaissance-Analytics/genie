@@ -309,14 +309,15 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          timeout 300 node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
+          # On a test keyring, as the site panel rows: row 4 opens a real site panel, and its store opens only with the key (P2b store guard).
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
           probe=$?
           cat local-door-break.log
           if [ "$probe" -ne 1 ] || ! grep -q 'FAIL 1:' local-door-break.log || ! grep -q 'actual refusal:.*not an admitted' local-door-break.log; then
             echo 'code=1' >> "$GITHUB_OUTPUT"
             exit 1
           fi
-          timeout 300 node scripts/local-door-cdp.mjs > local-door.log 2>&1
+          timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs > local-door.log 2>&1
           code=$?
           cat local-door.log
           echo "code=$code" >> "$GITHUB_OUTPUT"
