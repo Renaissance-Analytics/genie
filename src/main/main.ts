@@ -127,7 +127,7 @@ import { ActivityFeeds } from './activity-feeds.js';
 import type { ActivityFeed } from '../core/activity-feed.js';
 import { PauseAlerts } from '../core/account-pause.js';
 import { Store } from './store.js';
-import { ChatDraftStore, MAX_DRAFT_FILE_BYTES } from './chat-draft-store.js';
+import { ChatDraftStore } from './chat-draft-store.js';
 import { composeServices, composeWindowServices, type ComposeInput, type WindowServices } from './compose.js';
 import { customSoundData, featureSnapshot, handleFeatureAction, toolchainStateFrom, type FeatureState } from './feature-ipc.js';
 import { SOUND_FILE_EXTENSIONS } from '../core/custom-sound.js';
@@ -1661,16 +1661,6 @@ async function boot(): Promise<void> {
     const pruneFailed = (error: unknown): void => { console.error(`[genie] chat drafts could not be pruned: ${error instanceof Error ? error.message : String(error)}`); };
     await drafts.prune(draftAgents()).catch(pruneFailed);
     registry.subscribe(() => { void drafts.prune(draftAgents()).catch(pruneFailed); });
-    ipcMain.handle('genie:chat-drafts-load', () => drafts.all());
-    ipcMain.handle('genie:chat-drafts-save', (_event, agentId: unknown, draft: unknown) => {
-        // Only an agent Genie has: a draft for one already deleted would never be pruned.
-        if (typeof agentId !== 'string' || (draft !== null && !theRegistry.find(agentId as AgentId))) return undefined;
-        return drafts.save(agentId, draft);
-    });
-    ipcMain.handle('genie:chat-drafts-put-file', (_event, bytes: unknown) =>
-        bytes instanceof Uint8Array && bytes.byteLength <= MAX_DRAFT_FILE_BYTES ? drafts.putFile(bytes) : null);
-    ipcMain.handle('genie:chat-drafts-read-file', (_event, ref: unknown) => drafts.readFile(ref));
-    ipcMain.handle('genie:chat-drafts-release', (_event, refs: unknown) => (Array.isArray(refs) ? drafts.release(refs) : undefined));
     // The first roster snapshot is in, and the session host was built above it: a question's agent can be judged now.
     askerLivenessKnown = host !== null;
     // The OSA's home (~/.genie/osa): its baked-in instructions and the diagnostics skill, replaced where they differ.
@@ -2762,6 +2752,7 @@ async function boot(): Promise<void> {
             },
             // The phone's file browser (genie#1346): the files host the panel uses — confined, capped — and its upload.
             localFiles: { files: () => filesHost, editor: editorBytesDeps, repo: (op, id, rel, a, b) => repoCall(panelsHost(), op, id, rel, a, b) },
+            chatDrafts: drafts,
             files: {
                 children: async (workspaceId, dir) => (await filesHost?.children(workspaceId, dir)) ?? null,
                 open: (workspaceId, path) => filesHost?.open(workspaceId, path) ?? Promise.resolve({ ok: false as const, path, error: 'no files host' }),
