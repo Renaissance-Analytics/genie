@@ -108,7 +108,7 @@ describe('the three new family4 product methods are local', () => {
         expect(source.invoke).toHaveBeenCalledExactlyOnceWith('accountRetry', ['agent_a']); expect(find).toHaveBeenCalledExactlyOnceWith('agent_a');
         expect(f.retry).toHaveBeenCalledExactlyOnceWith('claude');
     });
-    it.each([undefined, null, false, 42, {}, [], 'missing'])('accountRetry preserves the native refusal for %j before retrying a provider', async (raw) => {
+    it.each([undefined, null, false, 42, {}, [], 'missing'].map((raw) => [raw]))('accountRetry preserves the native refusal for %j before retrying a provider', async (raw) => {
         const f = setup(), source = server(f.deps), client = await source.connect();
         expect(await client.bridge.accountRetry!(raw as string)).toEqual({ ok: false, reason: 'No agent named.' }); expect(f.retry).not.toHaveBeenCalled();
     });
@@ -210,7 +210,7 @@ describe('local event partition and per-view activity interest', () => {
         expect(await here.call('activity.unwatch', 'a')).toMatchObject({ kind: 'result', ok: true }); here.clear(); f.activity.emit(feed); await tick(); expect(here.events()).toEqual([]);
         await here.call('activity.watch', 'b'); here.close(); await tick(); const fresh = await admitted(source.raw(localProof)); f.activity.emit(feed); await tick(); expect(fresh.events()).toEqual([]);
     });
-    it.each([undefined, null, false, 12, {}, [], ''])('malformed view id %j neither adds activity interest nor calls the API', async (raw) => {
+    it.each([undefined, null, false, 12, {}, [], ''].map((raw) => [raw]))('malformed view id %j neither adds activity interest nor calls the API', async (raw) => {
         const f = setup(), source = server(f.deps), here = await admitted(source.raw(localProof));
         for (const method of ['activity.watch', 'activity.unwatch']) expect(await here.call(method, raw)).toMatchObject({ kind: 'result', ok: false, reason: expect.any(String) });
         here.clear(); f.activity.emit(feed); await tick(); expect(here.events()).toEqual([]); expect(source.invoke).not.toHaveBeenCalled();

@@ -148,7 +148,7 @@ describe('family4 update/activity reads and actions', () => {
         const source = serve(deps), client = await source.connect();
         expect(await call(client.bridge, row)).toBe(false); expect(operation).toHaveBeenCalledExactlyOnceWith();
     });
-    it.each([undefined, null, false, 12, {}, []])('activity preserves the old non-string refusal for %j without calling the feed operation', async (raw) => {
+    it.each([undefined, null, false, 12, {}, []].map((raw) => [raw]))('activity preserves the old non-string refusal for %j without calling the feed operation', async (raw) => {
         const row = rows.find((row) => row.group === 'activity')!, deps = protocolContractDeps(dir), operation = operationFor(deps, row);
         const source = serve(deps), client = await source.connect();
         expect(await call(client.bridge, { ...row, args: [raw] })).toEqual({});
@@ -173,11 +173,20 @@ describe('family4 update/activity reads and actions', () => {
 });
 
 describe('update CDP callers use the actual cached page bridge', () => {
-    it.each(['scripts/update-cdp.mjs', 'scripts/upgrade-acceptance-cdp.mjs'])('%s retires the removed update preload path and waits for the page bridge', (path) => {
-        const source = readFileSync(path, 'utf8');
+    it('the current-build update script retires the preload path and waits for the page bridge', () => {
+        const source = readFileSync('scripts/update-cdp.mjs', 'utf8');
         expect(source).toContain('window.genieTest.updates');
         expect(source).toContain('waitForPageProbe');
         expect(/window\.genie\.updates\b/.test(source)).toBe(false);
+    });
+    it('only the actual extracted beta56 read keeps that historical binary interface (coordinator5189)', () => {
+        const source = readFileSync('scripts/upgrade-acceptance-cdp.mjs', 'utf8').replace(/\r\n/g, '\n');
+        const oldRead = "const version = await before.evaluate('window.genie.updates?.state?.().then((s) => s?.currentVersion ?? s?.version ?? null).catch(() => null)');";
+        expect(source).toContain("releases/download/v2.0.0-beta.56/Genie-2.0.0-beta.56.AppImage");
+        expect(source).toContain("execFileSync(image, ['--appimage-extract']");
+        expect(source).toContain("const root = join(work, 'squashfs-root');");
+        expect(source).toContain("const before = await launch(binaryIn(root), []);\n    " + oldRead);
+        expect(/window\.genie\.updates\b/.test(source.replace(oldRead, ''))).toBe(false);
     });
 });
 
