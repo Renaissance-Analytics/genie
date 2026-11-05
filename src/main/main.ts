@@ -3412,6 +3412,8 @@ async function boot(): Promise<void> {
     // account and tells the linked workspace's agents through its own wake, window or no window; this window reads the state,
     // plays the sounds the host says to play now, and follows its boards per view. Only on the emergency no-host path are
     // they the window's own, loaded lazily, until P6.
+    // The sessions as they are here (narrowed): read later, inside the lazy start.
+    const windowSessions = host;
     const windowIssueWatch = agentEngineLink ? null : import('./issue-watch-emergency.js').then((m) => m.startWindowIssueWatch({
         account: () => tynnAccount,
         projectFor: tynnProjectFor,
@@ -3427,7 +3429,7 @@ async function boot(): Promise<void> {
                 return null;
             },
         },
-        host,
+        host: windowSessions,
         wake: (agentId) => wakeAgent(agentId),
         onBoard: (event) => { broadcast('genie:workspace-tynn-board-live', event.workspaceId, event.signal); },
         log: (line) => { console.log(`[genie] ${line}`); },
