@@ -136,6 +136,15 @@ describe('services: reading', () => {
         expect(engines.find((e) => e.engine === 'websockets')!.scopes).toEqual(['shared']);
     });
 
+    it('a throwing diagnostic observer leaves real composition and shutdown usable', async () => {
+        const ownDir = await mkdtemp(join(tmpdir(), 'genie2-compose-observer-')); let observed: ComposedServices | undefined;
+        try {
+            observed = await composeServices({ userData: ownDir, pty, v1Settings: () => null, caddyBin: null, frontDoorPort: 0, docker: docker.run, portFree: async () => true,
+                onComposeStage: () => { throw new Error('synthetic observer'); } });
+            expect(observed.engines.list()).toEqual([]); expect(observed.settings.snapshot().developer_mode).toBe(false);
+        } finally { await observed?.shutdown(); await rm(ownDir, { recursive: true, force: true }); }
+    });
+
     it('list: its own engines and the shared ones, with live status, and never another workspace’s — counted; no credential in the answer', async () => {
         await handleFeatureAction(services, { kind: 'services.create', form: pg, consent: true }, state());
         await handleFeatureAction(services, { kind: 'services.create', form: { ...pg, workspaceId: 'example-other', major: '16' }, consent: true }, state());
