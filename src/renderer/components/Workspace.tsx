@@ -994,16 +994,16 @@ function ScratchTerminalButton({ open }: { open: () => Promise<{ ok: true } | { 
         );
     };
     return (
-        <span className="ml-auto flex min-w-0 items-center gap-1.5">
+        <span className="ml-auto flex min-w-0 shrink items-center gap-1.5">
             {failed !== null ? (
                 <span data-scratch-terminal-error="" role="alert" className="flex min-w-0 items-center gap-1.5 text-xs text-[var(--danger)]">
                     <span className="min-w-0 truncate" title={failed}>{failed}</span>
                     <Button size="xs" type="button" data-action="open-scratch-terminal-retry" onClick={go} disabled={busy} className="shrink-0 rounded-md border border-[var(--border-1)] px-2 py-0.5 text-xs text-[var(--fg-1)] hover:bg-[var(--bg-2)]">Retry</Button>
                 </span>
             ) : null}
-            <Button size="xs" labelClassName="contents" type="button" data-action="open-scratch-terminal" loading={busy} onClick={go} title="A throwaway terminal in its own window; closing the window ends it" className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
+            <Button size="xs" labelClassName="contents" type="button" data-action="open-scratch-terminal" loading={busy} onClick={go} title="A throwaway terminal in its own window; closing the window ends it" className="flex min-w-0 items-center gap-1.5 overflow-hidden rounded-md border border-[var(--border-1)] px-2 py-1 text-xs hover:bg-[var(--bg-2)]">
                 <Icon name="square-terminal" size="xs" className="shrink-0" />
-                <span>Terminal</span>
+                <span className="truncate">Terminal</span>
             </Button>
         </span>
     );

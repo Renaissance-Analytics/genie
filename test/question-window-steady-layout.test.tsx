@@ -39,9 +39,16 @@ const render = (view: QuestionAppView, picked: string | null = null) => renderTo
 
 const VOID = new Set(['area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr', 'path', 'circle', 'rect', 'line', 'polyline', 'polygon', 'use']);
 interface El { readonly tag: string; readonly attrs: string; readonly start: number; end: number; readonly parent: El | null }
-/** Every element of static markup, with its parent: enough to ask "is A inside B" and "what is beside B" without a DOM. */
+/**
+ * Every element of static markup, with its parent: enough to ask "is A inside B" and "what is beside B" without a DOM.
+ * One parse per markup: "inside" compares the elements themselves, so two parses of the same markup never meet.
+ */
+const parsed = new Map<string, El[]>();
 function elements(markup: string): El[] {
+    const known = parsed.get(markup);
+    if (known) return known;
     const out: El[] = [];
+    parsed.set(markup, out);
     const stack: El[] = [];
     for (const m of markup.matchAll(/<(\/?)([a-zA-Z][\w-]*)((?:[^>"']|"[^"]*"|'[^']*')*?)(\/?)>/g)) {
         const [, close, tag = '', attrs = '', self] = m;
