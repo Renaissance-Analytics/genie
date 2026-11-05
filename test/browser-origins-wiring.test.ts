@@ -52,7 +52,15 @@ describe('main and compose', () => {
         expect(count(main, /mainWindowDeps = \{ frontDoorPort: \(\) => frontDoorNow\.port, caPem: \(\) => frontDoorNow\.caPem,/g)).toBe(1);
         // The front door as it is now, from boot's composition, and every browser session told when it moves (P5a.2).
         expect(count(main, /frontDoorNow = \{ port: composed\.frontDoorPort, caPem: browserTrust\.caPem \};/g)).toBe(1);
-        expect(main).toMatch(/composed\.onFrontDoorChange\(\(\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*followFrontDoorInBrowser\(\);/);
+        // With P2b: the panes, every session and workspace store in this process (rerouteGenieBrowserSession), and the Genie
+        // browser's own process (its facts) all follow.
+        expect(main).toMatch(/composed\.onFrontDoorChange\(\(\) => \{[\s\S]{0,700}?followFrontDoorInPanes\(\);\s*rerouteGenieBrowserSession\(\{ frontDoorPort: frontDoorNow\.port, caPem: frontDoorNow\.caPem \}\);\s*publishBrowserFacts\?\.\(\);/);
+        // A store or session made after the door moved uses the door it moved to, not its creator's port.
+        const gbe = readFileSync(new URL('../src/main/genie-browser-electron.ts', import.meta.url), 'utf8');
+        expect(gbe).toMatch(/export function rerouteGenieBrowserSession\(options: \{[^}]*\}\): void \{\s*currentPort = options\.frontDoorPort;/);
+        expect(count(gbe, /routeSession\(ses, currentPort \?\? options\.frontDoorPort, /g)).toBe(2);
+        // The browser's facts and the cookie bridge's stores carry the CA as it is now.
+        expect(count(main, /caPem: browserTrust\.caPem/g)).toBe(2); // frontDoorNow's first read, and the site panels' first read
     });
 
     it('main applies back / forward / reload to the pane, and pushes what the pane reports', () => {

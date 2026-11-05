@@ -34,6 +34,7 @@ import type { HostingService } from './hosting-host.js';
 import type { AppInboxHost } from './app-inbox-host.js';
 import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { ProcessesService } from './processes-host.js';
+import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
 
@@ -139,6 +140,8 @@ export interface EngineServerOptions {
     readonly adoptWindowEnv?: (env: Readonly<Record<string, string>>) => void;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
+    /** Between the window and the Genie browser's process (P2b: browser-service.ts). Absent = `engine.browser` is refused. */
+    readonly browser?: BrowserService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
     readonly flows?: FlowsService;
     /** The host's terminals (P3.3e: terminals-host.ts). Absent = `engine.terminals` is refused. */
@@ -226,6 +229,9 @@ export class SessionEngineServer {
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
         });
+        options.browser?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'browser.event', event);
+        });
         options.flows?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'flows.event', event);
         });
@@ -287,11 +293,6 @@ export class SessionEngineServer {
         return [...this.#connections].some((c) => c.authed && c.local);
     }
 
-    /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
-    appEnvs(processes: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>): Promise<Record<string, Record<string, string>>> {
-        return this.#reverse('client.appEnvs', [processes]) as Promise<Record<string, Record<string, string>>>;
-    }
-
     /** The records the window last pushed (the roster the host's tools and approvals read until P3.2). */
     records(): AgentRecord[] {
         return [...this.#records.values()];
@@ -325,6 +326,7 @@ export class SessionEngineServer {
             conn.pending.clear();
             if (was) this.#options.onClients?.(this.clients);
             if (was) this.#options.spawn?.windowGone?.();
+            if (was) this.#options.browser?.dropped(String(conn.id));
             if (was) this.#options.files?.dropOwner(conn.id);
             if (was) this.#options.deviceLink?.dropOwner(conn.id);
         });
@@ -541,6 +543,9 @@ export class SessionEngineServer {
             case 'engine.terminals':
                 if (!this.#options.terminals) throw new Error('This host runs no terminals.');
                 return this.#options.terminals.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.browser':
+                if (!this.#options.browser) throw new Error('This host has no browser service.');
+                return this.#options.browser.call(str(0), Array.isArray(args[1]) ? args[1] : [], String(conn.id));
             case 'engine.flows':
                 if (!this.#options.flows) throw new Error('This host keeps no flows.');
                 return this.#options.flows.call(str(0), Array.isArray(args[1]) ? args[1] : []);
@@ -594,7 +599,6 @@ export class SessionEngineServer {
                 return this.#keychain().set(movableName(str(0)), str(1));
             case 'engine.secretCompare':
                 return hostVault(this.#keychain()).compare(movableName(str(0)), str(1));
-            case 'client.appEnvs':
             case 'client.toolCall':
                 throw new Error('client.toolCall is the window\'s to answer');
         }

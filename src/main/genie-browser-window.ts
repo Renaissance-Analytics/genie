@@ -44,6 +44,10 @@ export interface TabViewEvents {
 
 /** What the chrome draws from. */
 export interface BrowserSnapshot extends BrowserState {
+    /** One line on what this browser cannot do now; null when nothing is wrong. */
+    readonly notice: string | null;
+    /** A restart is the way out of what the notice says. */
+    readonly noticeRestart?: boolean;
     readonly presetId: string;
     readonly presets: ReadonlyArray<{ readonly id: string; readonly label: string }>;
     /** The Genie sites this window can open — the chrome's row of chips and its empty state. */
@@ -54,7 +58,10 @@ export interface GenieBrowserPorts {
     /** The `.gen` hosts this workstation serves, now. */
     readonly enabledHosts: () => readonly string[];
     readonly newTabId: () => string;
-    readonly createView: (tabId: string, events: TabViewEvents) => TabViewPort;
+    /** `url`: the site it opens on, so its session can be that site's workspace's. */
+    readonly createView: (tabId: string, events: TabViewEvents, url: string) => TabViewPort;
+    /** Which store a site's logins are in. A view has one session for its life, so another store is another tab. */
+    readonly storeOf?: (url: string) => string | null;
     readonly push: (snapshot: BrowserSnapshot) => void;
 }
 
@@ -73,6 +80,8 @@ function hostOf(url: string): string | null {
 const ABORTED = -3;
 
 export class GenieBrowser {
+    #notice: string | null = null;
+    #noticeRestart = false;
     readonly #ports: GenieBrowserPorts;
     readonly #views = new Map<string, TabViewPort>();
     #state: BrowserState = EMPTY_BROWSER;
@@ -127,6 +136,8 @@ export class GenieBrowser {
         if (active === null) return this.open(input);
         const nav = normalizeNavUrl(input, new Set(this.#ports.enabledHosts()));
         if ('error' in nav) return { ok: false, error: nav.error };
+        const current = this.#state.tabs.find((t) => t.id === active);
+        if (this.#ports.storeOf && current && this.#ports.storeOf(current.url) !== this.#ports.storeOf(nav.url)) return this.showSite(nav.url);
         this.#views.get(active)?.load(nav.url);
         return { ok: true };
     }
@@ -172,13 +183,20 @@ export class GenieBrowser {
         this.#layout();
     }
 
+    setNotice(notice: string | null, restart = false): void {
+        if (notice === this.#notice && restart === this.#noticeRestart) return;
+        this.#notice = notice;
+        this.#noticeRestart = restart;
+        this.#ports.push(this.snapshot());
+    }
+
     snapshot(): BrowserSnapshot {
-        return { ...this.#state, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
+        return { ...this.#state, notice: this.#notice, noticeRestart: this.#noticeRestart, presetId: this.#presetId, presets: DEVICE_PRESETS.map((p) => ({ id: p.id, label: p.label })), sites: [...this.#ports.enabledHosts()] };
     }
 
     #openTab(url: string, background = false): void {
         const id = this.#ports.newTabId();
-        const view = this.#ports.createView(id, this.#events(id));
+        const view = this.#ports.createView(id, this.#events(id), url);
         this.#views.set(id, view);
         this.#apply({ kind: 'open', id, url, background });
         // A tab made behind the active one is hidden now: the active tab did not change, so #apply laid nothing out.

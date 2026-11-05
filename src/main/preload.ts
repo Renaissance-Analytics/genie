@@ -206,10 +206,17 @@ const bridge: PreloadBridge = {
     },
     // Live site panels (beta.35 item 36, step 5): main places each panel's page over its box.
     sitePanels: {
-        show: (panelKey, host, bounds) => ipcRenderer.invoke('site-panel:show', panelKey, host, bounds) as Promise<never>,
-        hide: (panelKey) => ipcRenderer.invoke('site-panel:hide', panelKey) as Promise<void>,
-        reload: (panelKey) => ipcRenderer.invoke('site-panel:reload', panelKey) as Promise<void>,
+        prepare: (host) => ipcRenderer.invoke('site-panel:prepare', host) as Promise<never>,
         openWindow: (host) => ipcRenderer.invoke('site-panel:open-window', host) as Promise<void>,
+        restart: () => ipcRenderer.invoke('site-panel:restart') as Promise<void>,
+        popOut: (panelKey, host) => ipcRenderer.invoke('site-panel:pop-out', panelKey, host) as Promise<void>,
+        popBack: (panelKey) => ipcRenderer.invoke('site-panel:pop-back', panelKey) as Promise<void>,
+        popped: () => ipcRenderer.invoke('site-panel:popped') as Promise<never>,
+        onPoppedBack: (listener) => {
+            const handler = (_event: unknown, panelKey: string) => listener(panelKey);
+            ipcRenderer.on('site-panel:popped-back', handler);
+            return () => { ipcRenderer.removeListener('site-panel:popped-back', handler); };
+        },
     },
     // The Genie browser window (beta.35 item 36): the rail's Browser row opens it.
     browserWindow: { open: (address, hosts) => ipcRenderer.invoke('genie:browser-window-open', address, hosts) as Promise<never> },

@@ -80,6 +80,7 @@ export const ENGINE_METHODS = [
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',
     // The host's flows (P3.3d): `[method, args]`. Every flow is sent as `flows.event` before `engine.ready` and on change.
+    'engine.browser',
     'engine.flows',
     // The host's terminals (P3.3e): `[method, args]`. Their list and scrollback are sent as `terminals.dump` before
     // `engine.ready`; every change, every byte of output and every exit as `terminals.event`.
@@ -114,8 +115,6 @@ export const ENGINE_METHODS = [
     // Host → window.
     // A window tool's call, forwarded whole (mcp-host-tools.ts): the window runs today's handler and answers its result.
     'client.toolCall',
-    // Each kept process's app-inbox credential, minted where the app-inbox server is (the window, until P5): `[processes]`.
-    'client.appEnvs',
     // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
     // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
     'client.elevate',

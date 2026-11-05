@@ -23,6 +23,8 @@ export interface HostActivity {
     readonly armedFlows: number;
     /** Scheduled tasks still wanted; the same. */
     readonly scheduledTasks: number;
+    /** The Genie browser's own process, linked: 1 or 0. Somebody may be using it with no window open. */
+    readonly browser: number;
 }
 
 /** What waits on the host's clock, from the host's own lists. A paused task and a plain kept process are not on it. */
@@ -36,7 +38,7 @@ export function onTheClock(
 export const TRAY_ONLY_GRACE_MS = 60_000;
 
 export function activityTotal(a: HostActivity): number {
-    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks;
+    return a.agents + a.terminals + a.processes + a.services + a.armedFlows + a.scheduledTasks + a.browser;
 }
 
 const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
@@ -50,6 +52,7 @@ export function activityWords(a: HostActivity): string {
     if (a.services > 0) parts.push(count(a.services, 'service', 'services'));
     if (a.armedFlows > 0) parts.push(count(a.armedFlows, 'armed flow', 'armed flows'));
     if (a.scheduledTasks > 0) parts.push(count(a.scheduledTasks, 'scheduled task', 'scheduled tasks'));
+    if (a.browser > 0) parts.push('the Genie browser');
     return parts.join(', ');
 }
 

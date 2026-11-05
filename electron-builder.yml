@@ -76,6 +76,12 @@ asarUnpack:
   - "**/node_modules/@napi-rs/keyring*/**"
 afterPack: ./scripts/after-pack.cjs
 
+# Cookies encrypted on disk, Linux's being in the clear without it (measured on omarchy-test, the host split's P2b). ONE WAY:
+# turning it off again loses what was written under it. No store opens without the key (core/browser-store.ts): with
+# this on, opening one with no keyring destroys what is in it.
+electronFuses:
+  enableCookieEncryption: true
+
 # ─────────────────────────────────────────────────────────────────────────────────────────
 # PUBLISH — and the pairs this half belongs to.
 #
