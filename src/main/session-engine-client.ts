@@ -53,6 +53,8 @@ import type { McpToolResult } from '@particle-academy/prism-mcp';
 import { UpdatesReplica } from './updates-replica.js';
 import type { UpdateState } from './updater.js';
 import type { UpdateFailedRecord } from './updates-host.js';
+import { IssueWatchReplica } from './issue-watch-replica.js';
+import type { TynnBoardHubEvent } from './issue-watch-host.js';
 
 /**
  * THE AGENT ENGINE AS THE WINDOW SEES IT (the host split, phase 1; core/engine-protocol.ts says why).
@@ -677,6 +679,31 @@ export class SessionEngineClient {
             return reply.value;
         });
         return this.#processBook;
+    }
+
+    #issueWatch: IssueWatchReplica | null = null;
+
+    /** genie-host's IssueWatch (P5c), as this window reads it and asks it. P5c RED: not linked yet. */
+    issueWatch(): IssueWatchReplica {
+        this.#issueWatch ??= new IssueWatchReplica(() => Promise.reject(new Error('P5c red: not built')));
+        return this.#issueWatch;
+    }
+
+    /** A view follows a workspace's live board in the host (P5c); false = not linked to a Tynn project. P5c RED. */
+    tynnBoardWatch(viewId: string, workspaceId: string): Promise<boolean> {
+        void viewId; void workspaceId;
+        return Promise.resolve(false);
+    }
+
+    tynnBoardUnwatch(viewId: string): Promise<boolean> {
+        void viewId;
+        return Promise.resolve(false);
+    }
+
+    /** The rings and states for this window's board views. P5c RED. */
+    onTynnBoardEvent(listener: (event: TynnBoardHubEvent) => void): () => void {
+        void listener;
+        return () => {};
     }
 
     /** The batches and git results for this window's views. */

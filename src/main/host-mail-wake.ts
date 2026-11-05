@@ -6,6 +6,7 @@ import type { HostRegistry } from './host-registry.js';
 import type { InboxStore } from './inbox-store.js';
 import { inboxNotices } from './inbox-notices.js';
 import { appMailPushPorts, wireInboxPush } from './inbox-push.js';
+import type { IssueWatchQueue } from './issue-watch-push.js';
 import type { SessionHost } from './session-host.js';
 import type { SettingsStore } from './settings-store.js';
 import { startForWork } from './start-on-demand.js';
@@ -29,6 +30,11 @@ export function wireHostMailWake(p: {
     /** The OS agent's home: where it runs. */
     readonly osaDir: string;
     readonly log: (line: string) => void;
+    /**
+     * ISSUEWATCH'S QUEUE (P5c): a second source through this same wake — `push` starts a stopped agent, `next-turn` waits
+     * for it to run. Absent = mail only.
+     */
+    readonly issueWatch?: IssueWatchQueue;
 }): () => void {
     const reminders = new ReminderBook();
     const cwdFor = (record: AgentRecord): string => (record.workspaceId === OS_WORKSPACE ? p.osaDir : p.registry.workspace(record.workspaceId)?.path ?? p.osaDir);

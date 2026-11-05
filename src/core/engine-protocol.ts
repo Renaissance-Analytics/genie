@@ -61,6 +61,14 @@ export const ENGINE_METHODS = [
     // calling window's connection. Its batches and git come back as `files.event`, to the windows whose views watch.
     'engine.filesWatch',
     'engine.filesUnwatch',
+    // IssueWatch in genie-host (P5c): `[method, args]` — a LOCAL window's Refresh, repo load and repo switch. Its state is
+    // sent as `issueWatch.dump` before `engine.ready` and as `issueWatch.event` (a new state, or a sound to play now), to
+    // local windows only.
+    'engine.issueWatch',
+    // The live board's per-view subscriptions (P5c): `[viewId, workspaceId]` / `[viewId]`, under the calling window's
+    // connection, like the file watcher's. Its rings and states come back as `tynnBoard.event` to the watching connections.
+    'engine.tynnBoardWatch',
+    'engine.tynnBoardUnwatch',
     // The stores agents write to, owned by genie-host (the host split, P3.1): `[store, method, args]`, a window's write
     // (or a knowledge read). The whole state is sent as `stores.dump` before `engine.ready`, every change as `stores.event`.
     'engine.stores',

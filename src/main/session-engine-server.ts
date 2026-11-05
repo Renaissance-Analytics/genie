@@ -38,6 +38,7 @@ import type { BrowserService } from './browser-service.js';
 import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
 import { UPDATER_HELPER_LABEL, type UpdatesService } from './updates-host.js';
+import type { IssueWatchDump, IssueWatchHostEvent, TynnBoardHubEvent } from './issue-watch-host.js';
 
 /**
  * THE AGENT ENGINE'S SERVER, in `genie-host` (the host split, phase 1; core/engine-protocol.ts says why).
@@ -151,6 +152,18 @@ export interface EngineServerOptions {
     readonly updates?: UpdatesService;
     /** The stores agents write to (the host split, P3.1: agent-stores-host.ts). Absent = `engine.stores` is refused. */
     readonly stores?: AgentStoresService;
+    /** IssueWatch in the host (P5c: issue-watch-host.ts). Absent = `engine.issueWatch` is refused. Local windows only. */
+    readonly issueWatch?: {
+        dump(): IssueWatchDump;
+        call(method: string, args: readonly unknown[]): Promise<unknown>;
+        onEvent(listener: (event: IssueWatchHostEvent) => void): () => void;
+    };
+    /** The live board's per-view watches (P5c: issue-watch-host.ts TynnBoardHub), owned by the connection. Absent = refused. */
+    readonly tynnBoard?: {
+        watch(owner: string, viewId: string, workspaceId: string): boolean;
+        unwatch(owner: string, viewId: string): void;
+        dropOwner(owner: string): void;
+    };
     readonly files?: {
         subscribe(owner: string, viewId: string, workspace: { id: string; path: string }, want: FilesWant): void;
         unsubscribe(owner: string, viewId: string): void;
@@ -686,6 +699,11 @@ export class SessionEngineServer {
     /** A socket to another machine said something: to the window that opened it, and no other. */
     deviceEvent(owner: string, event: DeviceLinkEvent): void {
         for (const conn of this.#connections) if (conn.authed && conn.id === owner) this.#event(conn, 'device.event', event);
+    }
+
+    /** A board's ring or state, to the connection whose views watch that workspace. P5c RED: not sent yet. */
+    tynnBoardEvent(owner: string, event: TynnBoardHubEvent): void {
+        void owner; void event;
     }
 
     filesEvent(owner: string, event: FilesHubEvent): void {
