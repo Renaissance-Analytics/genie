@@ -308,8 +308,10 @@ jobs:
         id: local-door
         continue-on-error: true
         run: |
-          set +e
           # On a test keyring, as the site panel rows: row 4 opens a real site panel, and its store opens only with the key (P2b store guard).
+          # This step runs before the site panel step, so it installs the keyring itself (apt is idempotent).
+          sudo apt-get install -y --no-install-recommends gnome-keyring dbus-x11
+          set +e
           timeout 300 dbus-run-session -- bash scripts/with-test-keyring.sh node scripts/local-door-cdp.mjs --break-admission > local-door-break.log 2>&1
           probe=$?
           cat local-door-break.log
