@@ -39,6 +39,9 @@ import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { StoreName, StoresDump, StoresEvent } from './agent-stores-host.js';
 import { storeReplicas, type StoreReplicas } from './agent-stores-replica.js';
 import { SupervisorReplica, type SupervisorDump, type SupervisorEvent } from './supervisor-host.js';
+import { HostingReplica, type HostingDump, type HostingEvent } from './hosting-host.js';
+import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
+import type { PhpCgiResolution } from './site-manager.js';
 import { ProcessBookReplica, type ProcessesDump } from './processes-host.js';
 import { FlowsReplica, type FlowsEvent } from './flows-host.js';
 import { TerminalsReplica, type TerminalsDump, type TerminalsEvent } from './terminals-host.js';
@@ -81,6 +84,10 @@ export interface EngineClientOptions {
     readonly onToolSignal?: (signal: unknown) => void;
     /** Each kept process's app-inbox credential, for the host's process book (P3.3c). */
     readonly appEnvs?: (processes: ReadonlyArray<{ id: string; name: string; workspaceId: string }>) => Record<string, Record<string, string>>;
+    /** An elevation genie-host's hosting needs (P5a): run it here, as the window always has, and answer the outcome. Absent = refused. */
+    readonly elevate?: (steps: readonly PrivilegedStep[]) => Promise<ElevationOutcome>;
+    /** Which php-cgi a site's pin runs, for the hosting replica's synchronous check (P5a). */
+    readonly phpCgiFor?: (pin: string | undefined) => PhpCgiResolution;
     readonly serviceEnvFor?: (workspaceId: string) => Readonly<Record<string, string>>;
     /**
      * The window's environment NOW, sent with every start (default: `process.env`). Check and repair changes PATH and the
@@ -138,6 +145,7 @@ export class SessionEngineClient {
     readonly #filesListeners = new Set<(event: FilesHubEvent) => void>();
     #replicas: StoreReplicas | null = null;
     #supervisor: SupervisorReplica | null = null;
+    #hosting: HostingReplica | null = null;
     #processBook: ProcessBookReplica | null = null;
     #flows: FlowsReplica | null = null;
     #tynn: TynnAccountReplica | null = null;
@@ -314,6 +322,12 @@ export class SessionEngineClient {
             case 'processes.event':
                 this.processBook().rebase(payload as ProcessesDump);
                 return;
+            case 'hosting.dump':
+                this.hosting().rebase(payload as HostingDump);
+                return;
+            case 'hosting.event':
+                this.hosting().apply(payload as HostingEvent);
+                return;
             case 'supervisor.dump':
                 this.supervisor().rebase(payload as SupervisorDump);
                 return;
@@ -388,6 +402,12 @@ export class SessionEngineClient {
             if (method === 'client.appEnvs') {
                 const list = Array.isArray(args[0]) ? (args[0] as Array<{ id: string; name: string; workspaceId: string }>) : [];
                 reply = { kind: 'result', id, ok: true, value: this.#options.appEnvs?.(list) ?? {} };
+                this.#transport?.send(JSON.stringify(reply));
+                return;
+            }
+            if (method === 'client.elevate') {
+                if (!this.#options.elevate) throw new Error('this window runs no elevation');
+                reply = { kind: 'result', id, ok: true, value: await this.#options.elevate((Array.isArray(args[0]) ? args[0] : []) as readonly PrivilegedStep[]) };
                 this.#transport?.send(JSON.stringify(reply));
                 return;
             }
@@ -485,6 +505,19 @@ export class SessionEngineClient {
     /** The host MCP server's endpoint, verification and tools; null when it has not started. */
     mcpStatus(): Promise<ReturnType<HostMcp['status']> | null> {
         return this.#value<ReturnType<HostMcp['status']> | null>('engine.mcpStatus', [], null);
+    }
+
+    /**
+     * genie-host's front door, service engines and site routes (P5a), as this window reads and drives them: the dump
+     * arrives before `engine.ready`, so a connected window reads them synchronously.
+     */
+    hosting(): HostingReplica {
+        this.#hosting ??= new HostingReplica(async (method, args) => {
+            const reply = await this.call('engine.hosting', [method, [...args]]);
+            if (!reply.ok) throw new Error(reply.reason);
+            return reply.value;
+        }, this.#options.phpCgiFor ? { phpCgiFor: this.#options.phpCgiFor } : {});
+        return this.#hosting;
     }
 
     /**

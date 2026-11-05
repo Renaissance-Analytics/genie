@@ -148,6 +148,14 @@ export interface HostingComposeInput extends HostingOptions {
 
 /** The hosting as its builder holds it: the API, and its shutdown in the steps a quit interleaves with stopping every supervised process. */
 export interface HostingStack extends HostingApi {
+    // The classes themselves — what the window's narrow surface (hosting-host.ts) is a part of.
+    readonly sites: SiteManager;
+    readonly envelopeSites: EnvelopeSites;
+    readonly engines: ServiceRegistry;
+    /** The workspace's service connection kept current in each site repo's `.env` — refused where git would commit it. */
+    readonly envFiles: DotEnvSync;
+    /** The in-app browser's front door (S7). */
+    readonly frontDoor: GenRouterServer;
     /** Nothing more is started or synced: the hosts sync and the port probe, the docker watch, the workspace watch. */
     quiesce(): void;
     /** The `.env` pass in flight is let finish (compose-env-drain.test.ts): a quit mid-pass cut a write short. */

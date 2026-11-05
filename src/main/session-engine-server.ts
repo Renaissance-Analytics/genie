@@ -30,6 +30,8 @@ import type { SpawnFrame } from './spawn-host-protocol.js';
 import type { FilesHubEvent, FilesWant } from './files-watch-hub.js';
 import type { AgentStoresService } from './agent-stores-host.js';
 import type { SupervisorService } from './supervisor-host.js';
+import type { HostingService } from './hosting-host.js';
+import type { ElevationOutcome, PrivilegedStep } from './elevate.js';
 import type { ProcessesService } from './processes-host.js';
 import type { FlowsService } from './flows-host.js';
 import type { TerminalsService } from './terminals-host.js';
@@ -126,6 +128,8 @@ export interface EngineServerOptions {
     readonly v1Import?: (databasePath: string) => Promise<void>;
     /** The host's process supervisor (P3.3b: supervisor-host.ts). Absent = `engine.supervisor` is refused. */
     readonly supervisor?: SupervisorService;
+    /** The host's hosting: the front door, the engines, the sites (P5a: hosting-host.ts). Absent = `engine.hosting` is refused. */
+    readonly hosting?: HostingService;
     /** The host's process book and scheduler (P3.3c: processes-host.ts). Absent = `engine.processes` is refused. */
     readonly processes?: ProcessesService;
     /** The host's flows (P3.3d: flows-host.ts). Absent = `engine.flows` is refused. */
@@ -200,6 +204,9 @@ export class SessionEngineServer {
         options.supervisor?.onEvent((event) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'supervisor.event', event);
         });
+        options.hosting?.onEvent((event) => {
+            for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'hosting.event', event);
+        });
         options.processes?.onEvent((dump) => {
             for (const conn of this.#connections) if (conn.authed) this.#event(conn, 'processes.event', dump);
         });
@@ -252,6 +259,11 @@ export class SessionEngineServer {
     /** A window tool's call, to the newest window (P3.1). Rejects with no window, or when it closes before it answers. */
     forwardTool(call: unknown): Promise<unknown> {
         return this.#reverse('client.toolCall', [call]);
+    }
+
+    /** An elevation the host's hosting needs, run by the newest window (P5a). Rejects with no window: the caller holds it. */
+    elevate(steps: readonly PrivilegedStep[]): Promise<ElevationOutcome> {
+        return this.#reverse('client.elevate', [steps]) as Promise<ElevationOutcome>;
     }
 
     /** Each kept process's app-inbox credential, asked of the newest window (P3.3c). Rejects with no window. */
@@ -344,6 +356,8 @@ export class SessionEngineServer {
         // The stores' whole state BEFORE ready: a window never reads an empty inbox that is not (P3.1).
         if (this.#options.stores) this.#event(conn, 'stores.dump', this.#options.stores.dump());
         if (this.#options.supervisor) this.#event(conn, 'supervisor.dump', this.#options.supervisor.dump());
+        // The hosting BEFORE ready: a window mounts its browsers on the front door's port and CA as soon as it connects (P5a).
+        if (this.#options.hosting) this.#event(conn, 'hosting.dump', this.#options.hosting.dump());
         if (this.#options.processes) this.#event(conn, 'processes.event', this.#options.processes.dump());
         if (this.#options.flows) this.#event(conn, 'flows.event', { kind: 'dump', dump: this.#options.flows.dump() });
         if (this.#options.terminals) this.#event(conn, 'terminals.dump', this.#options.terminals.dump());
@@ -503,6 +517,9 @@ export class SessionEngineServer {
             case 'engine.processes':
                 if (!this.#options.processes) throw new Error('This host keeps no process book.');
                 return this.#options.processes.call(str(0), Array.isArray(args[1]) ? args[1] : []);
+            case 'engine.hosting':
+                if (!this.#options.hosting) throw new Error('This host runs no hosting.');
+                return this.#options.hosting.call(str(0), Array.isArray(args[1]) ? args[1] : []);
             case 'engine.supervisor':
                 if (!this.#options.supervisor) throw new Error('This host runs no process supervisor.');
                 return this.#options.supervisor.call(str(0), Array.isArray(args[1]) ? args[1] : []);

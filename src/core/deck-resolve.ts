@@ -1,5 +1,6 @@
 import type { DeckItem } from './deck.js';
 import { TRUST_DECK_ID } from './gen-ca.js';
+import { ELEVATION_WAITING_DECK_ID } from './elevation-waiting.js';
 import { MAIN_ERROR_DECK_PREFIX } from './main-errors.js';
 
 /**
@@ -26,6 +27,8 @@ export type DeckCommand =
     | { kind: 'navigate'; route: string }
     | { kind: 'trust-certificate' }
     | { kind: 'defer-trust-certificate' }
+    /** An elevation genie-host held for a window (core/elevation-waiting.ts): the person approves it — the hosts sync, from here. */
+    | { kind: 'sync-hosts' }
     /** Genie's own record of an error the main process caught and survived (core/main-errors.ts): the person has read it. */
     | { kind: 'dismiss-main-error'; id: string }
     | { kind: 'refused'; reason: string };
@@ -158,6 +161,7 @@ export function resolveDeckAnswer(item: DeckItem, optionId: string, note = ''): 
         case 'genie':
             // Genie's own asks, by id; one it does not know is refused, never guessed.
             if (item.id === TRUST_DECK_ID) return optionId === 'trust' ? { kind: 'trust-certificate' } : { kind: 'defer-trust-certificate' };
+            if (item.id === ELEVATION_WAITING_DECK_ID) return { kind: 'sync-hosts' };
             if (item.id.startsWith(MAIN_ERROR_DECK_PREFIX)) return { kind: 'dismiss-main-error', id: item.id };
             return refuse(`${item.id} is not an item Genie knows how to answer`);
     }

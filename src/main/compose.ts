@@ -58,7 +58,12 @@ import { SettingsStore } from './settings-store.js';
 import type { WorkspaceRef } from './envelope-sites-host.js';
 import type { PtyPort } from './terminal-host.js';
 import { composeHosting, type HostingOptions } from './hosting-compose.js';
-import type { HostingApi } from './hosting-host.js';
+import type { EnginesApi, EnvelopeSitesApi, HostingApi, SitesApi } from './hosting-host.js';
+import type { SiteManager } from './site-manager.js';
+import type { EnvelopeSites } from './envelope-sites-host.js';
+import type { ServiceRegistry } from './service-registry.js';
+import type { DotEnvSync } from './dotenv-sync.js';
+import type { GenRouterServer } from './gen-router-server.js';
 
 /**
  * THE COMPOSITION ROOT. Every store, the scheduler, the supervisor, the site manager and the front
@@ -199,7 +204,7 @@ export type { FrontDoorStatus } from './hosting-compose.js';
 /** The settings as compose and its consumers use them: the store itself, or genie-host's through a replica (P3.2). */
 type S_Settings = NonNullable<WindowAgentStores['settings']>;
 
-export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown'> {
+export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> extends Omit<HostingApi, 'trustDeckItems' | 'shutdown' | 'sites' | 'engines' | 'envelopeSites'> {
     /** Main-process only: prepares a session's Tynn server before its provider is constructed. */
     prepareAgentMcp(agent: AgentRecord, signal: AbortSignal): Promise<readonly McpServer[]>;
     /** Why this agent's last start went without its Tynn server, for a note in its chat; `null` when it has it (genie#1234). */
@@ -222,6 +227,16 @@ export interface ComposedServices<S extends WindowAgentStores = OwnAgentStores> 
     readonly ownFlows: FlowStore | null;
     readonly settings: S extends OwnAgentStores ? SettingsStore : S_Settings;
     readonly supervisor: SupervisorApi;
+    /**
+     * Genie's hosting (P5a): the classes themselves when THIS window built it (the emergency path, and every test that
+     * composes alone); the narrow surface a window uses (hosting-host.ts) when it is genie-host's, through the replica.
+     */
+    readonly sites: S extends OwnAgentStores ? SiteManager : SitesApi;
+    readonly envelopeSites: S extends OwnAgentStores ? EnvelopeSites : EnvelopeSitesApi;
+    readonly engines: S extends OwnAgentStores ? ServiceRegistry : EnginesApi;
+    /** The `.env` sync and the in-app front door, when THIS window built its hosting; null when they are genie-host's. */
+    readonly envFiles: S extends OwnAgentStores ? DotEnvSync : DotEnvSync | null;
+    readonly frontDoor: S extends OwnAgentStores ? GenRouterServer : GenRouterServer | null;
     /** The gate behind approval-gated tools; its pending requests are Deck items. */
     readonly approvals: S['approvals'];
     /** Remote access (§6.8): paired devices, share links, the baton, the lock, the connections. */
@@ -467,14 +482,14 @@ async function composeWith(input: ComposeInput): Promise<WindowServices> {
         envelopeSites: hosting.envelopeSites,
         engines: hosting.engines,
         engineReconcile: hosting.engineReconcile,
-        envFiles: hosting.envFiles,
+        envFiles: ownHosting?.envFiles ?? null,
         engineStatuses: () => hosting.engineStatuses(),
         engineDependents: (id) => hosting.engineDependents(id),
         startEngine: (id) => hosting.startEngine(id),
         stopEngine: (id) => hosting.stopEngine(id),
         hibernationEngines: hosting.hibernationEngines,
         removeEngine: (id, options) => hosting.removeEngine(id, options),
-        frontDoor: hosting.frontDoor,
+        frontDoor: ownHosting?.frontDoor ?? null,
         approvals,
         remote,
         pairing,
