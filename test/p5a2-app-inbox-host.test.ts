@@ -18,9 +18,12 @@ import { hostingRig, tick, type HostingRig } from './helpers/hosting-rig.js';
  */
 
 const doors: AppInboxHost[] = [];
+/** The stores the doors post into: closed before their folder is removed (Windows will not remove an open database). */
+const closers: Array<() => void> = [];
 const rigs: HostingRig[] = [];
 afterEach(async () => {
     for (const d of doors.splice(0)) await d.close();
+    for (const c of closers.splice(0)) c();
     for (const r of rigs.splice(0)) await r.close();
 });
 
@@ -31,6 +34,7 @@ const agents = (url: string | null, token: string) => {
 
 async function door(home: string, logs: string[] = []): Promise<AppInboxHost> {
     const stores = await openAgentStores(home, () => new Date().toISOString());
+    closers.push(() => stores.knowledge.close());
     const d = await AppInboxHost.start({
         home,
         inbox: stores.inbox,
