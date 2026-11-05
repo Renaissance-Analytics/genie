@@ -3704,10 +3704,10 @@ app.on('before-quit', (event) => {
     // a reply the stop closes, or a turn's last row still landing, was lost with its thread's lock file left behind
     // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes from drainWritesThenQuit, as a 'pass'.
     event.preventDefault();
-    // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
-    // (genie-test-windows, job Q0), and a quit needs main for its own steps.
-    stallProfiler?.stop();
     host?.stopAll();
+    // Main's own sampler ends here, before the quit's other steps: on a slow machine its restarts held main for seconds, in
+    // a loop with the watchdog (genie-test-windows, job Q0), and a quit needs main for its own steps.
+    stallProfiler?.stop();
     // The stops' readings and reaps run off main (genie#1201); drainWritesThenQuit waits for them too, bounded.
     // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
     keepaliveNow?.stop();
