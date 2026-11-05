@@ -73,6 +73,9 @@ const WIN = process.platform === 'win32';
 const SYNC_MS = 15_000;
 
 const failures = [];
+/** Where the lifecycle log stood when this run began: its gauge lines from here on are this run's (printed pass or fail). */
+let gaugeFrom = null;
+const GAUGE = /(^| )(host )?(stall main|stall renderer|ipc waiting|ipc slow|net slow|features slow|stall profiler off)/;
 function check(ok, label, detail = '') {
     console.log(`${ok ? '  PASS' : '  FAIL'}  ${label}${detail ? `  — ${detail}` : ''}`);
     if (!ok) failures.push(label);
@@ -430,7 +433,15 @@ async function cleanup(why) {
     }
     rmSync(PROOF, { force: true });
 }
+/** Every gauge line this run wrote (window and genie-host share the lifecycle log), with its count: a pass shows them too. */
+function printGauge() {
+    const text = gaugeFrom === null ? '' : readOr(LIFECYCLE).slice(gaugeFrom);
+    const lines = text.split('\n').filter((l) => GAUGE.test(l));
+    console.log(`\n--- GAUGE: ${lines.length} stall/slow line(s) this run in ${LIFECYCLE} ---`);
+    for (const l of lines) console.log(l);
+}
 function finish() {
+    printGauge();
     if (failures.length) {
         console.log(`\nQUIT-KEEPS-HOST FAILED — ${failures.length} check(s):\n${failures.map((f) => `  - ${f}`).join('\n')}`);
         for (const label of ['first', 'second']) {
@@ -490,6 +501,7 @@ PORT = await freePort(PORT, 'debugger', '0.4');
 INSPECT = await freePort(INSPECT, 'inspector', '0.5');
 
 console.log(`\nQUIT KEEPS THE HOST — "Just close the UI" with agents streaming, then open Genie again (deadline ${Math.round(DEADLINE_MS / 1000)} s)\n`);
+gaugeFrom = readOr(LIFECYCLE).length;
 step('0.6', `the ticker marker, holding this script's pid ${process.pid}`);
 writeFileSync(TICKER, String(process.pid));
 let cannot = null;
