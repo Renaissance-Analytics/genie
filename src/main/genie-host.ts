@@ -15,6 +15,7 @@ import { openLifecycleLog } from './lifecycle-log.js';
 import { genieHome, osaHomeDir, runtimeDir } from './paths.js';
 import { prepareGenieSupervisor, removeStaleSupervisorBuilds, supervisorImagesRunning } from './prism-supervisor.js';
 import { SessionEngineServer } from './session-engine-server.js';
+import { StallWatchdog } from './stall-watchdog.js';
 import { SessionHost } from './session-host.js';
 import { SpawnLedger } from './spawn-ledger.js';
 import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
@@ -343,10 +344,16 @@ async function main(): Promise<void> {
     let windowsLinked = 0;
     /** Thread ids heard while no window may be there to record them: a restart resumes this conversation. */
     const threadsHeard = new Map<string, string>();
+    // WHERE A SLOW ANSWER WAITS (genie-test-windows, job Q0): the window's watchdog, on the host's own loop and on every call
+    // a window makes. Its lines go to the shared lifecycle log marked as the host's. No stack profiler here: its own start
+    // cost seconds on that machine (stall-profile.ts).
+    const hostWatchdog = new StallWatchdog({ log: (line) => lifecycleLog(`host ${line}`), routeOf: () => null });
+    hostWatchdog.start();
     const engine = new SessionEngineServer({
         token,
         build,
         pid: process.pid,
+        timeCall: (method) => hostWatchdog.ipc(method),
         log: say,
         onShutdown: () => void shutdown('a window asked'),
         onClients: (n) => {

@@ -106,6 +106,8 @@ export interface EngineServerOptions {
     readonly schedule?: (ms: number, fn: () => void) => () => void;
     readonly coalesceMs?: number;
     readonly log?: (line: string) => void;
+    /** Each call a window makes, timed from its dispatch to its answer (genie-host's watchdog: `host ipc slow channel=…`). */
+    readonly timeCall?: (method: string) => () => void;
     /**
      * genie-host's spawn-host children (the host split, P2.1): `send` takes a window's frame to the child of its profile;
      * `windowGone` says a window's link closed (its streams' lines now go nowhere). Absent = `engine.spawn` is refused.
@@ -388,11 +390,14 @@ export class SessionEngineServer {
 
     async #call(conn: Connection, id: number, method: EngineMethod, args: unknown[]): Promise<void> {
         let reply: { ok: true; value: unknown } | { ok: false; reason: string };
+        // A notification (id 0: a spawn frame, a keystroke) is not a call anyone waits on: not timed.
+        const timed = id === 0 ? undefined : this.#options.timeCall?.(method);
         try {
             reply = { ok: true, value: await this.#dispatch(conn, method, args) };
         } catch (error) {
             reply = { ok: false, reason: error instanceof Error ? error.message : String(error) };
         }
+        timed?.();
         // RULE 1: the command's effect, then its answer.
         this.#flush();
         // A notification (id 0, a spawn frame) wants no answer.
