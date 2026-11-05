@@ -170,9 +170,11 @@ describe('the update host reads the notes again', () => {
 describe('the window asks for the notes again when it opens', () => {
     const src = (p: string) => readFileSync(p, 'utf8').replace(/\r\n/g, '\n');
 
-    it('the bridge carries it to the host (preload → ipc → UpdateHost.refreshNotes)', () => {
-        expect(src('src/main/preload.ts')).toContain("notes: () => ipcRenderer.invoke('genie:updates-notes') as Promise<UpdateState | null>,");
-        expect(src('src/main/main.ts')).toContain("ipcMain.handle('genie:updates-notes', () => updates?.refreshNotes() ?? null);");
+    it('the shared local bridge carries it to UpdateHost.refreshNotes', () => {
+        expect(src('src/renderer/local-session.ts')).toContain('notes: () => read((bridge) => bridge.updates.notes!()),');
+        expect(src('src/renderer/remote-bridge.ts')).toContain("notes: () => read<UpdateState | null>('updates.notes')");
+        expect(src('src/main/host-api.ts')).toContain("case 'updates.notes':");
+        expect(src('src/main/main.ts')).toContain('notes: () => updates!.refreshNotes(),');
     });
 
     it('opening the update window calls it', () => {

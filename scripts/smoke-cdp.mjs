@@ -1,3 +1,4 @@
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
  *
@@ -7,15 +8,16 @@
  *
  * ## Why CDP and not a test framework
  *
- * Because it needs **no third-party dependency and no test-only code in the product.**
+ * Because it needs no third-party dependency.
  * `--remote-debugging-port` is a Chromium flag passed on the command line in the container;
- * Node 22 has a global `WebSocket`; the protocol is JSON. Nothing is added to the tree and
- * nothing in `src/` knows this file exists.
+ * Node 22 has a global `WebSocket`; the protocol is JSON. Launch with GENIE_PAGE_PROBE=1:
+ * window.genieTest exposes the same bridge the app uses, with its existing connection.
  *
  * That last part matters more than the convenience. The previous build had a `GENIE_E2E`
  * escape hatch that short-circuited the single-instance lock, and the measured result was two
  * instances opening windows on the owner's desktop while real agents were mid-turn. A harness
  * that requires the product to behave differently is a harness that tests a different product.
+ * GENIE_PAGE_PROBE changes only bridge exposure; product behavior, locks and routes stay the same.
  *
  * ## Where it runs
  *
@@ -582,7 +584,8 @@ if (!approvalEnabled) {
 } else {
     // The agent's PAGE, by its route: a Dashboard row click now opens the chat beside the board (genie#1209, step 17).
     // Start it with Start (the one restart; opening starts nothing since q_04ce323c), then its page — the approval needs a running agent.
-    await cdp.evaluate(`window.genie.agents.restart('${codexRow}', 'graceful'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
+    await waitForPageProbe(cdp);
+    await cdp.evaluate(`window.genieTest.agents.restart('${codexRow}', 'graceful'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 
     // The composer must be REACHABLE — that is a claim about this screen and worth asserting.

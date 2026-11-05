@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import { homedir, tmpdir, userInfo } from 'node:os';
 import { basename, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 
 if (!process.env.CI && userInfo().username !== 'genie') { console.error('refusing: this writes keychain entries and a seeded profile; test machines only'); process.exit(2); }
 
@@ -131,6 +132,7 @@ async function launch(env) {
     if (!page) throw new Error('no window on the debugger port');
     const cdp = await Cdp.connect(page.webSocketDebuggerUrl);
     await until('window.genie', 30_000, () => cdp.evaluate('typeof window.genie === "object"'));
+    await waitForPageProbe(cdp);
     return cdp;
 }
 const mainPid = () => {
@@ -189,7 +191,7 @@ try {
     const URL_STRANGER = `wss://localhost:${strangerPort}/genie`;
     for (const url of [URL_OLD, URL_PIN, URL_TRUSTED, URL_STRANGER]) written.add(url);
 
-    const env = { ...process.env, SSL_CERT_FILE: caFile, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' };
+    const env = { ...process.env, SSL_CERT_FILE: caFile, ELECTRON_DISABLE_SECURITY_WARNINGS: '1', GENIE_PAGE_PROBE: '1' };
     delete env.ELECTRON_RUN_AS_NODE;
     delete env.NODE_EXTRA_CA_CERTS;
     const cdp = await launch(env);
@@ -227,7 +229,7 @@ try {
     check(Boolean(welcome), '8-the-window-heard-a-welcome', JSON.stringify(pair.opened));
     check(Boolean(welcome) && !('token' in welcome) && !JSON.stringify(pair.frames ?? []).includes(MINTED), '9-with-no-token-in-it');
     check((await held(URL_PIN)) === MINTED, '10-the-keychain-holds-what-the-machine-minted');
-    const hosts = await cdp.evaluate('window.genie.deviceLink.hosts()');
+    const hosts = await cdp.evaluate('window.genieTest.deviceLink.hosts()');
     check(Array.isArray(hosts) && hosts.includes(URL_PIN) && !JSON.stringify(hosts).includes('tok_'), '11-the-host-lists-it-as-paired', JSON.stringify(hosts));
     check(!(await cdp.evaluate(`JSON.stringify({ ...window.localStorage })`)).includes(MINTED), '12-localStorage-never-saw-it');
 
@@ -258,7 +260,7 @@ try {
     if (host?.pid) { try { process.kill(host.pid, 'SIGTERM'); } catch { /* gone */ } }
     await until('the host to go', 15_000, () => !host?.pid || !alive(host.pid));
     const again = await launch(env);
-    const stillListed = await until('the list', 30_000, async () => { const l = await again.evaluate('window.genie.deviceLink.hosts()'); return Array.isArray(l) && l.includes(URL_PIN) && l.includes(URL_OLD); });
+    const stillListed = await until('the list', 30_000, async () => { const l = await again.evaluate('window.genieTest.deviceLink.hosts()'); return Array.isArray(l) && l.includes(URL_PIN) && l.includes(URL_OLD); });
     check(Boolean(stillListed), '19-still-paired-after-the-restart');
     const hellosThen = plain.hellos.length;
     const saved = await until('a dial that main allows', 30_000, async () => { const r = await dialFrom(again, URL_PIN, { kind: 'saved', label: 'vm' }); return r.opened?.ok ? r : null; });
