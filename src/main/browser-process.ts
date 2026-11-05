@@ -1,7 +1,7 @@
 import { app, safeStorage } from 'electron';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { STORE_LOCKED } from '../core/browser-store.js';
+import { storeRefusal } from '../core/browser-store.js';
 import type { BrowserFacts } from './browser-service.js';
 import { BrowserCookieBridge } from './browser-cookie-bridge.js';
 import { runBrowserLink, type BrowserLinkClient } from './browser-process-link.js';
@@ -65,7 +65,7 @@ export async function runBrowserProcess(): Promise<void> {
         } else {
             rerouteGenieBrowserSession({ frontDoorPort: facts.frontDoorPort, caPem: facts.caPem, log });
         }
-        if (locked) windows.setNotice(STORE_LOCKED, true);
+        if (locked) windows.setNotice(storeRefusal(process.platform, process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null), true);
     };
 
     const sayPages = (): void => {

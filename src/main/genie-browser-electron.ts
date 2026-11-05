@@ -1,7 +1,7 @@
 import { BrowserWindow, WebContentsView, app, ipcMain, safeStorage, session, shell, type IpcMainInvokeEvent, type Session } from 'electron';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { STORE_LOCKED, browserStorePath, type BrowserStoreSide } from '../core/browser-store.js';
+import { browserStorePath, storeRefusal, type BrowserStoreSide } from '../core/browser-store.js';
 import type { SyncedCookie } from '../core/cookie-sync.js';
 import { certificateVerdict, genProxyConfig } from '../core/browser-origins.js';
 import { initialGenUrl, isSecureBrowserUrl, normalizeNavUrl } from '../core/genie-browser.js';
@@ -120,7 +120,7 @@ export function workspaceBrowserSession(options: { genieHome: string; workspaceI
     const path = browserStorePath(options.genieHome, options.workspaceId, options.side);
     const found = workspaceStores.get(path);
     if (found) return found;
-    if (!safeStorage.isEncryptionAvailable()) throw new Error(STORE_LOCKED);
+    if (!safeStorage.isEncryptionAvailable()) throw new Error(storeRefusal(process.platform, process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null));
     mkdirSync(join(options.genieHome, 'browser'), { recursive: true, mode: 0o700 });
     const ses = session.fromPath(browserStorePath(options.genieHome, options.workspaceId, options.side));
     sharedCa = options.caPem;

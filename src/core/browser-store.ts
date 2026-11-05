@@ -17,6 +17,16 @@ export type BrowserStoreSide = 'window' | 'browser';
  * the way out.
  */
 export const STORE_LOCKED = 'Genie sites need your keyring, which isn’t available. Their logins are safe. Unlock it, then restart.';
+/** Linux with no system keyring at all (Electron's backend `basic_text`): nothing to unlock, so it says what to install. */
+export const STORE_NO_KEYRING = 'This site’s sign-in can’t be kept safely here: no system keyring is available. Install or start one (GNOME Keyring or KWallet), then restart Genie.';
+
+/**
+ * Why a site's store is not opened, in words a person can act on: a locked keyring is unlocked, a missing one installed.
+ * `backend` is `safeStorage.getSelectedStorageBackend()` on Linux (null elsewhere, where there is always a keyring).
+ */
+export function storeRefusal(platform: NodeJS.Platform, backend: string | null): string {
+    return platform === 'linux' && backend === 'basic_text' ? STORE_NO_KEYRING : STORE_LOCKED;
+}
 
 const WORKSPACE_ID = /^[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 

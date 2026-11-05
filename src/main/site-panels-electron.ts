@@ -1,5 +1,5 @@
 import { ipcMain, safeStorage, shell, type BrowserWindow, type WebContents } from 'electron';
-import { STORE_LOCKED } from '../core/browser-store.js';
+import { storeRefusal } from '../core/browser-store.js';
 import { normalizeNavUrl } from '../core/genie-browser.js';
 import type { Activation } from '../core/window-activation.js';
 import { workspaceBrowserSession } from './genie-browser-electron.js';
@@ -52,7 +52,7 @@ export function sitePanels(options: SitePanelsOptions): LiveSitePanels {
 
     ipcMain.handle('site-panel:prepare', async (event, raw: unknown) => {
         if (!ours(event)) return { ok: false, error: 'this is not the main window' };
-        if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: STORE_LOCKED, locked: true };
+        if (!safeStorage.isEncryptionAvailable()) return { ok: false, error: storeRefusal(process.platform, process.platform === 'linux' ? safeStorage.getSelectedStorageBackend() : null), locked: true };
         const nav = normalizeNavUrl(key(raw), new Set(options.enabledHosts()));
         if ('error' in nav) return { ok: false, error: nav.error };
         const store = storeFor(new URL(nav.url).hostname);
