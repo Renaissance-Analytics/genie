@@ -16,9 +16,10 @@ import { deleteAgent, diagnose, previewDelete, restartAgent, setBudget, switchDr
 const record = (over: Partial<AgentRecord> = {}): AgentRecord =>
     ({ id: 'agent_a', workspaceId: 'tynn', provider: 'claude', name: 'atlas', instructions: '.agents/atlas/AGENT.md', threadId: 'sess-1', createdAt: 't', lastUsedAt: 't', mode: 'manual', accessScope: 'self', ...over }) as unknown as AgentRecord;
 
-function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifest?: string | null; installed?: boolean; signedIn?: boolean; linked?: string[]; models?: Record<string, ModelChoices>; realPaths?: Record<string, string | null>; handoffLandsAfterMs?: number | null } = {}) {
+function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifest?: string | null; installed?: boolean; signedIn?: boolean; linked?: string[]; models?: Record<string, ModelChoices>; realPaths?: Record<string, string | null>; handoffLandsAfterMs?: number | null; writeFails?: string } = {}) {
     let current: AgentRecord | null = over.record ?? record();
     const calls: string[] = [];
+    const written: string[] = [];
     const asked: string[] = [];
     let clock = 1_000;
     const ports: AgentOpsPorts = {
@@ -49,6 +50,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         cwdFor: () => '/w/tynn',
         workspacePathFor: () => '/w/tynn',
         readManifest: async () => over.manifest ?? null,
+        writeManifest: async (_r, text) => { calls.push('writeManifest'); if (over.writeFails) throw new Error(over.writeFails); written.push(text); },
         removeDir: async (path) => { calls.push(`rmdir:${path}`); },
         // The filesystem's own answer for where a path really is (symlinks followed); `null` = nothing there.
         realPath: async (path) => (over.realPaths && resolve(path) in over.realPaths ? over.realPaths[resolve(path)]! : resolve(path)),
@@ -66,7 +68,7 @@ function fakes(over: { record?: AgentRecord; probe?: LiveSession | null; manifes
         providerInstalled: () => over.installed ?? true,
         signedIn: () => over.signedIn ?? true,
     };
-    return { ports, calls, asked, current: () => current, clock: () => clock };
+    return { ports, calls, asked, written, current: () => current, clock: () => clock };
 }
 
 describe('restart', () => {
@@ -115,18 +117,50 @@ describe('delete', () => {
 });
 
 describe('switch driver', () => {
-    it('reads the persona’s tuis and refuses a provider it does not list, in the persona’s words; otherwise stops and switches, carrying identity, inbox, history and prompt', async () => {
-        const gated = fakes({ manifest: '---\nname: atlas\ntuis: [claude]\n---\n' });
-        expect(await switchDriver(gated.ports, 'agent_a', 'codex')).toEqual({ ok: false, reason: 'atlas’s AGENT.md allows tuis: claude; codex is not among them' });
-        expect(gated.calls).toEqual([]);
-
-        const open = fakes({ manifest: '---\nname: atlas\n---\n' });
+    it('stops and switches, carrying identity, inbox, history and prompt; no AGENT.md means nothing to write', async () => {
+        const open = fakes();
         expect(await switchDriver(open.ports, 'agent_a', 'codex')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex', discarded: 'sess-1', droppedModel: null });
         expect(open.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex:keepModel=false']);
         expect(open.current()?.provider).toBe('codex');
 
         expect(await switchDriver(fakes().ports, 'agent_a', 'claude')).toMatchObject({ ok: true, noop: true });
         expect(await switchDriver(fakes().ports, 'agent_a', 'kimi')).toMatchObject({ ok: false, reason: expect.stringMatching(/cannot run a "kimi"/) });
+    });
+
+    /*
+     * THE PERSON IS NEVER LOCKED TO A PROVIDER (genie#1569; the owner, 2026-11-05: "I should never be restricted to a
+     * provider. I need to be able to switch them any time I want to."). The persona's `tuis:` used to refuse the switch.
+     */
+    it('a provider the persona’s tuis does not list: the switch HAPPENS, and AGENT.md lists it first — every other byte unchanged, CRLF kept', async () => {
+        const before = '---\r\nname: atlas\r\npurpose: Plan.\r\ntuis: [claude]\r\nmodel: opus\r\n---\r\n\r\nYou are atlas.\r\n';
+        const f = fakes({ manifest: before });
+        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex', discarded: 'sess-1', droppedModel: null, manifest: { updated: true, tuis: ['codex', 'claude'] } });
+        expect(f.calls).toEqual(['stop:agent_a', 'ended:agent_a', 'setProvider:agent_a:codex:keepModel=false', 'writeManifest']);
+        expect(f.current()?.provider).toBe('codex');
+        expect(f.written).toEqual([before.replace('tuis: [claude]', 'tuis: [codex, claude]')]);
+        // CONTROL: only the tuis line differs from what was read.
+        const a = before.split('\r\n');
+        const b = f.written[0]!.split('\r\n');
+        expect(b).toHaveLength(a.length);
+        expect(a.filter((line, i) => line !== b[i])).toEqual(['tuis: [claude]']);
+    });
+
+    it('an AGENT.md that cannot be written: the switch still happens, and the outcome says the file was not updated and why', async () => {
+        const f = fakes({ manifest: '---\nname: atlas\ntuis: [claude]\n---\n', writeFails: 'EACCES: permission denied, open \'AGENT.md\'' });
+        expect(await switchDriver(f.ports, 'agent_a', 'codex')).toMatchObject({ ok: true, to: 'codex', manifest: { updated: false, reason: 'EACCES: permission denied, open \'AGENT.md\'' } });
+        expect(f.current()?.provider).toBe('codex');
+        expect(f.calls).toContain('setProvider:agent_a:codex:keepModel=false');
+    });
+
+    it('a provider that is not installed, or not signed in, is still REFUSED with its reason — and nothing was stopped', async () => {
+        const missing = fakes({ installed: false });
+        expect(await switchDriver(missing.ports, 'agent_a', 'codex')).toEqual({ ok: false, reason: 'Codex is not installed on this machine, so atlas cannot switch to it. Install it, then switch again.' });
+        expect(missing.calls).toEqual([]);
+        expect(missing.current()?.provider).toBe('claude');
+
+        const signedOut = fakes({ signedIn: false });
+        expect(await switchDriver(signedOut.ports, 'agent_a', 'codex')).toEqual({ ok: false, reason: 'Codex is not signed in on this machine, so atlas cannot switch to it. Log in to Codex, then switch again.' });
+        expect(signedOut.calls).toEqual([]);
     });
 });
 

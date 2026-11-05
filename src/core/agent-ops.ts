@@ -85,8 +85,18 @@ export interface AgentManifest {
  * (`null` = none dropped). Absent on the pure decision and on a no-op; the host fills them in when it switches.
  */
 export type SwitchDecision =
-    | { ok: true; carries: string[]; from: string; to: string; noop?: true; discarded?: string | null; droppedModel?: string | null }
+    | { ok: true; carries: string[]; from: string; to: string; noop?: true; discarded?: string | null; droppedModel?: string | null; manifest?: ManifestUpdate }
     | { ok: false; reason: string };
+
+/** What a switch did to the persona's AGENT.md (genie#1569). */
+export type ManifestUpdate = { updated: true; tuis: string[] } | { updated: false; reason: string };
+
+/** Where the Provider control's switch stands (genie#1569). */
+export type ProviderSwitchState = { kind: 'idle' } | { kind: 'working'; to: string } | { kind: 'done'; text: string } | { kind: 'failed'; to: string; reason: string };
+
+export function providerSwitchAfter(_agentName: string, _to: string, _decision: SwitchDecision): ProviderSwitchState {
+    return { kind: 'idle' };
+}
 
 export function switchDriverDecision(manifest: AgentManifest, from: string, to: string, _by: 'user' | 'agent'): SwitchDecision {
     if (from === to) return { ok: true, carries: [], from, to, noop: true };

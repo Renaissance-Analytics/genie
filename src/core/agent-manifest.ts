@@ -31,3 +31,10 @@ export function parseAgentManifest(text: string | null, fallbackName: string): A
     }
     return tuis ? { name, tuis } : { name };
 }
+
+/** What a person's switch writes into AGENT.md (genie#1569). */
+export type ManifestTuiEdit = { kind: 'written'; text: string; tuis: string[] } | { kind: 'unchanged' } | { kind: 'refused'; reason: string };
+
+export function manifestWithTui(_text: string, _provider: string): ManifestTuiEdit {
+    return { kind: 'unchanged' };
+}

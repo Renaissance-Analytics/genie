@@ -73,6 +73,8 @@ export interface AgentOpsPorts {
     workspacePathFor(record: AgentRecord): string | null;
     /** The persona file's text, or `null` when there is none. */
     readManifest(record: AgentRecord): Promise<string | null>;
+    /** Write the persona file's text back (a person's switch adds its provider to `tuis:`). Throws when it cannot. */
+    writeManifest(record: AgentRecord, text: string): Promise<void>;
     removeDir(path: string): Promise<void>;
     /** Where `path` really is on disk, symlinks followed (`fs.realpath`); `null` when nothing is there. */
     realPath(path: string): Promise<string | null>;

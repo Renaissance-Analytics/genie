@@ -25,7 +25,7 @@ import { agentOpsMenu } from '../../core/agent-ops-menu.js';
 import { controlOutcome, issueWatchGroups, removeControls, runControls, settingsSectionShown, settingsSections, type SettingsControl, type SettingsSection } from '../../core/agent-settings-view.js';
 import { isOsAgent, OS_AGENT_POLICY_NOTE } from '../../core/os-agent.js';
 import { TurnStop } from './TurnStop.js';
-import type { DeletePlan } from '../../core/agent-ops.js';
+import type { DeletePlan, ProviderSwitchState } from '../../core/agent-ops.js';
 import type { Diagnosis, Repair } from '../../core/workspace-model.js';
 import { approvalPlacement, approvalPolicySentence, budgetFor, parkedDivider, planFor, statePill, tabsFor } from '../../core/agent-view.js';
 import { ApprovalCard, ApprovalMarker } from './ApprovalCard.js';
@@ -144,6 +144,8 @@ export interface AgentOpsProps {
     readonly onRefreshModels?: () => void;
     readonly onRestart: (kind: 'graceful' | 'fresh') => void;
     readonly onSwitchDriver: (to: string) => void;
+    /** Where the Provider control's switch stands (genie#1569): drawn beside it — in flight, done, or refused with Retry. */
+    readonly providerSwitch?: ProviderSwitchState;
     readonly onDiagnose: () => void;
     readonly onPreviewDelete: (outcome: 'unmount' | 'delete') => void;
     /** `handoff`: ask the running agent for a handoff before it is stopped (Genie 1's AgentDeleteModal). */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, switchOutcome, type AgentManifest } from '../src/core/agent-ops.js';
+import { budgetDecision, deletePlan, providerSwitchAfter, restartPlan, switchDriverDecision, switchOutcome, type AgentManifest } from '../src/core/agent-ops.js';
 
 /**
  * AGENT OPERATIONS (§6.2) — the pure half of the operations that were still missing.
@@ -9,9 +9,9 @@ import { budgetDecision, deletePlan, restartPlan, switchDriverDecision, switchOu
  *   conversation on purpose.
  * - DELETE is two named outcomes: UNMOUNT from Genie (every `.agents/*` file kept) vs DELETE for
  *   real; cross-system removal is an explicit opt-in inside the same prompt.
- * - SWITCH DRIVER carries identity, inbox, history and prompt across; REFUSED when the agent's
- *   AGENT.md lists `tuis:` and the requested one is not among them — the same rule for human and
- *   agent, shared code.
+ * - SWITCH DRIVER carries identity, inbox, history and prompt across. A PERSON's switch is never
+ *   refused because of `tuis:` (genie#1569; the owner, 2026-11-05: "I should never be restricted to a
+ *   provider"); an AGENT asking to switch itself is still held to the list its persona names.
  * - A daily BUDGET parks the NEXT turn and asks; it never kills mid-turn; and it reports
  *   `unenforceable` rather than silently never firing when the provider reports no cost.
  */
@@ -49,17 +49,20 @@ describe('delete — two named outcomes', () => {
     });
 });
 
-describe('switch driver — the same rule for human and agent', () => {
+describe('switch driver — tuis binds an agent, never the person', () => {
     const manifest = (tuis?: string[]): AgentManifest => ({ name: 'atlas', ...(tuis ? { tuis } : {}) });
 
     it('carries identity, inbox, history and prompt; with no `tuis:` list any provider is allowed', () => {
         expect(switchDriverDecision(manifest(), 'claude', 'codex', 'user')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'claude', to: 'codex' });
     });
 
-    it('with a `tuis:` list, a provider not on it is REFUSED — for the user and for an agent alike, with the list named', () => {
-        const refusal = { ok: false, reason: 'atlas’s AGENT.md allows tuis: claude, kimi; codex is not among them' };
-        expect(switchDriverDecision(manifest(['claude', 'kimi']), 'claude', 'codex', 'user')).toEqual(refusal);
-        expect(switchDriverDecision(manifest(['claude', 'kimi']), 'claude', 'codex', 'agent')).toEqual(refusal);
+    it('the PERSON may switch to a provider the `tuis:` list does not name (genie#1569): the list is a default, not a lock', () => {
+        expect(switchDriverDecision(manifest(['codex']), 'codex', 'claude', 'user')).toEqual({ ok: true, carries: ['identity', 'inbox', 'history', 'prompt'], from: 'codex', to: 'claude' });
+        expect(switchDriverDecision(manifest([]), 'claude', 'codex', 'user')).toMatchObject({ ok: true, to: 'codex' });
+    });
+
+    it('an AGENT switching itself is still held to its persona’s `tuis:` list, with the list named', () => {
+        expect(switchDriverDecision(manifest(['claude', 'kimi']), 'claude', 'codex', 'agent')).toEqual({ ok: false, reason: 'atlas’s AGENT.md allows tuis: claude, kimi; codex is not among them' });
         expect(switchDriverDecision(manifest(['claude', 'kimi']), 'claude', 'kimi', 'agent')).toMatchObject({ ok: true, to: 'kimi' });
     });
 
@@ -88,6 +91,18 @@ describe('switch driver — what the view says afterwards', () => {
         const text = switchOutcome('atlas', { ...switched, discarded: null, droppedModel: null });
         expect(text).toMatch(/starts a new conversation on codex/);
         expect(text).not.toMatch(/stays with claude/);
+    });
+
+    it('says what happened to AGENT.md: the tuis it now lists, or that it was NOT updated and why (genie#1569)', () => {
+        expect(switchOutcome('atlas', { ...switched, discarded: null, droppedModel: null, manifest: { updated: true, tuis: ['codex', 'claude'] } })).toMatch(/AGENT\.md now lists tuis: codex, claude/);
+        const failed = switchOutcome('atlas', { ...switched, discarded: null, droppedModel: null, manifest: { updated: false, reason: 'EACCES: permission denied' } });
+        expect(failed).toMatch(/^atlas switched claude → codex/);
+        expect(failed).toMatch(/its AGENT\.md was not updated: EACCES: permission denied/);
+    });
+
+    it('the Provider control’s state after a switch: refused keeps the provider asked for, so Retry asks for it again', () => {
+        expect(providerSwitchAfter('atlas', 'codex', { ok: false, reason: 'Codex is not installed' })).toEqual({ kind: 'failed', to: 'codex', reason: 'Codex is not installed' });
+        expect(providerSwitchAfter('atlas', 'codex', { ...switched, discarded: null, droppedModel: null })).toEqual({ kind: 'done', text: switchOutcome('atlas', { ...switched, discarded: null, droppedModel: null }) });
     });
 
     it('a no-op and a refusal are said as they are', () => {
