@@ -104,8 +104,8 @@ describe('genie#1298: the drag strip never scrolls', () => {
 
     it('every scroller in the window is the containing block of its absolutely positioned children (none escapes to grow the document)', () => {
         const scrollers = all.filter((e) => classes(e).some((c) => /^overflow-(y-)?(auto|scroll)$/.test(c)));
-        // The queue, the question, the drawer's body: three.
-        expect(scrollers.length).toBeGreaterThanOrEqual(3);
+        // The question and the drawer's body: two. The queue is a tab strip of a fixed height that never scrolls (Tynn story #378).
+        expect(scrollers.length).toBeGreaterThanOrEqual(2);
         for (const s of scrollers) expect(classes(s), s.attrs).toContain('relative');
     });
 

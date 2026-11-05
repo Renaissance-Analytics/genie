@@ -28,7 +28,6 @@ export const REAL_BUTTONS_ALLOWLIST: readonly AllowlistEntry[] = [
     { file: 'components/DesignedTab.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
     { file: 'components/FeatureSurfaces.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: the Browser surface\'s site chips (aria-current on a Button) navigate, so they become links in the menus follow-up PR; the Settings nav is already a react-fancy Sidebar' },
     { file: 'components/GenieBrowserChrome.tsx', rule: 'menu-as-button', count: 2, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
-    { file: 'components/QuestionApp.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; becomes react-fancy Tabs/Sidebar/Navbar in the menus branch (the owner, 2026-11-01: "it\'s a menu")' },
     { file: 'components/TynnBoardPanel.tsx', rule: 'menu-as-button', count: 3, reason: 'debt: a menu or tab item made into a Button; held for the open Tynn-tab PRs, then react-fancy Tabs' },
     { file: 'components/Workspace.tsx', rule: 'menu-as-button', count: 1, reason: 'debt: a menu or tab item made into a Button; held for the open Tynn-tab PRs, then react-fancy Tabs' },
 ];
