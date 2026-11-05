@@ -141,13 +141,14 @@ describe('wiring', () => {
         expect(main).toMatch(/ChatDraftStore\.open\(genieHome\(\)\)/);
         expect(main.indexOf('ChatDraftStore.open(')).toBeGreaterThan(main.indexOf('await registry.load('));
         expect(main).toMatch(/registry\.subscribe\(\(\) => \{ void drafts\.prune\(/);
-        for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(main).toContain(`'genie:chat-drafts-${ch}'`);
+        for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(main).not.toContain(`'genie:chat-drafts-${ch}'`);
+        expect(main).toMatch(/chatDrafts:\s*drafts/);
     });
 
-    it('the preload hands the window the five calls; a remote host’s bridge has none (its agents are not this machine’s)', () => {
+    it('the page composes local draft calls; the preload retires them and remote clients have no draft port', () => {
         const preload = strip('../src/main/preload.ts');
-        for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(preload).toContain(`'genie:chat-drafts-${ch}'`);
-        expect(strip('../src/renderer/remote-bridge.ts')).not.toMatch(/chatDrafts/);
+        for (const ch of ['load', 'save', 'put-file', 'read-file', 'release']) expect(preload).not.toContain(`'genie:chat-drafts-${ch}'`);
+        expect(strip('../src/renderer/bridge.ts')).toMatch(/chatDrafts:\s*local\.chatDrafts/);
     });
 
     it('the app loads them once per bridge, flushes on unload (a reload), and the shell hands them to the chat', () => {
