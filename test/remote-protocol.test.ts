@@ -83,7 +83,7 @@ describe('the capability table', () => {
         // (a write) — workspace-scoped, through the panel's confined files host.
         // 88 with P4's local-only notes, headroom and account retry; activity interests are connection controls.
         // 100 with family5's twelve owner operations; every one starts local.
-        expect(REMOTE_METHODS.length).toBe(100);
+        expect(REMOTE_METHODS.length).toBe(115);
         expect(capabilityOf('resolvePrompt')).toBe('write');
         expect(AGENT_SCOPED_METHODS).toContain('resolvePrompt');
         expect(capabilityOf('host.mkdir')).toBe('write');
