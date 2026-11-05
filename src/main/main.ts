@@ -164,6 +164,7 @@ import { installRustVersion, listRustVersions, managedRust, removeRustVersion, r
 import { installRubyVersion, listRubyVersions, managedRuby, removeRubyVersion, rubyVersionsRoot, type RubyVersionsPorts } from './ruby-versions.js';
 import { installJavaVersion, javaVersionsRoot, listJavaVersions, managedJava, removeJavaVersion, type JavaVersionsPorts } from './java-versions.js';
 import { installNodeVersion, listNodeVersions, managedNode, nodeVersionsRoot, removeNodeVersion, type NodeVersionsPorts } from './node-versions.js';
+import { runElevatedBatch, type PrivilegedStep } from './elevate.js';
 import { httpFetchOver, installPhpVersion, listPhpVersions, managedPhp, nodePhpVersionsFs, phpVersionsRoot, refreshAllManagedInis, refreshManagedIni, removePhpVersion, resolvePhpCgi, type PhpCaPort, type PhpCgiPorts, type PhpVersionsPorts } from './php-versions.js';
 import type { FeaturePorts } from './feature-ipc.js';
 import { ProcessBook } from './process-book.js';
@@ -1441,7 +1442,13 @@ async function boot(): Promise<void> {
         mcpServersFor: (record: AgentRecord) => genieMcpServers(mcp?.endpoint() ?? null, sessionCallers.keyFor(record.id)),
         // GENIE'S TOOLS THAT STILL NEED THIS WINDOW, forwarded by genie-host's MCP server (P3.1): run here, answered there.
         // Each kept process's app-inbox credential, for genie-host's process book (P3.3c): minted here, where the server is.
-        appEnvs: (list: ReadonlyArray<{ id: string; name: string; workspaceId: string }>) => Object.fromEntries(list.map((p) => [p.id, services ? services.appEnv({ kind: 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) : {}])),
+        // And each SITE's, for genie-host's hosting (P5a): the same door, named as a site.
+        appEnvs: (list: ReadonlyArray<{ id: string; name: string; workspaceId: string; kind?: 'site' | 'process' }>) => Object.fromEntries(list.map((p) => [p.id, services ? services.appEnv({ kind: p.kind === 'site' ? 'site' : 'process', id: p.id, name: p.name, workspaceId: p.workspaceId }) : {}])),
+        // AN ELEVATION GENIE-HOST'S HOSTING NEEDS (P5a): the hosts file, the trust store — raised HERE, the way this window always
+        // raised them; the host never prompts on its own.
+        elevate: (steps: readonly PrivilegedStep[]) => runElevatedBatch(process.platform, steps, (plan) => execFileRunner(plan.command, plan.args, { timeoutMs: 300_000 })),
+        // Which php-cgi a site's pin runs, for the hosting replica's synchronous check: the same toolchain as the host's.
+        phpCgiFor: (pin: string | undefined) => resolvePhpCgi(pin, phpCgiBase()),
         onToolCall: (call: ForwardedToolCall) => (windowToolRun ? windowToolRun(call) : Promise.resolve({ text: `${call.name}: Genie's window is still starting; call it again in a moment. Nothing was done.`, isError: true })),
         // openFileForUser made while no window was here: shown now (once the tools are built).
         onOpenFileLater: (call: ForwardedToolCall) => { if (windowToolRun) void windowToolRun(call); else openFilesLater.push(call); },
@@ -1492,7 +1499,9 @@ async function boot(): Promise<void> {
                 hostScript: join(here, 'host.js'),
                 execPath: process.execPath,
                 genieHome: genieHome(),
-                env: process.env,
+                // What only Electron knows, for the host's hosting (hosting-inputs.ts): Genie 1's folder (its database, CA and
+                // toolchain), the app data folder, and the resources folder with the bundled Caddy.
+                env: { ...process.env, GENIE_V1_USERDATA: app.getPath('userData'), GENIE_APPDATA: app.getPath('appData'), GENIE_RESOURCES: process.resourcesPath },
                 log: lifecycleLog,
             },
             records: () => registry?.listAgents() ?? [],
@@ -2584,6 +2593,10 @@ async function boot(): Promise<void> {
         // THE PROCESS SUPERVISOR IS GENIE-HOST'S (P3.3b): sites, workers and the front door run — and restart — there, with
         // or without this window; a window restart neither starts them twice nor stops them.
         ...(agentEngineLink ? { supervisor: agentEngineLink.client.supervisor() } : {}),
+        // GENIE'S HOSTING IS GENIE-HOST'S (P5a): the front door, the engines and the site routes are built there and kept with
+        // the UI closed; this window reads them (the front door's port and CA arrived before the link was ready) and drives
+        // them through the replica. Built here only on the emergency path.
+        ...(agentEngineLink ? { hosting: agentEngineLink.client.hosting() } : {}),
         // FLOWS ARE GENIE-HOST'S (P3.3d): an armed flow fires on its clock with no window; this window edits, arms and runs
         // them through the replica.
         ...(agentEngineLink ? { flowsEngine: { flows: agentEngineLink.client.flows(), scheduler: agentEngineLink.client.flows() } } : {}),

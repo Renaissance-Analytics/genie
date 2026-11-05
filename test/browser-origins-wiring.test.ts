@@ -16,6 +16,8 @@ const code = (path: string): string =>
 const view = code('../src/main/electron-browser-view.ts');
 const main = code('../src/main/main.ts');
 const compose = code('../src/main/compose.ts');
+// Genie's hosting (the CA, both front doors) is built here: by genie-host, or by the window with no host (P5a).
+const hosting = code('../src/main/hosting-compose.ts');
 const count = (text: string, re: RegExp) => (text.match(re) ?? []).length;
 
 describe('the pane’s session (electron-browser-view.ts)', () => {
@@ -52,8 +54,10 @@ describe('main and compose', () => {
         expect(count(main, /browserPane\.onChange\(/g)).toBe(1);
     });
 
-    it('compose opens Genie’s CA ONCE for both doors, and the in-app door is given a TLS context for its tunnel', () => {
-        expect(count(compose, /GenCa\.open\(/g)).toBe(1);
-        expect(compose).toMatch(/new GenRouterServer\(routes, \{\s*tls: \(host\) =>/);
+    it('Genie’s hosting opens Genie’s CA ONCE for both doors, and the in-app door is given a TLS context for its tunnel', () => {
+        expect(count(hosting, /GenCa\.open\(/g)).toBe(1);
+        // compose opens none of its own: it builds its hosting through hosting-compose.ts, or is handed the host's.
+        expect(count(compose, /GenCa\.open\(/g)).toBe(0);
+        expect(hosting).toMatch(/new GenRouterServer\(routes, \{\s*tls: \(host\) =>/);
     });
 });

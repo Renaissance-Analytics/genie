@@ -67,6 +67,9 @@ export const ENGINE_METHODS = [
     // The host's process supervisor (P3.3b): `[method, args]` — start, stop, restart, forget. Its state is sent as
     // `supervisor.dump` before `engine.ready`, every change and every line of output as `supervisor.event`.
     'engine.supervisor',
+    // The host's hosting (P5a: hosting-host.ts): `[method, args]` — a window's write. Its whole readable state is sent as
+    // `hosting.dump` before `engine.ready` (the front door's port and CA with it), and again as `hosting.event` on change.
+    'engine.hosting',
     // The host's process book and scheduler (P3.3c): `[method, args]`. Its list is sent as `processes.dump` before
     // `engine.ready`, and again as `processes.event` on every change.
     'engine.processes',
@@ -107,6 +110,9 @@ export const ENGINE_METHODS = [
     'client.toolCall',
     // Each kept process's app-inbox credential, minted where the app-inbox server is (the window, until P5): `[processes]`.
     'client.appEnvs',
+    // An elevation the host's hosting needs (the hosts file, the trust store), run by the window as a window always has:
+    // `[steps]`. The host never raises a prompt itself; with no window it waits (hosting-host.ts WindowElevation).
+    'client.elevate',
 ] as const;
 
 export type EngineMethod = (typeof ENGINE_METHODS)[number];

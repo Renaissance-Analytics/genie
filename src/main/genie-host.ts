@@ -22,6 +22,9 @@ import { startSpawnRelay, type SpawnRelay } from './spawn-relay.js';
 import { SpawnHostClient } from './spawn-host-client.js';
 import { ProcessSupervisor } from './process-supervisor.js';
 import { SupervisorService } from './supervisor-host.js';
+import { composeHosting, type HostingStack } from './hosting-compose.js';
+import { HostingService, WindowElevation } from './hosting-host.js';
+import { hostHostingOptions, hostMachinePaths } from './hosting-inputs.js';
 import { TerminalHost } from './terminal-host.js';
 import { TerminalsService } from './terminals-host.js';
 import { ProcessBook } from './process-book.js';
@@ -215,6 +218,65 @@ async function main(): Promise<void> {
     processSupervisor.watchLiveness();
     const supervisorService = new SupervisorService(processSupervisor);
     /*
+     * GENIE'S HOSTING (the host split, P5a): the front door, the service engines and the site routes are built HERE, under
+     * this host's supervisor, so sites stay served and routed with the UI closed; windows read and drive them through the
+     * service. This host never raises an OS prompt itself: an elevation is asked of a connected window, and with none it
+     * waits (WindowElevation) and the next window is told.
+     */
+    const hostingElevation = new WindowElevation({
+        connected: () => engineRef?.windowConnected() ?? false,
+        ask: (steps) => (engineRef ? engineRef.elevate(steps) : Promise.reject(new Error('no Genie window is connected'))),
+    });
+    /** Each site's app-inbox credential, as a window minted it (the app-inbox server is the window's until P5b). */
+    const siteAppEnvs = new Map<string, Readonly<Record<string, string>>>();
+    const workspacesListeners = new Set<() => void>();
+    stores.onEvent((event) => {
+        if (event.store !== 'registry') return;
+        void stores.registrySettled().then(() => { for (const l of [...workspacesListeners]) l(); });
+    });
+    let hosting: HostingStack | null = null;
+    try {
+        hosting = await composeHosting({
+            ...(await hostHostingOptions(hostMachinePaths(process.env, home), say)),
+            userData: home,
+            supervisor: processSupervisor,
+            settings,
+            appEnv: (source) => siteAppEnvs.get(source.id) ?? {},
+            elevate: (steps) => hostingElevation.run(steps),
+            workspaces: () => hostRegistry.listWorkspaces(),
+            onWorkspacesChange: (listener) => { workspacesListeners.add(listener); return () => { workspacesListeners.delete(listener); }; },
+        });
+    } catch (error) {
+        say(`Genie's hosting could not start in the host: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    const hostingStack = hosting;
+    const hostingService = hostingStack ? new HostingService(hostingStack, {
+        workspaces: () => hostRegistry.listWorkspaces().map((w) => w.id),
+        elevation: hostingElevation,
+        // An engine's dependents name the running processes; the workspaces are the registry's.
+        onChange: (listener) => {
+            const off = processSupervisor.onChange(() => listener());
+            workspacesListeners.add(listener);
+            return () => { off(); workspacesListeners.delete(listener); };
+        },
+    }) : null;
+    /** The sites' app credentials, asked of the newest window; a site whose credential moved gets it now. */
+    const refreshSiteAppEnvs = async (): Promise<void> => {
+        if (!hostingStack || !engineRef?.windowConnected()) return;
+        const sites = hostingStack.sites.list().map((s) => ({ kind: 'site' as const, id: s.id, name: s.name, workspaceId: s.workspaceId }));
+        if (sites.length === 0) return;
+        const envs = await engineRef.appEnvs(sites).catch(() => ({} as Record<string, Record<string, string>>));
+        const moved = new Set<string>();
+        for (const s of sites) {
+            const next = envs[s.id];
+            if (!next || JSON.stringify(next) === JSON.stringify(siteAppEnvs.get(s.id) ?? {})) continue;
+            siteAppEnvs.set(s.id, next);
+            moved.add(s.workspaceId);
+        }
+        for (const ws of moved) hostingStack.sites.serviceEnvChanged(ws);
+    };
+    hostingStack?.sites.onChange(() => { void refreshSiteAppEnvs(); });
+    /*
      * THE TERMINALS (P3.3e): the `terminals` spawn-host child is this host's own now — its shells (and their scrollback)
      * outlive the window, and an agent's `manageTerminals` works with none. Windows drive them through the service.
      */
@@ -298,6 +360,8 @@ async function main(): Promise<void> {
             say(`windows connected: ${n}`);
             // A window linking is a good moment to ask Tynn again, for an agent still waiting on it.
             if (n > windowsLinked) tynnRecovery?.nudge();
+            // And for the sites' app credentials, which only a window can mint (P5a).
+            if (n > windowsLinked) void refreshSiteAppEnvs();
             windowsLinked = n;
         },
         // A window reaches its own profiles only: `supervised` is this host's supervisor's, and no window sends into it.
@@ -305,6 +369,7 @@ async function main(): Promise<void> {
         spawn: { send: (profile, frame) => { if (profile === 'processes') relay?.send('processes', frame); }, windowGone: () => relay?.windowGone() },
         terminals: terminalsService,
         supervisor: supervisorService,
+        ...(hostingService ? { hosting: hostingService } : {}),
         processes: processesService,
         flows: flowsService,
         stores,
@@ -601,6 +666,9 @@ async function main(): Promise<void> {
         approvals.cancelAll('Genie is shutting down');
         own.knowledge.close();
         await relay?.stop().catch(() => undefined);
+        // Then the hosting's own part (P5a), after the supervised processes: its syncs, its watches, the in-app door. The
+        // engines' containers keep running (the ruling: databases outlive "Shut down everything").
+        await hostingStack?.shutdown().catch(() => undefined);
         server.close();
         // Only this host's record: a newer host may already have written its own.
         const current = parseHostRecord(readOrNull(recordFile));

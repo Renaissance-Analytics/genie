@@ -1465,6 +1465,12 @@ export async function handleFeatureAction(services: ComposedServices, action: Fe
                 case 'defer-trust-certificate':
                     services.deferTrustCertificate();
                     break;
+                case 'sync-hosts': {
+                    // What genie-host held for a window: the person approves it here, so the prompt is raised by this window.
+                    const r = await services.syncHosts();
+                    if ('error' in r) throw new Error(r.error);
+                    break;
+                }
                 case 'dismiss-main-error':
                     // Read, and put aside. Refused with its reason when nothing is wired or the item is already gone.
                     if (!ports.mainErrors) throw new Error('the main process’s error record is not wired into this Genie; nothing was dismissed');
