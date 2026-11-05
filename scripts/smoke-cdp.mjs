@@ -1,3 +1,4 @@
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * THE SMOKE PATH — a real Electron window, driven over the Chrome DevTools Protocol.
  *
@@ -583,6 +584,7 @@ if (!approvalEnabled) {
 } else {
     // The agent's PAGE, by its route: a Dashboard row click now opens the chat beside the board (genie#1209, step 17).
     // Start it with Start (the one restart; opening starts nothing since q_04ce323c), then its page — the approval needs a running agent.
+    await waitForPageProbe(cdp);
     await cdp.evaluate(`window.genieTest.agents.restart('${codexRow}', 'graceful'); window.location.hash = '#genie://agent/${codexRow}?tab=stream'; true`);
     await waitFor(cdp, `Boolean(document.querySelector('[data-surface="agent"]'))`, 'the codex agent');
 

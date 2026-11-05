@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 /**
  * REAL KEYS FROM A REAL TYNN, ACROSS THE UPGRADE (P3.4; plan §13, the beta.56 acceptance): S7, S5 and S6, against tynn.gen. On omarchy-test, with tynn.ai aliased. Refuses anywhere else.
  *
@@ -134,7 +135,7 @@ async function launch(command, args) {
     return cdp;
 }
 const signedIn = (cdp) => cdp.evaluate('window.genie.features.snapshot().then((d) => d?.integrations?.tynn?.user?.name ?? null)');
-const start = (cdp, id) => cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(id)}, "graceful"); true`);
+const start = async (cdp, id) => { await waitForPageProbe(cdp); return cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(id)}, "graceful"); true`); };
 const newRun = (seen) => until('a new run of the provider', 60_000, () => records().find((r) => !seen.has(r.pid)) ?? null);
 
 try {

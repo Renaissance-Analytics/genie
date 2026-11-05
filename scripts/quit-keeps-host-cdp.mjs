@@ -38,6 +38,7 @@
  *
  * Exit: 0 every check passed; 1 a check failed (or a deadline was missed); 2 cannot run here.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -477,6 +478,7 @@ try {
     }
     for (const ag of agents) {
         step('2', `starting ${ag.name} (≤ 30 s to running)`);
+        await waitForPageProbe(a.cdp);
         await a.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
         const running = await until(() => a.cdp.evaluate(`window.genie.agentDetail(${JSON.stringify(ag.id)}).then((d) => d?.session?.running === true)`, 5_000), 30_000);
         check(running === true, `2. ${ag.name}'s session is running`);

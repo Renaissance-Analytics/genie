@@ -25,6 +25,7 @@
  *
  * Prints a line per step, `### never-minted <check>=PASS|FAIL  detail`, then `### never-minted=PASS|FAIL`. Capped at 8 min. Every exit ends what it started.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { spawn, execFileSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer as createHttpServer } from 'node:http';
@@ -209,6 +210,7 @@ try {
     const a = snap.agents.find((x) => x.provider === 'codex' && x.id !== B_ID && x.id !== C_ID);
     check(Boolean(a) && snap.agents.some((x) => x.id === B_ID), '3-the-seed-left-both-agents', a?.id ?? 'no agent A');
     say('starting A through the window');
+    await waitForPageProbe(cdp);
     await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`);
     const first = await until("A's provider", 45_000, () => records()[0] ?? null);
     check(first !== null && given(first).includes('genie'), '4-A-has-the-hosts-genie-server', `given: ${given(first).join(',')}`);

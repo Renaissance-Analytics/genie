@@ -18,6 +18,7 @@
  * Prints a line per step, then `### agent-key <check>=PASS|FAIL` and `### agent-key=PASS|FAIL`. Every wait has a deadline, the run
  * is capped at 4 min, and every exit ends the providers and the host it found. The key is a test word, never a real one.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -148,6 +149,7 @@ try {
     check(!pgrep('stub-codex').length, '2-no-provider-before-anything-starts');
 
     say('starting A through the window');
+    await waitForPageProbe(cdp);
     await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(a.id)}, "graceful"); true`);
     const first = await until('A\'s provider', 45_000, () => records()[0] ?? null);
     const genie = first?.servers?.genie;

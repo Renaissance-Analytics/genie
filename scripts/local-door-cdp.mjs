@@ -11,6 +11,7 @@
  * is never PASS. --break-admission deliberately removes main's admission before row1, to
  * prove this after-the-feature harness fails on broken native admission. Nothing in src changes.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync, spawn } from 'node:child_process';
 import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -504,6 +505,7 @@ try {
         demand(added?.ok, `agent added: ${added?.reason??'no result'}`); agents.push(added.id);
         // Earlier admission/lifetime probes may replace the app's connection. Restore that
         // same pageBridge through its own recovery, observed by the existing preload listener.
+        await waitForPageProbe(main);
         await main.evaluate('window.genieTest.localProtocol.retry()');
         const restarted = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(added.id)},'graceful')`);
         demand(restarted?.ok, `start through app bridge: ${restarted?.reason??'no result'}`);

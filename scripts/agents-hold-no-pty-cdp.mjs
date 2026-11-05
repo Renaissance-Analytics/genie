@@ -18,6 +18,7 @@
  * processes is the number of live ptys on an otherwise idle machine. On Linux it is the number
  * of allocated pty slaves (`/dev/pts`). Deltas against a baseline taken before anything starts.
  */
+import { waitForPageProbe } from './page-probe-cdp.mjs';
 import { execFileSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 
@@ -123,6 +124,7 @@ try {
 
     // START AN AGENT, the way a person does.
     // Start (the one restart): opening an agent starts nothing since q_04ce323c.
+    await waitForPageProbe(cdp);
     await cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(codexId)}, "graceful"); true`);
     let running = null;
     for (const end = Date.now() + 30_000; Date.now() < end && running !== true;) {
