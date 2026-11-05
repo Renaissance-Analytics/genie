@@ -515,12 +515,7 @@ try {
         await until('streaming agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>d?.session?.running===true)`),30_000);
         const prompt = await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream ticks until stopped.')`); demand(prompt?.ok,'real driver accepted prompt');
         const ticks = async () => main.evaluate(`window.genie.agentDetail(${JSON.stringify(added.id)}).then(d=>JSON.stringify(d?.rows??[]))`);
-        const count = (text) => {
-            const matches = [...text.matchAll(/tick (\d+) pid (\d+)/g)];
-            for (const match of matches) providerPids.add(Number(match[2]));
-            const current = matches.at(-1)?.[2];
-            return matches.filter(match=>match[2]===current).map(match=>Number(match[1]));
-        };
+        const count = (text) => [...text.matchAll(/tick (\d+) pid (\d+)/g)].map(m=>{ providerPids.add(Number(m[2])); return Number(m[1]); });
         await until('at least four real provider ticks',async()=>count(await ticks()).length>=4,30_000);
         // Positive frame gauge immediately before the silent streaming interval.
         const gaugeStart = await main.evaluate('window.__doorCdp.total');
@@ -541,15 +536,17 @@ try {
         demand(frameEnd===frameStart,'no frame reached connected main preload while ledger grew');
         demand(nativeEnd.records.find(r=>r.connectionId===w.connectionId).frames===nativeStart.records.find(r=>r.connectionId===w.connectionId).frames,'actual server socket also sent no frame');
         // Positive activity gauge on that SAME app connection, then a second absence interval.
-        const earlierProviders = new Set(providerPids);
-        await main.evaluate(`window.__doorActivitySeen=0; window.__doorActivityOff=window.genieTest.activity.subscribe(feed=>{if(feed.agentId===${JSON.stringify(added.id)})window.__doorActivitySeen++}); true`);
+        const activityAgent = await main.evaluate(`window.genie.addAgent('tynn',{name:${JSON.stringify(`door-activity-${process.pid}`)},purpose:'Native activity subscription positive control',provider:'codex'})`);
+        demand(activityAgent?.ok, `activity control agent added: ${activityAgent?.reason??'no result'}`); agents.push(activityAgent.id);
+        await main.evaluate(`window.__doorActivitySeen=0; window.__doorActivityOff=window.genieTest.activity.subscribe(feed=>{if(feed.agentId===${JSON.stringify(activityAgent.id)})window.__doorActivitySeen++}); true`);
         try {
             // A ticker appends to one reply: its first-line feed may stay identical. A real
-            // restart changes session state and therefore the feed, without fabricating a push.
-            const activityRestart = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(added.id)},'graceful')`);
-            demand(activityRestart?.ok,'own agent restarted while its activity view watches');
-            demand((await main.evaluate(`window.genie.prompt(${JSON.stringify(added.id)},'Stream more ticks after restart.')`))?.ok,'restarted driver accepts its next prompt');
-            await until('new provider streaming after restart',async()=>count(await ticks()).length>=4&&[...providerPids].some(pid=>!earlierProviders.has(pid)),30_000);
+            // new agent's first session changes the feed while the original ticker keeps going.
+            const activityStart = await main.evaluate(`window.genieTest.agents.restart(${JSON.stringify(activityAgent.id)},'graceful')`);
+            demand(activityStart?.ok,'own new agent started while its activity view watches');
+            await until('activity control agent ready',()=>main.evaluate(`window.genie.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>d?.session?.running===true)`),30_000);
+            demand((await main.evaluate(`window.genie.prompt(${JSON.stringify(activityAgent.id)},'Stream ticks for the activity positive control.')`))?.ok,'activity control driver accepts its prompt');
+            await until('activity control provider has four real ticks',async()=>count(await main.evaluate(`window.genie.agentDetail(${JSON.stringify(activityAgent.id)}).then(d=>JSON.stringify(d?.rows??[]))`)).length>=4,30_000);
             await until('watched activity callback',()=>main.evaluate('window.__doorActivitySeen>=1'),20_000);
             demand(await main.evaluate('window.__doorCdp.frames.some(r=>r.frame?.kind==="event"&&r.frame.channel==="local-activity")'),'watched activity traverses the actual app frame channel');
             const watched = await nativeSummary();
