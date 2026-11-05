@@ -146,7 +146,7 @@ import { limitWords } from '../core/limit-words.js';
 import { genieWindowIcon } from './app-identity.js';
 import { HIDDEN_ARG, showOnBoot } from '../core/tray-resident.js';
 import { onTheClock, trayOnlyStep, trayProbeEnabled, type HostActivity } from '../core/tray-only.js';
-import { terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
+import { tableWithin, terminalBusy, trayConfirm, trayConfirmed, type Stopping, type TrayAction } from '../core/tray-confirm.js';
 import { wireCloseToTray, wireLoginItem, type LoginItemPort } from './tray-residence.js';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { caddyBinPath, userCaddyCopy } from './caddy-runtime.js';
@@ -315,7 +315,7 @@ const localDoor = localProtocolDoor(ipcMain);
  */
 let stallLog: ((line: string) => void) | null = null;
 /** Main's own stack, sampled cheaply and read on a block (main/stall-profile.ts); started at boot. */
-let stallProfiler: { capture(ms: number): void } | null = null;
+let stallProfiler: { capture(ms: number): void; stop(): void } | null = null;
 /**
  * THE SPAWN HOST (genie#1397): the child that creates every process main used to create on its own thread — the Docker
  * CLI (600 s of the owner's main in one beta.54 session, up to 18.3 s at a time), every other `execFileRunner` command,
@@ -429,9 +429,8 @@ function closeUi(reason: string): void {
  * terminal (marked when a command runs in it — read from the process table), the kept processes, the active services and
  * the sites.
  */
-function stoppingNow(): Stopping {
+function stoppingNow(table: Parameters<typeof terminalBusy>[1]): Stopping {
     const agents = registry && host ? registry.snapshot().agents.filter((a) => host!.probe(a.id as AgentId)?.running === true).map((a) => a.name) : [];
-    const table = systemProcessTree.snapshot();
     const workspaces = registry?.snapshot().workspaces ?? [];
     const seen = new Map<string, number>();
     const terminalsOpen = (terminals?.list() ?? []).map((t) => {
@@ -448,13 +447,17 @@ function stoppingNow(): Stopping {
     return { agents, terminals: terminalsOpen, processes, services: servicesUp, sites, flows: clockFlows, scheduled: clockTasks };
 }
 
+/** How long the tray's question waits for the busy marks' process table (read off main) before it is asked without them. */
+const TRAY_TABLE_MS = 1_500;
+
 /**
  * ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time — what will stop,
  * named; Cancel the default and the cancel; only the confirm button goes on. Not asked anywhere else: the quit dialog's own
  * answer, the tray-only exit, the OS ending the session, the upgrade.
  */
-function confirmTray(action: TrayAction): boolean {
-    const q = trayConfirm(action, stoppingNow());
+async function confirmTray(action: TrayAction): Promise<boolean> {
+    const table = await tableWithin(() => systemProcessTree.read?.() ?? Promise.resolve(null), TRAY_TABLE_MS);
+    const q = trayConfirm(action, stoppingNow(table));
     return trayConfirmed(dialog.showMessageBoxSync({ type: 'question', title: q.title, message: q.message, buttons: [...q.buttons], defaultId: q.defaultId, cancelId: q.cancelId }));
 }
 
@@ -3723,6 +3726,8 @@ async function boot(): Promise<void> {
                 remove: (version) => removeJavaVersion(version, javaVersionsPorts()),
             },
         },
+        // Which part of a features snapshot was slow (genie-test-windows, job Q0: an action took 20 s, main mostly free).
+        slowPart: { ms: 1_000, log: (part, ms) => lifecycleLog(`features slow part=${part} ms=${ms}`) },
     };
     // THE FORCETHEQUESTION WINDOW (§6.3; the owner, 2026-10-14: "a window that opens on top of all other windows"). It
     // reads the SAME items Pending Questions (the Deck) shows and answers through the same action, so the two stay one
@@ -3859,7 +3864,7 @@ async function boot(): Promise<void> {
         onQuit: () => { requestQuit(); },
         // QUIT KEEPS THE HOST (P1b): with genie-host, the tray offers the quit's two answers instead of Quit.
         // ALWAYS ASK (the owner, 2026-11-02): Restart and Shut down everything confirm first, every time.
-        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { if (confirmTray('restart')) restartGenie(); }, onShutDown: () => { if (confirmTray('shut-down')) requestQuit('shut-down'); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
+        ...(agentEngineLink ? { onCloseUi: () => { closeUi('tray'); }, onRestart: () => { void confirmTray('restart').then((ok) => { if (ok) restartGenie(); }); }, onShutDown: () => { void confirmTray('shut-down').then((ok) => { if (ok) requestQuit('shut-down'); }); }, uiOpen: () => window !== null && !window.isDestroyed() } : {}),
         onResumeLimit: (provider) => { host?.resumeLimit(provider); refreshTray(); },
         // A paused account named in the tray: Try again brings its agents back.
         onAccountRetry: (provider) => { retryPausedAccount?.(provider); },
@@ -4021,10 +4026,11 @@ app.on('before-quit', (event) => {
     // (measured 0 of 20 kept, omarchy-test 2026-10-21). The quit resumes when runQuit is done, as a 'pass'.
     // "Just close the UI" (P1b) stops no agent, closes no terminal and never ends the host: core/quit.ts runQuit.
     event.preventDefault();
-    let bound: ReturnType<typeof setTimeout> | undefined;
-    const done = runQuit(quitPorts).catch(() => { /* an unwritten row never blocks a quit */ });
-    void Promise.race([done, new Promise<void>((r) => { bound = setTimeout(r, QUIT_WRITES_MS); })])
-        .finally(() => { clearTimeout(bound); app.quit(); });
+    // runQuit runs to its end: the drain bounded inside it, then the host ended, itself bounded (agent-engine.ts). A race
+    // around the whole of it let the window exit before the host was told to end (ss-repeat5, 2026-11-05).
+    void runQuit(quitPorts, { drainMs: QUIT_WRITES_MS })
+        .catch(() => { /* an unwritten row never blocks a quit */ })
+        .finally(() => { app.quit(); });
 });
 
 /** How long a quit waits for a killed provider to report its exit — the exit is what queues the reply it closes. */
@@ -4037,6 +4043,9 @@ const quitPorts: QuitPorts = {
     // The stops' readings and reaps run off main (genie#1201); the drain below waits for them too, bounded.
     stopAgents: () => { host?.stopAll(); },
     closeWindow: () => {
+        // Main's own sampler ends first: on a slow machine its restarts held main for seconds, in a loop with the watchdog
+        // (genie-test-windows, job Q0), and a quit needs main for its own steps.
+        stallProfiler?.stop();
         // A nudge waiting out its grace is not sent into a quit (core/plan-keepalive.ts); with the sessions gone it would find none.
         keepaliveNow?.stop();
         // Every supervised process, the front door, an in-flight flow run, the knowledge database.

@@ -36,7 +36,7 @@ describe('main.ts', () => {
 
     it('the shutdown pass runs runQuit; the before-quit handler stops nothing itself', () => {
         const quit = block(main(), "app.on('before-quit'");
-        expect(quit).toMatch(/runQuit\(quitPorts\)/);
+        expect(quit).toMatch(/runQuit\(quitPorts, \{ drainMs: QUIT_WRITES_MS \}\)/);
         expect(quit).not.toMatch(/host\?\.stopAll\(\)/);
         const ports = block(main(), 'const quitPorts: QuitPorts = {', '\n};');
         expect(ports).toMatch(/stopAgents: \(\) => \{ host\?\.stopAll\(\); \}/);
@@ -62,13 +62,17 @@ describe('main.ts', () => {
     it('the tray offers the host’s verbs while the host is genie-host, and says what it runs', () => {
         const src = main();
         // ALWAYS ASK (the owner, 2026-11-02): the tray's Restart and Shut down everything confirm first, every time.
-        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ if \(confirmTray\('restart'\)\) restartGenie\(\); \}, onShutDown: \(\) => \{ if \(confirmTray\('shut-down'\)\) requestQuit\('shut-down'\); \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
+        expect(src).toMatch(/\.\.\.\(agentEngineLink \? \{ onCloseUi: \(\) => \{ closeUi\('tray'\); \}, onRestart: \(\) => \{ void confirmTray\('restart'\)\.then\(\(ok\) => \{ if \(ok\) restartGenie\(\); \}\); \}, onShutDown: \(\) => \{ void confirmTray\('shut-down'\)\.then\(\(ok\) => \{ if \(ok\) requestQuit\('shut-down'\); \}\); \}, uiOpen: \(\) => window !== null && !window\.isDestroyed\(\) \} : \{\}\),/);
         expect(block(src, 'function refreshTray', '\n}\n')).toMatch(/trayTooltip\(held, signedOut, paused, designLogin, trayWaiting, hostNow\)/);
     });
 
     it('the tray’s question: what stops, named; Cancel the default and the cancel; only the confirm button goes on', () => {
-        const ask = block(main(), 'function confirmTray(', '\n}\n');
-        expect(ask).toMatch(/const q = trayConfirm\(action, stoppingNow\(\)\);/);
+        const ask = block(main(), 'async function confirmTray(', '\n}\n');
+        // The busy marks come from a table read OFF main, and only for as long as the question can wait (ss-repeat5,
+        // 2026-11-05: a synchronous read froze the window 30 s before the question came).
+        expect(ask).toMatch(/const table = await tableWithin\(\(\) => systemProcessTree\.read\?\.\(\) \?\? Promise\.resolve\(null\), TRAY_TABLE_MS\);/);
+        expect(ask).toMatch(/const q = trayConfirm\(action, stoppingNow\(table\)\);/);
+        expect(block(main(), 'function stoppingNow(', '\n}\n')).not.toMatch(/systemProcessTree\.snapshot\(/);
         expect(ask).toMatch(/return trayConfirmed\(dialog\.showMessageBoxSync\(\{ type: 'question', title: q\.title, message: q\.message, buttons: \[\.\.\.q\.buttons\], defaultId: q\.defaultId, cancelId: q\.cancelId \}\)\);/);
     });
 

@@ -61,6 +61,8 @@ const DEADLINE_MS = Number(process.env.QUIT_CDP_DEADLINE_MS ?? 360_000);
 const AGENTS = 3;
 const TICKER = join(tmpdir(), 'genie-stub-codex-ticker');
 const PROOF = join(tmpdir(), `genie-quit-answer-${process.pid}.json`);
+// Every dialog call the window makes while a substitution is in place, answered or not (batch SS on Windows: 26e read none).
+const CALLS = join(tmpdir(), `genie-quit-dialog-calls-${process.pid}.log`);
 const GENIE_HOME = process.env.GENIE_HOME && process.env.GENIE_HOME.length > 0 ? process.env.GENIE_HOME : join(homedir(), '.genie');
 const HOST_RECORD = join(GENIE_HOME, 'runtime', 'host.json');
 const LIFECYCLE = join(GENIE_HOME, 'runtime', 'lifecycle.log');
@@ -100,13 +102,32 @@ function alive(pid) {
     if (!Number.isInteger(pid) || pid <= 0) return false;
     try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
 }
+/**
+ * A process's command line, or why it couldn't be read: never an empty string that reads as "not that program". Batch SS on Windows
+ * had a live host and live providers read as '' (rows 5 and 8): a cold PowerShell under load can take longer than one try allows.
+ */
 function commandLine(pid) {
+    if (!WIN) {
+        try { return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim(); } catch (error) { return `(unread: ${error.code ?? error.message})`; }
+    }
+    // ONE read of every process, kept for a minute: batch SS's repeat measured a single PowerShell read at over 30 s on the Windows
+    // VM, so one per pid ran the proof into its ceiling before row 9. Read again only for a pid the table hasn't got.
+    if (!table || Date.now() - table.at > 60_000 || !table.lines.has(Number(pid))) table = readTable();
+    return table.lines.get(Number(pid)) ?? `(unread: ${table.error ?? 'not in the process table'})`;
+}
+let table = null;
+function readTable() {
+    const started = Date.now();
+    const script = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId)|$($_.CommandLine)" }';
     try {
-        if (WIN) {
-            return execFileSync('powershell', ['-NoProfile', '-Command', `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: 'utf8', timeout: SYNC_MS }).trim();
-        }
-        return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0').join(' ').trim();
-    } catch { return ''; }
+        const out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', timeout: 120_000, maxBuffer: 32 * 1024 * 1024, windowsHide: true });
+        const lines = new Map();
+        for (const line of out.split(/\r?\n/)) { const i = line.indexOf('|'); if (i > 0 && line.slice(i + 1).trim()) lines.set(Number(line.slice(0, i)), line.slice(i + 1).trim()); }
+        console.log(`  (the process table: ${lines.size} command lines in ${Math.round((Date.now() - started) / 1000)} s)`);
+        return { at: Date.now(), lines, error: null };
+    } catch (error) {
+        return { at: Date.now(), lines: new Map(), error: error.code === 'ETIMEDOUT' ? 'PowerShell took over 120 s' : String(error.message).slice(0, 120) };
+    }
 }
 function hostRecord() {
     try { return JSON.parse(readFileSync(HOST_RECORD, 'utf8')); } catch { return null; }
@@ -200,7 +221,7 @@ function launch(label) {
     const out = openSync(log, 'a');
     const argv = ['electron', `--inspect=${INSPECT}`, '.', `--remote-debugging-port=${PORT}`, ...launchArgs()];
     // GENIE_TRAY_PROBE=1: main.ts's read-only tray probe exists only in a launch that asks for it (this proof's).
-    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
+    const child = spawn(WIN ? 'npx.cmd' : 'npx', argv, { detached: !WIN, stdio: ['ignore', out, out], shell: WIN, windowsHide: true, env: { ...process.env, GENIE2_CODEX_BINARY: process.env.GENIE2_CODEX_BINARY || join(process.cwd(), 'scripts', 'stub-codex.mjs'), GENIE_TRAY_PROBE: '1', GENIE_PAGE_PROBE: '1' } });
     let gone = false;
     const exited = new Promise((r) => {
         child.once('exit', (code, signal) => { gone = true; r({ code, signal }); });
@@ -254,7 +275,14 @@ async function answerTheQuit(inspector, index) {
         const require = module.createRequire(process.execPath);
         const { app, dialog } = require('electron');
         const fs = require('node:fs');
+        const note = (kind, args) => { try { const o = args.find((a) => a && typeof a === 'object' && Array.isArray(a.buttons)) ?? {}; fs.appendFileSync(${JSON.stringify(CALLS)}, new Date().toISOString() + ' ' + kind + ' ' + JSON.stringify({ title: o.title ?? null, buttons: o.buttons ?? null }) + ' at ' + (new Error().stack ?? '').split('\\n').slice(2, 6).map((l) => l.trim()).join(' < ') + '\\n'); } catch {} };
+        if (!dialog.__genieNoted) {
+            dialog.__genieNoted = true;
+            const realAsync = dialog.showMessageBox;
+            dialog.showMessageBox = (...args) => { note('showMessageBox (async, not answered)', args); return realAsync.apply(dialog, args); };
+        }
         const click = (...args) => {
+            note('showMessageBoxSync (answered ${index})', args);
             const options = args.find((a) => a && typeof a === 'object' && Array.isArray(a.buttons)) ?? {};
             fs.writeFileSync(${JSON.stringify(PROOF)}, JSON.stringify({ buttons: options.buttons ?? null, message: options.message ?? null, answered: ${index} }));
             return ${index};
@@ -409,6 +437,10 @@ function finish() {
             const log = join(OUT, `quit-keeps-host-${label}.log`);
             if (existsSync(log)) { console.log(`\n--- ${log} (last 40 lines) ---`); console.log(readOr(log).split('\n').slice(-40).join('\n')); }
         }
+        // Where the window's boot stopped: batch SS on Windows had a window process with DevTools up and no page for 90 s.
+        for (const log of [LIFECYCLE, HOST_LOG]) {
+            if (existsSync(log)) { console.log(`\n--- ${log} (last 60 lines) ---`); console.log(readOr(log).split('\n').slice(-60).join('\n')); }
+        }
         process.exit(1);
     }
     console.log(`\n[${since()}] QUIT KEEPS THE HOST — measured: the UI closed and opened again over the same host and providers, every tick kept; "Shut down everything" ended them.`);
@@ -463,6 +495,16 @@ writeFileSync(TICKER, String(process.pid));
 let cannot = null;
 /** Failures from before the run (a held port, 0.4/0.5) are reported, never mistaken for the run's own controls failing. */
 const failuresBeforeRun = failures.length;
+/**
+ * QUIT_CDP_CARRY_ON=1: a failed agent step or control is a FAIL row, and the run carries on to the quit and the tray with what
+ * is running, so one run on a slow VM still answers the tray's question (batch SS on Windows: two runs ended before row 26).
+ * The rows that need the agents fail on their own; nothing passes for want of them.
+ */
+const CARRY_ON = process.env.QUIT_CDP_CARRY_ON === '1';
+const carry = async (label, fn) => {
+    if (!CARRY_ON) return fn();
+    try { return await fn(); } catch (error) { check(false, `${label} (carried on past it)`, String(error?.message ?? error).slice(0, 160)); return undefined; }
+};
 try {
     // -------------------------------------------------------------------------------- A: three agents streaming
     a = await open('first', 1);
@@ -476,7 +518,7 @@ try {
         const added = await a.cdp.evaluate(`window.genie.addAgent(${JSON.stringify(workspaceId)}, { name: ${JSON.stringify(name)}, purpose: 'Streams ticks for the quit check.', provider: 'codex' })`, 30_000);
         if (check(added?.ok === true, `1.${i} agent ${name} added`, added?.ok ? added.id : added?.reason)) agents.push({ id: added.id, name });
     }
-    for (const ag of agents) {
+    for (const ag of agents) await carry(`2-3. ${ag.name}`, async () => {
         step('2', `starting ${ag.name} (≤ 30 s to running)`);
         await waitForPageProbe(a.cdp);
         await a.cdp.evaluate(`window.genieTest.agents.restart(${JSON.stringify(ag.id)}, "graceful"); true`, 15_000);
@@ -485,14 +527,15 @@ try {
         step('3', `prompting ${ag.name}`);
         const sent = await a.cdp.evaluate(`window.genie.prompt(${JSON.stringify(ag.id)}, 'Stream ticks until stopped.')`, 15_000);
         check(sent?.ok === true, `3. ${ag.name} took the prompt`, sent?.reason ?? '');
-    }
-    for (const ag of agents) {
+    });
+    for (const ag of agents) await carry(`4. ${ag.name}`, async () => {
         step('4', `waiting for ${ag.name}'s ledger to stream 8 ticks (≤ 30 s)`);
         const t = await until(async () => { const x = await ticksOf(a.cdp, ag.id); return x.max >= 8 ? x : null; }, 30_000);
         ag.before = t ?? await ticksOf(a.cdp, ag.id);
         ag.pid = ag.before.pids.length === 1 ? ag.before.pids[0] : null;
         check(ag.pid !== null, `4. ${ag.name}'s ledger is streaming, from ONE provider pid`, `ticks to ${ag.before.max}, pids ${JSON.stringify(ag.before.pids)}`);
-    }
+    });
+    for (const ag of agents) { ag.before ??= { max: 0, size: 0, pids: [] }; ag.pid ??= null; }
 
     // POSITIVE CONTROL: the pids read above are real, live, and what they say they are — before anything is closed.
     step('5', `positive control: host.json (${HOST_RECORD}) and the process table`);
@@ -502,16 +545,23 @@ try {
     const pids = agents.map((ag) => ag.pid);
     check(new Set(pids).size === AGENTS, '7. CONTROL: three DIFFERENT provider pids', JSON.stringify(pids));
     for (const ag of agents) check(alive(ag.pid) && /stub-codex/.test(commandLine(ag.pid)), `8. CONTROL: ${ag.name}'s provider pid ${ag.pid} is a LIVE stub-codex process`, commandLine(ag.pid).slice(0, 120));
-    for (const ag of agents) {
+    for (const ag of agents) await carry(`9. ${ag.name}`, async () => {
         step('9', `positive control: ${ag.name} is streaming NOW (≤ 10 s)`);
         const later = await until(async () => { const x = await ticksOf(a.cdp, ag.id); return x.max > ag.before.max ? x : null; }, 10_000);
         check(later !== null && later.pids.length === 1 && later.pids[0] === ag.pid, `9. CONTROL: ${ag.name} is streaming NOW (its ledger grew within seconds, same pid)`, `${ag.before.max} → ${later?.max}`);
         ag.before = later ?? ag.before;
-    }
+    });
     // Only THIS run's setup and controls gate what follows. A port finding at 0.4/0.5 is its own failed check and the run
     // carries on past it on a free port (batch L4 aborted here on it, with every control passing).
     const controlFailures = failures.slice(failuresBeforeRun);
-    if (controlFailures.length) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
+    if (controlFailures.length && !CARRY_ON) throw new Error(`the controls failed (${controlFailures.join('; ')}): nothing after them could mean anything`);
+    if (controlFailures.length) console.log(`  CARRYING ON past ${controlFailures.length} failed setup or control row(s), to answer the quit and tray rows with what is running`);
+
+    // A TERMINAL, with "Keep terminals through a quit" ON (genie#1508: from reading, that setting decides nothing with a host).
+    step('9t', 'the setting on, and a terminal open');
+    await a.cdp.evaluate(`window.genie.features.act({ kind: 'settings.set', key: 'detached_terminals', value: true }).then(() => true)`, 15_000);
+    const terminal = await a.cdp.evaluate(`window.genie.terminals.open(${JSON.stringify(workspaceId)}, {}).then((t) => ({ id: t.id, pid: t.pid }))`, 30_000);
+    check(alive(terminal?.pid), '9t. CONTROL: a terminal is open, its pid alive', JSON.stringify(terminal));
 
     // -------------------------------------------------------------------------------- "Just close the UI": the tray stays
     // The logs are read from HERE on: an older line must not answer for this run.
@@ -560,6 +610,10 @@ try {
         check(gap === null, `23. ${ag.name}: every tick streamed while no window was open is in the ledger, in order`, gap === null ? `${ag.before.max + 1}..${after.max}` : `tick ${gap} missing`);
     }
 
+    step('23t', 'the terminal after the reopen');
+    const terminalsAfter = await b.cdp.evaluate(`window.genie.terminals.list(${JSON.stringify(workspaceId)}).then((l) => l.map((t) => ({ id: t.id, pid: t.pid })))`, 15_000);
+    check(alive(terminal.pid) && terminalsAfter.some((t) => t.id === terminal.id && t.pid === terminal.pid), '23t. "Just close the UI" keeps the terminal: the same id and pid after the reopen', JSON.stringify(terminalsAfter));
+
     // -------------------------------------------------------------------------------- tray-only again, then a SECOND LAUNCH
     step('24', 'Just close the UI from the tray, then launch Genie again: the window comes back in the same process (≤ 60 s)');
     check(await trayClick(b.inspector, 'Just close the UI', 0) === 'ok', '24a. the tray\'s Just close the UI was clicked');
@@ -584,6 +638,12 @@ try {
     const cancelAsked = await until(() => asked(), 10_000);
     check(JSON.stringify(cancelAsked?.buttons) === JSON.stringify(['Cancel', 'Shut down everything']) && agents.every((ag) => (cancelAsked?.message ?? '').includes(ag.name)),
         '26e. it ASKED, naming what would stop (this run\'s agents among them), with Cancel and "Shut down everything"', JSON.stringify(cancelAsked));
+    if (!cancelAsked) {
+        // A real modal dialog blocks the window's main thread: an inspector call then doesn't answer.
+        const answers = await c.inspector.evaluate('1', 5_000).then(() => 'answers', (e) => `does not answer in 5 s (${String(e?.message ?? e).slice(0, 80)}): a real dialog may be open`);
+        console.log(`  26e: the window's main thread ${answers}`);
+        console.log(`  26e: dialog calls the window made since 26c:\n${readOr(CALLS) || '    none'}`);
+    }
     await sleep(3_000);
     check(!a.app.gone && alive(a.windowPid) && alive(hostPid) && agents.every((ag) => alive(ag.pid)), '26f. Cancel stopped NOTHING: the window process, the host and the providers all alive');
     step('26', 'Shut down everything from the tray, confirmed (button 1); then wait for the window process to exit (≤ 60 s)');
@@ -602,6 +662,10 @@ try {
         const gone = await until(() => !alive(ag.pid), 30_000);
         check(gone === true, `28. and ${ag.name}'s provider (the same gauge reading it dead now)`, `pid ${ag.pid}`);
     }
+    // What the setting is measured by: on, and a real quit. Alive here would mean it keeps them; ended means it decides nothing.
+    step('28t', `waiting for the terminal's pid ${terminal.pid} to end, the setting on (≤ 30 s)`);
+    const terminalGone = await until(() => !alive(terminal.pid), 30_000);
+    check(terminalGone === true, '28t. "Shut down everything" ends the terminal even with "Keep terminals through a quit" on (genie#1508)', `pid ${terminal.pid}`);
     shutDownProven = hostGone === true;
 } catch (error) {
     if (cannot === null) check(false, `the run stopped in step ${current}`, String(error?.message ?? error));

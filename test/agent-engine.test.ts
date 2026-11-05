@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { ENGINE_PROTOCOL } from '../src/core/engine-protocol.js';
 import type { LineTransport } from '../src/core/line-transport.js';
 import { connectAgentEngine } from '../src/main/agent-engine.js';
@@ -66,5 +67,40 @@ describe('connectAgentEngine beside a live host', () => {
         const errors: string[] = [];
         const link = await connectAgentEngine(options(new Set(), new Map(), errors, []));
         expect(link).toBeNull();
+    });
+});
+
+/**
+ * A HOST THAT DOES NOT ANSWER ITS SHUTDOWN DOES NOT HOLD THE QUIT (ss-repeat5, 2026-11-05). The quit now waits for the
+ * host's end instead of racing it, so that end has its own bound: `engine.shutdown` unanswered, the link's shutdown still
+ * returns within its wait. The host's pid here is a process that has already exited, so nothing real is signalled.
+ */
+describe('the link’s shutdown is bounded', () => {
+    /** A host that welcomes the window, sends its dump, and then never answers a call. */
+    const silentHost = (pid: number): LineTransport => {
+        const messages = new Set<(text: string) => void>();
+        return {
+            send: (text: string) => {
+                const m = JSON.parse(text) as { kind: string };
+                if (m.kind !== 'hello') return; // every call goes unanswered
+                queueMicrotask(() => {
+                    for (const l of [...messages]) l(JSON.stringify({ kind: 'welcome', connectionId: 'c', host: 'h', isOwner: true, workspaceId: null, protocol: ENGINE_PROTOCOL, build: 'b1', pid }));
+                    for (const l of [...messages]) l(JSON.stringify({ kind: 'event', channel: 'engine.ready', payload: {} }));
+                });
+            },
+            onMessage: (l) => { messages.add(l); return () => messages.delete(l); },
+            onClose: () => () => {},
+            close: () => {},
+            trusted: () => {},
+        };
+    };
+
+    it('engine.shutdown never answered: shutdown(waitMs) still returns within its wait', async () => {
+        const gone = spawnSync(process.execPath, ['-e', '']).pid!;
+        const base = options(new Set([gone]), files(gone), [], []);
+        const link = await connectAgentEngine({ ...base, launch: { ...base.launch, connectTo: async () => silentHost(gone) } });
+        expect(link?.client.connected).toBe(true); // positive control: linked, so the call really goes out
+        const outcome = await Promise.race([link!.shutdown(50).then(() => 'done'), new Promise((r) => setTimeout(() => r('held'), 1_000))]);
+        expect(outcome).toBe('done');
     });
 });
