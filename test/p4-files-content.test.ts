@@ -177,12 +177,13 @@ describe('7C local Files and repository content over the admitted door', () => {
         expect(f.ports.writeBytes).toHaveBeenCalledWith('work', 'a.xlsx', base64, null);
         expect(f.c.state().connected).toBe(true);
     });
-    it('removes all fifteen moved native paths and retains watch and window ports', () => {
+    it('removes all fifteen content paths and the moved watches, retaining window ports', () => {
         const main = readFileSync('src/main/main.ts', 'utf8'), preload = readFileSync('src/main/preload.ts', 'utf8'), inventory = readFileSync('src/core/ipc-inventory.ts', 'utf8');
         for (const name of ['files-tree', 'files-children', 'files-open', 'files-read-media', 'files-last-committed', 'files-state', 'files-git-status', 'files-create', 'files-rename', 'files-duplicate', 'files-trash', 'files-read-bytes', 'files-write', 'files-write-bytes', 'repo']) {
             expect(main).not.toContain(`ipcMain.handle('genie:${name}'`); expect(preload).not.toContain(`ipcRenderer.invoke('genie:${name}'`); expect(inventory).not.toContain(`['genie:${name}',`);
         }
-        for (const name of ['files-watch', 'files-unwatch', 'files-open-external', 'files-reveal', 'files-export', 'files-popout']) expect(main).toContain(`ipcMain.handle('genie:${name}'`);
-        for (const name of ['files-changed', 'files-git']) expect(preload).toContain(`ipcRenderer.on('genie:${name}'`);
+        for (const name of ['files-watch', 'files-unwatch']) expect(main).not.toContain(`ipcMain.handle('genie:${name}'`);
+        for (const name of ['files-open-external', 'files-reveal', 'files-export', 'files-popout']) expect(main).toContain(`ipcMain.handle('genie:${name}'`);
+        for (const name of ['files-changed', 'files-git']) expect(preload).not.toContain(`ipcRenderer.on('genie:${name}'`);
     });
 });

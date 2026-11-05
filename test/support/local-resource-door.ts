@@ -82,7 +82,7 @@ export async function resourceDoor(cleanups: Array<() => Promise<void>>, sources
         const c = connectRemote(transport, { kind: proof ? 'relay' : 'local' }, 'resource-fixture');
         closes.push(() => c.close()); expect(await c.ready).toEqual({ ok: true }); return c;
     }
-    return { raw, client, invoke, serialized, calls, rewrite };
+    return { raw, client, invoke, serialized, calls, rewrite, port };
 }
 
 export function resultValue<T>(r: WireMessage): T {
