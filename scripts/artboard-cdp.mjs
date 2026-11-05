@@ -31,8 +31,8 @@ class Cdp {
     next = 0; pending = new Map();
     static async connect(url) {
         const c = new Cdp(); c.socket = new WebSocket(url); let timer;
-        c.socket.addEventListener('message', event => { const frame = JSON.parse(event.data); c.pending.get(frame.id)?.(frame); c.pending.delete(frame.id); });
-        c.socket.addEventListener('close', () => { for (const done of c.pending.values()) done({ error: { message: 'CDP closed' } }); c.pending.clear(); });
+        c.socket.addEventListener('message', event => { const frame = JSON.parse(event.data); if (frame.method === 'Debugger.paused') c.paused = frame.params; if (frame.method === 'Debugger.resumed') c.paused = null; c.pending.get(frame.id)?.(frame); c.pending.delete(frame.id); });
+        c.socket.addEventListener('close', () => { c.dead ??= 'CDP closed'; for (const done of c.pending.values()) done({ error: { message: c.dead } }); c.pending.clear(); });
         try { await Promise.race([new Promise((resolve, reject) => { c.socket.addEventListener('open', resolve, { once: true }); c.socket.addEventListener('error', reject, { once: true }); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP connect timed out')), 10000); })]); }
         finally { clearTimeout(timer); }
         sessions.push(c); return c;
@@ -43,10 +43,14 @@ class Cdp {
         return result.result.value;
     }
     async request(method, params) {
+        if (this.dead || this.socket.readyState !== 1) throw new Error(this.dead ?? 'CDP is not connected');
         const id = ++this.next; let timer;
         try {
-            const frame = await Promise.race([new Promise(resolve => { this.pending.set(id, resolve); this.socket.send(JSON.stringify({ id, method, params })); }), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('CDP operation timed out')), 120000); })]);
+            const frame = await Promise.race([new Promise(resolve => { this.pending.set(id, resolve); this.socket.send(JSON.stringify({ id, method, params })); }), new Promise((_, reject) => { timer = setTimeout(() => reject(Object.assign(new Error('CDP operation timed out: ' + method), { code: 'CDP_TIMEOUT' })), 120000); })]);
             if (frame.error) throw new Error(frame.error.message); return frame.result;
+        } catch (error) {
+            if (error.code === 'CDP_TIMEOUT') { this.dead = error.message; this.socket.close(); }
+            throw error;
         } finally { clearTimeout(timer); this.pending.delete(id); }
     }
 }
@@ -115,8 +119,14 @@ try {
     app = spawn(xvfb ? 'xvfb-run' : electron, xvfb ? ['--auto-servernum', '--server-args=-screen 0 1440x900x24', electron, ...args] : args, { env, windowsHide: true, detached: !WIN, stdio: ['ignore', fd, fd] }); closeSync(fd); app.on('error', error => console.error(error.message));
     if (TRACE) {
         main = await Cdp.connect((await until('owned paused main inspector', async () => (await targets(INSPECT))[0])).webSocketDebuggerUrl);
-        await main.evaluate('globalThis.__artboardTrace=(' + installArtboardMainTrace.toString() + ')(' + JSON.stringify(root) + ');true');
-        await main.request('Runtime.runIfWaitingForDebugger', {}); startup.traceResumeMs = Date.now() - launchStarted;
+        const phase = name => console.log('ARTBOARD_TRACE_PHASE ' + JSON.stringify({ phase: name, elapsedMs: Date.now() - launchStarted }));
+        phase('inspector-connected'); await main.request('Debugger.enable', {});
+        await main.request('Runtime.runIfWaitingForDebugger', {}); phase('waiting-entry-pause');
+        const paused = await until('owned entry pause', async () => main.paused);
+        const installed = await main.request('Debugger.evaluateOnCallFrame', { callFrameId: paused.callFrames[0].callFrameId, expression: 'globalThis.__artboardTrace=(' + installArtboardMainTrace.toString() + ')(' + JSON.stringify(root) + ');true', returnByValue: true });
+        if (installed.exceptionDetails) throw new Error(installed.exceptionDetails.exception?.description ?? 'trace installation failed');
+        phase('trace-installed'); await main.request('Debugger.resume', {}); await main.request('Debugger.disable', {});
+        startup.traceResumeMs = Date.now() - launchStarted; phase('entry-resumed');
     }
     const target = await until('owned app page', async () => { hostRecord ??= json(join(runtime, 'host.json')); return (await targets(PORT)).find(target => target.type === 'page' && /index\.html/.test(target.url)); }, 240000);
     startup.pageTargetMs = Date.now() - launchStarted; page = await Cdp.connect(target.webSocketDebuggerUrl);
